@@ -304,3 +304,9 @@ if __name__ == '__main__':
         f.write('window.TRACK_DATA = ')
         json.dump(out, f, separators=(',', ':'))
         f.write(';\n')
+    # Godot port: one JSON file per track
+    gdir = os.path.join(HERE, '..', 'godot', 'data', 'tracks')
+    os.makedirs(gdir, exist_ok=True)
+    for key, data in out.items():
+        with open(os.path.join(gdir, key + '.json'), 'w') as f:
+            json.dump(data, f, separators=(',', ':'))

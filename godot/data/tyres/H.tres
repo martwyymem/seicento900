@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="TyreCompound" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/tyre_compound.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+key = "H"
+display_name = "Hard"
+color = Color(0.949, 0.949, 0.949, 1)
+grip = 0.962
+life = 48000
