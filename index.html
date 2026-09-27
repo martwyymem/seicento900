@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Seicento 900 Cup</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <canvas id="game3d"></canvas>
+  <canvas id="overlay"></canvas>
+
+  <div id="hud" class="hidden">
+    <div id="tower"></div>
+    <div id="topbar">
+      <div class="tb"><span class="tb-l">LAP</span><span id="tb-lap">1/6</span></div>
+      <div class="tb"><span class="tb-l">POS</span><span id="tb-pos">1/16</span></div>
+      <div class="tb"><span class="tb-l">RACE</span><span id="tb-time">0:00</span></div>
+      <div class="tb wide"><span class="tb-l">CORNER</span><span id="tb-sector">—</span></div>
+      <div class="tb wide"><span class="tb-l">WEATHER</span><span id="tb-weather">—</span></div>
+      <div class="tb"><span class="tb-l">LOCAL TIME</span><span id="tb-clock">—</span></div>
+    </div>
+    <canvas id="minimap"></canvas>
+    <div id="lights"><i></i><i></i><i></i><i></i><i></i></div>
+    <div id="banner"></div>
+    <div id="feed"></div>
+    <div id="pitwall"></div>
+    <div id="dash">
+      <div class="dash-main">
+        <div id="dash-speed">0</div>
+        <div class="dash-side">
+          <div id="dash-gear">N</div>
+          <div class="dash-unit">km/h</div>
+        </div>
+      </div>
+      <div id="dash-rpm"><div id="dash-rpm-fill"></div></div>
+      <div id="dash-laps"></div>
+    </div>
+    <div id="help">
+      <b>↑/W</b> throttle · <b>↓/S</b> brake/reverse · <b>←→/AD</b> steer · <b>E/Q</b> gear (manual)<br>
+      <b>P</b> box request · <b>[ ]</b> next tyre · <b>− =</b> fuel · <b>R</b> ask strategist<br>
+      <b>C</b> camera view · <b>L</b> racing line · <b>O</b> autopilot / co-driver · <b>M</b> mute · <b>H</b> hide · <b>Esc</b> pause<br>
+      <b>, .</b> time warp (the co-driver drives while it's on)
+    </div>
+  </div>
+
+  <div id="front" class="screen">
+    <header class="fe-top">
+      <div class="fe-title"><span id="fe-crumb">Main Menu</span><b id="fe-page-title"></b></div>
+      <div class="fe-time">Time <span id="fe-clock">00:00.00</span></div>
+    </header>
+    <canvas id="fe-art"></canvas>
+    <div id="fe-caption"></div>
+    <div id="fe-page" class="hidden">
+      <div class="fe-rows"></div>
+      <aside class="fe-side"></aside>
+    </div>
+    <div class="fe-foot">
+      <p id="fe-desc"></p>
+      <nav id="fe-bar"><div id="fe-strip"></div></nav>
+      <div id="fe-hint"></div>
+    </div>
+
+    <!-- every row and side panel lives here until a page mounts it -->
+    <div id="fe-pool" class="hidden">
+      <!-- race -->
+      <div class="row nav" id="r-track"><i></i><label>Track</label>
+        <div class="seg cycle" data-key="track">
+          <button data-v="gp">GP-Strecke<small>Nürburgring · 5.1 km</small></button>
+          <button data-v="nordschleife">Nordschleife<small>Nürburgring · 20.7 km</small></button>
+          <button data-v="monaco">Monaco<small>Triple Crown · 3.3 km</small></button>
+          <button data-v="indy">Indianapolis<small>Triple Crown · 4.0 km oval</small></button>
+          <button data-v="lemans">Le Mans<small>Triple Crown · 13.6 km</small></button>
+          <button data-v="monza">Monza<small>Grand Prix classic · 5.8 km</small></button>
+          <button data-v="silverstone">Silverstone<small>Grand Prix classic · 5.9 km</small></button>
+          <button data-v="spa">Spa-Francorchamps<small>Grand Prix classic · 7.0 km</small></button>
+        </div>
+      </div>
+      <div class="row nav" id="r-laps"><i></i><label>Laps</label>
+        <div class="val"><input type="range" data-key="laps" min="1" max="60" step="1"><output data-for="laps"></output></div>
+      </div>
+      <div class="row nav" id="r-hours"><i></i><label>Duration</label>
+        <div class="seg cycle" data-key="hours">
+          <button data-v="0.25">15 min</button><button data-v="0.5">30 min</button><button data-v="1">1 hour</button>
+          <button data-v="3">3 hours</button><button data-v="6">6 hours</button><button data-v="12">12 hours</button><button data-v="24">24 hours</button>
+        </div>
+      </div>
+      <div class="row info" id="r-length"><i></i><small class="hint" id="race-length"></small></div>
+      <div class="row nav" id="r-start"><i></i><label>Start time</label>
+        <div class="seg cycle" data-key="startHour">
+          <button data-v="10">10:00</button><button data-v="14">14:00</button><button data-v="16">16:00</button>
+          <button data-v="20">20:00</button><button data-v="23">23:00</button>
+        </div>
+      </div>
+      <div class="row nav" id="r-opponents"><i></i><label>Opponents</label>
+        <div class="val"><input type="range" data-key="opponents" min="0" max="15" step="1"><output data-for="opponents"></output></div>
+      </div>
+      <div class="row nav" id="r-difficulty"><i></i><label>AI skill</label>
+        <div class="seg" data-key="difficulty">
+          <button data-v="easy">Easy</button><button data-v="medium">Medium</button><button data-v="hard">Hard</button><button data-v="alien">Alien</button>
+        </div>
+      </div>
+      <div class="row nav" id="r-grid"><i></i><label>Start position</label>
+        <div class="seg" data-key="grid">
+          <button data-v="random">Random</button><button data-v="pole">Pole</button><button data-v="middle">Middle</button><button data-v="back">Back</button>
+        </div>
+      </div>
+      <div class="row nav" id="r-weather"><i></i><label>Weather</label>
+        <div class="seg" data-key="weather">
+          <button data-v="dry">Dry</button><button data-v="wet">Wet</button><button data-v="variable">Variable</button>
+        </div>
+      </div>
+      <div class="row nav" id="r-plan"><i></i><label>Strategy</label>
+        <div class="seg cycle plan"><span id="plan-val"></span></div>
+      </div>
+      <button class="row nav act" id="r-go-single" data-go="single"><i></i>Start race</button>
+      <button class="row nav act" id="r-go-endurance" data-go="endurance"><i></i>Start endurance race</button>
+
+      <!-- championship -->
+      <div class="row info" id="r-champ-info"><i></i><small class="hint" id="champ-info"></small></div>
+      <button class="row nav act" id="r-go-champ" data-go="championship"><i></i><span id="champ-go">Start championship</span></button>
+      <button class="row nav act" id="champ-reset"><i></i>Reset championship</button>
+
+      <!-- garage -->
+      <div class="row nav" id="r-name"><i></i><label>Driver</label>
+        <div class="val"><input type="text" data-key="playerName" maxlength="18"></div>
+      </div>
+      <div class="row nav" id="r-number"><i></i><label>Number</label>
+        <div class="val"><input type="number" data-key="playerNumber" min="1" max="99"></div>
+      </div>
+      <div class="row nav" id="r-colour"><i></i><label>Colour</label><div id="swatches"></div></div>
+      <div class="row nav" id="r-stripes"><i></i><label>Racing stripes</label>
+        <label class="toggle"><input type="checkbox" data-key="stripes"><span>On</span><span>Off</span></label>
+      </div>
+      <div class="row nav" id="r-gearbox"><i></i><label>Gearbox</label>
+        <div class="seg" data-key="gearbox"><button data-v="auto">Automatic</button><button data-v="manual">Manual (E/Q)</button></div>
+      </div>
+      <div class="row nav" id="r-assists"><i></i><label>Driving aids</label>
+        <div class="seg" data-key="assists"><button data-v="full">ABS + TC + ESC</button><button data-v="abs">ABS only</button><button data-v="off">None</button></div>
+      </div>
+
+      <!-- rules -->
+      <div class="row nav" id="r-wear"><i></i><label>Tyre wear</label>
+        <div class="val"><input type="range" data-key="wearMult" min="0.5" max="5" step="0.5"><output data-for="wearMult"></output></div>
+      </div>
+      <div class="row nav" id="r-fuel"><i></i><label>Fuel consumption</label>
+        <div class="val"><input type="range" data-key="fuelMult" min="0.5" max="10" step="0.5"><output data-for="fuelMult"></output></div>
+      </div>
+      <div class="row nav" id="r-crew"><i></i><label>Pit crew</label>
+        <div class="seg" data-key="crew"><button data-v="pro">Pro</button><button data-v="club">Club</button><button data-v="amateur">Mates + jack</button></div>
+      </div>
+      <div class="row nav" id="r-mandatory"><i></i><label>Mandatory pit stop</label>
+        <label class="toggle"><input type="checkbox" data-key="mandatoryStop"><span>On</span><span>Off</span></label>
+      </div>
+      <div class="row nav" id="r-two"><i></i><label>Two dry compounds</label>
+        <label class="toggle"><input type="checkbox" data-key="twoCompounds"><span>On</span><span>Off</span></label>
+      </div>
+      <div class="row nav" id="r-refuel"><i></i><label>Refuelling</label>
+        <label class="toggle"><input type="checkbox" data-key="refuel"><span>On</span><span>Off</span></label>
+      </div>
+      <div class="row nav" id="r-parallel"><i></i><label>Tyres &amp; fuel together</label>
+        <label class="toggle"><input type="checkbox" data-key="parallel"><span>On</span><span>Off</span></label>
+      </div>
+      <div class="row nav" id="r-contact"><i></i><label>Car contact</label>
+        <label class="toggle"><input type="checkbox" data-key="collisions"><span>On</span><span>Off</span></label>
+      </div>
+
+      <!-- options -->
+      <div class="row nav" id="r-graphics"><i></i><label>Graphics</label>
+        <div class="seg" data-key="graphics"><button data-v="3d">3D</button><button data-v="2d">Classic 2D</button></div>
+      </div>
+      <div class="row nav" id="r-quality"><i></i><label>3D quality</label>
+        <div class="seg" data-key="quality"><button data-v="low">Low</button><button data-v="high">High</button><button data-v="ultra">Ultra</button></div>
+      </div>
+      <div class="row nav" id="r-line"><i></i><label>Racing line</label>
+        <label class="toggle"><input type="checkbox" data-key="racingLine"><span>On</span><span>Off</span></label>
+      </div>
+      <div class="row nav" id="r-strategist"><i></i><label>Strategist calls my stops</label>
+        <label class="toggle"><input type="checkbox" data-key="autoStrategist"><span>On</span><span>Off</span></label>
+      </div>
+      <div class="row nav" id="r-ai"><i></i><label>AI drivers</label>
+        <div class="seg" data-key="aiLearning"><button data-v="on">Learn from me</button><button data-v="off">Fixed pace</button></div>
+      </div>
+      <div class="row info" id="r-aimem"><i></i><small class="hint" id="ai-memory"></small></div>
+
+      <!-- controls -->
+      <div class="row info kb" id="k-drive"><i></i><label>↑ / W · ↓ / S</label><span>throttle · brake (hold at a standstill to reverse)</span></div>
+      <div class="row info kb" id="k-steer"><i></i><label>← → / A D</label><span>steer</span></div>
+      <div class="row info kb" id="k-gear"><i></i><label>E / Q</label><span>shift up / down (manual gearbox)</span></div>
+      <div class="row info kb" id="k-pit"><i></i><label>P</label><span>request / cancel a pit stop this lap</span></div>
+      <div class="row info kb" id="k-service"><i></i><label>[ ] · − =</label><span>tyre compound · fuel for the next stop</span></div>
+      <div class="row info kb" id="k-replan"><i></i><label>R</label><span>ask the strategist to re-plan</span></div>
+      <div class="row info kb" id="k-cam"><i></i><label>C</label><span>camera: chase → far chase → roof cam → bird's-eye</span></div>
+      <div class="row info kb" id="k-line"><i></i><label>L / O</label><span>racing line · autopilot (co-driver)</span></div>
+      <div class="row info kb" id="k-warp"><i></i><label>, .</label><span>time warp ×1 … ×60 (the co-driver drives)</span></div>
+      <div class="row info kb" id="k-misc"><i></i><label>M / H / Esc</label><span>mute · hide help · pause</span></div>
+      <div class="row info kb" id="k-pad"><i></i><label>Gamepad</label><span>stick steers · RT/LT pedals · RB/LB shift · Y pit · Start pause</span></div>
+
+      <!-- side panels -->
+      <section class="side-panel" id="side-strategy">
+        <h2>Strategy</h2>
+        <div id="strat-info"></div>
+        <div id="strat-list"></div>
+        <div id="strat-custom">
+          <div class="custom-head">
+            <span>Custom plan</span>
+            <button id="strat-add" class="small">+ stint</button>
+          </div>
+          <div id="strat-stints"></div>
+          <div id="strat-eval"></div>
+        </div>
+      </section>
+      <section class="side-panel" id="side-standings">
+        <h2>Calendar</h2>
+        <div id="champ-cal"></div>
+        <h2 class="mt">Standings</h2>
+        <div id="champ-standings"></div>
+      </section>
+      <section class="side-panel" id="side-car">
+        <canvas id="car-preview" width="520" height="220"></canvas>
+      </section>
+    </div>
+  </div>
+
+  <div id="pause" class="screen hidden">
+    <div class="modal">
+      <h2>Paused</h2>
+      <button data-act="resume" class="go">Resume</button>
+      <button data-act="restart">Restart race</button>
+      <button data-act="retire">Retire &amp; see results</button>
+      <button data-act="menu">Quit to menu</button>
+    </div>
+  </div>
+
+  <div id="results" class="screen hidden">
+    <div class="modal wide">
+      <h2 id="res-title">Result</h2>
+      <p id="res-sub" class="hint"></p>
+      <p id="res-ai" class="hint"></p>
+      <div class="table-wrap"><table id="res-table"></table></div>
+      <div id="champ-wrap" class="hidden">
+        <h2 class="mt" id="champ-title">Championship standings</h2>
+        <div class="table-wrap"><table id="champ-table"></table></div>
+      </div>
+      <div class="btns">
+        <button data-act="next" id="champ-next" class="go hidden">Next round ▸</button>
+        <button data-act="restart" id="res-again" class="go">Race again</button>
+        <button data-act="menu">Back to menu</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="vendor/three.min.js"></script>
+  <script src="vendor/three-extras.min.js"></script>
+  <script src="js/tracks.js"></script>
+  <script src="js/car.js"></script>
+  <script src="js/physics.js"></script>
+  <script src="js/track.js"></script>
+  <script src="js/strategy.js"></script>
+  <script src="js/brain.js"></script>
+  <script src="js/driver.js"></script>
+  <script src="js/race.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/render3d.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/ui.js"></script>
+</body>
+</html>
