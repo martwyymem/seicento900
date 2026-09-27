@@ -32,3 +32,28 @@ extends Resource
 @export var cd_a := 0.33 * 1.84
 @export var crr := 0.013
 @export var front_weight := 0.62 ## FWD traction share
+
+@export_group("Chassis")
+@export var cg_height := 0.54
+@export var track_front := 1.36
+@export var track_rear := 1.33
+@export var wheel_inertia := 0.6 ## kg·m² per wheel incl. brake disc and half-shaft
+@export var engine_inertia := 0.045 ## crank + flywheel
+@export var clutch_capacity := 125.0 ## Nm
+@export var brake_front := 1250.0 ## Nm per wheel at full pedal
+@export var brake_rear := 130.0 ## rear drums behind a load-sensing valve
+@export var roll_front := 0.6 ## front share of roll stiffness
+@export var roll_gradient := 0.11 ## body roll, rad per g
+@export var pitch_gradient := 0.045 ## body pitch, rad per g
+@export var susp_hz := 1.5
+@export var susp_zeta := 0.55
+@export var lift_a := 0.12 ## Cl·A, a little lift at speed
+@export var reverse_ratio := 3.55
+@export var steer_lock := 0.5 ## road-wheel angle at full lock (rad)
+@export var ackermann := 0.5 ## fraction of true Ackermann geometry
+
+@export_group("Tyre model")
+@export var load_sensitivity := 0.1 ## grip lost per unit of extra load over static
+@export var grip_k := 1.15 ## calibrates the tyre so the car's steady-state limit matches the field's
+@export var v_ref := 2.5 ## low-speed slip floor (m/s)
+@export var substeps := 8 ## physics substeps per race tick

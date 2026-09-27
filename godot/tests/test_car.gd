@@ -1,6 +1,8 @@
 ## Compares CarModel/Tyres against js/car.js (reference from tools/parity/car_ref.js).
 extends RefCounted
 
+var completed := false
+
 func run() -> Array:
 	var car := CarModel.new()
 	var tyres := Tyres.new()
@@ -18,4 +20,5 @@ func run() -> Array:
 		checked += 1
 	if checked != ref.size():
 		errors.append("only %d of %d values checked" % [checked, ref.size()])
+	completed = true
 	return errors

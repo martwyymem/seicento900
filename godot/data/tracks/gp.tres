@@ -1,0 +1,85 @@
+[gd_resource type="Resource" script_class="TrackDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/corner_name.gd" id="1_wb4eu"]
+[ext_resource type="Script" path="res://scripts/data/track_def.gd" id="2_fr608"]
+
+[sub_resource type="Resource" id="Resource_y1k3t"]
+script = ExtResource("1_wb4eu")
+distance = 300.0
+name = "Start/Ziel"
+
+[sub_resource type="Resource" id="Resource_cq1x1"]
+script = ExtResource("1_wb4eu")
+distance = 1040.0
+name = "Yokohama-S"
+
+[sub_resource type="Resource" id="Resource_u31fi"]
+script = ExtResource("1_wb4eu")
+distance = 1240.0
+name = "Mercedes-Arena"
+
+[sub_resource type="Resource" id="Resource_phc7n"]
+script = ExtResource("1_wb4eu")
+distance = 2080.0
+name = "Valvoline-Kurve"
+
+[sub_resource type="Resource" id="Resource_nakvs"]
+script = ExtResource("1_wb4eu")
+distance = 2260.0
+name = "Ford-Kurve"
+
+[sub_resource type="Resource" id="Resource_4b3n1"]
+script = ExtResource("1_wb4eu")
+distance = 2820.0
+name = "Dunlop-Kehre"
+
+[sub_resource type="Resource" id="Resource_ps7en"]
+script = ExtResource("1_wb4eu")
+distance = 3240.0
+name = "Schumacher-S"
+
+[sub_resource type="Resource" id="Resource_gimvh"]
+script = ExtResource("1_wb4eu")
+distance = 3800.0
+name = "Kumho-Kurve"
+
+[sub_resource type="Resource" id="Resource_dx4wu"]
+script = ExtResource("1_wb4eu")
+distance = 4000.0
+name = "Bit-Kurve"
+
+[sub_resource type="Resource" id="Resource_08sps"]
+script = ExtResource("1_wb4eu")
+distance = 4440.0
+name = "Advan-Bogen"
+
+[sub_resource type="Resource" id="Resource_36s76"]
+script = ExtResource("1_wb4eu")
+distance = 4940.0
+name = "NGK-Schikane"
+
+[sub_resource type="Resource" id="Resource_620k5"]
+script = ExtResource("1_wb4eu")
+distance = 5180.0
+name = "Coca-Cola-Kurve"
+
+[resource]
+script = ExtResource("2_fr608")
+key = "gp"
+display_name = "Nürburgring GP-Strecke"
+short_name = "GP-Strecke"
+width = 13.0
+start_offset = 420.0
+pit_entry = -405.0
+pit_exit = 360.0
+pit_ramp = 90.0
+box_start = -250.0
+runoff = 16.0
+runoff_color = Color(0.7254902, 0.68235296, 0.54901963, 1)
+runoff_surface = "gravel"
+barrier = "tyres"
+tree_density = 0.35
+tree_patch = 0.45
+tree_conifer = 0.45
+terrain_fine = 5.0
+corners = Array[ExtResource("1_wb4eu")]([SubResource("Resource_y1k3t"), SubResource("Resource_cq1x1"), SubResource("Resource_u31fi"), SubResource("Resource_phc7n"), SubResource("Resource_nakvs"), SubResource("Resource_4b3n1"), SubResource("Resource_ps7en"), SubResource("Resource_gimvh"), SubResource("Resource_dx4wu"), SubResource("Resource_08sps"), SubResource("Resource_36s76"), SubResource("Resource_620k5")])

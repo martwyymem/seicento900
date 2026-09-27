@@ -1,0 +1,26 @@
+[gd_resource type="Resource" script_class="TrackDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/corner_name.gd" id="1_txq2k"]
+[ext_resource type="Script" path="res://scripts/data/track_def.gd" id="2_u4kdo"]
+
+[sub_resource type="Resource" id="Resource_8fehu"]
+script = ExtResource("1_txq2k")
+name = "Rettifilo"
+
+[resource]
+script = ExtResource("2_u4kdo")
+key = "monza"
+display_name = "Autodromo Nazionale Monza"
+short_name = "Monza"
+pit_entry = -540.0
+pit_exit = 170.0
+box_start = -300.0
+runoff = 12.0
+runoff_color = Color(0.6627451, 0.6117647, 0.47058824, 1)
+runoff_surface = "gravel"
+barrier = "tyres"
+tree_density = 1.1
+tree_conifer = 0.2
+stands = Vector2(-320, 250)
+osm_names = true
+corners = Array[ExtResource("1_txq2k")]([SubResource("Resource_8fehu")])

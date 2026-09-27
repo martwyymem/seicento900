@@ -1,0 +1,108 @@
+[gd_resource type="Resource" script_class="TrackDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/corner_name.gd" id="1_8wilr"]
+[ext_resource type="Script" path="res://scripts/data/track_def.gd" id="2_irkxb"]
+
+[sub_resource type="Resource" id="Resource_k2pgc"]
+script = ExtResource("1_8wilr")
+name = "Boulevard Albert Ier"
+
+[sub_resource type="Resource" id="Resource_3rev1"]
+script = ExtResource("1_8wilr")
+distance = 170.0
+name = "Sainte Dévote"
+
+[sub_resource type="Resource" id="Resource_pypx2"]
+script = ExtResource("1_8wilr")
+distance = 280.0
+name = "Beau Rivage"
+
+[sub_resource type="Resource" id="Resource_4i8xi"]
+script = ExtResource("1_8wilr")
+distance = 700.0
+name = "Massenet"
+
+[sub_resource type="Resource" id="Resource_fiqjt"]
+script = ExtResource("1_8wilr")
+distance = 860.0
+name = "Casino"
+
+[sub_resource type="Resource" id="Resource_bdpbl"]
+script = ExtResource("1_8wilr")
+distance = 1080.0
+name = "Mirabeau Haute"
+
+[sub_resource type="Resource" id="Resource_lv6si"]
+script = ExtResource("1_8wilr")
+distance = 1215.0
+name = "Grand Hotel Hairpin"
+
+[sub_resource type="Resource" id="Resource_1nvf6"]
+script = ExtResource("1_8wilr")
+distance = 1300.0
+name = "Mirabeau Bas"
+
+[sub_resource type="Resource" id="Resource_yfm7r"]
+script = ExtResource("1_8wilr")
+distance = 1395.0
+name = "Portier"
+
+[sub_resource type="Resource" id="Resource_6crug"]
+script = ExtResource("1_8wilr")
+distance = 1480.0
+name = "Tunnel"
+
+[sub_resource type="Resource" id="Resource_n00g5"]
+script = ExtResource("1_8wilr")
+distance = 1900.0
+name = "Nouvelle Chicane"
+
+[sub_resource type="Resource" id="Resource_d3bgs"]
+script = ExtResource("1_8wilr")
+distance = 2250.0
+name = "Tabac"
+
+[sub_resource type="Resource" id="Resource_6e0fb"]
+script = ExtResource("1_8wilr")
+distance = 2470.0
+name = "Piscine"
+
+[sub_resource type="Resource" id="Resource_rp27y"]
+script = ExtResource("1_8wilr")
+distance = 2780.0
+name = "La Rascasse"
+
+[sub_resource type="Resource" id="Resource_341l6"]
+script = ExtResource("1_8wilr")
+distance = 2950.0
+name = "Anthony Noghès"
+
+[sub_resource type="Resource" id="Resource_uaih6"]
+script = ExtResource("1_8wilr")
+distance = 3040.0
+name = "Boulevard Albert Ier"
+
+[resource]
+script = ExtResource("2_irkxb")
+key = "monaco"
+display_name = "Circuit de Monaco"
+short_name = "Monaco"
+width = 9.0
+pit_entry = -268.0
+pit_exit = 120.0
+pit_ramp = 40.0
+pit_offset = 10.0
+box_start = -196.0
+box_spacing = 9.0
+runoff = 0.6
+runoff_color = Color(0.5529412, 0.5529412, 0.53333336, 1)
+runoff_surface = "asphalt"
+barrier = "armco+fence"
+theme = "city"
+tree_density = 0.05
+tree_patch = 0.5
+tree_conifer = 0.0
+terrain_fine = 4.0
+stands = Vector2(-240, 100)
+sea = true
+corners = Array[ExtResource("1_8wilr")]([SubResource("Resource_k2pgc"), SubResource("Resource_3rev1"), SubResource("Resource_pypx2"), SubResource("Resource_4i8xi"), SubResource("Resource_fiqjt"), SubResource("Resource_bdpbl"), SubResource("Resource_lv6si"), SubResource("Resource_1nvf6"), SubResource("Resource_yfm7r"), SubResource("Resource_6crug"), SubResource("Resource_n00g5"), SubResource("Resource_d3bgs"), SubResource("Resource_6e0fb"), SubResource("Resource_rp27y"), SubResource("Resource_341l6"), SubResource("Resource_uaih6")])

@@ -1,0 +1,25 @@
+[gd_resource type="Resource" script_class="TrackDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/corner_name.gd" id="1_qospg"]
+[ext_resource type="Script" path="res://scripts/data/track_def.gd" id="2_grrhy"]
+
+[resource]
+script = ExtResource("2_grrhy")
+key = "nordschleife"
+display_name = "Nürburgring Nordschleife"
+short_name = "Nordschleife"
+width = 9.5
+start_offset = 230.0
+pit_entry = -222.0
+pit_exit = 60.0
+pit_ramp = 45.0
+pit_offset = 10.5
+box_start = -172.0
+box_spacing = 9.0
+runoff = 4.0
+runoff_color = Color(0.29411766, 0.47843137, 0.23921569, 1)
+tree_density = 1.25
+tree_patch = 0.28
+tree_conifer = 0.82
+grandstands = false
+osm_names = true

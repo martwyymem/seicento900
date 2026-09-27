@@ -1,0 +1,22 @@
+[gd_resource type="Resource" script_class="TrackDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/corner_name.gd" id="1_hlcgv"]
+[ext_resource type="Script" path="res://scripts/data/track_def.gd" id="2_x6ymm"]
+
+[resource]
+script = ExtResource("2_x6ymm")
+key = "lemans"
+display_name = "Circuit de la Sarthe (Le Mans)"
+short_name = "Le Mans"
+width = 11.0
+pit_entry = -226.0
+pit_exit = 540.0
+box_start = -80.0
+box_spacing = 13.0
+runoff = 6.0
+runoff_color = Color(0.3529412, 0.5411765, 0.24705882, 1)
+tree_density = 0.9
+tree_patch = 0.36
+tree_conifer = 0.6
+stands = Vector2(-200, 250)
+osm_names = true

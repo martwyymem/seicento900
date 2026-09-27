@@ -1,0 +1,24 @@
+[gd_resource type="Resource" script_class="TrackDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/corner_name.gd" id="1_d8tuu"]
+[ext_resource type="Script" path="res://scripts/data/track_def.gd" id="2_at4am"]
+
+[resource]
+script = ExtResource("2_at4am")
+key = "silverstone"
+display_name = "Silverstone Circuit"
+short_name = "Silverstone"
+width = 13.0
+pit_entry = -420.0
+pit_exit = 400.0
+pit_offset = 15.0
+box_start = -140.0
+runoff = 10.0
+runoff_color = Color(0.6039216, 0.6039216, 0.5647059, 1)
+runoff_surface = "gravel"
+barrier = "tyres"
+tree_density = 0.2
+tree_patch = 0.5
+tree_conifer = 0.1
+stands = Vector2(-300, 300)
+osm_names = true

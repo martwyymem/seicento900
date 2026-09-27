@@ -1,0 +1,72 @@
+[gd_resource type="Resource" script_class="TrackDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/corner_name.gd" id="1_s4a08"]
+[ext_resource type="Script" path="res://scripts/data/track_def.gd" id="2_dpwxk"]
+
+[sub_resource type="Resource" id="Resource_3wl3s"]
+script = ExtResource("1_s4a08")
+name = "Front Stretch"
+
+[sub_resource type="Resource" id="Resource_3kph7"]
+script = ExtResource("1_s4a08")
+distance = 288.0
+name = "Turn 1"
+
+[sub_resource type="Resource" id="Resource_n3hqc"]
+script = ExtResource("1_s4a08")
+distance = 756.0
+name = "South Short Chute"
+
+[sub_resource type="Resource" id="Resource_rx6dr"]
+script = ExtResource("1_s4a08")
+distance = 960.0
+name = "Turn 2"
+
+[sub_resource type="Resource" id="Resource_13fox"]
+script = ExtResource("1_s4a08")
+distance = 1412.0
+name = "Backstretch"
+
+[sub_resource type="Resource" id="Resource_q1rsh"]
+script = ExtResource("1_s4a08")
+distance = 2352.0
+name = "Turn 3"
+
+[sub_resource type="Resource" id="Resource_vw7e2"]
+script = ExtResource("1_s4a08")
+distance = 2936.0
+name = "North Short Chute"
+
+[sub_resource type="Resource" id="Resource_p7hmx"]
+script = ExtResource("1_s4a08")
+distance = 2960.0
+name = "Turn 4"
+
+[sub_resource type="Resource" id="Resource_332x6"]
+script = ExtResource("1_s4a08")
+distance = 3420.0
+name = "Front Stretch"
+
+[resource]
+script = ExtResource("2_dpwxk")
+key = "indy"
+display_name = "Indianapolis Motor Speedway"
+short_name = "Indianapolis"
+width = 15.0
+pit_entry = -420.0
+pit_exit = 250.0
+pit_offset = -15.0
+box_start = -250.0
+box_spacing = 13.0
+runoff = 3.0
+runoff_color = Color(0.43529412, 0.43529412, 0.41568628, 1)
+runoff_surface = "asphalt"
+barrier = "safer"
+theme = "oval"
+tree_density = 0.12
+tree_patch = 0.55
+tree_conifer = 0.2
+terrain_fine = 6.0
+stands = Vector2(-600, 250)
+stand_tiers = 14
+corners = Array[ExtResource("1_s4a08")]([SubResource("Resource_3wl3s"), SubResource("Resource_3kph7"), SubResource("Resource_n3hqc"), SubResource("Resource_rx6dr"), SubResource("Resource_13fox"), SubResource("Resource_q1rsh"), SubResource("Resource_vw7e2"), SubResource("Resource_p7hmx"), SubResource("Resource_332x6")])
