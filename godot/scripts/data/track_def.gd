@@ -23,6 +23,7 @@ extends Resource
 @export var runoff_color := Color(0.4, 0.55, 0.3)
 @export_enum("grass", "gravel", "asphalt") var runoff_surface := "grass"
 @export_enum("armco", "tyres", "armco+fence", "safer") var barrier := "armco"
+@export_range(0.0, 35.0, 0.1, "suffix:°") var banking := 0.0 ## banking in the turns; the outside edge is higher
 
 @export_group("Scenery")
 @export_enum("forest", "city", "oval") var theme := "forest"

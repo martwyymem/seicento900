@@ -36,6 +36,7 @@ var RDS := PackedFloat64Array() ## path length from sample i to i+1 along the ra
 var RK := PackedFloat64Array() ## racing-line curvature
 var CORNER := PackedFloat64Array() ## cornering speed limit at mu = 1
 var PROF := PackedFloat64Array() ## max speed at mu = 1: cornering limit + braking envelope
+var BANK := PackedFloat64Array() ## cross slope (rise per metre towards +d); banked turns rise to the outside
 var rl_length := 0.0
 var sectors: Array = [] ## [[sample index, name]] sorted by index
 var bounds := PackedFloat64Array() ## [min_x, min_y, max_x, max_y]
@@ -88,6 +89,7 @@ func _init(def: TrackDef) -> void:
 		sectors.append([e[0], e[1]])
 
 	build_frames()
+	build_banking()
 	build_corner_envelope()
 	build_racing_line()
 	build_profile()
@@ -119,6 +121,22 @@ func build_frames() -> void:
 	for i in n:
 		var da := SimUtil.wrap_angle(ANG[(i + m) % n] - ANG[(i - m + n) % n])
 		KC[i] = da / (2 * m * step)
+
+## Banked turns (cfg.banking degrees): full banking where the curvature is near its peak, easing to flat
+## on the straights through the corner entries and exits.
+func build_banking() -> void:
+	BANK.resize(n)
+	BANK.fill(0.0)
+	if cfg.banking == 0.0:
+		return
+	var k_full := 0.0
+	for k in KC:
+		k_full = maxf(k_full, absf(k))
+	k_full *= 0.85
+	var t := tan(deg_to_rad(cfg.banking))
+	for i in n:
+		var f := SimUtil.smooth01(absf(KC[i]) / k_full)
+		BANK[i] = -signf(KC[i]) * t * f # the inside of a turn is on the side of sign(KC)
 
 ## Peak curvature around each sample, so side offsets can be kept inside the corner radius.
 func build_corner_envelope() -> void:
@@ -198,7 +216,9 @@ func build_profile() -> void:
 	var p := PackedFloat64Array()
 	p.resize(n)
 	for i in n:
-		p[i] = minf(vcap, sqrt(G / maxf(absf(RK[i]), 1e-5)))
+		# banking adds its own share of the centripetal force: g (mu + tan) / (1 - mu tan) at mu = 1
+		var t := absf(BANK[i])
+		p[i] = minf(vcap, sqrt(G * (1.0 + t) / (1.0 - t) / maxf(absf(RK[i]), 1e-5)))
 	CORNER = p.duplicate()
 	for pass_ in 2:
 		for q in range(n - 1, -1, -1):
@@ -257,6 +277,21 @@ func heading(s: float) -> float:
 func curvature(s: float) -> float:
 	return sample(KC, s)
 
+## Height of a banked road surface above the centreline elevation at lateral offset d (m). The inside edge
+## stays at track level (so the flat apron and infield meet it), the outside climbs to the wall and levels
+## off behind it.
+func bank_rise(s: float, d: float) -> float:
+	var sl := sample(BANK, s)
+	if sl == 0.0:
+		return 0.0
+	return absf(sl) * clampf(signf(sl) * d + half, 0.0, width + cfg.runoff + 0.5)
+
+## Cross slope felt at lateral offset d: the banking on the road and run-off, flat on the apron and beyond.
+func bank_slope(s: float, d: float) -> float:
+	var sl := sample(BANK, s)
+	var u := signf(sl) * d + half
+	return sl if u > 0.0 and u < width + cfg.runoff + 0.5 else 0.0
+
 ## Speed along the centreline parameter for a path offset d (Frenet: ds/dt = v / (1 - k d)).
 func s_rate(s: float, d: float) -> float:
 	var f := 1.0 - curvature(s) * d
@@ -274,18 +309,26 @@ func project(x: float, y: float, hint_s := NAN) -> PackedFloat64Array:
 				bd = dd
 				bi = i
 	else:
+		# every free car, every tick: walk the 81 samples around the hint with a wrapping index
+		# instead of posmod() per sample (same samples, same order, same result)
 		var c := SimUtil.js_round(wrap_s(hint_s) / step)
-		for k in range(-40, 41):
-			var i := posmod(c + k, n)
-			var dd := (X[i] - x) * (X[i] - x) + (Y[i] - y) * (Y[i] - y)
+		var i := posmod(c - 40, n)
+		for k in 81:
+			var dx := X[i] - x
+			var dy := Y[i] - y
+			var dd := dx * dx + dy * dy
 			if dd < bd:
 				bd = dd
 				bi = i
+			i += 1
+			if i == n:
+				i = 0
 	# refine on the neighbouring segments
 	var best_s := bi * step
 	var best_d := 0.0
 	var best_dist := INF
-	for i in [(bi - 1 + n) % n, bi]:
+	for q in 2:
+		var i := (bi - 1 + n) % n if q == 0 else bi
 		var j: int = (i + 1) % n
 		var sx := X[j] - X[i]
 		var sy := Y[j] - Y[i]

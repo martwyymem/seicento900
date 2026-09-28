@@ -148,6 +148,9 @@ func max_steer(v: float, mu: float) -> float:
 	return minf(spec.steer_lock, wb * mu * G / v2 + 1.35 * APK)
 
 ## Advance the car by dt.
+## Hot path (every car, 8 substeps per tick): the tyre model is inlined and the car/drivetrain state
+## lives in locals for the whole step. The arithmetic matches tyre() and mf() term for term, so the
+## results are bit-identical to the straightforward version (the parity tests check 1e-14).
 func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 	var ph: PhysState = car.phys if car.phys else init_car(car)
 	var m := env.mass
@@ -172,6 +175,12 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 	var grip_k := spec.grip_k
 	var v_ref := spec.v_ref
 	var crr := spec.crr
+	var lift_a := spec.lift_a
+	var cd_a := spec.cd_a
+	var zeta := spec.susp_zeta
+	var clutch_cap := spec.clutch_capacity
+	var kpk := KPK
+	var tapk := TAPK
 	var fuel_w := 0.0
 	var slide_w := 0.0
 	var max_rho_f := 0.0
@@ -208,23 +217,47 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 	var rho_a := ph.rho
 	var abs_k := ph.abs_k
 	var brk := input.brake
+	var thr_in := input.throttle
+	var env_mu := env.mu
+	var abs_on := env.abs_on
+	var tc_on := env.tc_on
+	var esc_on := env.esc_on
+	var gx := env.gx
+	var gy := env.gy
+	var drag_mul := env.drag_mul
+	var shifting := car.shift_t > 0.0
+	# body and drivetrain state, written back after the substeps
+	var c_heading := car.heading
+	var c_vx := car.vx
+	var c_vy := car.vy
+	var c_yaw := car.yaw_rate
+	var c_x := car.x
+	var c_y := car.y
+	var ax_f := ph.ax_f
+	var ay_f := ph.ay_f
+	var ax_d := ph.ax_d
+	var ay_d := ph.ay_d
+	var p_tc := ph.tc
+	var p_clutch := ph.clutch
+	var p_we := ph.we
+	var p_fx0 := ph.fx0
 
 	for k in sub:
-		var ch := cos(car.heading)
-		var sh := sin(car.heading)
-		var vx := car.vx * ch + car.vy * sh
-		var vy := -car.vx * sh + car.vy * ch
-		var r := car.yaw_rate
+		var ch := cos(c_heading)
+		var sh := sin(c_heading)
+		var vx := c_vx * ch + c_vy * sh
+		var vy := -c_vx * sh + c_vy * ch
+		var r := c_yaw
 		var v2 := vx * vx + vy * vy
 
 		# ---- loads: static + aero lift + pitch/roll transfer from the lagged body accelerations
-		var lift := 0.5 * 1.2 * spec.lift_a * v2
+		var lift := 0.5 * 1.2 * lift_a * v2
 		var W := m * G
-		var d_long := m * ph.ax_f * cg_h / wb
+		var d_long := m * ax_f * cg_h / wb
 		var front := W * b / wb - d_long - lift * 0.55
 		var rear := W * a / wb + d_long - lift * 0.45
-		var d_lat_f := m * ph.ay_f * cg_h / tf * roll_f
-		var d_lat_r := m * ph.ay_f * cg_h / tr * (1.0 - roll_f)
+		var d_lat_f := m * ay_f * cg_h / tf * roll_f
+		var d_lat_r := m * ay_f * cg_h / tr * (1.0 - roll_f)
 		fz[0] = maxf(0.0, front / 2 + d_lat_f)
 		fz[1] = maxf(0.0, front / 2 - d_lat_f)
 		fz[2] = maxf(0.0, rear / 2 + d_lat_r)
@@ -238,26 +271,25 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 			vl[i] = wx * cd[i] + wy * sd[i]
 			vt[i] = -wx * sd[i] + wy * cd[i]
 			if k == 0:
-				surf[i] = env.surface.call(car.x + WX[i] * ch - WY[i] * sh, car.y + WX[i] * sh + WY[i] * ch)
+				surf[i] = env.surface.call(c_x + WX[i] * ch - WY[i] * sh, c_y + WX[i] * sh + WY[i] * ch)
+				drag[i] = crr + SURF_DRAG[surf[i]]
 			var sens := clampf(1.0 - load_sens * (fz[i] / fz0 - 1.0), 0.75, 1.15)
-			mu[i] = env.mu * grip_k * SURF_GRIP[surf[i]] * sens
-			drag[i] = crr + SURF_DRAG[surf[i]]
+			mu[i] = env_mu * grip_k * SURF_GRIP[surf[i]] * sens
 
 		# ---- driver aids
-		var thr := input.throttle
+		var thr := thr_in
 		# traction control trims the throttle in proportion to how far the driven wheels are past peak slip
 		var spin := maxf(rho_a[0], rho_a[1])
 		var tc_want := 1.0
-		if env.tc_on and vx > 1.0 and ph.fx0 > 0.0 and spin > 1.1:
+		if tc_on and vx > 1.0 and p_fx0 > 0.0 and spin > 1.1:
 			tc_want = maxf(0.35, 1.0 - (spin - 1.1) * 1.5)
-		ph.tc += clampf(tc_want - ph.tc, -h * 10.0, h * 5.0)
-		thr *= ph.tc
+		p_tc += clampf(tc_want - p_tc, -h * 10.0, h * 5.0)
+		thr *= p_tc
 
 		# ---- engine, clutch and gearbox
-		var shifting := car.shift_t > 0.0
-		var rpm := rpm_of(ph.we)
+		var rpm := p_we * 30.0 / PI
 		var wc := (w[0] + w[1]) / 2
-		var wheel_rpm := absf(rpm_of(wc * ratio))
+		var wheel_rpm := absf(wc * ratio * 30.0 / PI)
 		var bite: float
 		if shifting:
 			bite = 0.0
@@ -266,23 +298,26 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 			bite = clampf((rpm - 1150.0) / 1500.0, 0.0, 1.0) if thr > 0.02 else 0.0
 		else:
 			bite = 0.0 if rpm < 780.0 else 1.0
-		ph.clutch += clampf(bite - ph.clutch, -h * 25.0, h * (25.0 if shifting else 7.0))
+		p_clutch += clampf(bite - p_clutch, -h * 25.0, h * (25.0 if shifting else 7.0))
 		if shifting:
 			# throttle lifts on upshifts; the box blips on downshifts to match revs
-			var target := absf(rpm_of(wc * ratio))
+			var target := absf(wc * ratio * 30.0 / PI)
 			thr = 1.0 if target > rpm + 150.0 else 0.0
 		if rpm < idle + 60.0:
 			thr = maxf(thr, clampf((idle + 180.0 - rpm) / 400.0, 0.0, 0.35))
 		if rpm >= limiter:
 			thr = 0.0
-		var fr := engine_friction(rpm)
+		var fr := 7.0 + 0.0022 * rpm
 		var te := thr * (car_model.torque_at(rpm) + fr) - fr
 
 		# ---- stability control: brake the outside front wheel when the car yaws faster than the steering asks
-		esc.fill(0.0)
-		if env.esc_on and vx > 5.0:
+		esc[0] = 0.0
+		esc[1] = 0.0
+		esc[2] = 0.0
+		esc[3] = 0.0
+		if esc_on and vx > 5.0:
 			# reference: the neutral-steer yaw rate, capped at what the grip allows
-			var lim := env.mu * G * 1.1 / vx
+			var lim := env_mu * G * 1.1 / vx
 			var target := clampf(vx * delta / wb, -lim, lim)
 			var over := r - target
 			var band := 0.05 + 0.1 * absf(target)
@@ -291,88 +326,132 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 				thr *= 0.3
 
 		# ---- wheel spin: linearised backward Euler so stiff tyres can't blow up
+		# (only the longitudinal force and combined slip of tyre() are needed here)
 		for i in 4:
 			var wi := w[i]
-			tyre(wi, vl[i], vt[i], fz[i], mu[i])
-			var fl0 := _fl
-			var rho0 := _rho
+			var vli := vl[i]
+			var vti := vt[i]
+			var fzi := fz[i]
+			var vr := maxf(absf(vli), v_ref)
+			var sy := vti / vr / tapk
+			# tyre(wi, …)
+			var sx := (wi * R - vli) / vr / kpk
+			var rho0 := sqrt(sx * sx + sy * sy)
+			var fl0 := 0.0
+			if not (rho0 < 1e-9 or fzi <= 0.0):
+				var bx := TX_B * (rho0 * kpk)
+				fl0 = mu[i] * fzi * sin(TX_C * atan(bx - TX_E * (bx - atan(bx)))) * sx / rho0
+			# tyre(wi + eps, …)
 			var eps := 0.02
-			tyre(wi + eps, vl[i], vt[i], fz[i], mu[i])
-			var kx := maxf(0.0, (_fl - fl0) / eps)
+			var sx2 := ((wi + eps) * R - vli) / vr / kpk
+			var rho2 := sqrt(sx2 * sx2 + sy * sy)
+			var fl2 := 0.0
+			if not (rho2 < 1e-9 or fzi <= 0.0):
+				var bx2 := TX_B * (rho2 * kpk)
+				fl2 = mu[i] * fzi * sin(TX_C * atan(bx2 - TX_E * (bx2 - atan(bx2)))) * sx2 / rho2
+			var kx := maxf(0.0, (fl2 - fl0) / eps)
 			rho_a[i] = rho0
 			# ABS: back off a wheel's pressure when it is heading for a lock
-			var kappa := (wi * R - vl[i]) / maxf(absf(vl[i]), v_ref)
-			if env.abs_on and (brk > 0.0 or esc[i] > 0.0) and absf(vl[i]) > 2.0 and kappa * signf(vl[i]) < -KPK * 1.2:
+			var kappa := (wi * R - vli) / maxf(absf(vli), v_ref)
+			if abs_on and (brk > 0.0 or esc[i] > 0.0) and absf(vli) > 2.0 and kappa * signf(vli) < -kpk * 1.2:
 				abs_k[i] = maxf(0.1, abs_k[i] - h * 30.0)
 			else:
 				abs_k[i] = minf(1.0, abs_k[i] + h * 10.0)
 			var tb := (brk * (brake_f if i < 2 else brake_r) + esc[i]) * abs_k[i]
-			var roll := drag[i] * fz[i] * R
+			var roll := drag[i] * fzi * R
 			var w0 := 1.5
 			var sgn := clampf(wi / w0, -1.0, 1.0)
 			cw[i] = R * fl0 + (tb + roll) * sgn
 			dw[i] = wheel_i / h + R * kx + ((tb + roll) / w0 if absf(wi) < w0 else 0.0)
 		var tau := 0.0
 		var ad := ratio * eff / 2
-		if ph.clutch > 0.001:
+		if p_clutch > 0.001:
 			# clutch torque that would lock engine and differential together this substep, limited by capacity
 			var lhs := h / eng_i + (ratio / 2) * ad * (1.0 / dw[0] + 1.0 / dw[1])
-			var rhs := ph.we + h * te / eng_i - (ratio / 2) * (w[0] + w[1]) + (ratio / 2) * (cw[0] / dw[0] + cw[1] / dw[1])
-			var cap := ph.clutch * spec.clutch_capacity
+			var rhs := p_we + h * te / eng_i - (ratio / 2) * (w[0] + w[1]) + (ratio / 2) * (cw[0] / dw[0] + cw[1] / dw[1])
+			var cap := p_clutch * clutch_cap
 			tau = clampf(rhs / lhs, -cap, cap)
-		ph.we += h * (te - tau) / eng_i
-		ph.we = clampf(ph.we, 600.0 * PI / 30.0, (limiter + 250.0) * PI / 30.0)
+		p_we += h * (te - tau) / eng_i
+		p_we = clampf(p_we, 600.0 * PI / 30.0, (limiter + 250.0) * PI / 30.0)
 		for i in 4:
 			w[i] += ((tau * ad if i < 2 else 0.0) - cw[i]) / dw[i]
-		ph.fx0 = tau * ratio
-		fuel_w += maxf(0.0, te) * ph.we * h
+		p_fx0 = tau * ratio
+		fuel_w += maxf(0.0, te) * p_we * h
 
 		# ---- tyre forces with the updated wheel speeds, summed on the body
 		var fxB := 0.0
 		var fyB := 0.0
 		var mz := 0.0
 		for i in 4:
-			tyre(w[i], vl[i], vt[i], fz[i], mu[i])
-			var Fl := _fl
-			var Ft := _ft
-			rho_a[i] = _rho
+			var wi := w[i]
+			var vli := vl[i]
+			var vti := vt[i]
+			var fzi := fz[i]
+			# tyre(w[i], vl[i], vt[i], fz[i], mu[i])
+			var vr := maxf(absf(vli), v_ref)
+			var sx := (wi * R - vli) / vr / kpk
+			var sy := vti / vr / tapk
+			var rho := sqrt(sx * sx + sy * sy)
+			var Fl := 0.0
+			var Ft := 0.0
+			if not (rho < 1e-9 or fzi <= 0.0):
+				var fm := mu[i] * fzi
+				var bx := TX_B * (rho * kpk)
+				Fl = fm * sin(TX_C * atan(bx - TX_E * (bx - atan(bx)))) * sx / rho
+				var by_ := TY_B * atan(rho * tapk)
+				Ft = -fm * sin(TY_C * atan(by_ - TY_E * (by_ - atan(by_)))) * sy / rho
+			rho_a[i] = rho
 			var bx := Fl * cd[i] - Ft * sd[i]
 			var by := Fl * sd[i] + Ft * cd[i]
 			fxB += bx
 			fyB += by
 			mz += WX[i] * by - WY[i] * bx
-			var slx := w[i] * R - vl[i]
-			var sv := sqrt(slx * slx + vt[i] * vt[i])
+			var slx := wi * R - vli
+			var sv := sqrt(slx * slx + vti * vti)
 			slide_w += sqrt(Fl * Fl + Ft * Ft) * sv * h
 			slide_v = maxf(slide_v, sv)
 			if i < 2:
-				max_rho_f = maxf(max_rho_f, _rho)
+				max_rho_f = maxf(max_rho_f, rho)
 			else:
-				max_rho_r = maxf(max_rho_r, _rho)
+				max_rho_r = maxf(max_rho_r, rho)
 		var vmag := sqrt(v2)
-		var fa := 0.5 * 1.2 * spec.cd_a * env.drag_mul * vmag
+		var fa := 0.5 * 1.2 * cd_a * drag_mul * vmag
 		fxB -= fa * vx
 		fyB -= fa * vy
 
 		# ---- integrate the body (world frame) and the lagged suspension
 		var axB := fxB / m
 		var ayB := fyB / m
-		car.vx += (axB * ch - ayB * sh + env.gx) * h
-		car.vy += (axB * sh + ayB * ch + env.gy) * h
-		car.yaw_rate += mz / iz * h
+		c_vx += (axB * ch - ayB * sh + gx) * h
+		c_vy += (axB * sh + ayB * ch + gy) * h
+		c_yaw += mz / iz * h
 		# parked with the brakes on: stop creeping
-		if brk > 0.2 and v2 < 0.01 and absf(car.yaw_rate) < 0.05:
-			car.vx *= 0.9
-			car.vy *= 0.9
-			car.yaw_rate *= 0.9
-		car.heading += car.yaw_rate * h
-		car.x += car.vx * h
-		car.y += car.vy * h
-		ph.ax_d += (wn * wn * (axB - ph.ax_f) - 2.0 * spec.susp_zeta * wn * ph.ax_d) * h
-		ph.ay_d += (wn * wn * (ayB - ph.ay_f) - 2.0 * spec.susp_zeta * wn * ph.ay_d) * h
-		ph.ax_f += ph.ax_d * h
-		ph.ay_f += ph.ay_d * h
+		if brk > 0.2 and v2 < 0.01 and absf(c_yaw) < 0.05:
+			c_vx *= 0.9
+			c_vy *= 0.9
+			c_yaw *= 0.9
+		c_heading += c_yaw * h
+		c_x += c_vx * h
+		c_y += c_vy * h
+		ax_d += (wn * wn * (axB - ax_f) - 2.0 * zeta * wn * ax_d) * h
+		ay_d += (wn * wn * (ayB - ay_f) - 2.0 * zeta * wn * ay_d) * h
+		ax_f += ax_d * h
+		ay_f += ay_d * h
 
+	car.heading = c_heading
+	car.vx = c_vx
+	car.vy = c_vy
+	car.yaw_rate = c_yaw
+	car.x = c_x
+	car.y = c_y
+	ph.ax_f = ax_f
+	ph.ay_f = ay_f
+	ph.ax_d = ax_d
+	ph.ay_d = ay_d
+	ph.tc = p_tc
+	ph.clutch = p_clutch
+	ph.we = p_we
+	ph.fx0 = p_fx0
 	var ch := cos(car.heading)
 	var sh := sin(car.heading)
 	var vF := car.vx * ch + car.vy * sh

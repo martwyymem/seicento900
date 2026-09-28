@@ -5,26 +5,42 @@ extends RefCounted
 const G := 9.81
 
 var spec: CarSpec
+# caches of the spec, rebuilt by refresh() (call it after editing the spec at runtime)
+var _ratios := PackedFloat64Array()
+var _tq_rpm := PackedFloat64Array()
+var _tq_nm := PackedFloat64Array()
+var _n_gears := 0
 
 func _init(car_spec: CarSpec = null) -> void:
 	spec = car_spec if car_spec else load("res://data/seicento.tres")
+	refresh()
+
+func refresh() -> void:
+	_n_gears = spec.gears.size()
+	_ratios.resize(_n_gears)
+	for g in _n_gears:
+		_ratios[g] = spec.gears[g] * spec.final_drive
+	_tq_rpm.resize(spec.torque_curve.size())
+	_tq_nm.resize(spec.torque_curve.size())
+	for i in spec.torque_curve.size():
+		_tq_rpm[i] = spec.torque_curve[i].x
+		_tq_nm[i] = spec.torque_curve[i].y
 
 func torque_at(rpm: float) -> float:
-	var tc := spec.torque_curve
-	if rpm <= tc[0].x:
-		return tc[0].y
-	for i in range(1, tc.size()):
-		if rpm <= tc[i].x:
-			var a := tc[i - 1]
-			var b := tc[i]
-			return a.y + (b.y - a.y) * (rpm - a.x) / (b.x - a.x)
+	if rpm <= _tq_rpm[0]:
+		return _tq_nm[0]
+	for i in range(1, _tq_rpm.size()):
+		if rpm <= _tq_rpm[i]:
+			var r0 := _tq_rpm[i - 1]
+			var t0 := _tq_nm[i - 1]
+			return t0 + (_tq_nm[i] - t0) * (rpm - r0) / (_tq_rpm[i] - r0)
 	return 0.0
 
 func ratio(gear: int) -> float:
-	return spec.gears[gear] * spec.final_drive
+	return _ratios[gear]
 
 func rpm_for(v: float, gear: int) -> float:
-	return absf(v) / spec.wheel_radius * ratio(gear) * (60.0 / TAU)
+	return absf(v) / spec.wheel_radius * _ratios[gear] * (60.0 / TAU)
 
 ## Engine rpm including clutch slip in first gear when pulling away.
 func engine_rpm(v: float, gear: int, throttle: float) -> float:
@@ -41,26 +57,46 @@ func wheel_force(v: float, gear: int, throttle: float) -> float:
 
 ## The gear an ideal driver would be in: most tractive force without passing the redline.
 func best_gear(v: float) -> int:
+	_best_gear(v)
+	return _bg_gear
+
+var _bg_gear := 0
+var _bg_force := 0.0
+
+## best_gear() and its full-throttle wheel force in one pass (same arithmetic as the JS, so bit-identical).
+func _best_gear(v: float) -> void:
 	var best := 0
 	var best_f := -1.0
-	var n := spec.gears.size()
+	var n := _n_gears
+	var u := absf(v) / spec.wheel_radius
+	var c := 60.0 / TAU
 	for g in n:
-		if g > 0 and rpm_for(v, g) < 1500.0:
+		var rpm := u * _ratios[g] * c
+		if g > 0 and rpm < 1500.0:
 			break
-		if rpm_for(v, g) > spec.redline and g < n - 1:
+		if rpm > spec.redline and g < n - 1:
 			continue
-		var f := wheel_force(v, g, 1.0)
+		# wheel_force(v, g, 1) inlined
+		if g == 0:
+			rpm = maxf(rpm, 2600.0 + spec.idle_rpm * 0.0)
+		else:
+			rpm = maxf(rpm, spec.idle_rpm)
+		var f := 0.0
+		if rpm < spec.limiter:
+			f = 1.0 * torque_at(rpm) * _ratios[g] * spec.efficiency / spec.wheel_radius
 		if f > best_f:
 			best_f = f
 			best = g
-	return best
+	_bg_gear = best
+	_bg_force = best_f
 
 func resistance(v: float, mass: float, drag_mul := 1.0) -> float:
 	return 0.5 * 1.2 * spec.cd_a * drag_mul * v * v + spec.crr * mass * G
 
 ## Full-throttle longitudinal acceleration in the best gear (used by AI and the lap simulator).
 func max_accel(v: float, mass: float, mu: float, drag_mul := 1.0) -> float:
-	var drive := minf(wheel_force(v, best_gear(v), 1.0), spec.front_weight * mu * G * mass)
+	_best_gear(v)
+	var drive := minf(_bg_force, spec.front_weight * mu * G * mass)
 	return (drive - resistance(v, mass, drag_mul)) / (mass * 1.05)
 
 ## Deceleration from tyre scrub while cornering on curvature k: slip angles tilt the lateral force

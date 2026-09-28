@@ -1,0 +1,25 @@
+[gd_resource type="Resource" script_class="TrackDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/track_def.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+key = "suzuka"
+display_name = "Suzuka International Racing Course"
+short_name = "Suzuka"
+width = 12.0
+start_offset = 169.94
+pit_entry = -250.0
+pit_exit = 260.0
+box_start = -180.0
+box_spacing = 12.0
+runoff = 9.0
+runoff_color = Color(0.58, 0.55, 0.46, 1)
+runoff_surface = "gravel"
+barrier = "armco+fence"
+tree_density = 0.72
+tree_patch = 0.36
+tree_conifer = 0.48
+grandstands = true
+stands = Vector2(-100, 420)
+stand_tiers = 7

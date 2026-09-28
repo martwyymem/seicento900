@@ -99,14 +99,15 @@
       trees: { density: 0.12, patch: 0.55, conifer: 0.2 },
       terrainFine: 6,
       barrier: 'safer',
+      banking: 9.2, // degrees in the turns (9°12'); the 3D view here still draws it flat
       standTiers: 14,
       theme: 'oval',
       grandstands: true,
       stands: [-600, 250],
       osmNames: false,
       corners: [
-        [0, 'Front Stretch'], [288, 'Turn 1'], [756, 'South Short Chute'], [960, 'Turn 2'], [1412, 'Backstretch'],
-        [2352, 'Turn 3'], [2936, 'North Short Chute'], [2960, 'Turn 4'], [3420, 'Front Stretch'],
+        [0, 'Front Stretch'], [308, 'Turn 1'], [712, 'South Short Chute'], [922, 'Turn 2'], [1330, 'Backstretch'],
+        [2340, 'Turn 3'], [2748, 'North Short Chute'], [2958, 'Turn 4'], [3364, 'Front Stretch'],
       ],
     },
     lemans: {
@@ -250,6 +251,7 @@
         .sort((a, b) => a[0] - b[0]);
 
       this.buildFrames();
+      this.buildBanking();
       this.buildCornerEnvelope();
       this.buildRacingLine();
       this.buildProfile();
@@ -283,6 +285,16 @@
         const da = wrapAngle(this.ANG[(i + m) % n] - this.ANG[(i - m + n) % n]);
         this.KC[i] = da / (2 * m * this.step);
       }
+    }
+
+    // Banked turns: cross slope (rise per metre towards +d), full where the curvature is near its peak.
+    buildBanking() {
+      const { n } = this;
+      this.BANK = new Float64Array(n);
+      if (!this.cfg.banking) return;
+      const kFull = this.KC.reduce((a, k) => Math.max(a, Math.abs(k)), 0) * 0.85;
+      const t = Math.tan((this.cfg.banking * Math.PI) / 180);
+      for (let i = 0; i < n; i++) this.BANK[i] = -Math.sign(this.KC[i]) * t * smoothstep(Math.abs(this.KC[i]) / kFull);
     }
 
     // Peak curvature around each sample, so side offsets can be kept inside the corner radius.
@@ -370,7 +382,10 @@
       const G = SC.G;
       const vcap = 60;
       const p = new Float64Array(n);
-      for (let i = 0; i < n; i++) p[i] = Math.min(vcap, Math.sqrt(G / Math.max(Math.abs(this.RK[i]), 1e-5)));
+      for (let i = 0; i < n; i++) {
+        const t = Math.abs(this.BANK[i]); // banking adds to the centripetal force: g (mu + tan) / (1 - mu tan)
+        p[i] = Math.min(vcap, Math.sqrt((G * (1 + t)) / (1 - t) / Math.max(Math.abs(this.RK[i]), 1e-5)));
+      }
       this.CORNER = Float64Array.from(p);
       for (let pass = 0; pass < 2; pass++) {
         for (let q = n - 1; q >= 0; q--) {

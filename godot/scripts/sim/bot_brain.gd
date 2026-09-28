@@ -2,8 +2,8 @@
 class_name BotBrain
 extends RefCounted
 
-var e := PackedFloat64Array() ## learned pace per section (fraction of the grip limit)
-var e0 := PackedFloat64Array()
+var e := PackedFloat32Array() ## learned pace per section (fraction of the grip limit)
+var e0 := PackedFloat32Array()
 var talent := 1.0
 var cap := 1.0
 var floor_ := 0.9

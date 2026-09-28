@@ -47,7 +47,11 @@ TRACKS = {
                    dem='eudem25m', grid=75, length=13626),
     'indy': dict(src='osm_indy.json', ids=INDY, origin=(39.7950, -86.2346), start=(39.7931571, -86.2388466),
                  pits=('osm_indy.json', [588780266, 1176980820, 588780264, 588780328]),
-                 dem='ned10m', grid=30, length=4023),
+                 dem='ned10m', grid=30, length=4023,
+                 # the mapped oval has wobbly corners: rebuild it from the published layout (5/8 mi straights,
+                 # 1/8 mi short chutes, four 1/4 mi turns measured near the inside wall; the centreline turns
+                 # sit ~7.5 m further out, so 402 m + 7.5 * pi / 2) and fit that onto the OSM loop
+                 oval=dict(straight=1006, chute=201, turn=414, ease=30)),
     'monza': dict(src='osm_monza.json', ids='relation', origin=(45.6216, 9.2888), start=(45.61896, 9.28112),
                   pits=('osm_monza.json', [38168747]), dem='eudem25m', grid=45, length=5793, cw=True),
     'silverstone': dict(src='osm_silverstone.json', ids='relation', origin=(52.0712, -1.0168), start=(52.0693, -1.0218),
@@ -193,10 +197,68 @@ def nearest_index(pts, q):
 def rotate(seq, k):
     return seq[k:] + seq[:k]
 
+def ideal_oval(pts, straight, chute, turn, ease, ds=0.25):
+    """Four identical turns joined by straights, with eased curvature at each end of a turn, placed over the
+    mapped loop `pts` (same direction of travel, best-fitting rotation and position)."""
+    pts = resample(pts, [None] * len(pts), 4.0)[0]  # even spacing, so the sparse straights weigh as much as the corners
+    area = sum(pts[i][0] * pts[(i + 1) % len(pts)][1] - pts[(i + 1) % len(pts)][0] * pts[i][1] for i in range(len(pts)))
+    sign = 1 if area > 0 else -1  # y points south: a positive area turns clockwise on the map
+    kmax = (math.pi / 2) / (turn - ease)  # each smoothstep ease covers half its length's worth of turning
+    def ramp(u):
+        return u * u * (3 - 2 * u)
+    def k_turn(u):
+        return sign * kmax * ramp(min(1, u / ease, (turn - u) / ease))
+    segs = [(straight, None), (turn, k_turn), (chute, None), (turn, k_turn)] * 2
+    loop, x, y, a = [], 0.0, 0.0, 0.0
+    for length, kf in segs:
+        for q in range(round(length / ds)):
+            u = (q + 0.5) * ds
+            if kf:
+                a += kf(u) * ds
+            x += math.cos(a) * ds
+            y += math.sin(a) * ds
+            if q % 8 == 0:
+                loop.append((x, y))
+    cx = sum(p[0] for p in loop) / len(loop)
+    cy = sum(p[1] for p in loop) / len(loop)
+    mx = sum(p[0] for p in pts) / len(pts)
+    my = sum(p[1] for p in pts) / len(pts)
+    # principal axis of the mapped loop -> first guess for the rotation, then refine by mean distance
+    sxx = sum((p[0] - mx) ** 2 for p in pts)
+    syy = sum((p[1] - my) ** 2 for p in pts)
+    sxy = sum((p[0] - mx) * (p[1] - my) for p in pts)
+    axis = 0.5 * math.atan2(2 * sxy, sxx - syy)
+    def place(rot, dx=0.0, dy=0.0):
+        c, s = math.cos(rot), math.sin(rot)
+        return [(mx + dx + (p[0] - cx) * c - (p[1] - cy) * s, my + dy + (p[0] - cx) * s + (p[1] - cy) * c) for p in loop]
+    probe = pts[::6]
+    def cost(cand):
+        return sum(min((q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2 for p in cand[::4]) for q in probe)
+    best = None
+    for base in (axis, axis + math.pi / 2, axis + math.pi, axis - math.pi / 2):
+        for dr in [i * 0.002 for i in range(-10, 11)]:
+            c = cost(place(base + dr))
+            if best is None or c < best[0]:
+                best = (c, base + dr)
+    rot = best[1]
+    dx = dy = 0.0
+    for h in (4, 2, 1, 0.5):  # nudge the position too
+        moved = True
+        while moved:
+            moved = False
+            for ddx, ddy in ((h, 0), (-h, 0), (0, h), (0, -h)):
+                c = cost(place(rot, dx + ddx, dy + ddy))
+                if c < best[0]:
+                    best, dx, dy, moved = (c, rot), dx + ddx, dy + ddy, True
+    return place(rot, dx, dy)
+
 def centreline(key):
     """Chain, resample and (for the new tracks) rotate so index 0 is on the start line."""
     t = TRACKS[key]
     pts, names, tunnel = chain(key)
+    if 'oval' in t:
+        pts = ideal_oval(pts, **t['oval'])
+        names, tunnel = [None] * len(pts), [False] * len(pts)
     if t.get('reverse'):  # the relation's ways run against the direction of the race
         pts, names, tunnel = pts[::-1], names[::-1], tunnel[::-1]
     if 'cw' in t:  # OSM way directions are arbitrary: make the loop run the way the real race does
@@ -304,6 +366,10 @@ if __name__ == '__main__':
         f.write('window.TRACK_DATA = ')
         json.dump(out, f, separators=(',', ':'))
         f.write(';\n')
+    # the Godot port reads the same data, one file per track
+    for key, data in out.items():
+        with open(os.path.join(HERE, '..', 'godot', 'data', 'tracks', key + '.json'), 'w') as f:
+            json.dump(data, f, separators=(',', ':'))
     # Godot port: one JSON file per track
     gdir = os.path.join(HERE, '..', 'godot', 'data', 'tracks')
     os.makedirs(gdir, exist_ok=True)

@@ -9,42 +9,42 @@ name = "Front Stretch"
 
 [sub_resource type="Resource" id="Resource_3kph7"]
 script = ExtResource("1_s4a08")
-distance = 288.0
+distance = 308.0
 name = "Turn 1"
 
 [sub_resource type="Resource" id="Resource_n3hqc"]
 script = ExtResource("1_s4a08")
-distance = 756.0
+distance = 712.0
 name = "South Short Chute"
 
 [sub_resource type="Resource" id="Resource_rx6dr"]
 script = ExtResource("1_s4a08")
-distance = 960.0
+distance = 922.0
 name = "Turn 2"
 
 [sub_resource type="Resource" id="Resource_13fox"]
 script = ExtResource("1_s4a08")
-distance = 1412.0
+distance = 1330.0
 name = "Backstretch"
 
 [sub_resource type="Resource" id="Resource_q1rsh"]
 script = ExtResource("1_s4a08")
-distance = 2352.0
+distance = 2340.0
 name = "Turn 3"
 
 [sub_resource type="Resource" id="Resource_vw7e2"]
 script = ExtResource("1_s4a08")
-distance = 2936.0
+distance = 2748.0
 name = "North Short Chute"
 
 [sub_resource type="Resource" id="Resource_p7hmx"]
 script = ExtResource("1_s4a08")
-distance = 2960.0
+distance = 2958.0
 name = "Turn 4"
 
 [sub_resource type="Resource" id="Resource_332x6"]
 script = ExtResource("1_s4a08")
-distance = 3420.0
+distance = 3364.0
 name = "Front Stretch"
 
 [resource]
@@ -62,6 +62,7 @@ runoff = 3.0
 runoff_color = Color(0.43529412, 0.43529412, 0.41568628, 1)
 runoff_surface = "asphalt"
 barrier = "safer"
+banking = 9.2
 theme = "oval"
 tree_density = 0.12
 tree_patch = 0.55

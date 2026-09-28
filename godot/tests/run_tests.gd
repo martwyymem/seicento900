@@ -3,7 +3,13 @@
 ## run() and still hands back an empty (typed) Array, so the flag is what tells a pass from a crash.
 extends SceneTree
 
-const SUITES := ["res://tests/test_car.gd", "res://tests/test_physics.gd", "res://tests/test_track.gd"]
+const SUITES := [
+	"res://tests/test_car.gd",
+	"res://tests/test_physics.gd",
+	"res://tests/test_track.gd",
+	"res://tests/test_strategy.gd",
+	"res://tests/test_ui_and_audio.gd"
+]
 
 func _init() -> void:
 	var failed := 0
