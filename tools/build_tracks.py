@@ -1,4 +1,4 @@
-"""Builds js/tracks.js from OpenStreetMap data.
+"""Builds js/tracks.js and godot/data/tracks/<key>.json from OpenStreetMap data.
 
 Data © OpenStreetMap contributors, ODbL. Fetched via Overpass:
   Nürburgring   way["highway"="raceway"](50.31,6.90,50.39,7.02); out tags geom;   -> osm_raceways.json
@@ -7,6 +7,10 @@ Data © OpenStreetMap contributors, ODbL. Fetched via Overpass:
   Le Mans       rel(2126739); out geom;     (Circuit des 24 Heures du Mans)        -> osm_lemans.json
                 way["highway"="raceway"](47.940,0.195,47.965,0.225); out tags geom; -> osm_lemans_pits.json
   Indianapolis  way["highway"="raceway"](39.785,-86.245,39.805,-86.225); out tags geom; -> osm_indy.json
+Suzuka and Zandvoort come from the main API (relation/<id>/full, plus Zandvoort's pit lane way 38144527),
+converted to the same relation-with-geometry layout, with the member ways' tags stored alongside:
+  Suzuka        relation 284570   (鈴鹿サーキット)                                -> osm_suzuka.json
+  Zandvoort     relation 13545573 (Grand Prix Formule 1 van Nederland)             -> osm_zandvoort.json
 """
 import json, math, os
 
@@ -30,7 +34,11 @@ INDY = [588780349, 51308226, 588780333, 588780334, 588780335, 588780332, 5887803
 
 # key: source file, chain (explicit way ids, or 'relation' to chain the relation's members by their
 # endpoints), projection origin, start line (lat, lon) for new tracks, pit-lane ways (for hints) and
-# the OpenTopoData dataset used for elevation.
+# the OpenTopoData dataset used for elevation. Optional: 'oneway' orients the loop along the relation's
+# oneway=yes ways (for layouts whose winding says nothing, like Suzuka's figure of eight), 'name_tag'
+# picks the OSM name tag for the section names, 'bridges' parts the two roads where the loop crosses
+# itself, and 'godot' keeps a track out of the JS reference's tracks.js (and puts its start exactly on
+# the given point rather than the nearest OSM node).
 TRACKS = {
     'gp': dict(src='osm_raceways.json', ids=GP, origin=(50.35, 6.96), dem='eudem25m', grid=30),
     'nordschleife': dict(src='osm_raceways.json', ids=NORD, origin=(50.35, 6.96), dem='eudem25m', grid=75),
@@ -58,6 +66,15 @@ TRACKS = {
                         pits=('osm_silverstone.json', [227902927]), dem='eudem25m', grid=40, length=5891, cw=True),
     'spa': dict(src='osm_spa.json', ids='relation', origin=(50.4370, 5.9686), start=(50.4427568, 5.9666915),
                 pits=('osm_spa.json', [323851541]), dem='eudem25m', grid=60, length=7004, cw=True),
+    # no start node in the relation: the control line faces the middle of the pit building
+    'suzuka': dict(src='osm_suzuka.json', ids='relation', origin=(34.8431, 136.5367), start=(34.843871, 136.539761),
+                   pits=('osm_suzuka.json', [120917578]), dem='aster30m', grid=30, length=5807, oneway=True,
+                   name_tag='name:en', rename={'Hitachi Automotive Systems Chicane': 'Hitachi Astemo Chicane'},
+                   bridges=dict(deck=120, clearance=7.5, ramp=150), godot=True),
+    # the finish line (the relation also has a start node 60 m further on)
+    'zandvoort': dict(src='osm_zandvoort.json', ids='relation', origin=(52.3880, 4.5440), start=(52.3889948, 4.5408762),
+                      pits=('osm_zandvoort.json', [38144527]), dem='eudem25m', grid=30, length=4259, oneway=True,
+                      rename={'CM.com Circuit Zandvoort': None}, godot=True),
 }
 
 _cache = {}
@@ -135,7 +152,8 @@ def chain(key):
         seq = relation_chain(ways, P, t.get('skip', ()))
     else:
         seq = [(ways[i], False) for i in t['ids']]
-    pts, names, tunnel = [], [], []
+    pts, names, tunnel, bridge = [], [], [], []
+    forward = backward = 0.0  # length of oneway=yes ways run with / against their drawn direction
     for w, flip in seq:
         g = w['geometry'][::-1] if flip else w['geometry']
         if pts:
@@ -143,15 +161,28 @@ def chain(key):
             assert gap < 45.0, f'gap {gap:.1f} m before way {w["id"]}'
             if gap < 3.0:
                 g = g[1:]
+        if w.get('tags', {}).get('oneway') == 'yes':
+            run = sum(math.dist(P(a), P(b)) for a, b in zip(w['geometry'], w['geometry'][1:]))
+            if flip:
+                backward += run
+            else:
+                forward += run
         tags = w.get('tags', {})
+        name = tags.get(t.get('name_tag', 'name')) or tags.get('name')
+        name = t.get('rename', {}).get(name, name)
         for p in g:
-            pts.append(P(p)); names.append(tags.get('name')); tunnel.append(tags.get('tunnel') == 'yes')
+            pts.append(P(p)); names.append(name); tunnel.append(tags.get('tunnel') == 'yes')
+            bridge.append(tags.get('bridge') == 'yes')
     assert math.dist(pts[0], pts[-1]) < 45.0, 'loop not closed'
     if math.dist(pts[0], pts[-1]) < 3.0:
-        pts, names, tunnel = pts[:-1], names[:-1], tunnel[:-1]
+        pts, names, tunnel, bridge = pts[:-1], names[:-1], tunnel[:-1], bridge[:-1]
     if not TRACKS[key].get('tunnels'):
         tunnel = [False] * len(pts)
-    return pts, names, tunnel
+    if t.get('oneway'):  # oneway ways are drawn in the direction of the race
+        assert forward + backward > 0, 'no oneway ways to orient the loop'
+        if backward > forward:
+            pts, names, tunnel, bridge = pts[::-1], names[::-1], tunnel[::-1], bridge[::-1]
+    return pts, names, tunnel, bridge
 
 def resample(pts, names, step):
     n = len(pts)
@@ -253,22 +284,37 @@ def ideal_oval(pts, straight, chute, turn, ease, ds=0.25):
     return place(rot, dx, dy)
 
 def centreline(key):
-    """Chain, resample and (for the new tracks) rotate so index 0 is on the start line."""
+    """Chain, resample and (for the new tracks) rotate so index 0 is on the start line.
+    Returns the points with per-point section names and OSM tunnel / bridge flags."""
     t = TRACKS[key]
-    pts, names, tunnel = chain(key)
+    pts, names, tunnel, bridge = chain(key)
     if 'oval' in t:
         pts = ideal_oval(pts, **t['oval'])
-        names, tunnel = [None] * len(pts), [False] * len(pts)
+        names, tunnel, bridge = [None] * len(pts), [False] * len(pts), [False] * len(pts)
     if t.get('reverse'):  # the relation's ways run against the direction of the race
-        pts, names, tunnel = pts[::-1], names[::-1], tunnel[::-1]
+        pts, names, tunnel, bridge = pts[::-1], names[::-1], tunnel[::-1], bridge[::-1]
     if 'cw' in t:  # OSM way directions are arbitrary: make the loop run the way the real race does
         area = sum(pts[i][0] * pts[(i + 1) % len(pts)][1] - pts[(i + 1) % len(pts)][0] * pts[i][1] for i in range(len(pts)))
         if (area > 0) != t['cw']:  # y points south, so a positive area is clockwise on the map
-            pts, names, tunnel = pts[::-1], names[::-1], tunnel[::-1]
+            pts, names, tunnel, bridge = pts[::-1], names[::-1], tunnel[::-1], bridge[::-1]
     if 'start' in t:
-        k = nearest_index(pts, proj_for(key)({'lat': t['start'][0], 'lon': t['start'][1]}))
-        pts, names, tunnel = rotate(pts, k), rotate(names, k), rotate(tunnel, k)
-    return pts, names, tunnel
+        q = proj_for(key)({'lat': t['start'][0], 'lon': t['start'][1]})
+        k = nearest_index(pts, q)
+        # no OSM node on the line: split the segment it crosses (the JS tracks keep the nearest node, for parity)
+        if t.get('godot') and math.dist(pts[k], q) > 1.0:
+            best = None
+            for i in range(len(pts)):
+                a, b = pts[i], pts[(i + 1) % len(pts)]
+                L2 = (b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2 or 1
+                f = max(0.0, min(1.0, ((q[0] - a[0]) * (b[0] - a[0]) + (q[1] - a[1]) * (b[1] - a[1])) / L2))
+                c = (a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f)
+                if best is None or math.dist(c, q) < best[0]:
+                    best = (math.dist(c, q), i, c)
+            _, i, c = best
+            pts.insert(i + 1, c); names.insert(i + 1, names[i]); tunnel.insert(i + 1, tunnel[i]); bridge.insert(i + 1, bridge[i])
+            k = i + 1
+        pts, names, tunnel, bridge = rotate(pts, k), rotate(names, k), rotate(tunnel, k), rotate(bridge, k)
+    return pts, names, tunnel, bridge
 
 def pit_hints(key, pts, step):
     """Where the real pit lane leaves/rejoins the track, relative to the start line, and on which side."""
@@ -293,16 +339,69 @@ def pit_hints(key, pts, step):
         out.append((round(s), round(d, 1)))
     return out
 
+def crossings(pts, bridge, step):
+    """(upper, lower) sample pairs where the loop passes over itself under a bridge=yes stretch."""
+    n = len(pts)
+    runs, i = [], 0
+    while i < n:
+        if bridge[i]:
+            j = i
+            while j + 1 < n and bridge[j + 1]:
+                j += 1
+            runs.append((i, j))
+            i = j + 1
+        else:
+            i += 1
+    far = int(200 / step)  # ignore the bridge's own approaches
+    pad = int(60 / step)  # flags label OSM segments by one end, so look a little either side
+    out = []
+    for a, b in runs:
+        best = None
+        for i in (k % n for k in range(a - pad, b + pad + 1)):
+            for j in range(n):
+                if min(abs(i - j), n - abs(i - j)) < far:
+                    continue
+                d = math.dist(pts[i], pts[j])
+                if best is None or d < best[0]:
+                    best = (d, i, j)
+        d, up, low = best
+        assert d < 10, f'no road passes under the bridge at sample {a} ({d:.0f} m away)'
+        out.append((up, low))
+    return out
+
+def level_decks(elev, pairs, step, deck=0, **_):
+    """The DEM sees the valley under a bridge on the upper road too: carry the deck on a straight grade
+    across +-`deck` m, as the tunnels are."""
+    n = len(elev)
+    span = int(deck / step)
+    for up, _ in pairs:
+        h0, h1 = elev[(up - span) % n], elev[(up + span) % n]
+        for k in range(-span, span + 1):
+            elev[(up + k) % n] = h0 + (h1 - h0) * (k + span) / (2 * span)
+
+def cut_underpasses(elev, pairs, step, clearance=0, ramp=0, **_):
+    """Lower the road under each bridge until the deck clears it by `clearance` m, eased in over `ramp` m."""
+    n = len(elev)
+    span = int(ramp / step)
+    for up, low in pairs:
+        need = clearance - (elev[up] - elev[low])
+        if need > 0:
+            for k in range(-span, span + 1):
+                elev[(low + k) % n] -= need * (0.5 + 0.5 * math.cos(math.pi * k / span))
+        print(f'  bridge at {up * step:.0f} m over {low * step:.0f} m: {elev[up] - elev[low]:.1f} m clearance'
+              + (f' (underpass cut {need:.1f} m)' if need > 0 else ''))
+
 def build(key, step=2.0):
     t = TRACKS[key]
-    pts, names, tunnel = centreline(key)
-    # resample tunnel flags alongside the names
-    tn = [('\x01' if f else '') + (nm or '') for nm, f in zip(names, tunnel)]
+    pts, names, tunnel, bridge = centreline(key)
+    # resample the tunnel / bridge flags alongside the names
+    tn = [('\x01' if f else '') + ('\x02' if b else '') + (nm or '') for nm, f, b in zip(names, tunnel, bridge)]
     pts, tn, _ = resample(pts, tn, 4.0)
     pts = smooth(pts, 3)  # take the corners off OSM polyline vertices
     pts, tn, total = resample(pts, tn, step)
     tunnel = [x.startswith('\x01') for x in tn]
-    names = [x.lstrip('\x01') or None for x in tn]
+    bridge = ['\x02' in x for x in tn]
+    names = [x.lstrip('\x01\x02') or None for x in tn]
     # run-length encode sector names: [[startIndex, name], ...]
     sectors, last = [], object()
     for i, nm in enumerate(names):
@@ -341,7 +440,10 @@ def build(key, step=2.0):
                 k = max(j for j in range(len(prof) - 1) if prof[j][0] <= u)
                 (a, ha), (b, hb) = prof[k], prof[k + 1]
                 elev.append(ha + (hb - ha) * (u - a) / (b - a))
+        pairs = crossings(pts, bridge, total / len(pts)) if 'bridges' in t else []
+        level_decks(elev, pairs, total / len(pts), **t.get('bridges', {}))
         elev = smooth_loop(elev, 30 / (total / len(pts)))
+        cut_underpasses(elev, pairs, total / len(pts), **t.get('bridges', {}))
         out['elev'] = [round(h, 2) for h in elev]
         out['grid'] = ev['grid']
     if tunnels:
@@ -364,12 +466,8 @@ if __name__ == '__main__':
     with open(os.path.join(HERE, '..', 'js', 'tracks.js'), 'w') as f:
         f.write('// Generated by tools/build_tracks.py — geometry © OpenStreetMap contributors (ODbL)\n')
         f.write('window.TRACK_DATA = ')
-        json.dump(out, f, separators=(',', ':'))
+        json.dump({k: v for k, v in out.items() if not TRACKS[k].get('godot')}, f, separators=(',', ':'))
         f.write(';\n')
-    # the Godot port reads the same data, one file per track
-    for key, data in out.items():
-        with open(os.path.join(HERE, '..', 'godot', 'data', 'tracks', key + '.json'), 'w') as f:
-            json.dump(data, f, separators=(',', ':'))
     # Godot port: one JSON file per track
     gdir = os.path.join(HERE, '..', 'godot', 'data', 'tracks')
     os.makedirs(gdir, exist_ok=True)

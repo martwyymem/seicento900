@@ -25,6 +25,8 @@ const DIFFICULTY := {
 }
 ## Share of the racing line's limit speed the full-assist brake lets the player carry into a corner.
 const ASSIST_PACE := 0.97
+const TOW_MAX := 0.35 ## drag lost in a full slipstream, right behind a car at speed
+const RAIL_LOAD_NORM := 0.66 ## mean of 0.45 + 1.1u² over a lap, so a bot's average wear stays at the nominal figure
 
 ## Player controls for one tick.
 class PlayerInput:
@@ -132,10 +134,13 @@ var player: RaceCar
 var phys_bots := true
 var warp := 1
 var brain: Brain = null
+var limiter := false ## the player has the flag speed limiter switched on (V)
+var rc: RaceControl = null ## flags, safety car, stewards and damage (null: contact is just physics, as before)
 var last_contact := 0.0
 
 var _env := Physics.Env.new()
 var _ctl := Physics.Controls.new()
+var _uturn_ctl := Physics.Controls.new()
 var _surf_car: RaceCar
 var _surface_fn: Callable
 
@@ -178,6 +183,7 @@ func _init(settings: RaceSettings, player_plan = null, seed_ := -1, models := {}
 	# learning AI (off: every bot drives one fixed pace everywhere, as before)
 	brain = Brain.new(self, not settings.demo) if settings.ai_learning != "off" else null
 	build_field(player_plan)
+	rc = RaceControl.new(self) if settings.race_control and not settings.demo else null
 	order = cars.duplicate()
 	for i in cars.size():
 		_order_idx[cars[i]] = i
@@ -230,10 +236,16 @@ func apply_plan(car: RaceCar, p: Dictionary) -> void:
 	car.stint_idx = 0
 	var c0: String = p.stints[0].c
 	car.tyre = {"c": c0, "wear": 1.0, "temp": 0.6}
+	if s.dynamic_running:
+		car.tyre.q = _tyre_quality()
 	car.used_mask = Tyres.compound_bit(c0)
 	car.history = [c0]
 	var f: float = p.stints[0].get("fuel", 0.0)
 	car.fuel = minf(spec.tank, f if f else Strategy.fuel_need(R, fpl))
+
+## Wear multiplier of one set of tyres: no two sets last exactly as long.
+func _tyre_quality() -> float:
+	return 0.92 + 0.16 * rng.next()
 
 func build_field(player_plan) -> void:
 	var diff: Dictionary = DIFFICULTY[s.difficulty]
@@ -247,6 +259,8 @@ func build_field(player_plan) -> void:
 		car.stripes = rng.next() < 0.3
 		car.agg = 0.9 + rng.next() * 0.2
 		car.mistake_rate = diff.mistakes
+		if s.dynamic_running and rng.next() < 0.3:
+			car.pit_bias = 1
 		if brain:
 			brain.add_bot(car, diff.spread)
 		car.wet_threshold = 0.36 + rng.next() * 0.14
@@ -351,6 +365,8 @@ func step(dt: float, input: PlayerInput) -> void:
 	if s.collisions:
 		collide()
 	update_order()
+	if rc:
+		rc.step(dt)
 	if brain:
 		brain.observe()
 	rubber_band(dt)
@@ -397,6 +413,8 @@ func on_line(car: RaceCar) -> void:
 	car.mistake_p = rng.next() * track.L if rng.next() < car.mistake_rate else null
 	if brain:
 		brain.lap(car)
+	if rc:
+		rc.on_line(car)
 	if car.finished:
 		return
 	if timed and not winner and car == order[0]:
@@ -411,6 +429,8 @@ func on_line(car: RaceCar) -> void:
 		if left <= 0.0:
 			log_event("🏁 Time is up — the leader takes the chequered flag", "good")
 	var done := (car == order[0] and rt >= duration) if timed else car.lap >= R
+	if rc and rc.flag == "red":
+		done = false # nobody takes the flag in the pit lane: the race resumes first
 	if not winner and done:
 		winner = car
 		finish(car)
@@ -438,7 +458,7 @@ func finish(car: RaceCar, still_running := false) -> void:
 		car.penalty += p[1]
 	if not still_running:
 		if car == winner:
-			log_event("🏁 %s wins the race!" % car.name, "good")
+			log_event("🏁 You win the race!" if car.is_player else "🏁 %s wins the race!" % car.name, "good")
 		if car.is_player:
 			log_event("🏁 You finished P%d" % car.pos, "good")
 	# the cool-down lap is driven on rails
@@ -456,7 +476,7 @@ func after_move(car: RaceCar, prev_p: float) -> void:
 		if prev_p < x and p >= x and p - prev_p < 60.0:
 			decide(car)
 		x = cfg.pit_entry
-		if car.pit_request and prev_p < x and p >= x and p - prev_p < 60.0:
+		if (car.pit_request or (rc and rc.flag == "red")) and prev_p < x and p >= x and p - prev_p < 60.0:
 			enter_pit(car)
 	if car.mode == "pit" and car.pit.phase == "out" and p >= cfg.pit_exit and p - cfg.pit_exit < 60.0:
 		exit_pit(car)
@@ -480,28 +500,75 @@ func after_move(car: RaceCar, prev_p: float) -> void:
 		log_event("%s retires — out of fuel" % car.name, "bad")
 
 # ---------------- strategy decisions ----------------
+## Litres a lap costs this car: what it has really burned lately, else the calibrated figure.
+func car_fpl(car: RaceCar) -> float:
+	return car.fuel_lap if s.dynamic_running and car.fuel_lap > 0.0 else fpl
+
+## Nominal tread fraction a lap costs these tyres at this car's aggression.
+func nominal_lap_wear(car: RaceCar, c: String) -> float:
+	return track.L * tyres.wear_per_metre(c, weather.wet, s.wear_mult) * car.agg
+
+## Measure what the last lap really cost in tread and fuel. Rises are believed quickly and falls slowly,
+## so a few slow laps behind a safety car don't leave a car short of fuel or tyres.
+func _observe_rates(car: RaceCar) -> void:
+	var m = car.rate_mark
+	if m != null and m.stops == car.stops and m.lap == car.lap - 1:
+		var dw: float = m.wear - car.tyre.wear
+		var df: float = m.fuel - car.fuel
+		if dw > 0.0:
+			car.obs_wear = dw if car.obs_wear <= 0.0 else lerpf(car.obs_wear, dw, 0.6 if dw > car.obs_wear else 0.3)
+		if df > 0.0:
+			var f := clampf(df, fpl * 0.7, fpl * 1.6)
+			car.fuel_lap = f if car.fuel_lap <= 0.0 else lerpf(car.fuel_lap, f, 0.6 if f > car.fuel_lap else 0.3)
+	car.rate_mark = {"lap": car.lap, "stops": car.stops, "wear": car.tyre.wear, "fuel": car.fuel}
+
 func decide(car: RaceCar) -> void:
+	var dyn := s.dynamic_running
+	if dyn:
+		_observe_rates(car)
 	var rem_after := R - (car.lap + 1)
 	if rem_after <= 0 or winner:
 		return
 	var wet := weather.wet
 	var cur: String = car.tyre.c
-	var per_lap_wear := track.L * tyres.wear_per_metre(cur, wet, s.wear_mult) * car.agg
+	var nominal_wear := nominal_lap_wear(car, cur)
+	var per_lap_wear := nominal_wear
+	var lap_fuel := fpl
+	var wear_ratio := 1.0
+	var fuel_ratio := 1.0
+	if dyn:
+		# the stop calls follow what the car is really using, not the figures the plan started from
+		if car.obs_wear > 0.0:
+			wear_ratio = car.obs_wear / maxf(nominal_wear, 1e-9)
+			per_lap_wear = car.obs_wear * 1.05
+		if car.fuel_lap > 0.0:
+			fuel_ratio = car.fuel_lap / fpl
+			lap_fuel = car.fuel_lap * 1.03
 	var laps_in_stint := car.lap + 1 - car.stint_start_lap
 	var wear_end: float = car.tyre.wear - per_lap_wear * 0.15
-	var fuel_end := car.fuel - fpl * 0.15
+	var fuel_end := car.fuel - lap_fuel * 0.15
 	var reason := ""
 
 	var cur0 = car.plan[car.stint_idx] if car.stint_idx < car.plan.size() else null
 	var planned_now: bool = cur0 != null and car.stint_idx < car.plan.size() - 1 and laps_in_stint >= cur0.laps
 	var weather_shift := absf(wet - car.plan_wet) > 0.12 or (cur != "W" and wet > car.wet_threshold) or (cur == "W" and wet < 0.18)
 	var tyre_trouble := not planned_now and wear_end - per_lap_wear < 0.02
-	var fuel_trouble := not planned_now and fuel_end - fpl < Strategy.RESERVE * 0.5
-	if weather_shift or tyre_trouble or fuel_trouble or car.plan_stale:
+	var fuel_trouble := not planned_now and fuel_end - lap_fuel < Strategy.RESERVE * 0.5
+	# the car is using tyres or fuel noticeably faster or slower than its plan assumed
+	var wear_drift := dyn and absf(wear_ratio / car.plan_wear_ratio - 1.0) > 0.1
+	var fuel_drift := dyn and absf(fuel_ratio / car.plan_fuel_ratio - 1.0) > 0.08
+	var drifted := wear_drift or fuel_drift
+	if weather_shift or tyre_trouble or fuel_trouble or car.plan_stale or drifted:
+		var next_before := player_next_stop_lap() if car.is_player else -1
 		car.plan_stale = false
 		car.plan_wet = wet
+		var wear_up := wear_ratio > car.plan_wear_ratio
+		var fuel_up := fuel_ratio > car.plan_fuel_ratio
+		car.plan_wear_ratio = wear_ratio
+		car.plan_fuel_ratio = fuel_ratio
 		var opts := strategy.plan(plan_opts({
 			"laps": rem_after, "wet": wet, "agg": car.agg, "max_stops": 4,
+			"wear_mult": s.wear_mult * wear_ratio, "fuel_mult": s.fuel_mult * fuel_ratio,
 			"current": {"c": cur, "wear": maxf(0.0, wear_end), "fuel": maxf(0.0, fuel_end), "mask": car.used_mask, "stops_done": car.stops},
 		}))
 		if opts.size():
@@ -519,9 +586,19 @@ func decide(car: RaceCar) -> void:
 					reason = "new strategy"
 			if car.is_player:
 				car.service_edited = false
+				var next_now := player_next_stop_lap()
+				if drifted and not reason and next_now != next_before and next_now > 0:
+					log_event("Strategist: %s than planned — stop moved to lap %d" % [
+						"tyres wearing faster" if wear_drift and wear_up else ("tyres lasting longer" if wear_drift else
+						("fuel use up" if fuel_up else "fuel use down")), next_now], "box")
 	var st = car.plan[car.stint_idx] if car.stint_idx < car.plan.size() else null
-	if not reason and st and car.stint_idx < car.plan.size() - 1 and laps_in_stint >= st.laps:
+	var last_stint: bool = car.stint_idx >= car.plan.size() - 1
+	if not reason and st and not last_stint and laps_in_stint >= st.laps:
 		reason = "planned stop"
+		# some bots gamble on one more lap when tyres and tank can take it
+		if dyn and car.pit_bias > 0 and laps_in_stint == st.laps and not car.is_player \
+				and wear_end - 2.0 * per_lap_wear > 0.05 and fuel_end - 2.0 * lap_fuel > Strategy.RESERVE:
+			reason = ""
 	if not car.is_player or not car.service_edited:
 		car.service = default_service(car)
 	if not reason:
@@ -560,24 +637,30 @@ func default_service(car: RaceCar) -> Dictionary:
 	var next = car.plan[car.stint_idx + 1] if car.stint_idx + 1 < car.plan.size() else {"c": car.tyre.c, "laps": rem_after}
 	var is_last := car.stint_idx + 1 >= car.plan.size() - 1
 	var laps: int = rem_after if is_last else mini(next.laps, rem_after)
-	var fuel_target := minf(spec.tank, Strategy.fuel_need(laps, fpl))
+	var fuel_target := minf(spec.tank, Strategy.fuel_need(laps, car_fpl(car)))
 	return make_service(car, next.c, fuel_target)
 
 func make_service(car: RaceCar, c, fuel_target: float) -> Dictionary:
-	var arrival := maxf(0.0, car.fuel - fpl * 0.1)
+	var arrival := maxf(0.0, car.fuel - car_fpl(car) * 0.1)
 	var litres := clampf(fuel_target - arrival, 0.0, spec.tank - arrival) if rules.refuel else 0.0
-	return {"c": c, "fuel_target": fuel_target, "litres": litres, "time": Strategy.service_time(s.crew, s.parallel, c != null, litres)}
+	var sv := {"c": c, "fuel_target": fuel_target, "litres": litres, "time": Strategy.service_time(s.crew, s.parallel, c != null, litres)}
+	if rc:
+		sv.repair = rc.repair_time(car)
+		sv.time += sv.repair
+	return sv
 
 func enter_pit(car: RaceCar) -> void:
 	car.mode = "pit"
-	car.pit = {"phase": "in", "entered_at": race_time, "hold": 0.0, "wait": 0.0}
+	# under a red flag the field queues at the end of the pit lane instead of stopping at the boxes
+	var red := rc != null and rc.flag == "red"
+	car.pit = {"phase": "red" if red else "in", "entered_at": race_time, "hold": 0.0, "wait": 0.0}
 	car.pit_request = false
 	if not car.service:
 		car.service = default_service(car)
 	if car.control == "free":
 		to_rail(car)
 	if car.is_player:
-		log_event("Pit lane — limiter on, the crew is ready", "box")
+		log_event("Pit lane — red flag, queue at the pit exit" if red else "Pit lane — limiter on, the crew is ready", "box")
 
 func start_service(car: RaceCar) -> void:
 	car.v = 0.0
@@ -593,6 +676,9 @@ func finish_service(car: RaceCar) -> void:
 	var old: String = car.tyre.c
 	if sv.c:
 		car.tyre = {"c": sv.c, "wear": 1.0, "temp": 0.3}
+		if s.dynamic_running:
+			car.tyre.q = _tyre_quality()
+			car.obs_wear = 0.0
 		car.used_mask |= Tyres.compound_bit(sv.c)
 		car.history.append(sv.c)
 	car.fuel = minf(spec.tank, car.fuel + sv.litres)
@@ -611,6 +697,10 @@ func finish_service(car: RaceCar) -> void:
 		car.plan_stale = true
 	var tyre_txt := "%s→%s" % [old, sv.c] if sv.c else "no tyres"
 	var fuel_txt := ", +%.1f L" % sv.litres if sv.litres > 0.05 else ""
+	if sv.get("repair", 0.0) > 0.0:
+		rc.repaired(car)
+		fuel_txt += ", repairs"
+		car.plan_stale = true
 	log_event("%s: %s%s — %.1f s" % ["Your stop" if car.is_player else car.name, tyre_txt, fuel_txt, sv.time], "box" if car.is_player else "pit")
 	car.service = null
 	car.service_edited = false
@@ -665,13 +755,24 @@ func traffic(car: RaceCar, vT: float, rl: float, dt: float) -> Dictionary:
 	if not ahead:
 		if car.overtake_t > 0.0:
 			car.overtake_t -= dt
+		if s.draft:
+			drag = tow_drag(car, 0.0, dt)
 		var t := {"vT": vT, "dT": car.overtake_d if car.overtake_t > 0.0 else rl, "drag": drag}
+		if rc:
+			t = avoid_wrecks(car, t)
 		return apply_side_room(car, t, side)
 	var lat0 := ahead.d - car.d
 	var ahead_v := sqrt(ahead.vx * ahead.vx + ahead.vy * ahead.vy) if ahead.control == "free" else ahead.v
-	if ahead_gap < 30.0 and absf(lat0) < 1.3:
+	if s.draft:
+		drag = tow_drag(car, wake_strength(ahead_gap, absf(lat0), ahead_v), dt)
+	elif ahead_gap < 30.0 and absf(lat0) < 1.3:
 		drag = 1.0 - 0.3 * (1.0 - ahead_gap / 30.0)
 	var wants_by := vT > ahead_v + 0.4 or car.v > ahead_v + 0.6
+	# under yellow flags or the safety car only a stricken car may be passed
+	var no_pass := rc != null and rc.no_pass(car) and not ahead.stranded
+	if no_pass:
+		wants_by = false
+		car.overtake_t = 0.0
 	if wants_by and ahead_gap < 24.0 and car.overtake_t <= 0.0:
 		var sides := []
 		for d in [ahead.d - 2.4, ahead.d + 2.4]:
@@ -679,7 +780,7 @@ func traffic(car: RaceCar, vT: float, rl: float, dt: float) -> Dictionary:
 				continue
 			var blocked := false
 			for c in cars:
-				if c != car and c != ahead and not c.finished and c.mode != "pit" and absf(c.d - d) < 2.0 and absf(tr.rel(c.s - car.s) - 3.0) < 11.0:
+				if c != car and c != ahead and not c.finished and not c.recovered and c.mode != "pit" and absf(c.d - d) < 2.0 and absf(tr.rel(c.s - car.s) - 3.0) < 11.0:
 					blocked = true
 					break
 			if not blocked:
@@ -698,7 +799,45 @@ func traffic(car: RaceCar, vT: float, rl: float, dt: float) -> Dictionary:
 		vT = minf(vT, ahead_v + maxf(0.0, ahead_gap - 6.0) * 0.7)
 		if ahead_gap < 5.0:
 			vT = minf(vT, ahead_v - 0.6)
-	return apply_side_room(car, {"vT": vT, "dT": dT, "drag": drag}, side)
+	var tf := {"vT": vT, "dT": dT, "drag": drag}
+	if rc:
+		tf = avoid_wrecks(car, tf)
+	return apply_side_room(car, tf, side)
+
+## Steer round cars lying on the track (wrecks, beached cars): pick the side with room, slow down to
+## get past, and stop if there's no way through.
+func avoid_wrecks(car: RaceCar, t: Dictionary) -> Dictionary:
+	var tr := track
+	var lim := tr.half - 1.0
+	for o in cars:
+		if not o.stranded or o == car or absf(o.d) > tr.half + 1.0:
+			continue
+		var g := tr.rel(o.s - car.s)
+		if g < -8.0 or g > 140.0:
+			continue
+		if absf(o.d - car.d) > 4.5 and absf(o.d - t.dT) > 4.5:
+			continue
+		var left := o.d + 3.0
+		var right := o.d - 3.0
+		var can_l := left <= lim
+		var can_r := right >= -lim
+		var d := o.d
+		if can_l and can_r:
+			d = left if lim - o.d > o.d + lim else right
+		elif can_l:
+			d = left
+		elif can_r:
+			d = right
+		else:
+			t.vT = minf(t.vT, sqrt(2.0 * 3.0 * maxf(0.0, g - 10.0)))
+			continue
+		t.dT = d
+		var lat := absf(car.d - o.d)
+		if lat < 2.8:
+			t.vT = minf(t.vT, clampf(5.0 + maxf(0.0, g - 12.0) * 0.3, 5.0, 30.0))
+		elif g < 30.0:
+			t.vT = minf(t.vT, 13.0)
+	return t
 
 ## Lateral space left by cars running alongside: {lo, hi} offsets this car may steer to without
 ## leaning on anyone, plus the speed of whoever is squeezing it (squeeze_v, NAN if nobody).
@@ -717,7 +856,7 @@ func side_room(car: RaceCar) -> Dictionary:
 			continue
 		# track.rel() inlined; the distance test rejects most cars before the flag reads
 		var g := fmod(fmod(o.s - cs + hL, L) + L, L) - hL
-		if absf(g) > reach or o.dnf or o.finished or o.mode == "pit":
+		if absf(g) > reach or (o.dnf and not o.stranded) or o.finished or o.mode == "pit":
 			continue
 		var lat := o.d - car.d
 		var gm := gap_min + (brain.margin(o) if brain else 0.0)
@@ -754,11 +893,16 @@ func apply_side_room(car: RaceCar, t: Dictionary, side: Dictionary) -> Dictionar
 ## Follow the car ahead in the pit lane instead of driving through it.
 func pit_traffic(car: RaceCar, vT: float) -> float:
 	var tr := track
+	# under the safety car the queue out of the pit lane also minds the car that has just rejoined
+	var queue := rc != null and rc.neutral
 	for o in cars:
-		if o == car or o.mode != "pit" or o.dnf:
+		if o == car or o.dnf or (o.mode != "pit" and not (queue and o.mode == "race")):
 			continue
 		var g := tr.rel(o.s - car.s)
 		if g <= 0.0 or g > 20.0 or absf(o.d - car.d) > 1.9:
+			continue
+		if o.mode != "pit":
+			vT = minf(vT, maxf(0.0, RaceControl._speed(o) + (g - 8.0) * 0.8))
 			continue
 		# a car still parked in its box isn't in the way of someone in the fast lane
 		if o.pit.phase != "in" and o.v < 0.5 and absf(o.d - tr.cfg.pit_offset) > 2.5:
@@ -799,11 +943,17 @@ func pit_speed(car: RaceCar, v_race: float) -> float:
 	var p := tr.rel(car.s)
 	var box_p := tr.box_s(car.box)
 	var vT := v_race
-	if car.pit.phase == "in":
+	if rc and car.pit.get("go", 0.0) > race_time:
+		return 0.0 # red-flag restart: the queue leaves the pit lane one car at a time
+	if car.pit.phase == "in" or car.pit.phase == "red":
 		var to_lane := tr.lane_start - p
 		vT = minf(vT, sqrt(Strategy.PIT_SPEED * Strategy.PIT_SPEED + 2.0 * 5.5 * to_lane) if to_lane > 0.0 else Strategy.PIT_SPEED)
-		var to_box := box_p - p
-		vT = minf(vT, maxf(0.8, sqrt(maxf(0.0, 2.0 * 4.5 * (to_box - 0.3)))))
+		if car.pit.phase == "red":
+			# red flag: line up at the end of the pit lane
+			vT = minf(vT, sqrt(maxf(0.0, 2.0 * 4.0 * (rc.red_stop - p - 0.3))))
+		else:
+			var to_box := box_p - p
+			vT = minf(vT, maxf(0.8, sqrt(maxf(0.0, 2.0 * 4.5 * (to_box - 0.3)))))
 	elif p < tr.lane_end:
 		vT = minf(vT, Strategy.PIT_SPEED)
 	return vT
@@ -814,6 +964,8 @@ func pit_lateral(car: RaceCar, rl: float) -> float:
 	var p := tr.rel(car.s)
 	# swing into the box only in the last few metres, clear of the neighbouring boxes
 	var near := SimUtil.smooth01(1.0 - maxf(0.0, absf(p - tr.box_s(car.box)) - 1.5) / 6.0)
+	if car.pit.phase == "red":
+		near = 0.0 # queueing in the fast lane
 	var lane := po + signf(po) * 3.6 * near
 	return rl + (lane - rl) * tr.pit_blend(car.s)
 
@@ -839,6 +991,10 @@ func targets(car: RaceCar, dt: float, mu: float, is_phys: bool) -> Dictionary:
 		vT *= 0.82
 	if not car.finished:
 		var t := traffic(car, vT, rl, dt)
+		if rc:
+			rc.limit_speed(car, t, mu)
+			if rc.slowed(car):
+				hindered = true
 		if t.vT < vT - 0.3 or car.overtake_t > 0.0:
 			hindered = true
 		vT = t.vT
@@ -890,10 +1046,13 @@ func step_rail(car: RaceCar, dt: float) -> void:
 		vT *= 1.0 - 0.012 * absf(car.d - rl)
 		if absf(car.d) > tr.half + 0.3:
 			vT *= 0.75
+		if car.damage > 0.0:
+			vT *= 1.0 - (0.3 if rc else 0.06) * car.damage
+			drag *= 1.0 + 0.5 * car.damage
 
 	var a := 0.0
 	var climb := G * tr.sample(tr.GRADE, car.s) + (0.0 if car.mode == "pit" else car_model.scrub(car.v, tr.sample(tr.RK, car.s), mu))
-	var a_max := car_model.max_accel(car.v, mass, mu, drag) - climb
+	var a_max := car_model.max_accel(car.v, mass, mu, drag) * (1.0 - 0.3 * car.damage) - climb
 	if car.v < vT and car.fuel > 0.0 and a_max > 0.0:
 		a = minf(a_max, (vT - car.v) / dt)
 	elif car.v > vT:
@@ -931,10 +1090,20 @@ func step_rail(car: RaceCar, dt: float) -> void:
 	car.vy = sin(car.heading) * car.v
 	car.speed = car.v
 	var factor := 0.3 if car.mode == "pit" else car.agg * (0.85 if car.brain and car.brain.mind == "manage" else 1.0)
+	if s.dynamic_running and car.mode != "pit":
+		# a bot's tyres wear with the same load the player's do: cornering and braking or accelerating
+		# against the grip available, so hard corners, dirty air and a heavy tank all cost tread
+		var g_lat := car.v * car.v * absf(tr.sample(tr.RK, car.s))
+		var u := minf(1.5, sqrt(g_lat * g_lat + a * a) / (mu * G))
+		factor *= (0.45 + 1.1 * u * u) / RAIL_LOAD_NORM
 	wear_tyres(car, car.v * dt, factor)
 
 func wear_tyres(car: RaceCar, dist: float, factor: float) -> void:
 	var t: Dictionary = car.tyre
+	if s.dynamic_running:
+		# cold tyres slide and grain, a heavy tank leans on them, and every set wears a little differently
+		var load_mass: float = car_model.mass_with_fuel(car.fuel) / cal.m_ref
+		factor *= (1.0 + 0.4 * (1.0 - t.temp) * (1.0 - t.temp)) * pow(load_mass, 0.7) * t.get("q", 1.0)
 	t.wear = maxf(0.0, t.wear - dist * tyres.wear_per_metre(t.c, weather.wet, s.wear_mult) * factor)
 	t.temp = minf(1.0, t.temp + dist / 1500.0)
 	if t.wear <= 0.0 and not t.get("dead", false) and not car.finished:
@@ -1013,7 +1182,7 @@ func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float,
 	var ty := tr.sample(tr.TY, car.s)
 	# bots run the same driving-aid setting the player chose — no free assist the player didn't pick
 	var assists := s.assists
-	var drag_mul := slipstream(car) if car.is_player else car.slip_drag
+	var drag_mul := slipstream(car, dt) if car.is_player else car.slip_drag
 	var mu := tyres.tyre_grip(car.tyre, weather.wet)
 	var steer := steer_assist(car, steer_in, mu, assists) if car.is_player else steer_in
 	var env := _env
@@ -1026,6 +1195,19 @@ func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float,
 	var bank_g := G * bank / sqrt(1.0 + bank * bank)
 	env.gx = -grade * tx - bank_g * tr.sample(tr.NX, car.s)
 	env.gy = -grade * ty - bank_g * tr.sample(tr.NY, car.s)
+	if car.is_player and limiter and rc and not car.rev:
+		# the limiter holds the car just under the speed flags allow; the driver still steers and brakes
+		var cap := rc.speed_cap(car)
+		if cap > 0.0:
+			var over := vF - (cap - 1.5)
+			thr = minf(thr, clampf(-over * 0.35, 0.0, 1.0))
+			if over > 1.0:
+				brk = maxf(brk, clampf((over - 1.0) * 0.25, 0.0, 0.7))
+	if car.damage > 0.0:
+		# bent bodywork and suspension: less power, more drag, a pull to one side
+		thr *= 1.0 - 0.3 * car.damage
+		drag_mul *= 1.0 + 0.5 * car.damage
+		steer = clampf(steer + car.dmg_pull, -1.0, 1.0)
 	env.drag_mul = drag_mul
 	env.abs_on = assists != "off"
 	env.tc_on = assists == "full"
@@ -1141,13 +1323,39 @@ func player_rejoin(car: RaceCar, dt: float) -> void:
 	car.gear = 0
 	log_event("Back on track — keep going!", "info")
 
-## Tow from a car close ahead on roughly the same line (drag multiplier).
-func slipstream(car: RaceCar) -> float:
+## Strength 0..1 of the wake of a car `gap` m ahead (centre to centre) and `lat` m to one side, moving at `v`.
+## It is densest right behind the car, thins out over a few car lengths, widens as it goes and needs the
+## car ahead to be moving fast enough to leave one.
+static func wake_strength(gap: float, lat: float, v: float) -> float:
+	if gap <= 0.0 or gap > 60.0:
+		return 0.0
+	var behind := maxf(0.0, gap - 3.6) # bumper to bumper
+	var x := lat / (0.9 + 0.02 * behind)
+	return clampf((v - 8.0) / 22.0, 0.0, 1.0) * exp(-behind / 14.0 - x * x)
+
+## The tow builds up over about 0.7 s once a car tucks in behind another and is lost within 0.4 s of
+## leaving the wake, so speed is gained and shed gradually. Returns the drag multiplier.
+func tow_drag(car: RaceCar, strength: float, dt: float) -> float:
+	car.tow = move_toward(car.tow, strength, (1.5 if strength > car.tow else 2.5) * dt)
+	return 1.0 - TOW_MAX * car.tow
+
+## Drag multiplier from the wake of the cars ahead of the player.
+func slipstream(car: RaceCar, dt: float) -> float:
 	var tr := track
-	var drag := 1.0
 	var cs := car.s
 	var L := tr.L
 	var hL := L / 2
+	if s.draft:
+		var best := 0.0
+		for o in cars:
+			if o == car or not absf(o.d - car.d) < 2.5 or o.dnf or o.finished or o.mode == "pit":
+				continue
+			var g := fmod(fmod(o.s - cs + hL, L) + L, L) - hL
+			if g > 0.0 and g < 60.0:
+				var ov := sqrt(o.vx * o.vx + o.vy * o.vy) if o.control == "free" else o.v
+				best = maxf(best, wake_strength(g, absf(o.d - car.d), ov))
+		return tow_drag(car, best, dt)
+	var drag := 1.0
 	for o in cars:
 		if o == car or not absf(o.d - car.d) < 1.3 or o.dnf or o.finished or o.mode == "pit":
 			continue
@@ -1175,9 +1383,16 @@ func bot_control(car: RaceCar) -> void:
 	# spun or stuck: rejoin
 	var off := absf(SimUtil.wrap_angle(car.heading - tr.heading(car.s)))
 	var v := sqrt(car.vx * car.vx + car.vy * car.vy)
-	car.stuck_t = car.stuck_t + 1.0 / 120.0 if off > 1.4 or (v < 2.5 and not car.out_of_fuel) else 0.0
-	if car.stuck_t > (1.2 if off > 1.4 else 2.5):
+	if rc:
+		# a spun car drives itself round (bot_input) instead of being lifted back onto the line
+		if off > 1.4 and v < 14.0:
+			car.uturn = true
+		elif off < 0.7:
+			car.uturn = false
+	car.stuck_t = car.stuck_t + 1.0 / 120.0 if off > 1.4 or (v < 2.5 and not car.out_of_fuel and not (rc and rc.neutral)) else 0.0
+	if car.stuck_t > ((10.0 if rc else 1.2) if off > 1.4 else 2.5):
 		car.stuck_t = 0.0
+		car.uturn = false
 		to_rail(car)
 		car.v = minf(car.v, 3.0)
 		car.recover_t = 4.0
@@ -1185,6 +1400,14 @@ func bot_control(car: RaceCar) -> void:
 			log_event("%s spins and rejoins" % car.name, "info")
 
 func bot_input(car: RaceCar, dt: float) -> Physics.Controls:
+	if car.uturn and rc:
+		# facing the wrong way: creep forwards on full lock towards the direction of the track
+		var diff := SimUtil.wrap_angle(track.heading(car.s) - car.heading)
+		var v := sqrt(car.vx * car.vx + car.vy * car.vy)
+		_uturn_ctl.steer = signf(diff) if diff != 0.0 else 1.0
+		_uturn_ctl.throttle = 0.45 if v < 6.0 else 0.0
+		_uturn_ctl.brake = 0.3 if v > 9.0 else 0.0
+		return _uturn_ctl
 	var mu := tyres.tyre_grip(car.tyre, weather.wet)
 	var tg := targets(car, dt, mu, true)
 	car.slip_drag = tg.drag
@@ -1244,7 +1467,9 @@ func barrier_contact(car: RaceCar, mass: float) -> void:
 		car.y -= ny * pen * side
 		car.d -= pen * side
 		hit = maxf(hit, phys.barrier_hit(car, nx * side, ny * side, rx, ry, mass))
-	if hit > 5.0 and clock - car.last_hit > 1.5:
+	if rc and hit > 0.0:
+		rc.report_barrier(car, hit)
+	if hit > 5.0 and clock - car.last_hit > 1.5 and (car.is_player or not rc):
 		car.last_hit = clock
 		log_event("Ouch — that was the barrier!", "bad")
 
@@ -1292,7 +1517,7 @@ func collide() -> void:
 	var live := _collide_live
 	live.clear()
 	for c in cars:
-		if not c.finished and not c.dnf and c.mode != "pit":
+		if not c.finished and (not c.dnf or c.stranded) and c.mode != "pit":
 			live.append(c)
 	var n := live.size()
 	for i in n:
@@ -1302,6 +1527,9 @@ func collide() -> void:
 			var dx := a.x - b.x
 			var dy := a.y - b.y
 			if dx * dx + dy * dy > 16.0:
+				continue
+			# where the track crosses itself (Suzuka), one car is on the bridge and the other under it
+			if absf(track.sample(track.H, a.s) - track.sample(track.H, b.s)) > 3.0:
 				continue
 			var hit := sat(a, b)
 			if hit.is_empty():
@@ -1329,6 +1557,8 @@ func collide() -> void:
 				var py := (a.y + ca[1] + b.y + cb[1]) / 2.0
 				kick(a, -nx * jimp * wa, -ny * jimp * wa, px - a.x, py - a.y)
 				kick(b, nx * jimp * wb, ny * jimp * wb, px - b.x, py - b.y)
+				if rc:
+					rc.report_contact(a, b, nx, ny, jimp * wa, jimp * wb)
 				if brain and jimp > 1.0:
 					brain.contact(a, b, nx, ny)
 				if (a.is_player or b.is_player) and jimp > 2.5 and clock - last_contact > 1.0:

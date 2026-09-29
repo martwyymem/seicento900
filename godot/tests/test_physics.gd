@@ -6,9 +6,16 @@ extends RefCounted
 var completed := false
 
 const DT := 1.0 / 120.0
+const JS_GRIP_K := 1.15 ## js/physics.js gripK; the Godot car is tuned separately, the parity check uses the reference's
 const TOL := 1e-9
 const FIELDS := ["x", "y", "heading", "vx", "vy", "yaw_rate", "rpm", "steer", "we", "clutch", "w0", "w1", "w2", "w3",
 	"ax_f", "ay_f", "understeer", "slip", "body_roll", "body_pitch", "engine_power", "slide_power"]
+
+## The car model with the reference's calibration, for the parity tests (the shared spec resource is left alone).
+static func js_car_model() -> CarModel:
+	var spec: CarSpec = load("res://data/seicento.tres").duplicate()
+	spec.grip_k = JS_GRIP_K
+	return CarModel.new(spec)
 
 static func surf_id(x: float, y: float) -> int:
 	if y > 4.0:
@@ -20,7 +27,7 @@ static func surf_id(x: float, y: float) -> int:
 	return Physics.SURF_TRACK
 
 func run() -> Array:
-	var phys := Physics.new(CarModel.new())
+	var phys := Physics.new(js_car_model())
 	var ref: Array = JSON.parse_string(FileAccess.get_file_as_string("res://tests/ref/physics.json"))
 	var errors := []
 	var checked := 0

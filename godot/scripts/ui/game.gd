@@ -39,13 +39,46 @@ const TRACK_DEFAULTS := {
 
 const WARP_VALUES := [1, 2, 5, 10, 30, 60]
 const UI_SCALES := [0.85, 1.0, 1.15, 1.3]
+## 3D upscalers offered in the options (MetalFX only where the GPU driver supports it).
+const UPSCALERS := [
+	{"name": "Off (native resolution)", "mode": Viewport.SCALING_3D_MODE_BILINEAR},
+	{"name": "AMD FSR 1 (spatial)", "mode": Viewport.SCALING_3D_MODE_FSR},
+	{"name": "AMD FSR 2 (temporal)", "mode": Viewport.SCALING_3D_MODE_FSR2},
+	{"name": "MetalFX Spatial", "mode": Viewport.SCALING_3D_MODE_METALFX_SPATIAL, "feature": RenderingDevice.SUPPORTS_METALFX_SPATIAL},
+	{"name": "MetalFX Temporal", "mode": Viewport.SCALING_3D_MODE_METALFX_TEMPORAL, "feature": RenderingDevice.SUPPORTS_METALFX_TEMPORAL},
+]
+## Render-resolution presets for the upscalers, AMD's standard ratios.
+const UPSCALE_PRESETS := [
+	{"name": "Native AA (100%)", "scale": 1.0},
+	{"name": "Quality (67%)", "scale": 0.67},
+	{"name": "Balanced (59%)", "scale": 0.59},
+	{"name": "Performance (50%)", "scale": 0.5},
+	{"name": "Ultra performance (33%)", "scale": 0.33},
+]
+## FSR sharpening strength; Viewport.fsr_sharpness runs from 0 (sharpest) to 2 (softest).
+const SHARPENING := [
+	{"name": "Off", "value": 2.0},
+	{"name": "Low", "value": 0.8},
+	{"name": "Medium", "value": 0.4},
+	{"name": "High", "value": 0.1},
+]
+
+## Frame-rate limits offered in the options (0 is unlimited). A ProMotion display would otherwise be driven at 120 Hz.
+const FPS_LIMITS := [
+	{"name": "30 fps", "fps": 30},
+	{"name": "60 fps", "fps": 60},
+	{"name": "120 fps", "fps": 120},
+	{"name": "Unlimited", "fps": 0},
+]
+const MENU_FPS := 30 ## cap while the 3D view is hidden or holding a still image (menus, pause, results)
+const BACKGROUND_FPS := 10 ## cap while the window is not in front
+const STILL_FRAMES := 3 ## frames the 3D view keeps drawing after it stops changing, so its last image is the current one
 
 const TICK := 1.0 / 120.0
 const INK := CmrStyle.TEXT
 const MUTED := CmrStyle.MUTED
-const ACCENT := CmrStyle.LIME
+const ACCENT := CmrStyle.ORANGE
 const DANGER := CmrStyle.RED
-const MENU_BACKDROP := preload("res://scripts/ui/menu_backdrop.gd")
 
 var race: Race
 var accumulator := 0.0
@@ -60,15 +93,17 @@ var world_view: Node3D
 
 # UI Panels
 var setup_panel: PanelContainer
-var menu_tint: Control ## the CMR-style blue backdrop behind every front-end page
+var menu_tint: ColorRect ## the flat page tint behind every front-end page (one colour per page, as in CMR)
 var menu_header: HBoxContainer
 var menu_home: Control
 var menu_home_art: Control
-var menu_home_items: Array[Button] = []
+var menu_home_strip: HBoxContainer
 var menu_home_desc: Label
 var menu_home_clock: Label
 var options_panel: PanelContainer
-var render_scale_picker: OptionButton
+var upscaler_picker: OptionButton
+var upscale_preset_picker: OptionButton
+var sharpening_picker: OptionButton
 var render_viewport: SubViewport
 var home_menu_index := 1
 var home_tween: Tween
@@ -96,18 +131,24 @@ var display_mode_picker: OptionButton
 var rules_section: Control
 var antialiasing_picker: OptionButton
 var vsync_toggle: CheckButton
-var reflections_toggle: CheckButton
+var fps_limit_picker: OptionButton
+var reflections_picker: OptionButton
 var ssao_toggle: CheckButton
 var shadows_toggle: CheckButton
 var graphics_display_mode := 0
+var graphics_fps_limit := 1 ## index into FPS_LIMITS
 var graphics_antialiasing := 0
 var graphics_vsync := true
-var graphics_reflections := false
+var graphics_upscaler := 0 ## index into UPSCALERS
+var graphics_upscale_preset := 1 ## index into UPSCALE_PRESETS
+var graphics_sharpening := 2 ## index into SHARPENING
+var graphics_reflections := 0 ## 0 off, 1 screen-space, 2 ray-traced
 var graphics_ssao := true
 var graphics_shadows := true
 var graphics_ui_scale := 1 ## index into UI_SCALES
 var ui_scale_picker: OptionButton
 var menu_tab_buttons: Dictionary = {}
+var menu_tab_dividers: Dictionary = {}
 var menu_tab_index := 1
 var active_menu_page := "home"
 var hud: RaceHud
@@ -139,6 +180,9 @@ var mandatory_stop_toggle: CheckButton
 var two_compounds_toggle: CheckButton
 var refuel_toggle: CheckButton
 var collisions_toggle: CheckButton
+var race_control_toggle: CheckButton
+var dynamic_toggle: CheckButton
+var draft_toggle: CheckButton
 var strategist_toggle: CheckButton
 var parallel_toggle: CheckButton
 var crew_picker: OptionButton
@@ -188,6 +232,9 @@ var shift_down := false
 var gamepad_active := false
 var gamepad_device := -1
 var warp_index := 0
+var _app_focused := true
+var _view_live := true ## the 3D view is being rendered (see _sync_rendering)
+var _still_frames := 0
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -197,6 +244,7 @@ func _ready() -> void:
 
 	_load_championship()
 	_build_audio()
+	add_child(DevHud.new())
 	_build_viewport()
 	_build_setup()
 	_build_information_page()
@@ -212,7 +260,28 @@ func _build_audio() -> void:
 	audio = RaceAudio.new()
 	add_child(audio)
 
+## Battery and heat: the 3D view is only rendered while somebody can see it change. Behind the opaque front-end
+## pages it is off; while paused or on the results screen it draws a few more frames and then keeps its last
+## image. The frame-rate cap follows the same states, and drops further while the window is in the background.
+func _sync_rendering() -> void:
+	var covered := menu_tint.visible
+	var still := not covered and race != null and (paused or race.phase == "finished") and not skipping
+	_still_frames = _still_frames + 1 if still else 0
+	var live := not covered and _still_frames <= STILL_FRAMES
+	if live != _view_live:
+		_view_live = live
+		render_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS if live else SubViewport.UPDATE_DISABLED
+		world_view.process_mode = Node.PROCESS_MODE_INHERIT if live else Node.PROCESS_MODE_DISABLED
+	var fps: int = FPS_LIMITS[graphics_fps_limit].fps
+	if not _app_focused:
+		fps = BACKGROUND_FPS
+	elif not live:
+		fps = MENU_FPS if fps == 0 else mini(fps, MENU_FPS)
+	if Engine.max_fps != fps:
+		Engine.max_fps = fps
+
 func _process(delta: float) -> void:
+	_sync_rendering()
 	if not race:
 		menu_clock += delta
 		if is_instance_valid(menu_home_clock):
@@ -371,11 +440,14 @@ func _fit_3d_views() -> void:
 		var px := Vector2i((view.size * px_scale).round()).max(Vector2i(2, 2))
 		if vp.size != px:
 			vp.size = px
+			_still_frames = 0 # a resized target is blank until it is drawn again
 
 func _build_setup() -> void:
-	menu_tint = MENU_BACKDROP.new()
-	menu_tint.name = "MenuBackdrop"
+	menu_tint = ColorRect.new()
+	menu_tint.name = "MenuTint"
+	menu_tint.color = CmrStyle.TINT_HOME
 	menu_tint.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	menu_tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(menu_tint)
 	move_child(menu_tint, 2)
 
@@ -405,7 +477,7 @@ func _build_setup() -> void:
 	mode_row.add_theme_constant_override("separation", 10)
 	col.add_child(mode_row)
 
-	mode_button = _button("SINGLE RACE", CmrStyle.BAR)
+	mode_button = _button("SINGLE RACE", CmrStyle.FIELD)
 	mode_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	mode_button.add_theme_font_size_override("font_size", 18)
 	mode_button.pressed.connect(_toggle_mode)
@@ -571,11 +643,21 @@ func _build_setup() -> void:
 	row7.add_theme_constant_override("separation", 10)
 	col.add_child(row7)
 	collisions_toggle = _check_field(row7, "Car contact", true)
-	strategist_toggle = _check_field(row7, "Auto strategist", true)
+	strategist_toggle = _check_field(row7, "Auto strategist", false)
+	strategist_toggle.tooltip_text = "On: the strategist boxes you by itself. Off: it only advises and you press P to call the stop"
 	parallel_toggle = _check_field(row7, "Parallel service", false)
+	var row8 := HBoxContainer.new()
+	row8.add_theme_constant_override("separation", 10)
+	col.add_child(row8)
+	draft_toggle = _check_field(row8, "Slipstream", true)
+	draft_toggle.tooltip_text = "A car close behind another pulls less air and gains speed; the tow builds and fades over about a second"
 	var crew_row := HBoxContainer.new()
 	col.add_child(crew_row)
 	crew_picker = _option_field(crew_row, "PIT CREW", ["Pro", "Club", "Amateur"])
+	race_control_toggle = _check_field(crew_row, "Race control", true)
+	race_control_toggle.tooltip_text = "Flags, safety car, red flags, stewards' penalties and crash damage"
+	dynamic_toggle = _check_field(crew_row, "Live wear and stops", true)
+	dynamic_toggle.tooltip_text = "Tyre wear and fuel follow how hard each car is driven, and pit stops follow the live state of tyres and tank instead of the starting plan"
 	var bot_row := HBoxContainer.new()
 	col.add_child(bot_row)
 	ai_learning_picker = _option_field(bot_row, "AI LEARNING", ["On", "Off"])
@@ -646,7 +728,7 @@ func _build_strategy_section(parent: VBoxContainer) -> void:
 	custom_rows = VBoxContainer.new()
 	custom_rows.add_theme_constant_override("separation", 4)
 	custom_box.add_child(custom_rows)
-	var add := _button("+ STINT", CmrStyle.BAR)
+	var add := _button("+ STINT", CmrStyle.FIELD)
 	add.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	add.pressed.connect(func() -> void:
 		var base := _editor_stints()
@@ -758,9 +840,9 @@ func _plan_button(i: int) -> Button:
 	b.button_pressed = strategy_choice == i
 	b.focus_mode = Control.FOCUS_NONE
 	b.custom_minimum_size.y = 46
-	b.add_theme_stylebox_override("normal", CmrStyle.bar(CmrStyle.BAR_DIM, false))
-	b.add_theme_stylebox_override("hover", CmrStyle.bar(CmrStyle.BAR, false))
-	var on := CmrStyle.bar(CmrStyle.LIME, false)
+	b.add_theme_stylebox_override("normal", CmrStyle.box(CmrStyle.FIELD_DIM))
+	b.add_theme_stylebox_override("hover", CmrStyle.box(CmrStyle.FIELD))
+	var on := CmrStyle.box(CmrStyle.ORANGE)
 	b.add_theme_stylebox_override("pressed", on)
 	b.add_theme_stylebox_override("hover_pressed", on)
 	var row := HBoxContainer.new()
@@ -956,6 +1038,7 @@ func _race_setting_controls() -> Dictionary:
 		"weather": weather_picker, "gearbox": gearbox_picker, "grid": grid_picker, "assists": assists_picker,
 		"wear_mult": wear_picker, "fuel_mult": fuel_picker, "mandatory_stop": mandatory_stop_toggle,
 		"two_compounds": two_compounds_toggle, "refuel": refuel_toggle, "collisions": collisions_toggle,
+		"race_control": race_control_toggle, "dynamic_running": dynamic_toggle, "draft": draft_toggle,
 		"auto_strategist": strategist_toggle, "parallel": parallel_toggle, "crew": crew_picker,
 		"ai_learning": ai_learning_picker, "bot_physics": bot_physics_picker, "player_name": player_name_edit,
 		"player_number": player_number_picker, "player_color": player_color_picker, "stripes": player_stripes_toggle,
@@ -1016,7 +1099,7 @@ func _build_menu_car_preview() -> void:
 	viewport.size = Vector2i(920, 650)
 	viewport.world_3d = World3D.new()
 	viewport.transparent_bg = true
-	viewport.msaa_3d = Viewport.MSAA_4X
+	viewport.msaa_3d = Viewport.MSAA_2X
 	viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_PARENT_VISIBLE
 	menu_car_viewport = viewport
 	add_child(viewport)
@@ -1031,37 +1114,10 @@ func _build_menu_car_preview() -> void:
 	var environment_data := Environment.new()
 	environment_data.background_mode = Environment.BG_CLEAR_COLOR
 	environment_data.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	environment_data.ambient_light_color = Color("#cfe2ff")
+	environment_data.ambient_light_color = Color("#e6dcf2")
 	environment_data.ambient_light_energy = 0.6
 	environment.environment = environment_data
 	showcase.add_child(environment)
-
-	# a dark turntable with a cyan rim, lit like a showroom
-	var table := MeshInstance3D.new()
-	var table_mesh := CylinderMesh.new()
-	table_mesh.top_radius = 4.6
-	table_mesh.bottom_radius = 4.8
-	table_mesh.height = 0.12
-	table_mesh.radial_segments = 96
-	table.mesh = table_mesh
-	table.position.y = -0.085
-	var table_material := StandardMaterial3D.new()
-	table_material.albedo_color = Color("#0d2344")
-	table_material.roughness = 0.55
-	table.material_override = table_material
-	showcase.add_child(table)
-	var rim := MeshInstance3D.new()
-	var rim_mesh := TorusMesh.new()
-	rim_mesh.inner_radius = 4.66
-	rim_mesh.outer_radius = 4.8
-	rim_mesh.rings = 96
-	rim.mesh = rim_mesh
-	rim.position.y = -0.02
-	var rim_material := StandardMaterial3D.new()
-	rim_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	rim_material.albedo_color = CmrStyle.CYAN
-	rim.material_override = rim_material
-	showcase.add_child(rim)
 
 	var car = MENU_CAR_SCENE.instantiate()
 	car.name = "MenuSeicento"
@@ -1079,7 +1135,7 @@ func _build_menu_car_preview() -> void:
 	showcase.add_child(key_light)
 	var fill_light := DirectionalLight3D.new()
 	fill_light.rotation_degrees = Vector3(-18, 145, 0)
-	fill_light.light_color = Color("#8fc4ff")
+	fill_light.light_color = Color("#c9a8ff")
 	fill_light.light_energy = 0.55
 	showcase.add_child(fill_light)
 
@@ -1095,7 +1151,7 @@ func _build_menu_car_preview() -> void:
 	menu_car_rule.anchor_top = 0.66
 	menu_car_rule.anchor_right = 0.555
 	menu_car_rule.anchor_bottom = 0.664
-	menu_car_rule.color = ACCENT
+	menu_car_rule.color = Color(CmrStyle.TEXT, 0.85)
 	add_child(menu_car_rule)
 	menu_car_summary = _label("", 26, INK)
 	menu_car_summary.anchor_left = 0.045
@@ -1103,8 +1159,6 @@ func _build_menu_car_preview() -> void:
 	menu_car_summary.anchor_right = 0.555
 	menu_car_summary.anchor_bottom = 0.79
 	menu_car_summary.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	var summary_style := CmrStyle.bar(CmrStyle.NAVY, true, 26, 10)
-	menu_car_summary.add_theme_stylebox_override("normal", summary_style)
 	add_child(menu_car_summary)
 	_update_menu_car_summary()
 
@@ -1131,14 +1185,14 @@ func _build_menu_header() -> void:
 	menu_header.name = "MenuHeader"
 	menu_header.set_anchors_preset(Control.PRESET_TOP_WIDE)
 	menu_header.offset_left = 58
-	menu_header.offset_top = 30
+	menu_header.offset_top = 52
 	menu_header.offset_right = -58
-	menu_header.offset_bottom = 78
+	menu_header.offset_bottom = 100
 	menu_header.add_theme_constant_override("separation", 0)
 	add_child(menu_header)
 
 	var tabs := HBoxContainer.new()
-	tabs.add_theme_constant_override("separation", 12)
+	tabs.add_theme_constant_override("separation", 0)
 	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	menu_header.add_child(tabs)
 	_menu_tab(tabs, "Information", _show_information_page)
@@ -1150,21 +1204,39 @@ func _build_menu_header() -> void:
 
 	var player := Label.new()
 	player.text = "PLAYER 1  │  YOU"
-	player.add_theme_font_size_override("font_size", 20)
+	player.add_theme_font_size_override("font_size", 21)
 	player.add_theme_color_override("font_color", MUTED)
 	player.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	menu_header.add_child(player)
 
+## A CMR header tab: plain text, a hairline between tabs, the current page picked out in orange.
 func _menu_tab(parent: Control, title: String, callback: Callable) -> void:
 	var tab := Button.new()
-	tab.text = title.to_upper()
+	tab.text = title
+	tab.flat = true
 	tab.focus_mode = Control.FOCUS_NONE
-	tab.custom_minimum_size = Vector2(128, 46)
-	tab.add_theme_font_size_override("font_size", 20)
+	tab.custom_minimum_size = Vector2(0, 46)
+	tab.add_theme_font_override("font", CmrStyle.font(250))
+	tab.add_theme_font_size_override("font_size", 27)
+	tab.add_theme_color_override("font_color", CmrStyle.DIM)
+	tab.add_theme_color_override("font_hover_color", CmrStyle.TEXT)
+	tab.add_theme_color_override("font_pressed_color", ACCENT)
+	var clear := StyleBoxEmpty.new()
+	clear.content_margin_left = 12
+	clear.content_margin_right = 12
+	for st in ["normal", "hover", "pressed", "hover_pressed", "focus"]:
+		tab.add_theme_stylebox_override(st, clear)
 	parent.add_child(tab)
 	menu_tab_buttons[title] = tab
 	if callback.is_valid():
 		tab.pressed.connect(callback)
+	if title != "Quit":
+		var divider := ColorRect.new()
+		divider.custom_minimum_size = Vector2(2, 42)
+		divider.color = CmrStyle.DIM
+		divider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		parent.add_child(divider)
+		menu_tab_dividers[title] = divider
 
 func _build_information_page() -> void:
 	information_panel = Control.new()
@@ -1191,9 +1263,7 @@ func _build_information_page() -> void:
 	map_frame.size_flags_vertical = Control.SIZE_FILL
 	map_frame.custom_minimum_size.y = 480
 	var map_style := StyleBoxFlat.new()
-	map_style.bg_color = Color(0.02, 0.07, 0.16, 0.8)
-	map_style.border_color = Color(CmrStyle.CYAN, 0.6)
-	map_style.set_border_width_all(2)
+	map_style.bg_color = Color("#8a73b0")
 	map_style.set_content_margin_all(0)
 	map_frame.add_theme_stylebox_override("panel", map_style)
 	map_column.add_child(map_frame)
@@ -1275,7 +1345,7 @@ func _build_repair_page() -> void:
 	time_row.alignment = BoxContainer.ALIGNMENT_BEGIN
 	time_row.add_theme_constant_override("separation", 8)
 	column.add_child(time_row)
-	var time_left := _label("00:00", 70, CmrStyle.CYAN)
+	var time_left := _label("00:00", 70, CmrStyle.TEXT)
 	time_left.add_theme_font_override("font", CmrStyle.digits())
 	time_row.add_child(time_left)
 	var minutes := _label("(mins)", 21, MUTED)
@@ -1323,9 +1393,7 @@ func _build_repair_page() -> void:
 	art_frame.anchor_right = 0.36
 	art_frame.anchor_bottom = 0.72
 	var art_style := StyleBoxFlat.new()
-	art_style.bg_color = Color(0.02, 0.07, 0.16, 0.8)
-	art_style.border_color = Color(CmrStyle.CYAN, 0.6)
-	art_style.set_border_width_all(2)
+	art_style.bg_color = CmrStyle.PAPER
 	art_style.set_content_margin_all(0)
 	art_frame.add_theme_stylebox_override("panel", art_style)
 	repair_details.add_child(art_frame)
@@ -1345,7 +1413,7 @@ func _build_repair_page() -> void:
 	replacement_title.anchor_right = 0.57
 	replacement_title.anchor_bottom = 0.625
 	repair_details.add_child(replacement_title)
-	repair_time_label = _label("08:00", 62, CmrStyle.CYAN)
+	repair_time_label = _label("08:00", 62, CmrStyle.TEXT)
 	repair_time_label.add_theme_font_override("font", CmrStyle.digits())
 	repair_time_label.anchor_left = 0.38
 	repair_time_label.anchor_top = 0.625
@@ -1361,10 +1429,10 @@ func _build_repair_page() -> void:
 	damage_bar.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	damage_bar.stretch_mode = TextureRect.STRETCH_SCALE
 	var damage_gradient := Gradient.new()
-	damage_gradient.set_color(0, CmrStyle.GREEN)
-	damage_gradient.add_point(0.45, CmrStyle.LIME)
-	damage_gradient.add_point(0.72, CmrStyle.AMBER)
-	damage_gradient.set_color(1, CmrStyle.RED)
+	damage_gradient.set_color(0, CmrStyle.VIOLET)
+	damage_gradient.add_point(0.45, CmrStyle.PURPLE)
+	damage_gradient.add_point(0.72, CmrStyle.ORANGE_SOFT)
+	damage_gradient.set_color(1, CmrStyle.ORANGE)
 	var damage_texture := GradientTexture2D.new()
 	damage_texture.gradient = damage_gradient
 	damage_bar.texture = damage_texture
@@ -1426,9 +1494,9 @@ func _select_repair_part(index: int) -> void:
 		"The axles are ready for the next event."
 	]
 	for i in repair_rows.size():
-		var style := CmrStyle.bar(ACCENT if i == repair_selected else CmrStyle.BAR_DIM, true, 14, 4)
+		var style := CmrStyle.box(ACCENT if i == repair_selected else CmrStyle.FIELD_DIM, Color.TRANSPARENT, 14, 4)
 		repair_rows[i].add_theme_stylebox_override("normal", style)
-		repair_rows[i].add_theme_stylebox_override("hover", style if i == repair_selected else CmrStyle.bar(CmrStyle.BAR, true, 14, 4))
+		repair_rows[i].add_theme_stylebox_override("hover", style if i == repair_selected else CmrStyle.box(CmrStyle.FIELD, Color.TRANSPARENT, 14, 4))
 		repair_row_rules[i].color = Color(0, 0, 0, 0)
 	if is_instance_valid(repair_part_name):
 		repair_part_name.text = names[repair_selected].to_upper()
@@ -1447,97 +1515,89 @@ func _build_home_screen() -> void:
 	add_child(menu_home)
 
 	menu_home_art = MENU_TRACK_ART.new()
-	menu_home_art.anchor_left = 0.40
-	menu_home_art.anchor_top = 0.17
-	menu_home_art.anchor_right = 0.98
-	menu_home_art.anchor_bottom = 0.86
+	menu_home_art.anchor_left = 0.08
+	menu_home_art.anchor_top = 0.14
+	menu_home_art.anchor_right = 0.92
+	menu_home_art.anchor_bottom = 0.75
 	menu_home_art.set_track(Race.get_track(TRACK_KEYS[track_picker.selected]))
 	menu_home_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	menu_home_art.visible = false # the showroom car takes this space now
 	menu_home.add_child(menu_home_art)
 
 	var top := HBoxContainer.new()
 	top.set_anchors_preset(Control.PRESET_TOP_WIDE)
 	top.offset_left = 58
-	top.offset_top = 22
+	top.offset_top = 52
 	top.offset_right = -58
-	top.offset_bottom = 90
-	top.add_theme_constant_override("separation", 18)
+	top.offset_bottom = 100
+	top.add_theme_constant_override("separation", 0)
 	menu_home.add_child(top)
-	var title := _label("SEICENTO 900 CUP", 46, INK)
+	var title := _label("Main Menu", 27, CmrStyle.TEXT)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	top.add_child(title)
-	var sub := _label("MAIN MENU", 22, ACCENT)
-	sub.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	sub.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	top.add_child(sub)
 	menu_home_clock = _label("00:00.00", 24, MUTED)
 	menu_home_clock.add_theme_font_override("font", CmrStyle.digits())
 	menu_home_clock.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	top.add_child(menu_home_clock)
 
-	var list := Control.new()
-	list.anchor_top = 0.24
-	list.anchor_bottom = 0.24
-	list.offset_right = 560
-	list.offset_bottom = FRONT_MENU.size() * 78.0
-	list.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	menu_home.add_child(list)
-	menu_home_items.clear()
+	# the strip scrolls sideways so the selected word always sits at the same place
+	var clip := Control.new()
+	clip.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	clip.anchor_top = 0.77
+	clip.anchor_bottom = 0.9
+	clip.clip_contents = true
+	menu_home.add_child(clip)
+	menu_home_strip = HBoxContainer.new()
+	menu_home_strip.add_theme_constant_override("separation", 0)
+	clip.add_child(menu_home_strip)
 	for i in FRONT_MENU.size():
+		if i > 0:
+			var divider := ColorRect.new()
+			divider.custom_minimum_size = Vector2(2, 96)
+			divider.color = Color(CmrStyle.TEXT, 0.75)
+			divider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			menu_home_strip.add_child(divider)
 		var item: Dictionary = FRONT_MENU[i]
 		var button := Button.new()
-		button.text = item.word.to_upper()
+		button.text = str(item.word).to_lower()
+		button.flat = true
 		button.focus_mode = Control.FOCUS_NONE
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		button.position = Vector2(-60, i * 78.0)
-		button.size = Vector2(500, 64)
-		button.add_theme_font_size_override("font_size", 34)
+		button.custom_minimum_size.y = 112
+		button.add_theme_font_override("font", CmrStyle.font(250))
+		button.add_theme_font_size_override("font_size", 82)
+		button.add_theme_color_override("font_hover_color", CmrStyle.TEXT)
+		var clear := StyleBoxEmpty.new()
+		clear.content_margin_left = 22
+		clear.content_margin_right = 22
+		for st in ["normal", "hover", "pressed", "hover_pressed", "focus"]:
+			button.add_theme_stylebox_override(st, clear)
 		button.pressed.connect(_home_item_pressed.bind(i))
-		button.mouse_entered.connect(func() -> void:
-			if home_menu_index != i:
-				_home_select(i)
-		)
-		list.add_child(button)
-		menu_home_items.append(button)
+		menu_home_strip.add_child(button)
+	menu_home_strip.size = menu_home_strip.get_combined_minimum_size()
 
-	menu_home_desc = _label("", 18, INK)
-	menu_home_desc.anchor_top = 0.24
-	menu_home_desc.anchor_bottom = 0.24
-	menu_home_desc.offset_left = 40
-	menu_home_desc.offset_right = 540
-	menu_home_desc.offset_top = FRONT_MENU.size() * 78.0 + 18.0
-	menu_home_desc.offset_bottom = FRONT_MENU.size() * 78.0 + 70.0
+	# the one-line hint under the strip, in CMR's highlight colour
+	menu_home_desc = _label("", 18, CmrStyle.ORANGE_SOFT)
+	menu_home_desc.anchor_left = 0.16
+	menu_home_desc.anchor_top = 0.905
+	menu_home_desc.anchor_right = 0.92
+	menu_home_desc.anchor_bottom = 0.96
 	menu_home_desc.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	menu_home_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	menu_home_desc.add_theme_stylebox_override("normal", CmrStyle.bar(CmrStyle.NAVY, true, 20, 8))
 	menu_home.add_child(menu_home_desc)
-
-	var hint := _label("▲ ▼  SELECT        ENTER  ACCEPT        ESC  BACK", 17, MUTED)
-	hint.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	hint.offset_top = -52
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	var hint_style := StyleBoxFlat.new()
-	hint_style.bg_color = Color(0.01, 0.04, 0.1, 0.72)
-	hint_style.border_color = ACCENT
-	hint_style.border_width_top = 2
-	hint.add_theme_stylebox_override("normal", hint_style)
-	menu_home.add_child(hint)
-	_home_select(home_menu_index, false)
+	get_viewport().size_changed.connect(_layout_home_strip)
+	_layout_home_strip.call_deferred()
 
 func _build_options_page() -> void:
 	options_panel = _panel(Vector2.ZERO)
 	options_panel.anchor_left = 0.19
 	options_panel.anchor_right = 0.81
-	options_panel.anchor_top = 0.155
+	options_panel.anchor_top = 0.12
 	options_panel.anchor_bottom = 0.93
 	options_panel.offset_left = 0
 	options_panel.offset_right = 0
 	options_panel.offset_top = 0
 	options_panel.offset_bottom = 0
 	add_child(options_panel)
-	options_panel.add_theme_stylebox_override("panel", CmrStyle.panel(CmrStyle.NAVY, CmrStyle.NAVY_EDGE, 26))
 	var scroll := ScrollContainer.new()
 	scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -1561,19 +1621,31 @@ func _build_options_page() -> void:
 	ui_scale_picker = _option_field(display_row, "INTERFACE SIZE", ["Small", "Normal", "Large", "Extra large"])
 	ui_scale_picker.select(graphics_ui_scale)
 	ui_scale_picker.item_selected.connect(_on_ui_scale_selected)
+	var frame_row := HBoxContainer.new()
+	frame_row.add_theme_constant_override("separation", 22)
+	column.add_child(frame_row)
+	fps_limit_picker = _option_field(frame_row, "FRAME RATE LIMIT", FPS_LIMITS.map(func(l): return l.name))
+	fps_limit_picker.item_selected.connect(_on_fps_limit_selected)
+	var frame_note := _label("A lower limit runs cooler and saves battery. The race view is drawn only while it is changing, so menus, pause and results are cheap whatever this is set to.", 14, MUTED)
+	frame_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	frame_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	frame_row.add_child(frame_note)
+	frame_note.size_flags_stretch_ratio = 2.0
 	_menu_rule(column)
 	_field_label(column, "3D UPSCALING")
-	render_scale_picker = OptionButton.new()
-	render_scale_picker.add_item("Native resolution")
-	render_scale_picker.add_item("FSR 2 · Quality (77%)")
-	render_scale_picker.add_item("FSR 2 · Balanced (59%)")
-	render_scale_picker.add_item("FSR 2 · Performance (50%)")
-	render_scale_picker.custom_minimum_size.y = 40
-	render_scale_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_style_control(render_scale_picker)
-	render_scale_picker.item_selected.connect(_on_render_scale_selected)
-	column.add_child(render_scale_picker)
-	var explanation := _label("FSR 2 renders the 3D scene at a lower resolution, then reconstructs it for your display. Lower presets can improve performance with a softer image.", 14, MUTED)
+	var upscaling_row := HBoxContainer.new()
+	upscaling_row.add_theme_constant_override("separation", 22)
+	column.add_child(upscaling_row)
+	upscaler_picker = _option_field(upscaling_row, "UPSCALER", [])
+	for i in UPSCALERS.size():
+		if _upscaler_available(i):
+			upscaler_picker.add_item(UPSCALERS[i].name, i)
+	upscaler_picker.item_selected.connect(_on_upscaler_selected)
+	upscale_preset_picker = _option_field(upscaling_row, "RENDER RESOLUTION", UPSCALE_PRESETS.map(func(p): return p.name))
+	upscale_preset_picker.item_selected.connect(_on_upscale_preset_selected)
+	sharpening_picker = _option_field(upscaling_row, "FSR SHARPENING", SHARPENING.map(func(s): return s.name))
+	sharpening_picker.item_selected.connect(_on_sharpening_selected)
+	var explanation := _label("Upscalers render the 3D scene at a lower resolution, then rebuild it for your display: lower presets run faster with a softer image. The temporal ones (FSR 2, MetalFX Temporal) also replace anti-aliasing, and at 100% act as a high-quality anti-aliaser.", 14, MUTED)
 	explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	column.add_child(explanation)
 	var image_row := HBoxContainer.new()
@@ -1581,6 +1653,7 @@ func _build_options_page() -> void:
 	column.add_child(image_row)
 	antialiasing_picker = _option_field(image_row, "NATIVE ANTI-ALIASING", ["SMAA", "FXAA", "Off"])
 	antialiasing_picker.item_selected.connect(_on_antialiasing_selected)
+	_grid_spacers(image_row, 2)
 	_menu_rule(column)
 	_field_label(column, "LIGHTING & REFLECTIONS")
 	var effects_row := HBoxContainer.new()
@@ -1590,46 +1663,65 @@ func _build_options_page() -> void:
 	ssao_toggle.toggled.connect(_on_ssao_toggled)
 	shadows_toggle = _check_field(effects_row, "Dynamic shadows", graphics_shadows)
 	shadows_toggle.toggled.connect(_on_shadows_toggled)
-	reflections_toggle = _check_field(effects_row, "Wet-road reflections", graphics_reflections)
-	reflections_toggle.toggled.connect(_on_reflections_toggled)
-	var lighting_note := _label("Hardware ray-traced reflections aren't exposed as a scene setting in this renderer. Screen-space reflections offer a cheaper real-time approximation and may cost performance.", 14, MUTED)
+	var reflections_row := HBoxContainer.new()
+	reflections_row.add_theme_constant_override("separation", 22)
+	column.add_child(reflections_row)
+	reflections_picker = _option_field(reflections_row, "REFLECTIONS", ["Off", "Screen-space", "Ray-traced"])
+	reflections_picker.item_selected.connect(_on_reflections_selected)
+	_grid_spacers(reflections_row, 2)
+	var lighting_note := _label("Ray-traced reflections trace the whole circuit and every car on the GPU, so wet tarmac, puddles and paintwork also mirror what's off screen. Godot doesn't expose Metal's ray-tracing hardware yet, so they run in compute shaders. Screen-space reflections are cheaper but only show what's already on screen.", 14, MUTED)
 	lighting_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	column.add_child(lighting_note)
 	var back := _button("BACK TO MENU", ACCENT)
 	back.pressed.connect(_show_home)
 	column.add_child(back)
 	options_panel.hide()
-	render_scale_picker.select(_current_render_scale_index())
+	upscaler_picker.select(upscaler_picker.get_item_index(graphics_upscaler))
+	upscale_preset_picker.select(graphics_upscale_preset)
+	sharpening_picker.select(graphics_sharpening)
 	antialiasing_picker.select(graphics_antialiasing)
 	display_mode_picker.select(graphics_display_mode)
 	vsync_toggle.button_pressed = graphics_vsync
+	fps_limit_picker.select(graphics_fps_limit)
 	ssao_toggle.button_pressed = graphics_ssao
 	shadows_toggle.button_pressed = graphics_shadows
-	reflections_toggle.button_pressed = graphics_reflections
-	_apply_antialiasing()
+	reflections_picker.select(graphics_reflections)
+	_apply_upscaling()
 
-func _current_render_scale_index() -> int:
-	if not is_instance_valid(render_viewport):
-		return 0
-	if render_viewport.scaling_3d_mode == Viewport.SCALING_3D_MODE_FSR2:
-		if render_viewport.scaling_3d_scale >= 0.72:
-			return 1
-		return 2 if render_viewport.scaling_3d_scale >= 0.55 else 3
-	if render_viewport.scaling_3d_mode == Viewport.SCALING_3D_MODE_FSR:
-		return 1 if render_viewport.scaling_3d_scale >= 0.72 else 2
-	return 0
+func _upscaler_available(index: int) -> bool:
+	if not UPSCALERS[index].has("feature"):
+		return true
+	var rd := RenderingServer.get_rendering_device()
+	return rd != null and rd.has_feature(UPSCALERS[index].feature)
 
-func _on_render_scale_selected(index: int) -> void:
+func _on_upscaler_selected(item: int) -> void:
+	graphics_upscaler = upscaler_picker.get_item_id(item)
+	_apply_upscaling()
+	_save_graphics_settings()
+
+func _on_upscale_preset_selected(index: int) -> void:
+	graphics_upscale_preset = index
+	_apply_upscaling()
+	_save_graphics_settings()
+
+func _on_sharpening_selected(index: int) -> void:
+	graphics_sharpening = index
+	_apply_upscaling()
+	_save_graphics_settings()
+
+func _apply_upscaling() -> void:
 	if not is_instance_valid(render_viewport):
 		return
-	if index == 0:
-		render_viewport.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
-		render_viewport.scaling_3d_scale = 1.0
-	else:
-		render_viewport.scaling_3d_mode = Viewport.SCALING_3D_MODE_FSR2
-		render_viewport.scaling_3d_scale = [1.0, 0.77, 0.59, 0.5][clampi(index, 0, 3)]
+	var mode: int = UPSCALERS[graphics_upscaler].mode
+	render_viewport.scaling_3d_mode = mode
+	render_viewport.scaling_3d_scale = 1.0 if graphics_upscaler == 0 else UPSCALE_PRESETS[graphics_upscale_preset].scale
+	render_viewport.fsr_sharpness = SHARPENING[graphics_sharpening].value
+	if is_instance_valid(world_view):
+		world_view.apply_graphics(world_view.quality) # MSAA depends on the upscaler
+	if is_instance_valid(upscale_preset_picker):
+		upscale_preset_picker.disabled = graphics_upscaler == 0
+		sharpening_picker.disabled = mode not in [Viewport.SCALING_3D_MODE_FSR, Viewport.SCALING_3D_MODE_FSR2]
 	_apply_antialiasing()
-	_save_graphics_settings()
 
 func _on_display_mode_selected(index: int) -> void:
 	graphics_display_mode = index
@@ -1647,6 +1739,10 @@ func _on_vsync_toggled(enabled: bool) -> void:
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED if enabled else DisplayServer.VSYNC_DISABLED)
 	_save_graphics_settings()
 
+func _on_fps_limit_selected(index: int) -> void:
+	graphics_fps_limit = index
+	_save_graphics_settings()
+
 func _on_antialiasing_selected(index: int) -> void:
 	graphics_antialiasing = index
 	_apply_antialiasing()
@@ -1655,7 +1751,11 @@ func _on_antialiasing_selected(index: int) -> void:
 func _apply_antialiasing() -> void:
 	if not is_instance_valid(render_viewport):
 		return
-	if render_viewport.scaling_3d_mode == Viewport.SCALING_3D_MODE_FSR2:
+	# temporal upscalers anti-alias the image themselves
+	var temporal := render_viewport.scaling_3d_mode in [Viewport.SCALING_3D_MODE_FSR2, Viewport.SCALING_3D_MODE_METALFX_TEMPORAL]
+	if is_instance_valid(antialiasing_picker):
+		antialiasing_picker.disabled = temporal
+	if temporal:
 		render_viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
 		return
 	match graphics_antialiasing:
@@ -1663,8 +1763,8 @@ func _apply_antialiasing() -> void:
 		1: render_viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
 		_: render_viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
 
-func _on_reflections_toggled(enabled: bool) -> void:
-	graphics_reflections = enabled
+func _on_reflections_selected(index: int) -> void:
+	graphics_reflections = index
 	_apply_world_graphics_settings()
 	_save_graphics_settings()
 
@@ -1684,45 +1784,59 @@ func _apply_world_graphics_settings() -> void:
 	var environment := world_view.get("world_environment") as Environment
 	if environment:
 		environment.ssao_enabled = graphics_ssao
-		environment.ssr_enabled = graphics_reflections
+		environment.ssr_enabled = graphics_reflections == 1
+	var ray_tracing := world_view.get("ray_tracing") as RayTracing
+	if ray_tracing:
+		ray_tracing.enabled = graphics_reflections == 2
 	var sun := world_view.get("sun") as DirectionalLight3D
 	if sun:
 		sun.shadow_enabled = graphics_shadows
 
 func _load_graphics_settings() -> void:
 	var config := ConfigFile.new()
-	var config_loaded := config.load("user://graphics.cfg") == OK
-	var scale_index: int = 0
-	if config_loaded:
+	if config.load("user://graphics.cfg") == OK:
 		graphics_display_mode = clampi(int(config.get_value("graphics", "display_mode", 0)), 0, 1)
 		graphics_antialiasing = clampi(int(config.get_value("graphics", "antialiasing", 0)), 0, 2)
 		graphics_vsync = bool(config.get_value("graphics", "vsync", true))
-		graphics_reflections = bool(config.get_value("graphics", "reflections", false))
+		graphics_fps_limit = clampi(int(config.get_value("graphics", "fps_limit", graphics_fps_limit)), 0, FPS_LIMITS.size() - 1)
+		# older versions stored an SSR on/off switch
+		var reflections = config.get_value("graphics", "reflections", 0)
+		graphics_reflections = (1 if reflections else 0) if reflections is bool else int(reflections)
+		graphics_reflections = clampi(graphics_reflections, 0, 2)
 		graphics_ssao = bool(config.get_value("graphics", "ssao", true))
 		graphics_shadows = bool(config.get_value("graphics", "shadows", true))
-		scale_index = clampi(int(config.get_value("graphics", "render_scale", 0)), 0, 3)
+		if config.has_section_key("graphics", "upscaler"):
+			graphics_upscaler = clampi(int(config.get_value("graphics", "upscaler", 0)), 0, UPSCALERS.size() - 1)
+			graphics_upscale_preset = clampi(int(config.get_value("graphics", "upscale_preset", 1)), 0, UPSCALE_PRESETS.size() - 1)
+			graphics_sharpening = clampi(int(config.get_value("graphics", "sharpening", 2)), 0, SHARPENING.size() - 1)
+		else:
+			# older versions: render_scale 0 native, then FSR 2 at Quality, Balanced or Performance
+			var scale_index := clampi(int(config.get_value("graphics", "render_scale", 0)), 0, 3)
+			graphics_upscaler = 2 if scale_index > 0 else 0
+			graphics_upscale_preset = maxi(scale_index, 1)
 		graphics_ui_scale = clampi(int(config.get_value("graphics", "ui_scale", 1)), 0, UI_SCALES.size() - 1)
+	if not _upscaler_available(graphics_upscaler):
+		graphics_upscaler = 0
 	get_window().content_scale_factor = UI_SCALES[graphics_ui_scale]
 	if graphics_display_mode == 1:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 	else:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED if graphics_vsync else DisplayServer.VSYNC_DISABLED)
-	if scale_index == 0:
-		render_viewport.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
-		render_viewport.scaling_3d_scale = 1.0
-	else:
-		render_viewport.scaling_3d_mode = Viewport.SCALING_3D_MODE_FSR2
-		render_viewport.scaling_3d_scale = [1.0, 0.77, 0.59, 0.5][scale_index]
-	_apply_antialiasing()
+	_apply_upscaling()
 
 func _save_graphics_settings() -> void:
 	var config := ConfigFile.new()
 	config.load("user://graphics.cfg")
-	config.set_value("graphics", "render_scale", _current_render_scale_index())
+	if config.has_section_key("graphics", "render_scale"):
+		config.erase_section_key("graphics", "render_scale")
+	config.set_value("graphics", "upscaler", graphics_upscaler)
+	config.set_value("graphics", "upscale_preset", graphics_upscale_preset)
+	config.set_value("graphics", "sharpening", graphics_sharpening)
 	config.set_value("graphics", "display_mode", graphics_display_mode)
 	config.set_value("graphics", "antialiasing", graphics_antialiasing)
 	config.set_value("graphics", "vsync", graphics_vsync)
+	config.set_value("graphics", "fps_limit", graphics_fps_limit)
 	config.set_value("graphics", "reflections", graphics_reflections)
 	config.set_value("graphics", "ssao", graphics_ssao)
 	config.set_value("graphics", "shadows", graphics_shadows)
@@ -1734,25 +1848,22 @@ func _layout_home_strip() -> void:
 
 func _home_select(index: int, animate := true) -> void:
 	home_menu_index = posmod(index, FRONT_MENU.size())
-	if menu_home_items.is_empty():
+	if not is_instance_valid(menu_home_strip) or menu_home_strip.get_child_count() == 0:
 		return
+	for i in FRONT_MENU.size():
+		var button: Button = menu_home_strip.get_child(i * 2)
+		button.add_theme_color_override("font_color", ACCENT if i == home_menu_index else CmrStyle.DIM)
+	menu_home_desc.text = "%s        ◂  ▸  browse     enter  select" % FRONT_MENU[home_menu_index].desc
+	var selected: Control = menu_home_strip.get_child(home_menu_index * 2)
+	var target_x := get_viewport_rect().size.x * 0.16 - selected.position.x
 	if home_tween and home_tween.is_running():
 		home_tween.kill()
 	if animate:
-		home_tween = create_tween().set_parallel(true)
+		home_tween = create_tween()
 		home_tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	for i in menu_home_items.size():
-		var button := menu_home_items[i]
-		var on := i == home_menu_index
-		var style := CmrStyle.bar(ACCENT if on else CmrStyle.BAR_DIM, true, 96, 6)
-		button.add_theme_stylebox_override("normal", style)
-		button.add_theme_stylebox_override("hover", style)
-		var x := -12.0 if on else -60.0
-		if animate:
-			home_tween.tween_property(button, "position:x", x, 0.22)
-		else:
-			button.position.x = x
-	menu_home_desc.text = FRONT_MENU[home_menu_index].desc
+		home_tween.tween_property(menu_home_strip, "position:x", target_x, 0.32)
+	else:
+		menu_home_strip.position.x = target_x
 
 func _home_item_pressed(index: int) -> void:
 	if index != home_menu_index:
@@ -1785,15 +1896,13 @@ func _select_menu_tab(title: String) -> void:
 	menu_tab_index = maxi(0, TOP_MENU_TABS.find(title))
 	for tab_name in TOP_MENU_TABS:
 		var button: Button = menu_tab_buttons[tab_name]
-		var style := CmrStyle.bar(ACCENT if tab_name == title else CmrStyle.BAR_DIM)
-		button.add_theme_stylebox_override("normal", style)
+		button.add_theme_color_override("font_color", ACCENT if tab_name == title else CmrStyle.DIM)
 
 func _show_home() -> void:
 	active_menu_page = "home"
 	_hide_pages()
 	menu_home.show()
-	_place_car_preview(0.38, 0.15, 0.98, 0.9)
-	menu_car_preview.show()
+	menu_tint.color = CmrStyle.TINT_HOME
 	if is_instance_valid(menu_home_art):
 		menu_home_art.set_track(Race.get_track(TRACK_KEYS[track_picker.selected]))
 	_home_select(home_menu_index, false)
@@ -1819,24 +1928,27 @@ func _show_options_page() -> void:
 	active_menu_page = "options"
 	_hide_pages()
 	options_panel.show()
+	menu_tint.color = CmrStyle.TINT_OPTIONS
 
 func _show_information_page() -> void:
 	active_menu_page = "information"
 	_hide_pages()
 	information_panel.show()
 	menu_header.show()
+	menu_tint.color = CmrStyle.TINT_INFO
 	_select_menu_tab("Information")
 	_update_information_page()
 
 func _show_setup_page() -> void:
 	active_menu_page = "setup"
 	_hide_pages()
-	_place_car_preview(0.045, 0.15, 0.555, 0.65)
+	_place_car_preview(0.045, 0.12, 0.555, 0.64)
 	menu_car_preview.show()
 	menu_car_summary.show()
 	menu_car_rule.show()
 	setup_panel.show()
 	menu_header.show()
+	menu_tint.color = CmrStyle.TINT_SETUP
 	_select_menu_tab("Set Up")
 	menu_scroll.scroll_vertical = 0
 	_update_menu_car_summary()
@@ -1844,11 +1956,12 @@ func _show_setup_page() -> void:
 func _show_repair_page() -> void:
 	active_menu_page = "repair"
 	_hide_pages()
-	_place_car_preview(0.045, 0.15, 0.555, 0.53)
+	_place_car_preview(0.045, 0.12, 0.555, 0.53)
 	menu_car_preview.show()
 	repair_panel.show()
 	repair_details.show()
 	menu_header.show()
+	menu_tint.color = CmrStyle.TINT_REPAIR
 	_select_menu_tab("Repair")
 
 func _set_championship_mode(value: bool) -> void:
@@ -1906,7 +2019,7 @@ func _build_hud() -> void:
 	_build_pause_menu()
 
 func _build_pause_menu() -> void:
-	pause_panel = _panel(Vector2(380, 0))
+	pause_panel = _sheet(Vector2(380, 0))
 	pause_panel.anchor_left = 0.5
 	pause_panel.anchor_right = 0.5
 	pause_panel.anchor_top = 0.5
@@ -1919,7 +2032,7 @@ func _build_pause_menu() -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(title)
 	for spec in [["RESUME", "resume"], ["RESTART RACE", "restart"], ["RETIRE & SEE RESULTS", "retire"], ["QUIT TO MENU", "menu"]]:
-		var b := _button(spec[0], ACCENT if spec[1] == "resume" else CmrStyle.BAR)
+		var b := _button(spec[0], ACCENT if spec[1] == "resume" else CmrStyle.FIELD)
 		b.custom_minimum_size = Vector2(340, 44)
 		b.pressed.connect(_pause_action.bind(spec[1]))
 		col.add_child(b)
@@ -1963,9 +2076,15 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		_commit_brain()
 		_save_race_settings()
+	# leaving the window stops the race and drops the frame rate instead of burning battery unseen
+	elif what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		_app_focused = false
+		_set_paused(true)
+	elif what == NOTIFICATION_APPLICATION_FOCUS_IN:
+		_app_focused = true
 
 func _build_results() -> void:
-	result_panel = _panel(Vector2(1120, 820))
+	result_panel = _sheet(Vector2(1120, 820))
 	result_panel.set_anchors_preset(Control.PRESET_CENTER)
 	result_panel.position = Vector2(-560, -410)
 	add_child(result_panel)
@@ -2029,6 +2148,9 @@ func _start_race() -> void:
 	settings.two_compounds = two_compounds_toggle.button_pressed
 	settings.refuel = refuel_toggle.button_pressed
 	settings.collisions = collisions_toggle.button_pressed
+	settings.race_control = race_control_toggle.button_pressed
+	settings.dynamic_running = dynamic_toggle.button_pressed
+	settings.draft = draft_toggle.button_pressed
 	settings.auto_strategist = strategist_toggle.button_pressed
 	settings.parallel = parallel_toggle.button_pressed
 	settings.crew = ["pro", "club", "amateur"][crew_picker.selected]
@@ -2108,7 +2230,7 @@ func _show_results() -> void:
 			for x in learned.slice(0, 3):
 				parts.append("%s −%.1f s/lap" % [Brain.short(x.car), x.gain])
 			var more := " and %d more" % (learned.size() - 3) if learned.size() > 3 else ""
-			var ai := _label("The field learned from you: %s%s." % [", ".join(parts), more], 13, CmrStyle.CYAN)
+			var ai := _label("The field learned from you: %s%s." % [", ".join(parts), more], 13, CmrStyle.VIOLET)
 			ai.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			col.add_child(ai)
 
@@ -2124,7 +2246,7 @@ func _show_results() -> void:
 	var table := VBoxContainer.new()
 	table.add_theme_constant_override("separation", 3)
 	col.add_child(table)
-	table.add_child(_result_row(headers, widths, CmrStyle.bar(Color(0.01, 0.04, 0.1, 0.8), true, 14, 3), CmrStyle.LIME, 12))
+	table.add_child(_result_row(headers, widths, CmrStyle.box(Color(0, 0, 0, 0.25), Color.TRANSPARENT, 14, 3), CmrStyle.ORANGE_SOFT, 12))
 	for r in rows:
 		var car: RaceCar = r.car
 		var time_txt: String = Race.fmt_time(r.total) if r.pos == 1 and r.total != null else (r.gap if r.gap != "" else ("" if r.status != "" else "—"))
@@ -2139,8 +2261,8 @@ func _show_results() -> void:
 			Race.fmt_time(car.best_lap), str(car.stops), tyres]
 		if is_champ:
 			cells.append("+%d" % _round_points(r))
-		var fill: Color = CmrStyle.LIME if car.is_player else (CmrStyle.BAR if r.pos % 2 == 1 else CmrStyle.BAR_DIM)
-		var row := _result_row(cells, widths, CmrStyle.bar(fill, true, 14, 3), CmrStyle.INK, 15, car.color)
+		var fill: Color = CmrStyle.ORANGE if car.is_player else (CmrStyle.FIELD if r.pos % 2 == 1 else CmrStyle.FIELD_DIM)
+		var row := _result_row(cells, widths, CmrStyle.box(fill, Color.TRANSPARENT, 14, 3), CmrStyle.INK, 15, car.color)
 		if fast and fast.car == car:
 			(row.get_child(0).get_child(5) as Label).add_theme_color_override("font_color", Color("#6a1fc0"))
 		table.add_child(row)
@@ -2163,7 +2285,7 @@ func _show_results() -> void:
 		primary.pressed.connect(_start_race)
 	primary.custom_minimum_size.y = 44
 	buttons.add_child(primary)
-	var back := _button("BACK TO MENU", CmrStyle.BAR)
+	var back := _button("BACK TO MENU", CmrStyle.FIELD)
 	back.custom_minimum_size.y = 44
 	back.pressed.connect(_return_to_setup)
 	buttons.add_child(back)
@@ -2233,12 +2355,12 @@ func _render_championship_standings(col: VBoxContainer) -> void:
 	table.add_theme_constant_override("separation", 3)
 	col.add_child(table)
 	var widths := [46, 44, 250, 60, 70]
-	table.add_child(_result_row(["POS", "NO.", "DRIVER", "WINS", "POINTS"], widths, CmrStyle.bar(Color(0.01, 0.04, 0.1, 0.8), true, 14, 3), CmrStyle.LIME, 12))
+	table.add_child(_result_row(["POS", "NO.", "DRIVER", "WINS", "POINTS"], widths, CmrStyle.box(Color(0, 0, 0, 0.25), Color.TRANSPARENT, 14, 3), CmrStyle.ORANGE_SOFT, 12))
 	for i in list.size():
 		var e: Dictionary = list[i]
-		var fill: Color = CmrStyle.LIME if e.get("is_player", false) else (CmrStyle.BAR if i % 2 == 0 else CmrStyle.BAR_DIM)
+		var fill: Color = CmrStyle.ORANGE if e.get("is_player", false) else (CmrStyle.FIELD if i % 2 == 0 else CmrStyle.FIELD_DIM)
 		table.add_child(_result_row([str(i + 1), str(int(e.get("number", 0))), str(e.name), str(int(e.wins)), str(int(e.points))],
-			widths, CmrStyle.bar(fill, true, 14, 3), CmrStyle.INK, 15))
+			widths, CmrStyle.box(fill, Color.TRANSPARENT, 14, 3), CmrStyle.INK, 15))
 
 ## Scores a round once, however many times its results are shown. No points for a DNF.
 func _score_championship_round(results: Array) -> void:
@@ -2502,6 +2624,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		KEY_O: _toggle_autopilot()
 		KEY_C: _cycle_camera()
 		KEY_L: _toggle_racing_line()
+		KEY_V: race.limiter = not race.limiter
 		KEY_H: hud.toggle_help()
 		KEY_M: _toggle_mute()
 		KEY_COMMA: _change_warp(-1)
@@ -2581,6 +2704,12 @@ func _panel(min_size := Vector2.ZERO) -> PanelContainer:
 	panel.custom_minimum_size = min_size
 	return panel
 
+## A panel with its own flat purple sheet, for screens drawn over the race (pause, results).
+func _sheet(min_size := Vector2.ZERO) -> PanelContainer:
+	var panel := _panel(min_size)
+	panel.add_theme_stylebox_override("panel", CmrStyle.panel())
+	return panel
+
 func _column(parent: Control, spacing := 12) -> VBoxContainer:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", spacing)
@@ -2599,7 +2728,7 @@ func _field_label(parent: Control, text: String) -> void:
 
 func _menu_rule(parent: Control) -> void:
 	var line := ColorRect.new()
-	line.color = Color(CmrStyle.CYAN, 0.35)
+	line.color = Color(CmrStyle.TEXT, 0.6)
 	line.custom_minimum_size.y = 2
 	parent.add_child(line)
 
@@ -2627,7 +2756,7 @@ func _label(text: String, font_size: int, color: Color) -> Label:
 	label.add_theme_color_override("font_color", color)
 	return label
 
-## A slanted CMR bar. Lime (ACCENT) is the primary action and red a destructive one; any other colour
+## A flat CMR box. Orange (ACCENT) is the primary action and red a destructive one; any other colour
 ## gives the standard light bar.
 func _button(text: String, color: Color) -> Button:
 	var button := Button.new()
@@ -2635,8 +2764,8 @@ func _button(text: String, color: Color) -> Button:
 	button.custom_minimum_size.y = 42
 	button.add_theme_font_size_override("font_size", 16)
 	if color == ACCENT or color == DANGER:
-		button.add_theme_stylebox_override("normal", CmrStyle.bar(color))
-		button.add_theme_stylebox_override("hover", CmrStyle.bar(color.lightened(0.2)))
+		button.add_theme_stylebox_override("normal", CmrStyle.box(color, color.darkened(0.3)))
+		button.add_theme_stylebox_override("hover", CmrStyle.box(color.lightened(0.2), color.darkened(0.3)))
 		if color == DANGER:
 			for key in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
 				button.add_theme_color_override(key, INK)
@@ -2676,6 +2805,13 @@ func _option_field(parent: Control, title: String, options: Array) -> OptionButt
 	_style_control(opt)
 	col.add_child(opt)
 	return opt
+
+## Empty columns that keep a lone field at the width of the three-column rows around it.
+func _grid_spacers(row: HBoxContainer, count: int) -> void:
+	for i in count:
+		var spacer := Control.new()
+		spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(spacer)
 
 func _check_field(parent: Control, title: String, default_val: bool) -> CheckButton:
 	var chk := CheckButton.new()

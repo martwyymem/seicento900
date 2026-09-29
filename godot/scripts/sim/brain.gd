@@ -366,7 +366,7 @@ func observe() -> void:
 	var ch := cos(p.heading)
 	var sh := sin(p.heading)
 	var slip_ang := absf(atan2(-sh * p.vx + ch * p.vy, ch * p.vx + sh * p.vy)) if v > 3.0 else 0.0
-	if absf(p.d) > tr.half + 0.3 or p.rev or slip_ang > 0.14 or race.clock - last_contact < 2.0:
+	if absf(p.d) > tr.half + 0.3 or p.rev or slip_ang > 0.14 or race.clock - last_contact < 2.0 or (race.rc and race.rc.slowed(p)):
 		ob.ok = false
 	else:
 		for c in race.cars:

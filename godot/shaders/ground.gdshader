@@ -23,7 +23,6 @@ uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic, r
 uniform sampler2D normal_tex : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D rough_tex : hint_default_white, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform bool has_rough_tex = false;
-uniform vec3 tex_average = vec3(0.5);
 uniform float tex_scale = 0.35;
 uniform float tex_color_mix = 0.3;
 
@@ -56,22 +55,22 @@ void fragment() {
 		vec2 tuv = p * tex_scale;
 		vec2 tuv2 = mat2(vec2(0.8, 0.6), vec2(-0.6, 0.8)) * p * tex_scale * 0.37 + 0.31;
 		vec3 photo = mix(texture(albedo_tex, tuv).rgb, texture(albedo_tex, tuv2).rgb, smoothstep(0.35, 0.65, broad));
-		col = mix(base * photo / tex_average, photo, tex_color_mix);
+		col = mix(base * photo / max(textureLod(albedo_tex, vec2(0.5), 12.0).rgb, vec3(0.004)), photo, tex_color_mix);
 		nmap = texture(normal_tex, tuv).rgb;
 		if (has_rough_tex) {
 			rough = texture(rough_tex, tuv).r;
 		}
 	} else {
-		col = base * (0.86 + 0.26 * fine * tuft + 0.1 * micro);
+		col = base * (0.74 + 0.42 * fine + 0.2 * micro);
 	}
 	// patchy colour: sun-bleached and lush areas
 	vec3 dry_tint = vec3(1.08, 1.04, 0.84);
 	vec3 lush_tint = vec3(0.86, 0.96, 0.86);
-	col *= mix(vec3(1.0), mix(lush_tint, dry_tint, smoothstep(0.3, 0.7, macro)), tuft) * (0.9 + 0.2 * broad);
+	col *= mix(vec3(1.0), mix(lush_tint, dry_tint, smoothstep(0.3, 0.7, macro)), tuft) * (0.8 + 0.4 * broad);
 
 	// steep ground turns to bare earth and rock
 	if (!is_runoff) {
-		float steep = smoothstep(0.8, 0.62, world_normal.y) * slope_rock;
+		float steep = smoothstep(0.8, 0.62, abs(world_normal.y)) * slope_rock; // abs: the terrain is two-sided
 		col = mix(col, rock_color * (0.8 + 0.4 * fine), steep);
 		rough = mix(rough, 0.85, steep);
 	} else {

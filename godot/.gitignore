@@ -1,2 +1,7 @@
 .godot/
 *.import
+
+# Optional art downloaded by tools/fetch_assets.py (see ASSETS.md)
+assets/sky/
+assets/textures/
+assets/models/

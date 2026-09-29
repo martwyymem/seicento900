@@ -54,6 +54,6 @@ extends Resource
 
 @export_group("Tyre model")
 @export var load_sensitivity := 0.1 ## grip lost per unit of extra load over static
-@export var grip_k := 1.15 ## calibrates the tyre so the car's steady-state limit matches the field's
+@export var grip_k := 1.4 ## calibrates the tyre so the car's steady-state limit matches the field's
 @export var v_ref := 2.5 ## low-speed slip floor (m/s)
 @export var substeps := 8 ## physics substeps per race tick

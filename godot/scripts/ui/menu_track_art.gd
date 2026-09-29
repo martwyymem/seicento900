@@ -43,15 +43,13 @@ func _draw() -> void:
 	path.append(path[0])
 
 	if map_mode:
-		draw_polyline(path, Color(CmrStyle.CYAN, 0.25), 14.0, true)
-		draw_polyline(path, Color("#e8f2ff"), 5.0, true)
-		draw_polyline(path, CmrStyle.CYAN, 1.8, true)
+		draw_polyline(path, Color(CmrStyle.TEXT, 0.9), 3.0, true)
 		var start := path[0]
-		draw_circle(start, 8.0, CmrStyle.LIME)
+		draw_circle(start, 7.0, CmrStyle.ORANGE)
 	else:
-		draw_polyline(path, Color(CmrStyle.CYAN, 0.10), 9.0, true)
-		draw_polyline(path, Color(0.84, 0.92, 1.0, 0.30), 1.7, true)
+		draw_polyline(path, Color(CmrStyle.TEXT, 0.12), 7.0, true)
+		draw_polyline(path, Color(CmrStyle.TEXT, 0.7), 1.6, true)
 		var marker_index := int(marker_phase * track.n) % track.n
 		var marker := origin + Vector2((track.X[marker_index] - min_x) * scale_x, (track.Y[marker_index] - min_y) * scale_y)
-		draw_circle(marker, 9.0, Color(CmrStyle.LIME, 0.25))
-		draw_circle(marker, 4.2, CmrStyle.LIME)
+		draw_circle(marker, 9.0, Color(CmrStyle.ORANGE, 0.3))
+		draw_circle(marker, 4.2, CmrStyle.ORANGE)

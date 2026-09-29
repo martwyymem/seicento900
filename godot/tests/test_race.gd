@@ -23,6 +23,9 @@ static func snake(k: String) -> String:
 
 func settings_for(sc: Dictionary) -> RaceSettings:
 	var st := RaceSettings.new()
+	st.auto_strategist = true # the reference always boxes the player automatically
+	st.dynamic_running = false
+	st.draft = false
 	for k in sc.settings:
 		var v = sc.settings[k]
 		var key := snake(k)
@@ -33,6 +36,8 @@ func settings_for(sc: Dictionary) -> RaceSettings:
 	# Godot-only player aids the JS reference doesn't have
 	st.brake_assist = false
 	st.auto_rejoin = false
+	st.race_control = false
+	st.player_name = "You"
 	return st
 
 func snap(c: RaceCar) -> Dictionary:
@@ -48,7 +53,8 @@ func player_input(t: float) -> Race.PlayerInput:
 
 func run_scenario(sc: Dictionary) -> void:
 	var name: String = sc.name
-	var race := Race.new(settings_for(sc), null, int(sc.seed))
+	var models := {"car_model": preload("res://tests/test_physics.gd").js_car_model()}
+	var race := Race.new(settings_for(sc), null, int(sc.seed), models)
 	var grid := []
 	for c in race.cars:
 		grid.append(c.name)
@@ -81,7 +87,7 @@ func run_scenario(sc: Dictionary) -> void:
 			for k in w:
 				checked += 1
 				if w[k] is String:
-					if ticks <= TIGHT_UNTIL and g[k] != w[k]:
+					if ticks <= TIGHT_UNTIL and g[k] != w[k] and errors.size() < 20:
 						errors.append("%s tick %d %s.%s: %s, want %s" % [name, ticks, race.cars[i].name, k, g[k], w[k]])
 					continue
 				var diff := absf(float(g[k]) - float(w[k]))
@@ -91,12 +97,12 @@ func run_scenario(sc: Dictionary) -> void:
 					if errors.size() < 20:
 						errors.append("%s tick %d %s.%s: %s, want %s" % [name, ticks, race.cars[i].name, k, g[k], w[k]])
 				if k == "s":
-					var ds := absf(float(g.lap - w.lap) * race.tr.L + float(g.s) - float(w.s))
+					var ds := absf(float(g.lap - w.lap) * race.track.L + float(g.s) - float(w.s))
 					if ds > worst:
 						worst = ds
 						worst_at = "tick %d %s" % [ticks, race.cars[i].name]
-	print("    %s: %d ticks (js %d) in %d ms, first drift > %.0e at tick %d, worst %.2f m (%s)" % [
-		name, ticks, int(sc.ticks), Time.get_ticks_msec() - t0, TIGHT, first_off, worst, worst_at])
+	print("    %s: %d ticks (js %d) in %d ms, first drift > %s at tick %d, worst %.2f m (%s)" % [
+		name, ticks, int(sc.ticks), Time.get_ticks_msec() - t0, str(TIGHT), first_off, worst, worst_at])
 	if worst > POS_LOOSE:
 		errors.append("%s: cars drifted %.1f m from the reference (%s)" % [name, worst, worst_at])
 	if race.phase != sc.phase:

@@ -1,7 +1,7 @@
-[gd_resource type="Resource" script_class="TrackDef" format=3]
+[gd_resource type="Resource" script_class="TrackDef" format=3 uid="uid://81bmg0gyfcqu"]
 
-[ext_resource type="Script" path="res://scripts/data/corner_name.gd" id="1_s4a08"]
-[ext_resource type="Script" path="res://scripts/data/track_def.gd" id="2_dpwxk"]
+[ext_resource type="Script" uid="uid://cpipdh37q2ypp" path="res://scripts/data/corner_name.gd" id="1_s4a08"]
+[ext_resource type="Script" uid="uid://b74r5qpl8www8" path="res://scripts/data/track_def.gd" id="2_dpwxk"]
 
 [sub_resource type="Resource" id="Resource_3wl3s"]
 script = ExtResource("1_s4a08")
@@ -62,12 +62,12 @@ runoff = 3.0
 runoff_color = Color(0.43529412, 0.43529412, 0.41568628, 1)
 runoff_surface = "asphalt"
 barrier = "safer"
-banking = 9.2
+banking = 15.8
 theme = "oval"
-tree_density = 0.12
+tree_density = 0.0
 tree_patch = 0.55
 tree_conifer = 0.2
 terrain_fine = 6.0
 stands = Vector2(-600, 250)
-stand_tiers = 14
+stand_tiers = 60
 corners = Array[ExtResource("1_s4a08")]([SubResource("Resource_3wl3s"), SubResource("Resource_3kph7"), SubResource("Resource_n3hqc"), SubResource("Resource_rx6dr"), SubResource("Resource_13fox"), SubResource("Resource_q1rsh"), SubResource("Resource_vw7e2"), SubResource("Resource_p7hmx"), SubResource("Resource_332x6")])

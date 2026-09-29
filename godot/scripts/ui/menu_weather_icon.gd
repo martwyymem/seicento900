@@ -6,9 +6,9 @@ var condition := "cloud":
 		condition = value
 		queue_redraw()
 
-const INK := Color("#303332")
+const INK := CmrStyle.INK
 const CLOUD := Color("#f4f3ef")
-const SUN := Color("#efd44f")
+const SUN := CmrStyle.ORANGE
 
 func _ready() -> void:
 	custom_minimum_size = Vector2(48, 52)
@@ -30,7 +30,7 @@ func _draw() -> void:
 			_draw_cloud(Rect2(3.0, 5.0, size.x - 6.0, size.y * 0.50))
 			_draw_rain(true)
 		"storm":
-			_draw_cloud(Rect2(3.0, 4.0, size.x - 6.0, size.y * 0.49), Color("#aab7c1"))
+			_draw_cloud(Rect2(3.0, 4.0, size.x - 6.0, size.y * 0.49), Color("#b7aac9"))
 			var bolt := PackedVector2Array([Vector2(27, 29), Vector2(20, 39), Vector2(25, 39), Vector2(21, 49), Vector2(33, 35), Vector2(27, 35)])
 			draw_colored_polygon(bolt, SUN)
 			draw_polyline(bolt + PackedVector2Array([bolt[0]]), INK, 1.5, true)
@@ -69,4 +69,4 @@ func _draw_rain(long_drops: bool) -> void:
 	for x in [12.0, 24.0, 36.0]:
 		var y := 38.0 if long_drops else 35.0
 		var length := 10.0 if long_drops else 5.0
-		draw_line(Vector2(x + 2.0, y), Vector2(x - 2.0, y + length), Color("#628da8"), 2.0, true)
+		draw_line(Vector2(x + 2.0, y), Vector2(x - 2.0, y + length), CmrStyle.PLUM, 2.0, true)

@@ -2,11 +2,11 @@
 extends Control
 
 const STOPS := [
-	Color("#a2c4c4"),
-	Color("#c4cba2"),
-	Color("#e4c45e"),
-	Color("#e98e3f"),
-	Color("#c16e9f")
+	Color("#9d86d6"),
+	Color("#c49ae6"),
+	Color("#f2b98a"),
+	Color("#ff9433"),
+	Color("#e0620e")
 ]
 
 func _ready() -> void:
@@ -21,7 +21,7 @@ func _draw() -> void:
 	var font := ThemeDB.fallback_font
 	var text := "14°C"
 	var text_size := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 18)
-	draw_string(font, Vector2((size.x - text_size.x) * 0.5, 18.0), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color("#303332"))
+	draw_string(font, Vector2((size.x - text_size.x) * 0.5, 18.0), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, CmrStyle.INK)
 
 func _draw_segment(index: int, scaled: float) -> void:
 	var stop := mini(int(floorf(scaled)), STOPS.size() - 2)

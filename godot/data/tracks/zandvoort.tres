@@ -1,17 +1,22 @@
 [gd_resource type="Resource" script_class="TrackDef" format=3]
 
-[ext_resource type="Script" path="res://scripts/data/track_def.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/data/corner_name.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/data/track_def.gd" id="2"]
+
+[sub_resource type="Resource" id="Resource_main"]
+script = ExtResource("1")
+name = "Main straight"
 
 [resource]
-script = ExtResource("1")
+script = ExtResource("2")
 key = "zandvoort"
 display_name = "Circuit Zandvoort"
 short_name = "Zandvoort"
 width = 10.0
-start_offset = 174.86
-pit_entry = -250.0
-pit_exit = 260.0
-box_start = -180.0
+pit_entry = -230.0
+pit_exit = 530.0
+pit_offset = 11.5
+box_start = 10.0
 box_spacing = 12.0
 runoff = 9.0
 runoff_color = Color(0.58, 0.55, 0.46, 1)
@@ -21,5 +26,7 @@ tree_density = 0.72
 tree_patch = 0.36
 tree_conifer = 0.48
 grandstands = true
-stands = Vector2(-100, 420)
+stands = Vector2(-150, 150)
 stand_tiers = 7
+osm_names = true
+corners = Array[ExtResource("1")]([SubResource("Resource_main")])

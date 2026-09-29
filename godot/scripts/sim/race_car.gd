@@ -77,6 +77,12 @@ var service_edited := false
 var pit = null ## {phase: in|service|out, entered_at, left, total, hold, wait} or null
 var plan_wet := 0.0
 var plan_stale := false
+var rate_mark = null ## {lap, stops, wear, fuel} at the last strategy check, to measure a lap's real use
+var obs_wear := 0.0 ## tread fraction the current tyres really lose per lap (0 = not measured yet)
+var fuel_lap := 0.0 ## litres a lap really costs this car (0 = not measured yet)
+var plan_wear_ratio := 1.0 ## real / nominal tyre wear the plan was made with
+var plan_fuel_ratio := 1.0
+var pit_bias := 0 ## laps a bot will stretch a stint past its plan when the tyres and tank allow
 var grid := 0
 var box := 0
 
@@ -108,7 +114,23 @@ var slow_t := 0.0
 var mistake_p = null ## track distance of the next driving error, or null
 var err = null ## {kind: late|wide, d, t} or null
 var slip_drag := 1.0
+var tow := 0.0 ## 0..1: how much of a leading car's wake this car is sitting in (it fills and fades over about a second)
 var recover_t := 0.0
 var stuck_t := 0.0
 var last_hit := 0.0
 var off_target := 0.0
+
+# ---- race control (see RaceControl)
+var damage := 0.0 ## 0 = straight, 1 = wrecked; costs power, drag and pace until repaired in the pits
+var dmg_pull := 0.0 ## steering pull from bent suspension (steer units, + = right)
+var wrecked := false ## crashed out: the car stays where it stopped until the marshals recover it
+var stranded := false ## a retired car still sitting on the circuit (an obstacle, flagged yellow)
+var recovered := false ## cleared away by the marshals
+var recover_left := 0.0
+var is_safety_car := false
+var sc_lights := false
+var sc_waved := false ## lapped car between the safety car and the leader, waved past to the tail
+var spin_t := -100.0 ## race clock of the last moment this car was out of control (spun, off, wrecked)
+var offences := 0 ## penalties and warnings for causing collisions, so repeat offenders pay more
+var repair_asked := false
+var uturn := false ## a spun bot is driving itself round to face the right way again

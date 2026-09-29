@@ -14,6 +14,8 @@ extends Resource
 @export_enum("easy", "medium", "hard", "alien") var difficulty := "medium"
 @export_enum("pole", "middle", "back", "random") var grid := "middle"
 @export var collisions := true
+@export var draft := true ## slipstream: a car behind another one, close and in line, pulls less air and gains speed
+@export var race_control := true ## flags, safety car, red flags, stewards' penalties and crash damage
 @export_enum("on", "off") var ai_learning := "on"
 @export_enum("on", "off") var bot_physics := "on"
 @export var demo := false ## menu background race: bots on rails, nothing learned
@@ -23,6 +25,7 @@ extends Resource
 @export_enum("M", "S", "H", "W") var starting_tyre := "M"
 @export var wear_mult := 2.0
 @export var fuel_mult := 1.0
+@export var dynamic_running := true ## wear and fuel follow the real load, and stops follow the live state instead of the starting plan
 
 @export_group("Rules and pits")
 @export var mandatory_stop := true
@@ -30,10 +33,10 @@ extends Resource
 @export var refuel := true
 @export_enum("pro", "club", "amateur") var crew := "club"
 @export var parallel := false ## fuel and tyres at the same time
-@export var auto_strategist := true
+@export var auto_strategist := false ## the strategist boxes the player on its own; off = it only advises, the player calls the stop
 
 @export_group("Player")
-@export var player_name := "You"
+@export var player_name := "Player"
 @export var player_number := 9
 @export var player_color := Color("#b3121d")
 @export var stripes := true

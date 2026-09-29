@@ -1,6 +1,6 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene format=3 uid="uid://j1tqp0eerb1e"]
 
-[ext_resource type="Script" path="res://scripts/ui/race_car_visual.gd" id="1"]
+[ext_resource type="Script" uid="uid://c0237onouejtx" path="res://scripts/ui/race_car_visual.gd" id="1"]
 
-[node name="Seicento" type="Node3D"]
+[node name="Seicento" type="Node3D" unique_id=315959399]
 script = ExtResource("1")

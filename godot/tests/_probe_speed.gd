@@ -1,10 +1,10 @@
 extends SceneTree
-func run(track: String, aids: bool):
+func run(track: String, aids: bool, assists := "full"):
 	var st := RaceSettings.new()
 	st.laps = 2
 	st.track = track
 	st.difficulty = "medium"
-	st.assists = "full"
+	st.assists = assists
 	st.brake_assist = aids
 	st.auto_rejoin = aids
 	var race := Race.new(st, null, 12345)
@@ -34,6 +34,8 @@ func run(track: String, aids: bool):
 		race.step(dt, inp)
 		ticks += 1
 		vmax = maxf(vmax, absf(p.speed) * 3.6)
+		if ticks % 120 == 0 and race.phase == "racing" and ticks < 120 * 90:
+			print("t=%d v=%.1f g=%d rpm=%.0f thr_in=%.2f brk_in=%.2f thr=%.2f steer=%.2f d=%.1f und=%.2f yaw=%.3f" % [ticks/120, absf(p.speed)*3.6, p.gear+1, p.rpm, inp.throttle, inp.brake, p.throttle, inp.steer, p.d, p.understeer, p.yaw_rate])
 		for e in race.events:
 			if e.id > seen:
 				seen = e.id
@@ -43,10 +45,8 @@ func run(track: String, aids: bool):
 	for c in race.cars:
 		if not c.is_player: bots.append(c.best_lap)
 	bots.sort()
-	print("%s aids=%s vmax=%.1f laps=%d best=%s rejoins=%d walls=%d  bot best=%s median=%s pos=%d phase=%s" % [track, aids, vmax, p.lap, Race.fmt_time(p.best_lap), rejoins, ouch, Race.fmt_time(bots[0]), Race.fmt_time(bots[bots.size()/2]), p.pos, race.phase])
+	print(assists + " %s aids=%s vmax=%.1f laps=%d best=%s rejoins=%d walls=%d  bot best=%s median=%s pos=%d phase=%s" % [track, aids, vmax, p.lap, Race.fmt_time(p.best_lap), rejoins, ouch, Race.fmt_time(bots[0]), Race.fmt_time(bots[bots.size()/2]), p.pos, race.phase])
 func _init():
 	Brain.use_disk = false
-	for t in ["indy", "gp"]:
-		run(t, false)
-		run(t, true)
+	run("indy", true, "full")
 	quit()

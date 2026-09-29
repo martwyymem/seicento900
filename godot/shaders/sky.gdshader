@@ -24,6 +24,7 @@ uniform float cloud_speed = 0.004;
 uniform vec3 cloud_lit : source_color = vec3(1.0);
 uniform vec3 cloud_shade : source_color = vec3(0.55, 0.6, 0.68);
 uniform float star_amount = 0.0;
+uniform float cloud_opacity = 1.0;
 
 // HDRI layers: A and B are two clear-sky times of day, O is an overcast sky.
 uniform sampler2D hdri_a : filter_linear, repeat_enable, hint_default_black;
@@ -76,18 +77,25 @@ vec3 procedural(vec3 d) {
 			float tw = 0.7 + 0.3 * sin(TIME * (1.0 + r * 3.0) + r * 60.0);
 			col += vec3(0.9, 0.93, 1.0) * star * tw * star_amount * (1.0 - overcast) * 2.5;
 		}
-		// clouds on a flat layer above the circuit
-		vec2 p = d.xz / (up + 0.12) * 0.22;
-		vec2 wind = vec2(TIME * cloud_speed, TIME * cloud_speed * 0.35);
-		float n = texture(cloud_noise, p + wind).r * 0.65 + texture(cloud_noise, p * 2.7 - wind * 1.6).r * 0.35;
-		float cover = mix(cloud_cover, 0.92, overcast);
-		float dens = smoothstep(1.0 - cover, 1.0 - cover + 0.32, n) * smoothstep(0.0, 0.12, up);
-		float lit = clamp(0.55 + 0.45 * dot(normalize(vec3(d.x, 0.0, d.z) + 1e-5), normalize(vec3(sun_dir.x, 0.0, sun_dir.z) + 1e-5)), 0.0, 1.0);
-		vec3 cloud = mix(cloud_shade, cloud_lit, lit * (1.0 - overcast * 0.6));
-		cloud = mix(cloud, glow_color * 1.2, glow_amount * 0.45 * (1.0 - overcast));
-		col = mix(col, cloud, dens * 0.92);
 	}
 	return col;
+}
+
+// Cloud layer as (colour, coverage); drawn over both the procedural sky and the HDRIs.
+vec4 clouds(vec3 d) {
+	float up = d.y;
+	if (up <= 0.0) {
+		return vec4(0.0);
+	}
+	vec2 p = d.xz / (up + 0.12) * 0.22;
+	vec2 wind = vec2(TIME * cloud_speed, TIME * cloud_speed * 0.35);
+	float n = texture(cloud_noise, p + wind).r * 0.65 + texture(cloud_noise, p * 2.7 - wind * 1.6).r * 0.35;
+	float cover = mix(cloud_cover, 0.92, overcast);
+	float dens = smoothstep(1.0 - cover, 1.0 - cover + 0.32, n) * smoothstep(0.0, 0.12, up);
+	float lit = clamp(0.55 + 0.45 * dot(normalize(vec3(d.x, 0.0, d.z) + 1e-5), normalize(vec3(sun_dir.x, 0.0, sun_dir.z) + 1e-5)), 0.0, 1.0);
+	vec3 cloud = mix(cloud_shade, cloud_lit, lit * (1.0 - overcast * 0.6));
+	cloud = mix(cloud, glow_color * 1.2, glow_amount * 0.45 * (1.0 - overcast));
+	return vec4(cloud, dens * 0.92);
 }
 
 void sky() {
@@ -109,6 +117,8 @@ void sky() {
 		vec3 hd = mix(panorama(hdri_a, d, hdri_rot_a) * hdri_gain_a, panorama(hdri_b, d, hdri_rot_b) * hdri_gain_b, hdri_ab);
 		col = mix(col, hd, hdri_mix);
 	}
+	vec4 cl = clouds(d);
+	col = mix(col, cl.rgb * sky_energy, cl.a * cloud_opacity);
 	if (hdri_o_mix > 0.001) {
 		col = mix(col, panorama(hdri_o, d, hdri_rot_o) * hdri_gain_o, hdri_o_mix);
 	}

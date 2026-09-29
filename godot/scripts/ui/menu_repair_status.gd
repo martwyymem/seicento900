@@ -7,8 +7,8 @@ var state := "none":
 		queue_redraw()
 
 const INK := CmrStyle.MUTED
-const PAPER := Color(0.61, 0.75, 0.89, 0.6)
-const WARNING := Color("#f0d52e")
+const PAPER := Color(0.87, 0.83, 0.92, 0.55)
+const WARNING := CmrStyle.ORANGE
 
 func _ready() -> void:
 	custom_minimum_size = Vector2(38, 34)
@@ -29,7 +29,7 @@ func _draw() -> void:
 	var box := Rect2(7, 3, 27, 27)
 	draw_rect(box, PAPER, false, 2.0)
 	if state == "ok":
-		draw_polyline(PackedVector2Array([Vector2(11, 16), Vector2(17, 22), Vector2(30, 8)]), CmrStyle.GREEN, 3.0, true)
+		draw_polyline(PackedVector2Array([Vector2(11, 16), Vector2(17, 22), Vector2(30, 8)]), CmrStyle.ORANGE_SOFT, 3.0, true)
 	elif state == "bad":
 		draw_line(Vector2(13, 9), Vector2(29, 25), INK, 3.0, true)
 		draw_line(Vector2(29, 9), Vector2(13, 25), INK, 3.0, true)

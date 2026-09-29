@@ -5,6 +5,8 @@ extends RefCounted
 var completed := false
 
 const TOL := 1e-9
+## TrackDef values the Godot game has retuned away from js/track.js; the parity check builds with the reference's.
+const JS_VALUES := {"indy": {"banking": 9.2}}
 const ARRS := ["X", "Y", "H", "GRADE", "TX", "TY", "NX", "NY", "ANG", "KC", "KP", "RLD", "RX", "RY", "RDS", "RK", "CORNER", "PROF"]
 
 var errors := []
@@ -35,7 +37,12 @@ func run() -> Array:
 			continue
 		var want: Dictionary = ref[key]
 		var t0 := Time.get_ticks_msec()
-		var tr := Track.new(Track.load_def(key))
+		var def := Track.load_def(key)
+		if key in JS_VALUES:
+			def = def.duplicate()
+			for f in JS_VALUES[key]:
+				def.set(f, JS_VALUES[key][f])
+		var tr := Track.new(def)
 		print("    %s: built in %d ms (n = %d)" % [key, Time.get_ticks_msec() - t0, tr.n])
 		if tr.n != int(want.n):
 			errors.append("%s: n = %d, want %d" % [key, tr.n, want.n])

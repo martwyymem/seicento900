@@ -11,14 +11,14 @@ const INK := CmrStyle.INK
 const TEXT := CmrStyle.TEXT
 const MUTED := CmrStyle.MUTED
 const RED := CmrStyle.RED
-const YELLOW := CmrStyle.LIME
-const GOOD := CmrStyle.GREEN
-const PURPLE := Color("#8a3ee0")
-const BLUE := CmrStyle.CYAN
+const YELLOW := CmrStyle.ORANGE
+const GOOD := CmrStyle.VIOLET
+const PURPLE := CmrStyle.PLUM
+const BLUE := CmrStyle.VIOLET
 const METER_BG := Color(0, 0, 0, 0.35)
-const CHIP_BG := Color(0.03, 0.08, 0.17, 0.85)
-const BAR_HI := Color(0.92, 0.96, 1.0, 0.9) ## opaque end of the CMR gradient bars
-const BAR_LO := Color(0.55, 0.75, 0.95, 0.35) ## faded end
+const CHIP_BG := Color(0.13, 0.08, 0.2, 0.85)
+const BAR_HI := Color(0.97, 0.95, 1.0, 0.9) ## opaque end of the CMR gradient bars
+const BAR_LO := Color(0.55, 0.36, 0.85, 0.35) ## faded end, violet where CMR has blue
 const REFRESH := 0.12
 const ROW_H := 21.0
 const TOWER_W := 262.0
@@ -26,9 +26,10 @@ const PITWALL_W := 330.0
 const FEED_W := 330.0
 const CLOCK_W := 300.0
 const MAP_S := 190.0
-const FEED_BORDER := {"good": GOOD, "bad": RED, "warn": BLUE, "box": YELLOW, "pit": Color("#8a8f99"),
-	"purple": PURPLE, "ai": Color("#2ec4b6")}
-const HELP_TEXT := "↑/W throttle · ↓/S/Space brake · ←→/AD steer · E/Q gear (manual)\nP box request · [ ] next tyre · − = fuel · R ask strategist\nC camera · L racing line · O autopilot / co-driver · M mute · H hide · Esc pause · , . time warp"
+const REPAIR_AT_HUD := 0.3 ## the damage at which the gauge turns red (RaceControl.REPAIR_AT)
+const FEED_BORDER := {"good": GOOD, "bad": RED, "warn": CmrStyle.ORANGE_SOFT, "box": YELLOW, "pit": Color("#8a8f99"),
+	"purple": PURPLE, "ai": Color("#2ec4b6"), "rc": Color("#ffcc00")}
+const HELP_TEXT := "↑/W throttle · ↓/S/Space brake · ←→/AD steer · E/Q gear (manual)\nP box request · [ ] next tyre · − = fuel · R ask strategist\nV flag speed limiter · C camera · L racing line · O autopilot / co-driver · M mute · H hide · Esc pause · , . time warp"
 
 var race: Race
 var world: Node3D
@@ -49,6 +50,7 @@ var dash: Control
 var minimap: Control
 var tags: Control
 var help: PanelContainer
+var flagbar: Control
 
 var _font: Font
 var _bold: Font
@@ -58,6 +60,7 @@ var _lights_style: StyleBoxFlat
 var _refresh_t := 0.0
 var _clock := 0.0
 var _event_seen := 0
+var _last_flag := ""
 var _fitted := {} ## name -> name shortened to fit the tower column
 var _map_track: Track
 var _map_size := Vector2.ZERO
@@ -69,15 +72,14 @@ var _map_origin := Vector2.ZERO
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_font = CmrStyle.font(false)
-	_bold = CmrStyle.font(true)
+	_font = CmrStyle.font(400)
+	_bold = CmrStyle.font(600)
 	_digits = CmrStyle.digits()
-	_panel_style = CmrStyle.panel(CmrStyle.NAVY, Color(CmrStyle.CYAN, 0.55), 0)
+	_panel_style = CmrStyle.panel(Color(0.13, 0.08, 0.2, 0.8), Color(CmrStyle.VIOLET, 0.5), 0)
 	_lights_style = StyleBoxFlat.new()
 	_lights_style.bg_color = Color("#0b0b0d")
 	_lights_style.border_color = Color("#222222")
 	_lights_style.set_border_width_all(2)
-	_lights_style.skew = Vector2(CmrStyle.SKEW * 0.5, 0)
 
 	tags = _canvas(_draw_tags)
 	tags.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -89,6 +91,8 @@ func _ready() -> void:
 	clock = _canvas(_draw_clock)
 	_place(clock, 1.0, 0.0, 1.0, 0.0, -14 - CLOCK_W - 20, 14, -14, 214)
 	lights = _canvas(_draw_lights)
+	flagbar = _canvas(_draw_flag)
+	_place(flagbar, 0.5, 0.0, 0.5, 0.0, -210, 132, 210, 186)
 	_place(lights, 0.0, 0.0, 1.0, 0.0, 0, 140, 0, 212)
 	minimap = _canvas(_draw_minimap)
 	_place(minimap, 1.0, 0.0, 1.0, 0.0, -14 - MAP_S, 224, -14, 224 + MAP_S)
@@ -107,12 +111,12 @@ func _ready() -> void:
 	banner = _banner_label(46)
 	banner_box.add_child(banner)
 	banner_small = _banner_label(18)
-	banner_small.add_theme_color_override("font_color", Color("#e6f0ff"))
+	banner_small.add_theme_color_override("font_color", CmrStyle.MUTED)
 	banner_box.add_child(banner_small)
 
 	help = PanelContainer.new()
 	help.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var help_style := CmrStyle.bar(Color(0.03, 0.08, 0.17, 0.62), true, 18, 6)
+	var help_style := CmrStyle.box(Color(0.13, 0.08, 0.2, 0.62), Color.TRANSPARENT, 18, 6)
 	help.add_theme_stylebox_override("panel", help_style)
 	var help_label := Label.new()
 	help_label.text = HELP_TEXT
@@ -138,6 +142,7 @@ func start(race_: Race, world_: Node3D, audio_: RaceAudio) -> void:
 	warp = 1
 	skip_note = ""
 	_event_seen = 0
+	_last_flag = ""
 	_refresh_t = 0.0
 	_map_track = null
 	_fitted.clear()
@@ -155,6 +160,7 @@ func update(dt: float) -> void:
 	_clock += dt
 	dash.queue_redraw()
 	pacenote.queue_redraw()
+	flagbar.queue_redraw()
 	minimap.queue_redraw()
 	tags.queue_redraw()
 	_refresh_t -= dt
@@ -205,17 +211,14 @@ func _text(c: Control, at: Vector2, s: String, size: int, color: Color, bold := 
 ## White HUD type straight over the 3D view gets a dark outline, as in CMR.
 func _text_o(c: Control, at: Vector2, s: String, size: int, color: Color, font: Font = null, align := HORIZONTAL_ALIGNMENT_LEFT, width := -1.0) -> void:
 	var f := font if font else _bold
-	c.draw_string_outline(f, at, s, align, width, size, maxi(3, size / 6), Color(0.01, 0.05, 0.12, 0.85 * color.a))
+	c.draw_string_outline(f, at, s, align, width, size, maxi(2, size / 9), Color(0.08, 0.03, 0.12, 0.85 * color.a))
 	c.draw_string(f, at, s, align, width, size, color)
 
-## The CMR 2.0 bar: bright at one end fading to a translucent ice blue at the other, with a slanted end.
+## The CMR 2.0 bar: a plain rectangle, bright at one end fading to translucent violet at the other.
 func _gbar(c: Control, rect: Rect2, hi := BAR_HI, lo := BAR_LO, flip := false) -> void:
-	var sl := rect.size.y * CmrStyle.SKEW
 	var a := hi if not flip else lo
 	var b := lo if not flip else hi
-	var pts := PackedVector2Array([rect.position, Vector2(rect.end.x + sl, rect.position.y), Vector2(rect.end.x, rect.end.y), Vector2(rect.position.x, rect.end.y)])
-	if flip:
-		pts = PackedVector2Array([Vector2(rect.position.x - sl, rect.position.y), Vector2(rect.end.x, rect.position.y), rect.end, Vector2(rect.position.x, rect.end.y)])
+	var pts := PackedVector2Array([rect.position, Vector2(rect.end.x, rect.position.y), rect.end, Vector2(rect.position.x, rect.end.y)])
 	c.draw_polygon(pts, PackedColorArray([a, b, b, a]))
 
 func _text_w(s: String, size: int, bold := false) -> float:
@@ -295,6 +298,10 @@ func _draw_tower() -> void:
 		var base := y + 15.5
 		_text(tower, Vector2(4, base), str(i + 1), 13, Color(INK, fade), true, HORIZONTAL_ALIGNMENT_RIGHT, 24)
 		tower.draw_rect(Rect2(36, y + 3, 4, 15), Color(c.color, fade))
+		if c.damage > 0.05:
+			# damage gauge: a thin bar beside the team colour, orange then red as the car gets worse
+			var dh := 15.0 * clampf(c.damage, 0.15, 1.0)
+			tower.draw_rect(Rect2(41, y + 18 - dh, 2, dh), Color(RED if c.damage >= REPAIR_AT_HUD else CmrStyle.ORANGE_SOFT, fade))
 		_text(tower, Vector2(44, base), str(c.number), 11, Color(CmrStyle.INK_SOFT, fade), true, HORIZONTAL_ALIGNMENT_RIGHT, 26)
 		var nm := c.name.to_upper() if c.is_player else Brain.short(c).to_upper()
 		_text(tower, Vector2(78, base), _fit(nm, 12, 64), 12, Color(INK, fade), true)
@@ -318,9 +325,9 @@ func _draw_clock() -> void:
 	for k in segs:
 		var r := Rect2(x0 + k * (sw + 3.0), 0, sw, 12)
 		var fill := clampf(frac * segs - k, 0.0, 1.0)
-		clock.draw_rect(r, Color(0.03, 0.08, 0.17, 0.55))
+		clock.draw_rect(r, Color(0.13, 0.08, 0.2, 0.55))
 		if fill > 0.0:
-			clock.draw_rect(Rect2(r.position, Vector2(r.size.x * fill, r.size.y)), GOOD)
+			clock.draw_rect(Rect2(r.position, Vector2(r.size.x * fill, r.size.y)), YELLOW)
 		clock.draw_rect(r, Color(1, 1, 1, 0.35), false, 1.0)
 	# the clock
 	var time_text: String
@@ -332,7 +339,7 @@ func _draw_clock() -> void:
 	else:
 		time_text = "0:00.00" if race.phase == "countdown" else Race.fmt_time(race.race_time)
 	var box := Rect2(x0, 18, W, 58)
-	var box_style := CmrStyle.bar(BAR_HI, true, 0, 0)
+	var box_style := CmrStyle.box(BAR_HI, Color.TRANSPARENT, 0, 0)
 	box_style.border_color = Color(1, 1, 1, 0.9)
 	box_style.border_width_top = 2
 	box_style.draw(clock.get_canvas_item(), box)
@@ -411,6 +418,27 @@ func _draw_lights() -> void:
 		else:
 			lights.draw_circle(c, 20.0, Color("#2a0c0c"))
 
+## Race control's flag for the player: a coloured board under the pace notes.
+func _draw_flag() -> void:
+	if not race or not race.rc or race.phase != "racing":
+		return
+	var f: Dictionary = race.rc.player_flag()
+	if f.is_empty():
+		return
+	var W := flagbar.size.x
+	var col: Color = f.color
+	var title: String = f.title
+	# the safety-car boards flash like the marshals' lights
+	var flash := title.begins_with("SAFETY CAR") or title == "DOUBLE YELLOW"
+	var a := 0.72 + 0.28 * absf(cos(_clock * PI * 1.5)) if flash else 1.0
+	flagbar.draw_rect(Rect2(0, 0, W, 54), Color(0.01, 0.03, 0.08, 0.72))
+	flagbar.draw_rect(Rect2(0, 0, 62, 54), Color(col, a))
+	if title == "DOUBLE YELLOW":
+		flagbar.draw_rect(Rect2(31, 0, 2, 54), Color(0, 0, 0, 0.5))
+	flagbar.draw_rect(Rect2(62, 0, W - 62, 3), Color(col, a))
+	_text(flagbar, Vector2(74, 25), title, 20, col.lightened(0.1) if col.get_luminance() > 0.3 else TEXT, true)
+	_text(flagbar, Vector2(74, 44), f.sub, 12, TEXT)
+
 func _update_banner() -> void:
 	var p := race.player
 	var tr := race.track
@@ -426,6 +454,9 @@ func _update_banner() -> void:
 			small = "Hold the throttle for a good launch — wait for lights out"
 	elif race.race_time < 1.5:
 		big = "GO!"
+	elif p.dnf and p.wrecked:
+		big = "CRASHED OUT"
+		small = "Enter — skip to results"
 	elif p.dnf:
 		big = "RETIRED"
 		small = "Enter — skip to results"
@@ -460,6 +491,14 @@ func _update_event_sounds() -> void:
 			audio.beep(880.0, 2)
 		elif e.kind == "good":
 			audio.beep(660.0, 1)
+		elif e.kind == "rc":
+			audio.beep(990.0, 1)
+	# a new flag from race control: three quick beeps
+	var f: String = race.rc.flag if race.rc else "green"
+	if f != _last_flag:
+		if audio and _last_flag != "":
+			audio.beep(990.0, 3)
+		_last_flag = f
 
 # ---------------- event feed ----------------
 func _draw_feed() -> void:
@@ -490,7 +529,12 @@ func _service() -> Variant:
 	return null
 
 func _pitwall_height() -> float:
-	return 10.0 + 22.0 + 40.0 + 34.0 + 26.0 + 22.0 + (44.0 if _service() else 0.0) + 8.0
+	return 10.0 + 22.0 + 40.0 + 34.0 + (26.0 if _damage_row() else 0.0) + 26.0 + 22.0 + (44.0 if _service() else 0.0) + 8.0
+
+## The car's damage and the stewards' time penalties get a row on the pit wall once there are any.
+func _damage_row() -> bool:
+	var p := race.player
+	return race.rc != null and (p.damage > 0.01 or p.penalty > 0.0)
 
 func _draw_pitwall() -> void:
 	if not race:
@@ -530,6 +574,19 @@ func _draw_pitwall() -> void:
 	_text(pitwall, Vector2(x + 40, y + 13), "≈ %.1f laps · %.2f L/lap" % [p.fuel / fpl if fpl > 0.0 else 0.0, fpl], 11, MUTED, false, HORIZONTAL_ALIGNMENT_RIGHT, W - 12 - (x + 40))
 	_meter(pitwall, Rect2(x + 40, y + 21, W - 64, 7), p.fuel / race.spec.tank, BLUE)
 	y += 34.0
+	# damage and penalties
+	if _damage_row():
+		var pen := "PENALTY +%d s" % roundi(p.penalty) if p.penalty > 0.0 else ""
+		if p.damage > 0.01:
+			var dcol := RED if p.damage >= RaceControl.REPAIR_AT else (YELLOW if p.damage > 0.12 else TEXT)
+			_text(pitwall, Vector2(x, y + 13), "DMG", 11, MUTED, true)
+			_text(pitwall, Vector2(x + 40, y + 13), "%d%%" % roundi(p.damage * 100.0), 13, dcol, true)
+			var fix := "repairs ≈%.0f s" % race.rc.repair_time(p)
+			_text(pitwall, Vector2(x + 40, y + 13), fix + ("  ·  " + pen if pen != "" else ""), 11, MUTED, false, HORIZONTAL_ALIGNMENT_RIGHT, W - 12 - (x + 40))
+			_meter(pitwall, Rect2(x + 40, y + 19, W - 64, 5), p.damage, dcol)
+		else:
+			_text(pitwall, Vector2(x, y + 13), pen, 12, YELLOW, true)
+		y += 26.0
 	# the plan: done stints fade, the current one is outlined
 	var from := maxi(0, p.stint_idx - 2)
 	var cx := x
@@ -557,6 +614,9 @@ func _draw_pitwall() -> void:
 	if p.mode == "pit" and p.pit:
 		if p.pit.phase == "in":
 			status = "Pit lane — limiter 60 km/h"
+		elif p.pit.phase == "red":
+			status = "Red flag — queue at the pit exit"
+			status_col = RED
 		elif p.pit.phase == "service":
 			status = "Crew working… %.1f / %.1f s" % [p.pit.total - p.pit.left, p.pit.total]
 		else:
@@ -577,7 +637,7 @@ func _draw_pitwall() -> void:
 	# the service the crew will do at the next stop
 	var sv = _service()
 	if sv:
-		pitwall.draw_line(Vector2(x, y), Vector2(W - 12, y), Color(CmrStyle.CYAN, 0.3), 1.0)
+		pitwall.draw_line(Vector2(x, y), Vector2(W - 12, y), Color(CmrStyle.VIOLET, 0.3), 1.0)
 		var sx := x
 		_text(pitwall, Vector2(sx, y + 17), "Next stop:", 12, MUTED)
 		sx += _text_w("Next stop: ", 12)
@@ -612,24 +672,25 @@ func _draw_dash() -> void:
 		gear = "N"
 	var limiter: float = race.spec.limiter
 	var frac := clampf(p.rpm / limiter, 0.0, 1.0)
-	var n := 22
+	var n := 26
 	var arc_w := W - 96.0
-	var seg := arc_w / n
 	var bottom := H - 26.0
+	# the band's lower edge curves up toward the redline and the band thickens as it goes, like CMR's
+	var edge := func(t: float) -> Vector2: return Vector2(arc_w * t, bottom - 96.0 * pow(t, 2.6))
+	var thick := func(t: float) -> float: return 10.0 + 22.0 * t
 	for i in n:
 		var t0 := float(i) / n
-		var t1 := float(i + 1) / n
-		var h0 := 14.0 + 104.0 * pow(t0, 1.7)
-		var h1 := 14.0 + 104.0 * pow(t1, 1.7)
-		var x := i * seg
-		var lean := 7.0
-		var poly := PackedVector2Array([Vector2(x, bottom), Vector2(x + seg - 2.0, bottom),
-			Vector2(x + seg - 2.0 + lean, bottom - h1), Vector2(x + lean, bottom - h0)])
+		var t1 := (i + 0.78) / n
+		var p0: Vector2 = edge.call(t0)
+		var p1: Vector2 = edge.call(t1)
+		var d := (p1 - p0).normalized()
+		var up := Vector2(d.y, -d.x)
+		var poly := PackedVector2Array([p0, p1, p1 + up * thick.call(t1), p0 + up * thick.call(t0)])
 		var col := Color(1, 1, 1, 0.16)
-		if t1 <= frac + 0.001:
-			col = RED if t0 >= 0.9 else (CmrStyle.AMBER if t0 >= 0.78 else BLUE)
+		if t1 <= frac + 0.03:
+			col = RED if t0 >= 0.9 else (YELLOW if t0 >= 0.78 else BLUE)
 		dash.draw_colored_polygon(poly, col)
-		dash.draw_polyline(poly + PackedVector2Array([poly[0]]), Color(0.01, 0.05, 0.12, 0.55), 1.0)
+		dash.draw_polyline(poly + PackedVector2Array([poly[0]]), Color(0.08, 0.03, 0.12, 0.5), 1.0)
 	var thousands := int(limiter / 1000.0)
 	for k in range(1, thousands + 1):
 		var x := arc_w * (k * 1000.0 / limiter)
@@ -662,14 +723,21 @@ func _draw_minimap() -> void:
 		return
 	var rect := Rect2(Vector2.ZERO, minimap.size)
 	minimap.draw_rect(rect, Color(0.03, 0.08, 0.17, 0.55))
-	minimap.draw_rect(Rect2(0, 0, rect.size.x, 2), Color(CmrStyle.CYAN, 0.7))
+	minimap.draw_rect(Rect2(0, 0, rect.size.x, 2), Color(CmrStyle.VIOLET, 0.7))
 	if _map_track != race.track or _map_size != minimap.size:
 		_build_map()
 	minimap.draw_polyline(_map_points, Color(0.01, 0.05, 0.12, 0.8), 7.0, true)
 	minimap.draw_polyline(_map_points, Color("#e8f2ff"), 3.2, true)
 	minimap.draw_line(_map_start[0], _map_start[1], RED, 3.0, true)
+	var rc := race.rc
+	if rc:
+		_draw_map_flags(rc)
 	var p := race.player
 	for car in race.cars:
+		if car.stranded and not car.recovered:
+			var wp := Vector2(car.x, car.y) * _map_scale + _map_origin
+			minimap.draw_line(wp - Vector2(3.5, 3.5), wp + Vector2(3.5, 3.5), RED, 2.0, true)
+			minimap.draw_line(wp + Vector2(-3.5, 3.5), wp + Vector2(3.5, -3.5), RED, 2.0, true)
 		if car.dnf or car == p:
 			continue
 		var at := Vector2(car.x, car.y) * _map_scale + _map_origin
@@ -679,12 +747,36 @@ func _draw_minimap() -> void:
 		var pp := Vector2(p.x, p.y) * _map_scale + _map_origin
 		minimap.draw_circle(pp, 5.5, YELLOW)
 		minimap.draw_arc(pp, 5.5, 0.0, TAU, 16, Color.BLACK, 2.0, true)
+	if rc and rc.sc_state in ["out", "in"]:
+		var sp := Vector2(rc.sc.x, rc.sc.y) * _map_scale + _map_origin
+		var on := fmod(_clock, 0.5) < 0.25
+		minimap.draw_rect(Rect2(sp - Vector2(4, 4), Vector2(8, 8)), Color("#ffd21a") if on else Color.WHITE)
+		minimap.draw_rect(Rect2(sp - Vector2(4, 4), Vector2(8, 8)), Color.BLACK, false, 1.5)
+
+## Yellow marshal sectors along the minimap line (the whole lap turns red under a red flag).
+func _draw_map_flags(rc: RaceControl) -> void:
+	var tr := race.track
+	var step := maxf(15.0, tr.L / 320.0)
+	for k in rc.n_sec:
+		var lvl := 3 if rc.flag == "red" else rc.yellow[k]
+		if lvl == 0:
+			continue
+		var col := RED if lvl == 3 else (Color("#ffd21a") if lvl == 2 else Color("#ffe98a"))
+		var pts := PackedVector2Array()
+		var s := k * rc.sec_len
+		while s <= (k + 1) * rc.sec_len + 0.1:
+			var q := tr.pos(s, 0.0)
+			pts.append(Vector2(q[0], q[1]) * _map_scale + _map_origin)
+			s += step
+		if pts.size() >= 2:
+			minimap.draw_polyline(pts, col, 4.0 if lvl == 2 else 3.2, true)
 
 func _draw_tags() -> void:
 	if not race or not is_instance_valid(world) or not world.camera:
 		return
 	var cam: Camera3D = world.camera
 	var focus := race.player
+	var shown := [] ## [distance to camera, car, screen point]
 	for car in race.cars:
 		if car == focus or car.dnf:
 			continue
@@ -700,12 +792,34 @@ func _draw_tags() -> void:
 			continue
 		# the camera renders at window pixels; the HUD lives on the scaled design canvas
 		var sp := cam.unproject_position(wp) * (size / Vector2(cam.get_viewport().size))
+		shown.append([cam.global_position.distance_squared_to(wp), car, sp])
+	# nearest first, so they keep their spot; a farther tag that would overlap one already placed moves up
+	shown.sort_custom(func(a, b): return a[0] < b[0])
+	var placed: Array[Rect2] = []
+	for entry in shown:
+		var car = entry[1]
+		var sp: Vector2 = entry[2]
 		var mark := ""
 		if car.brain:
 			mark = " »" if car.brain.mind == "attack" else (" «" if car.brain.mind == "defend" else "")
 		var label := "P%d %s%s" % [car.pos, Brain.short(car), mark]
 		var tw := _text_w(label, 11, true) + 14.0
 		var r := Rect2(sp.x - tw * 0.5, sp.y - 14.0, tw, 16.0)
+		var moved := true
+		while moved:
+			moved = false
+			for other in placed:
+				if r.intersects(other):
+					r.position.y = other.position.y - 18.0
+					moved = true
+		placed.append(r)
+		entry.append(label)
+		entry.append(r)
+	# draw far to near so the nearer cars' tags end up on top
+	for i in range(shown.size() - 1, -1, -1):
+		var car = shown[i][1]
+		var label: String = shown[i][3]
+		var r: Rect2 = shown[i][4]
 		_gbar(tags, r, BAR_HI, Color(BAR_HI, 0.6))
 		tags.draw_rect(Rect2(r.position, Vector2(4, 16)), car.color)
-		_text(tags, Vector2(r.position.x + 8.0, sp.y - 2.0), label, 11, INK, true)
+		_text(tags, Vector2(r.position.x + 8.0, r.position.y + 12.0), label, 11, INK, true)

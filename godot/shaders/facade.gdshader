@@ -1,6 +1,8 @@
 // City blocks: rows of windows with shutters, floor bands and a darker roof, drawn from the box's own
 // coordinates, so one material serves every building. Windows light up at random after dark.
-// Per-building values are instance uniforms set with set_instance_shader_parameter().
+// Per-building values are instance uniforms set with set_instance_shader_parameter(), or, with
+// `instanced` on, come from a MultiMesh of unit boxes: INSTANCE_CUSTOM = (width, height, depth, seed),
+// COLOR.rgb = wall colour and COLOR.a = shutter colour index / 4.
 shader_type spatial;
 render_mode blend_mix, depth_draw_opaque, cull_back;
 
@@ -12,10 +14,16 @@ uniform float wet = 0.0;
 uniform float floor_height = 3.1;
 uniform float bay_width = 2.6;
 uniform sampler2D grain : filter_linear_mipmap, repeat_enable;
+uniform bool instanced = false;
+
+const vec3 SHUTTERS[4] = vec3[](vec3(0.25, 0.37, 0.28), vec3(0.36, 0.44, 0.48), vec3(0.42, 0.29, 0.2), vec3(0.48, 0.54, 0.35));
 
 varying vec3 local_pos;
 varying vec3 local_normal;
 varying vec3 world_pos;
+varying flat vec4 v_dims;
+varying flat vec3 v_wall;
+varying flat vec3 v_shutter;
 
 float hash12(vec2 p) {
 	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -27,11 +35,20 @@ void vertex() {
 	local_pos = VERTEX;
 	local_normal = NORMAL;
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	v_dims = dims;
+	v_wall = wall_color.rgb;
+	v_shutter = shutter_color.rgb;
+	if (instanced) {
+		v_dims = INSTANCE_CUSTOM;
+		local_pos = VERTEX * v_dims.xyz;
+		v_wall = COLOR.rgb;
+		v_shutter = SHUTTERS[int(COLOR.a * 4.0 + 0.5) % 4];
+	}
 }
 
 void fragment() {
-	vec3 wall = wall_color.rgb * (0.9 + 0.2 * texture(grain, world_pos.xy * 0.13 + world_pos.zy * 0.11).r);
-	float seed = dims.w;
+	vec3 wall = v_wall * (0.9 + 0.2 * texture(grain, world_pos.xy * 0.13 + world_pos.zy * 0.11).r);
+	float seed = v_dims.w;
 	if (local_normal.y > 0.5) {
 		ALBEDO = wall * vec3(0.55, 0.52, 0.5);
 		ROUGHNESS = 0.9;
@@ -40,14 +57,14 @@ void fragment() {
 		ROUGHNESS = 0.9;
 	} else {
 		float along = abs(local_normal.x) > 0.5 ? local_pos.z * sign(local_normal.x) : local_pos.x * sign(-local_normal.z);
-		float face_w = abs(local_normal.x) > 0.5 ? dims.z : dims.x;
-		float y = local_pos.y + dims.y * 0.5;
+		float face_w = abs(local_normal.x) > 0.5 ? v_dims.z : v_dims.x;
+		float y = local_pos.y + v_dims.y * 0.5;
 		float bays = max(1.0, floor(face_w / bay_width));
 		float bx = (along + face_w * 0.5) / face_w * bays;
 		float row = floor(y / floor_height);
 		vec2 f = vec2(fract(bx), fract(y / floor_height));
 		vec2 id = vec2(floor(bx) + seed * 17.0 + local_normal.x * 5.0 + local_normal.z * 11.0, row + seed * 3.0);
-		bool top_band = y > dims.y - 0.9;
+		bool top_band = y > v_dims.y - 0.9;
 		bool in_window = f.x > 0.24 && f.x < 0.76 && f.y > 0.22 && f.y < 0.8 && row >= 1.0 && !top_band && bx > 0.35 && bx < bays - 0.35;
 		bool ground_shop = row < 1.0 && f.x > 0.12 && f.x < 0.88 && f.y > 0.08 && f.y < 0.78;
 		vec3 col = wall;
@@ -63,7 +80,7 @@ void fragment() {
 			bool shut = in_window && h < 0.28;
 			if (shut) {
 				// louvred shutters
-				col = shutter_color.rgb * (0.8 + 0.25 * step(0.5, fract(f.y * 14.0)));
+				col = v_shutter * (0.8 + 0.25 * step(0.5, fract(f.y * 14.0)));
 				rough = 0.7;
 			} else {
 				col = vec3(0.05, 0.07, 0.08);

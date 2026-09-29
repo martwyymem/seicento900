@@ -76,8 +76,18 @@ static func load_image(path: String) -> Image:
 static func load_texture(path: String, mipmaps := true) -> Texture2D:
 	if ResourceLoader.exists(path):
 		var tex := load(path) as Texture2D
-		if tex:
+		if tex and not mipmaps:
 			return tex
+		if tex:
+			# the ground shaders read the texture's average from its smallest mip, and distant ground shimmers
+			# without them, so an import with mipmaps off is rebuilt with them
+			var img := tex.get_image()
+			if img == null or img.has_mipmaps():
+				return tex
+			if img.is_compressed():
+				img.decompress()
+			img.generate_mipmaps()
+			return ImageTexture.create_from_image(img)
 	var img := load_image(path)
 	if img == null or img.is_empty():
 		return null
@@ -146,11 +156,6 @@ static func _analyse_sky(path: String) -> Dictionary:
 		weight += rings[i]
 	var mean := total / maxf(weight, 1e-6)
 	var name := path.get_file().to_lower()
-	var kind := "clear"
-	if name.contains("night") or name.contains("moon"):
-		kind = "night"
-	elif name.contains("overcast") or peak < median * 25.0:
-		kind = "overcast"
 	var half := ""
 	for hint in ["dawn", "sunrise", "morning"]:
 		if name.contains(hint):
@@ -160,10 +165,20 @@ static func _analyse_sky(path: String) -> Dictionary:
 			half = "pm"
 	var u := (float(peak_at.x) + 0.5) / float(w)
 	var v := (float(peak_at.y) + 0.5) / float(h)
+	var el := rad_to_deg(PI * 0.5 - v * PI)
+	var sun_visible := peak >= median * 25.0
+	var kind := "clear"
+	if name.contains("night") or name.contains("moon"):
+		kind = "night"
+	elif name.contains("overcast") or (not sun_visible and half == ""):
+		kind = "overcast"
+	elif not sun_visible:
+		# twilight: the sun is below the horizon and only its glow shows (the glow still gives the azimuth)
+		el = -6.0 if name.contains("dusk_2") or name.contains("twilight") else -3.0
 	return {
 		"kind": kind,
 		"half": half,
-		"el": rad_to_deg(PI * 0.5 - v * PI),
+		"el": el,
 		"az": (u - 0.5) * TAU,
 		"mean": mean,
 	}
@@ -222,7 +237,7 @@ func finish() -> void:
 
 # ---------------- ground textures ----------------
 
-## A PBR set from assets/textures/<name>/: {albedo, normal, roughness (Texture2D or null), average (Color)}.
+## A PBR set from assets/textures/<name>/: {albedo, normal, roughness (Texture2D or null)}.
 ## Returns {} when the folder or its colour map is missing.
 func material_set(folder: String) -> Dictionary:
 	if _material_cache.has(folder):
@@ -243,22 +258,10 @@ func material_set(folder: String) -> Dictionary:
 		var albedo := load_texture(found.albedo)
 		if albedo:
 			out.albedo = albedo
-			out.average = _average_color(albedo)
 			out.normal = load_texture(found.normal) if found.has("normal") else null
 			out.roughness = load_texture(found.roughness) if found.has("roughness") else null
 	_material_cache[folder] = out
 	return out
-
-static func _average_color(tex: Texture2D) -> Color:
-	var img := tex.get_image()
-	if img == null or img.is_empty():
-		return Color(0.5, 0.5, 0.5)
-	img = img.duplicate()
-	if img.is_compressed():
-		img.decompress()
-	img.resize(1, 1, Image.INTERPOLATE_LANCZOS)
-	var c := img.get_pixel(0, 0)
-	return Color(maxf(c.r, 0.02), maxf(c.g, 0.02), maxf(c.b, 0.02))
 
 # ---------------- tree models ----------------
 

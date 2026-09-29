@@ -1,4 +1,4 @@
-"""Fetches EU-DEM 25 m (Europe) / NED 10 m (USA) elevations (via the public OpenTopoData API) for the track centrelines and
+"""Fetches EU-DEM 25 m (Europe) / NED 10 m (USA) / ASTER 30 m (Japan) elevations (via the public OpenTopoData API) for the track centrelines and
 a terrain grid around each track. Results are cached in tools/elevation.json, so builds run offline.
 
 Rate limits of the public API: 100 locations per request, 1 request per second.
@@ -42,7 +42,7 @@ def main():
         P = bt.proj_for(key)
         unproj = P.inv
         grid_step = t['grid']
-        pts, _, _ = bt.centreline(key)
+        pts = bt.centreline(key)[0]
         rs, _, total = bt.resample(pts, [None] * len(pts), 20.0)
         print(key, 'centreline', len(rs))
         line = query([unproj(x, y) for x, y in rs], t['dem'])

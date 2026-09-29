@@ -1,7 +1,7 @@
-[gd_resource type="Resource" script_class="TrackDef" format=3]
+[gd_resource type="Resource" script_class="TrackDef" format=3 uid="uid://coc7r4ykjnw12"]
 
-[ext_resource type="Script" path="res://scripts/data/corner_name.gd" id="1_wb4eu"]
-[ext_resource type="Script" path="res://scripts/data/track_def.gd" id="2_fr608"]
+[ext_resource type="Script" uid="uid://cpipdh37q2ypp" path="res://scripts/data/corner_name.gd" id="1_wb4eu"]
+[ext_resource type="Script" uid="uid://b74r5qpl8www8" path="res://scripts/data/track_def.gd" id="2_fr608"]
 
 [sub_resource type="Resource" id="Resource_y1k3t"]
 script = ExtResource("1_wb4eu")

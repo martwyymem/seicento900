@@ -1,13 +1,16 @@
-## 3D Fiat Seicento Sporting Cup race car.
-## The body is one merged mesh shared by every car (paint, stripes and tail lights are per-car materials),
-## so a car costs about a dozen draw calls and a single shadow-casting surface. Wheels steer and spin
-## from the physics model, the sprung body rolls and pitches, and lights follow braking and nightfall.
+## 3D Fiat Seicento 900 Cup race car.
+## The model (models/seicento.glb) is built in Blender by tools/blender/build_seicento.py to the real car's
+## dimensions. Its meshes are shared by every car; paint, stripes and tail lights are per-car materials,
+## so a car costs a few dozen draw calls and a single shadow-casting shell. Wheels steer and spin from
+## the physics model, the sprung body rolls and pitches, and lights follow braking and nightfall.
 extends Node3D
 
-const WHEEL_RADIUS := 0.33
-const WHEELBASE := 2.04
-const WHEEL_SPOTS := [Vector3(-0.78, WHEEL_RADIUS, -1.02), Vector3(0.78, WHEEL_RADIUS, -1.02),
-	Vector3(-0.78, WHEEL_RADIUS, 1.02), Vector3(0.78, WHEEL_RADIUS, 1.02)] ## FL, FR, RL, RR like the physics
+const MODEL_PATH := "res://models/seicento.glb"
+const WHEEL_RADIUS := 0.2665 ## 145/70 R13
+const WHEELBASE := 2.2
+const HALF_TRACK := 0.6315
+const WHEEL_SPOTS := [Vector3(-HALF_TRACK, WHEEL_RADIUS, -1.1), Vector3(HALF_TRACK, WHEEL_RADIUS, -1.1),
+	Vector3(-HALF_TRACK, WHEEL_RADIUS, 1.1), Vector3(HALF_TRACK, WHEEL_RADIUS, 1.1)] ## FL, FR, RL, RR like the physics
 
 static var _shared := {}
 
@@ -32,6 +35,10 @@ var _roll := 0.0
 var _spins := PackedFloat64Array([0.0, 0.0, 0.0, 0.0])
 var _tail_energy := -1.0
 var _ghost := false
+var _paint := Color.WHITE
+var _damage_shown := 0.0
+var _light_bar: Array[StandardMaterial3D] = [] ## safety car only: left and right lamps
+var _beacon: OmniLight3D
 
 func _ready() -> void:
 	var sh := _shared_resources()
@@ -59,14 +66,14 @@ func _ready() -> void:
 	var shell := MeshInstance3D.new()
 	shell.name = "Shell"
 	shell.mesh = sh.shell
-	shell.material_override = paint_material
+	shell.set_surface_override_material(sh.paint_surface, paint_material)
 	body_pivot.add_child(shell)
 
 	var details := MeshInstance3D.new()
 	details.name = "Details"
 	details.mesh = sh.details
 	details.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	details.set_surface_override_material(3, tail_material)
+	details.set_surface_override_material(sh.tail_surface, tail_material)
 	body_pivot.add_child(details)
 
 	stripes_node = MeshInstance3D.new()
@@ -80,10 +87,14 @@ func _ready() -> void:
 		var pivot := Node3D.new()
 		pivot.position = spot
 		add_child(pivot)
-		var wheel := MeshInstance3D.new()
-		wheel.mesh = sh.wheel
-		wheel.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var wheel := Node3D.new() # spins about X
 		pivot.add_child(wheel)
+		var tyre := MeshInstance3D.new()
+		tyre.mesh = sh.wheel
+		tyre.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		if spot.x < 0.0:
+			tyre.rotation.y = PI # the model's outer face points +X
+		wheel.add_child(tyre)
 		steer_pivots.append(pivot)
 		wheels.append(wheel)
 
@@ -100,7 +111,7 @@ func _ready() -> void:
 	number_label.font_size = 34
 	number_label.outline_size = 8
 	number_label.modulate = Color("#202124")
-	number_label.position = Vector3(0, 1.262, 0.18)
+	number_label.position = Vector3(0, 1.428, 0.6)
 	number_label.rotation.x = -PI / 2.0
 	number_label.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	body_pivot.add_child(number_label)
@@ -108,8 +119,52 @@ func _ready() -> void:
 func set_paint(color: Color) -> void:
 	if not paint_material:
 		return
-	paint_material.albedo_color = color
+	_paint = color
+	_apply_paint()
 	stripe_material.albedo_color = Color.WHITE if color.get_luminance() < 0.42 else Color("#202124")
+
+## Crash damage dulls and darkens the paint (scuffs, dirt and bent panels at a glance).
+func _apply_paint() -> void:
+	var c := _paint.lerp(Color("#3a3632"), _damage_shown * 0.8)
+	c.a = 0.55 if _ghost else 1.0
+	paint_material.albedo_color = c
+	paint_material.clearcoat = 0.9 * (1.0 - _damage_shown)
+
+## Dress this car as the safety car: white with yellow stripes and an amber light bar on the roof.
+func make_safety_car() -> void:
+	set_paint(Color("#f4f4f0"))
+	set_stripes(true)
+	stripe_material.albedo_color = Color("#ffc400")
+	number_label.text = "SAFETY CAR"
+	number_label.font_size = 16
+	var bar := MeshInstance3D.new()
+	bar.name = "LightBar"
+	bar.mesh = _box(Vector3(1.1, 0.1, 0.22))
+	var base := StandardMaterial3D.new()
+	base.albedo_color = Color("#1c1c1c")
+	bar.material_override = base
+	bar.position = Vector3(0, 1.47, 0.3)
+	body_pivot.add_child(bar)
+	for side in [-1.0, 1.0]:
+		var lamp := MeshInstance3D.new()
+		lamp.mesh = _box(Vector3(0.44, 0.12, 0.2))
+		var m := StandardMaterial3D.new()
+		m.albedo_color = Color("#ff9d00")
+		m.emission_enabled = true
+		m.emission = Color("#ff9000")
+		m.emission_energy_multiplier = 0.0
+		lamp.material_override = m
+		lamp.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		lamp.position = Vector3(0.28 * side, 1.49, 0.3)
+		body_pivot.add_child(lamp)
+		_light_bar.append(m)
+	_beacon = OmniLight3D.new()
+	_beacon.light_color = Color("#ff9a10")
+	_beacon.omni_range = 9.0
+	_beacon.light_energy = 0.0
+	_beacon.position = Vector3(0, 1.76, 0.3)
+	_beacon.shadow_enabled = false
+	body_pivot.add_child(_beacon)
 
 func set_stripes(enabled: bool) -> void:
 	if is_instance_valid(stripes_node):
@@ -152,103 +207,58 @@ func sync(car: RaceCar, dt: float, curvature: float, night: float, ghost: bool) 
 	if ghost != _ghost:
 		_ghost = ghost
 		paint_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA if ghost else BaseMaterial3D.TRANSPARENCY_DISABLED
-		paint_material.albedo_color.a = 0.55 if ghost else 1.0
+		_apply_paint()
+	if absf(car.damage - _damage_shown) > 0.02:
+		_damage_shown = car.damage
+		_apply_paint()
+
+	if not _light_bar.is_empty():
+		# alternating amber flashes while the safety car is on duty
+		var t := Time.get_ticks_msec() / 1000.0
+		var phase := fmod(t * 2.5, 1.0)
+		for i in _light_bar.size():
+			var on: bool = car.sc_lights and ((phase < 0.5) == (i == 0))
+			_light_bar[i].emission_energy_multiplier = (3.5 + 3.0 * night) if on else 0.0
+		_beacon.light_energy = (1.2 + 1.8 * night) if car.sc_lights else 0.0
 
 # ---------------- shared geometry ----------------
 static func _shared_resources() -> Dictionary:
 	if not _shared.is_empty():
 		return _shared
-	# Local frame: -Z forward, +X right, +Y up.
-	var trim := Color(0.1, 0.1, 0.1)
-	var shell := _merge([
-		[_box(Vector3(1.54, 0.44, 3.32)), Vector3(0, 0.46, 0.0), 0.0, Color.WHITE], # lower body
-		[_box(Vector3(1.48, 0.22, 1.15)), Vector3(0, 0.65, -0.98), 0.0, Color.WHITE], # bonnet and wings
-		[_box(Vector3(1.36, 0.52, 1.58)), Vector3(0, 0.98, 0.22), 0.0, Color.WHITE], # upright hatchback cabin
-		[_box(Vector3(1.32, 0.08, 0.24)), Vector3(0, 1.25, 0.98), 0.0, trim], # roof spoiler
-		[_box(Vector3(1.40, 0.20, 0.16)), Vector3(0, 0.34, -1.68), 0.0, trim], # front bumper / grille
-		[_box(Vector3(1.40, 0.18, 0.14)), Vector3(0, 0.33, 1.68), 0.0, trim], # rear bumper
-		[_box(Vector3(1.56, 0.08, 3.1)), Vector3(0, 0.25, 0.0), 0.0, trim], # sills
-	])
-	var glass_parts := _merge([
-		[_box(Vector3(1.34, 0.44, 0.08)), Vector3(0, 0.94, -0.58), deg_to_rad(-28.0), Color.WHITE],
-		[_box(Vector3(1.30, 0.42, 0.08)), Vector3(0, 0.96, 0.98), deg_to_rad(18.0), Color.WHITE],
-		[_box(Vector3(0.04, 0.38, 1.42)), Vector3(-0.69, 0.96, 0.24), 0.0, Color.WHITE],
-		[_box(Vector3(0.04, 0.38, 1.42)), Vector3(0.69, 0.96, 0.24), 0.0, Color.WHITE],
-	])
-	var plate := Color("#f0ede4")
-	var bits := _merge([
-		[_box(Vector3(0.02, 0.34, 0.44)), Vector3(-0.78, 0.58, 0.15), 0.0, plate], # door number plates
-		[_box(Vector3(0.02, 0.34, 0.44)), Vector3(0.78, 0.58, 0.15), 0.0, plate],
-		[_box(Vector3(0.10, 0.10, 0.32)), Vector3(-0.46, 0.28, 1.72), 0.0, Color("#4a5054")], # exhaust
-	])
-	var heads := _merge([
-		[_box(Vector3(0.26, 0.14, 0.08)), Vector3(-0.54, 0.58, -1.67), 0.0, Color.WHITE],
-		[_box(Vector3(0.26, 0.14, 0.08)), Vector3(0.54, 0.58, -1.67), 0.0, Color.WHITE],
-	])
-	var tails := _merge([
-		[_box(Vector3(0.24, 0.16, 0.08)), Vector3(-0.54, 0.62, 1.67), 0.0, Color.WHITE],
-		[_box(Vector3(0.24, 0.16, 0.08)), Vector3(0.54, 0.62, 1.67), 0.0, Color.WHITE],
-	])
-	var details := ArrayMesh.new()
-	for part in [glass_parts, bits, heads, tails]:
-		details.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, part.surface_get_arrays(0))
+	# Local frame: -Z forward, +X right, +Y up; the model's origin is on the ground midway between the axles.
+	var meshes := {}
+	var root := _load_model()
+	if root:
+		for mi in root.find_children("*", "MeshInstance3D", true, false):
+			meshes[mi.name] = (mi as MeshInstance3D).mesh
+		root.free()
+	var shell: Mesh = meshes.get("Body", BoxMesh.new())
+	var details: Mesh = meshes.get("Details", BoxMesh.new())
 
+	# Glass and headlights are the same on every car, so they live on the shared meshes.
 	var glass := StandardMaterial3D.new()
-	glass.albedo_color = Color("#0f1316")
-	glass.roughness = 0.08
-	glass.metallic = 0.6
-	var bits_mat := StandardMaterial3D.new()
-	bits_mat.vertex_color_use_as_albedo = true
-	bits_mat.vertex_color_is_srgb = true
-	bits_mat.roughness = 0.55
+	glass.albedo_color = Color(0.05, 0.065, 0.075, 0.38)
+	glass.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	glass.cull_mode = BaseMaterial3D.CULL_DISABLED
+	glass.roughness = 0.04
+	glass.metallic_specular = 0.8
 	var head := StandardMaterial3D.new()
-	head.albedo_color = Color("#fffce8")
-	head.roughness = 0.1
+	head.albedo_color = Color("#d8dcdc")
+	head.metallic = 0.6
+	head.roughness = 0.08
 	head.emission_enabled = true
 	head.emission = Color("#fff3d6")
 	head.emission_energy_multiplier = 0.05
-	details.surface_set_material(0, glass)
-	details.surface_set_material(1, bits_mat)
-	details.surface_set_material(2, head)
-
-	var stripes := _merge([
-		[_box(Vector3(0.14, 0.014, 0.98)), Vector3(-0.16, 0.77, -0.98), 0.0, Color.WHITE],
-		[_box(Vector3(0.14, 0.014, 0.98)), Vector3(0.16, 0.77, -0.98), 0.0, Color.WHITE],
-		[_box(Vector3(0.14, 0.014, 1.20)), Vector3(-0.16, 1.245, 0.22), 0.0, Color.WHITE],
-		[_box(Vector3(0.14, 0.014, 1.20)), Vector3(0.16, 1.245, 0.22), 0.0, Color.WHITE],
-	])
-
-	# Wheel: tyre, alloy and a dark hub cross (so the spin reads), axle along X.
-	var axle := Basis(Vector3.BACK, PI / 2.0)
-	var tyre := CylinderMesh.new()
-	tyre.top_radius = WHEEL_RADIUS
-	tyre.bottom_radius = WHEEL_RADIUS
-	tyre.height = 0.2
-	tyre.radial_segments = 20
-	tyre.rings = 1
-	var rim := CylinderMesh.new()
-	rim.top_radius = 0.21
-	rim.bottom_radius = 0.21
-	rim.height = 0.206
-	rim.radial_segments = 16
-	rim.rings = 1
-	var hub := Color("#2a2d30")
-	var wheel := _merge([
-		[tyre, Vector3.ZERO, axle, Color("#181a1b")],
-		[rim, Vector3.ZERO, axle, Color("#d8dde0")],
-		[_box(Vector3(0.214, 0.36, 0.05)), Vector3.ZERO, 0.0, hub],
-		[_box(Vector3(0.214, 0.05, 0.36)), Vector3.ZERO, 0.0, hub],
-	])
-	var wheel_mat := StandardMaterial3D.new()
-	wheel_mat.vertex_color_use_as_albedo = true
-	wheel_mat.vertex_color_is_srgb = true
-	wheel_mat.roughness = 0.6
-	wheel_mat.metallic = 0.3
-	wheel.surface_set_material(0, wheel_mat)
+	var glass_surface := _surface(shell, "Glass")
+	if glass_surface >= 0:
+		shell.surface_set_material(glass_surface, glass)
+	var head_surface := _surface(details, "Headlight")
+	if head_surface >= 0:
+		details.surface_set_material(head_surface, head)
 
 	# Soft dark ellipse under the car keeps it sitting on the road.
 	var contact := PlaneMesh.new()
-	contact.size = Vector2(2.1, 3.9)
+	contact.size = Vector2(1.9, 3.7)
 	var fade := Gradient.new()
 	fade.set_color(0, Color(0, 0, 0, 0.6))
 	fade.set_color(1, Color(0, 0, 0, 0))
@@ -266,8 +276,31 @@ static func _shared_resources() -> Dictionary:
 	contact_mat.albedo_color = Color.WHITE
 	contact.material = contact_mat
 
-	_shared = {"shell": shell, "details": details, "stripes": stripes, "wheel": wheel, "contact": contact, "head": head}
+	_shared = {"shell": shell, "details": details, "stripes": meshes.get("Stripes", BoxMesh.new()),
+		"wheel": meshes.get("Wheel", BoxMesh.new()), "contact": contact, "head": head,
+		"paint_surface": maxi(0, _surface(shell, "Paint")), "tail_surface": maxi(0, _surface(details, "Taillight"))}
 	return _shared
+
+## The imported model when the editor has imported it, otherwise the GLB read directly (fresh checkouts).
+static func _load_model() -> Node:
+	if ResourceLoader.exists(MODEL_PATH):
+		var packed := load(MODEL_PATH) as PackedScene
+		if packed:
+			return packed.instantiate()
+	var doc := GLTFDocument.new()
+	var state := GLTFState.new()
+	if doc.append_from_file(ProjectSettings.globalize_path(MODEL_PATH), state) != OK:
+		push_error("Car model %s could not be read" % MODEL_PATH)
+		return null
+	return doc.generate_scene(state)
+
+## Index of the surface whose material has this name (from Blender), or -1.
+static func _surface(mesh: Mesh, material_name: String) -> int:
+	for i in mesh.get_surface_count():
+		var m := mesh.surface_get_material(i)
+		if m and m.resource_name == material_name:
+			return i
+	return -1
 
 static func _box(size: Vector3) -> BoxMesh:
 	var box := BoxMesh.new()
