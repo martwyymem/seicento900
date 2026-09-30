@@ -16,10 +16,27 @@ const FOLIAGE_SHADER := preload("res://shaders/foliage.gdshader")
 const WATER_SHADER := preload("res://shaders/water.gdshader")
 const FACADE_SHADER := preload("res://shaders/facade.gdshader")
 const CROWD_SHADER := preload("res://shaders/crowd.gdshader")
-const ALTITUDE_SCALE := 0.25
+const SURROUNDINGS := preload("res://scripts/ui/surroundings.gd")
+const FURNITURE := preload("res://scripts/ui/trackside_furniture.gd")
+const ALTITUDE_SCALE := 1.0 ## heights at their real scale (the physics ignores elevation)
 const BEAM_COUNT := 4 ## headlight spotlights handed to the cars nearest the camera after dark
 const BEAM_REACH := 180.0
 const SKID_CAPACITY := 1600
+## Trackside structures built in Blender (tools/blender/build_trackside.py); the layout numbers below match it.
+const TRACKSIDE_PATH := "res://models/trackside.glb"
+const STAND_BAY := 10.0 ## grandstand bay width along the road
+const STAND_RISE := 0.4 ## height and depth of a tier
+const STAND_TREAD := 0.85
+const STAND_FIRST_Z := 1.6 ## the first tier's top above the ground
+const STAND_CONCOURSE := 1.6 ## walkway behind the top tier
+const STAND_ROOF_FRONT := 4.3 ## roof front edge above the top tier, and how far it overhangs the first
+const STAND_ROOF_OVERHANG := 1.6
+const STAND_BOARDS := 8 ## sponsor boards StandBoard_0..7
+const PIT_BAY := 12.0 ## a garage's width as built (stretched to the box spacing) and the building's depth
+const PIT_DEPTH := 15.0
+const GANTRY_BEAM_Y := 7.2
+const LAMP_POOL := [4, 8, 12, 16] ## real lights hopping between the lamps nearest the camera, by quality
+const LAMP_REACH := 150.0
 
 # Sky and light palette (parsed once, not every frame).
 const SKY_TOP_NIGHT := Color("#030611")
@@ -78,11 +95,29 @@ var assets: RefCounted ## world_assets.gd, shared by every track
 var _wet_materials: Array[ShaderMaterial] = []
 var _night_materials: Array[ShaderMaterial] = []
 var _sky_textures := {} ## sky uniform -> path currently bound
+## The circuit's real surroundings from OpenStreetMap (surroundings.gd), or null where there is no data
+var surroundings: RefCounted
+## Marshal posts, braking boards, bridges and the paddock (trackside_furniture.gd)
+var furniture: RefCounted
+## The detailed terrain's grid (_build_terrain): corner, spacing, and per point its height, squared distance to
+## the nearest centreline sample and that sample
+var _terrain_grid := {}
+var _hdri_weight := 0.0 ## how much of the sky is HDRI (its sun then decides the light direction)
 static var _noise := {}
 
 ## Camera modes:
 ## 0 = Chase | 1 = Far Chase | 2 = Roof cam | 3 = Trackside TV | 4 = Bird's-eye | 5 = full-track overview
 var camera_mode := 0
+enum TvKind { TOWER, GROUND, LONG }
+## Per kind, how far ahead of the car (m) a camera must be to be cut to and how far ahead it is when the shot
+## ends (negative: once the car is past), the width of road (m) to frame, and the lens limits (degrees)
+const TV_MIN_AHEAD := [40.0, 130.0, 210.0]
+const TV_END_AHEAD := [-45.0, 22.0, 70.0]
+const TV_FRAME := [12.0, 9.0, 7.0]
+const TV_FOV_MIN := [16.0, 20.0, 5.0]
+const TV_FOV_MAX := [55.0, 50.0, 22.0]
+## What the director cuts to, in turn
+const TV_SEQUENCE := [TvKind.GROUND, TvKind.TOWER, TvKind.LONG, TvKind.GROUND, TvKind.LONG, TvKind.TOWER]
 const CAMERA_NAMES := ["CHASE", "FAR CHASE", "ROOF CAM", "TRACKSIDE TV", "BIRD'S-EYE", "FULL TRACK"]
 ## Fraction of a simulation tick elapsed since the last step (set by the game loop each frame).
 var render_alpha := 1.0
@@ -93,14 +128,27 @@ var _focus_pos := Vector3.ZERO
 var _focus_heading := 0.0
 var _focus_s := 0.0
 
-## Trackside TV camera positions along the track, and their distance along it
+## Trackside TV camera positions along the track, their distance along it and their kind: a high tower
+## camera, a low camera behind the fence that pans with the car, or a low telephoto looking up a straight
 var tv_cameras: Array[Vector3] = []
 var tv_camera_s := PackedFloat64Array()
+var tv_camera_kind := PackedInt32Array()
 var _tv_index := -1
+var _tv_shot := 0
+var _tv_look := Vector3.ZERO
+var _tv_prev_pos := Vector3.ZERO
 
 ## Start gantry lights
 var start_lights: Array[MeshInstance3D] = []
 var _lights_lit := -1
+
+## Pit garages: the team-coloured bands over the doors (one instance per garage) and each garage's box
+var pit_bands: MultiMesh
+var pit_band_boxes := PackedInt32Array()
+var race_control_s := NAN ## where race control stands along the lap (NAN when it did not fit)
+static var _trackside := {} ## Blender trackside meshes by object name
+var _crowd_material: ShaderMaterial ## the grandstands' crowd (_stand_crowd_material), for _crowd_material_track
+var _crowd_material_track: Track
 
 ## Racing line assist
 var racing_line_node: MeshInstance3D
@@ -119,6 +167,19 @@ var _skid_used := 0
 var _skid_last := {} ## car id -> rear-axle position of the car's last mark
 
 var _atmos_key := Vector3(-1.0, -1.0, -1.0)
+
+## Street lamps, floodlights and tunnel lamps: every fixture is a point here; the pooled lights are handed
+## to the ones nearest the camera, and the emissive lamp heads follow the hour.
+var _lamp_pos := PackedVector3Array()
+var _lamp_color := PackedColorArray()
+var _lamp_energy := PackedFloat32Array()
+var _lamp_range := PackedFloat32Array()
+var _lamp_always := PackedByteArray() ## 1 for lamps that burn by day too (the tunnel)
+var _lamp_pool: Array[OmniLight3D] = []
+var _lamp_material: StandardMaterial3D
+var _lamp_pick := PackedInt32Array()
+var _lamp_pick_d2 := PackedFloat32Array()
+var _lamp_on := 0.0
 var night := 0.0
 
 func _ready() -> void:
@@ -184,10 +245,21 @@ func set_track(value: Track) -> void:
 
 	visuals.clear()
 	start_lights.clear()
+	pit_bands = null
+	pit_band_boxes.clear()
+	race_control_s = NAN
 	tv_cameras.clear()
 	tv_camera_s.clear()
+	tv_camera_kind.clear()
 	_wet_materials.clear()
 	_night_materials.clear()
+	_lamp_pos.clear()
+	_lamp_color.clear()
+	_lamp_energy.clear()
+	_lamp_range.clear()
+	_lamp_always.clear()
+	_lamp_pool.clear()
+	_lamp_material = null
 	_lights_lit = -1
 	_skid_instance = null
 	_atmos_key = Vector3(-1.0, -1.0, -1.0) # the new materials pick up the current weather
@@ -226,10 +298,12 @@ func set_race(value: Race) -> void:
 		ray_tracing.invalidate(false)
 	_rank_cars.resize(value.cars.size())
 	_rank_d2.resize(value.cars.size())
+	_paint_pit_bands()
 
 	overview = false
 	camera_snap = true
 	_tv_index = -1
+	_tv_shot = 0
 	_lights_lit = -1
 
 func _process(delta: float) -> void:
@@ -239,6 +313,7 @@ func _process(delta: float) -> void:
 	if overview or not race:
 		_update_atmosphere(14.0, 0.0, 0.0)
 		_hide_beams()
+		_hide_lamp_lights()
 		camera.global_position = camera.global_position.lerp(overview_target, 1.0 - exp(-2.4 * delta))
 		camera.look_at(Vector3(overview_target.x, 0, overview_target.z), Vector3.FORWARD)
 		return
@@ -289,6 +364,7 @@ func _process(delta: float) -> void:
 	_update_start_lights()
 	_update_camera(delta)
 	_update_beams()
+	_update_lamp_lights()
 
 func _update_atmosphere(hour: float, wet: float, rain: float) -> void:
 	if not world_environment or not sky_material or not sun:
@@ -315,9 +391,7 @@ func _update_atmosphere(hour: float, wet: float, rain: float) -> void:
 	sky_horizon_color = horizon
 	var az := deg_to_rad(sun_v[1])
 	# the sun where it really is; after dark a high, dim moonlight instead of light from under the ground
-	var light_el := deg_to_rad(lerpf(34.0, maxf(el, 10.0), day_t))
-	var toward := _sky_dir(light_el, az)
-	sun.basis = Basis.looking_at(-toward, Vector3.UP)
+	var light_deg := lerpf(34.0, maxf(el, 10.0), day_t)
 
 	sky_material.set_shader_parameter("top_color", top)
 	sky_material.set_shader_parameter("horizon_color", horizon)
@@ -333,7 +407,13 @@ func _update_atmosphere(hour: float, wet: float, rain: float) -> void:
 	sky_material.set_shader_parameter("cloud_lit", CLOUD_NIGHT.lerp(CLOUD_LIT, day_t).lerp(HORIZON_OVERCAST, overcast * 0.5 * day_t))
 	sky_material.set_shader_parameter("cloud_shade", (CLOUD_NIGHT * 0.6).lerp(CLOUD_SHADE, day_t).lerp(SKY_TOP_OVERCAST.darkened(0.2), overcast * day_t))
 	var sky_luma := (top.srgb_to_linear().get_luminance() + horizon.srgb_to_linear().get_luminance() * 2.0) / 3.0
-	_update_sky_hdri(el, az, hour, day_t, overcast, sky_luma, first)
+	var hdri_el := _update_sky_hdri(el, az, hour, day_t, overcast, sky_luma, first)
+	if not is_nan(hdri_el):
+		# the light comes from where the panorama's own sun or moon is, so shading matches the sky
+		light_deg = lerpf(light_deg, maxf(hdri_el, 8.0), _hdri_weight)
+	sun.basis = Basis.looking_at(-_sky_dir(deg_to_rad(light_deg), az), Vector3.UP)
+	# the panoramas carry their own clouds, so the procedural layer only adds a faint drift over them
+	sky_material.set_shader_parameter("cloud_opacity", lerpf(1.0, 0.3, _hdri_weight))
 
 	world_environment.ambient_light_energy = lerpf(0.3, 1.0, day_t) * (1.0 - overcast * 0.2)
 	world_environment.ambient_light_color = AMBIENT_NIGHT.lerp(Color.WHITE, day_t)
@@ -356,6 +436,9 @@ func _update_atmosphere(hour: float, wet: float, rain: float) -> void:
 		m.set_shader_parameter("rain", rain)
 	for m in _night_materials:
 		m.set_shader_parameter("night", night)
+	_lamp_on = smoothstep(0.08, 0.55, night)
+	if _lamp_material:
+		_lamp_material.emission_energy_multiplier = 7.0 * _lamp_on
 	if rain_particles:
 		rain_particles.emitting = rain > 0.03
 		rain_particles.amount_ratio = clampf(rain, 0.0, 1.0)
@@ -366,21 +449,31 @@ static func _sky_dir(el: float, az: float) -> Vector3:
 ## Blends the two HDRI skies nearest the sun's elevation (same half of the day where the file names say
 ## so), each turned so its own sun sits where the game's sun is, and brought to the brightness of the
 ## procedural sky at that hour. Overcast HDRIs take over in the wet; a night HDRI (if any) after dark.
-func _update_sky_hdri(el: float, az: float, hour: float, day_t: float, overcast: float, target: float, wait: bool) -> void:
+func _update_sky_hdri(el: float, az: float, hour: float, day_t: float, overcast: float, target: float, wait: bool) -> float:
+	_hdri_weight = 0.0
 	if assets == null or not assets.has_skies():
 		sky_material.set_shader_parameter("hdri_mix", 0.0)
 		sky_material.set_shader_parameter("hdri_o_mix", 0.0)
-		return
+		return NAN
 	var half := "am" if hour < 13.75 else "pm"
 	var ladder: Array = []
-	for n in assets.skies_of("night"):
-		var entry: Dictionary = n.duplicate()
-		entry.el = -14.0
+	# the night panoramas take distinct steps below the twilight ones (highest moon first), so none of them
+	# shares an elevation with another and the sky never switches between two of them in one frame
+	var nights: Array = assets.skies_of("night")
+	nights.sort_custom(func(x, y): return x.el > y.el)
+	for i in nights.size():
+		var entry: Dictionary = nights[i].duplicate()
+		entry.sky_el = entry.el
+		entry.el = lerpf(-8.0, -18.0, float(i) / float(nights.size() - 1)) if nights.size() > 1 else -14.0
 		ladder.append(entry)
 	var clear: Array = assets.skies_of("clear").filter(func(e): return e.half == "" or e.half == half)
 	if clear.is_empty():
 		clear = assets.skies_of("clear")
-	ladder.append_array(clear)
+	for c in clear:
+		var entry: Dictionary = c.duplicate()
+		entry.sky_el = entry.el
+		ladder.append(entry)
+	var light_el := NAN
 	var mix := 0.0
 	if not ladder.is_empty():
 		var a: Dictionary = ladder[0]
@@ -397,34 +490,54 @@ func _update_sky_hdri(el: float, az: float, hour: float, day_t: float, overcast:
 					b = ladder[i + 1]
 					t = (el - a.el) / maxf(b.el - a.el, 0.01)
 					break
-		if _bind_sky("hdri_a", a.path, wait) and _bind_sky("hdri_b", b.path, wait):
+		# both panoramas must be resident before either is swapped in, otherwise the old pair would be drawn
+		# with the new pair's rotation and gain (a visible jump)
+		var tex_a: Texture2D = _sky_texture_for("hdri_a", a.path, wait)
+		var tex_b: Texture2D = _sky_texture_for("hdri_b", b.path, wait)
+		if tex_a and tex_b:
+			_apply_sky("hdri_a", a.path, tex_a)
+			_apply_sky("hdri_b", b.path, tex_b)
+			var ab := smoothstep(0.0, 1.0, t)
 			var gain_boost := lerpf(1.0, 0.6, night) # night HDRIs are kept a little darker than the palette
 			sky_material.set_shader_parameter("hdri_rot_a", a.az - az)
 			sky_material.set_shader_parameter("hdri_rot_b", b.az - az)
 			sky_material.set_shader_parameter("hdri_gain_a", target / maxf(a.mean, 1e-5) * gain_boost)
 			sky_material.set_shader_parameter("hdri_gain_b", target / maxf(b.mean, 1e-5) * gain_boost)
-			sky_material.set_shader_parameter("hdri_ab", smoothstep(0.0, 1.0, t))
+			sky_material.set_shader_parameter("hdri_ab", ab)
 			sky_material.set_shader_parameter("hdri_mix", mix)
+			light_el = lerpf(a.sky_el, b.sky_el, ab)
+			_hdri_weight = mix
+		# warm the next panorama up on the worker thread so the following swap is instant
+		var next_i := 0
+		for i in ladder.size():
+			if ladder[i].path == b.path:
+				next_i = i
+		for i in [next_i + 1, next_i - 1]:
+			if i >= 0 and i < ladder.size():
+				assets.sky_texture(ladder[i].path, false)
 	var grey: Array = assets.skies_of("overcast")
 	var o_mix := 0.0
 	if not grey.is_empty():
 		var pick: Dictionary = grey[absi(hash(track.cfg.key if track else "")) % grey.size()]
 		o_mix = smoothstep(0.18, 0.7, overcast) * clampf(day_t * 1.5, 0.0, 1.0)
-		if o_mix > 0.0 and _bind_sky("hdri_o", pick.path, wait):
+		var tex_o: Texture2D = _sky_texture_for("hdri_o", pick.path, wait) if o_mix > 0.0 else null
+		if tex_o:
+			_apply_sky("hdri_o", pick.path, tex_o)
 			sky_material.set_shader_parameter("hdri_gain_o", target / maxf(pick.mean, 1e-5))
 		elif _sky_textures.get("hdri_o", "") != pick.path:
 			o_mix = 0.0
 	sky_material.set_shader_parameter("hdri_o_mix", o_mix)
+	return light_el
 
-func _bind_sky(uniform: String, path: String, wait: bool) -> bool:
+## The panorama for a uniform: the bound one, or the newly wanted one once it has loaded (null until then).
+func _sky_texture_for(uniform: String, path: String, wait: bool) -> Texture2D:
+	return assets.sky_texture(path, wait or not _sky_textures.has(uniform))
+
+func _apply_sky(uniform: String, path: String, tex: Texture2D) -> void:
 	if _sky_textures.get(uniform, "") == path:
-		return true
-	var tex: Texture2D = assets.sky_texture(path, wait or not _sky_textures.has(uniform))
-	if tex == null:
-		return false # still loading on a worker thread: bound at a later atmosphere update
+		return
 	sky_material.set_shader_parameter(uniform, tex)
 	_sky_textures[uniform] = path
-	return true
 
 ## Five red lights come on one per second on the grid and all go out at the start.
 func _update_start_lights() -> void:
@@ -487,20 +600,24 @@ func _update_camera(delta: float) -> void:
 		3: # trackside TV: a camera ahead of the car picks it up, follows it past, then cuts to the next
 			if tv_cameras.is_empty():
 				return
-			if snap or _tv_index < 0 or track.rel(_focus_s - tv_camera_s[_tv_index]) > 45.0:
-				var best := 0
-				var best_ahead := INF
-				for i in tv_camera_s.size():
-					var ahead_m := fposmod(tv_camera_s[i] - _focus_s, track.L)
-					if ahead_m >= 40.0 and ahead_m < best_ahead:
-						best_ahead = ahead_m
-						best = i
-				_tv_index = best
+			var cut := snap or _tv_index < 0 or tv_cameras[_tv_index].distance_to(p) > 450.0
+			if not cut:
+				var along := track.rel(tv_camera_s[_tv_index] - _focus_s)
+				cut = along < TV_END_AHEAD[tv_camera_kind[_tv_index]]
+			if cut:
+				_tv_index = _pick_tv_camera()
+			var kind := tv_camera_kind[_tv_index]
 			camera.global_position = tv_cameras[_tv_index]
-			var target := p + Vector3.UP * 0.8
-			camera.look_at(target, Vector3.UP)
-			fov = clampf(rad_to_deg(2.0 * atan(12.0 / maxf(1.0, camera.global_position.distance_to(target)))), 16.0, 55.0)
-			camera.fov = fov
+			# an operator's pan: lead the car by its velocity so it stays framed, but smooth the aim and the zoom
+			# so the pan does not whip past when the car is closest and the shot does not pump as it comes and goes
+			# capped, since a change of focus to another car moves p a long way in one frame
+			var vel := Vector3.ZERO if cut or delta <= 0.0 else ((p - _tv_prev_pos) / delta).limit_length(90.0)
+			_tv_prev_pos = p
+			var target := p + Vector3.UP * 0.6 + vel * (1.0 / 9.0)
+			_tv_look = target if cut else _tv_look.lerp(target, _ease(9.0, delta, false))
+			camera.look_at(_tv_look, Vector3.UP)
+			var want_fov := clampf(rad_to_deg(2.0 * atan(TV_FRAME[kind] / maxf(1.0, camera.global_position.distance_to(_tv_look)))), TV_FOV_MIN[kind], TV_FOV_MAX[kind])
+			camera.fov = want_fov if cut else camera.fov + (want_fov - camera.fov) * _ease(3.0, delta, false)
 			return
 		4: # bird's-eye, car pointing up the screen
 			var want := p + Vector3.UP * (55.0 + v * 0.8)
@@ -509,8 +626,30 @@ func _update_camera(delta: float) -> void:
 			fov = 55.0
 	camera.fov += (fov - camera.fov) * _ease(4.0, delta, snap)
 
+## The director's next cut: the nearest camera of the next kind in the sequence that is far enough ahead of
+## the car, or of any kind if that one has nothing in reach.
+func _pick_tv_camera() -> int:
+	var want: int = TV_SEQUENCE[_tv_shot % TV_SEQUENCE.size()]
+	_tv_shot += 1
+	var best := -1
+	var best_ahead := INF
+	for pass_kind in 2:
+		for i in tv_camera_s.size():
+			var kind := tv_camera_kind[i]
+			if pass_kind == 0 and kind != want:
+				continue
+			var ahead_m := fposmod(tv_camera_s[i] - _focus_s, track.L)
+			if ahead_m >= TV_MIN_AHEAD[kind] and ahead_m < best_ahead:
+				best_ahead = ahead_m
+				best = i
+		if best >= 0:
+			return best
+	return maxi(0, best)
+
 func cycle_camera() -> String:
 	camera_mode = (camera_mode + 1) % 5
+	if camera_mode == 3:
+		_tv_index = -1 # pick the camera afresh: the car has moved on since the TV view was last used
 	return CAMERA_NAMES[camera_mode]
 
 func _build_beams() -> void:
@@ -699,6 +838,9 @@ func _build_track() -> void:
 	far_ground.set_shader_parameter("base_color", Color("#364a38") if track.cfg.theme != "city" else Color("#aaa18d"))
 	ground.material_override = far_ground
 	track_root.add_child(ground)
+	surroundings = SURROUNDINGS.new()
+	if not surroundings.setup(self):
+		surroundings = null
 	_build_terrain(ground)
 
 	# 2. Track ribbons (Runoff, Edge line, Asphalt road)
@@ -735,18 +877,26 @@ func _build_track() -> void:
 	# 6. Armco barriers / guardrails along runoff edges, and covered sections (Monaco's tunnel)
 	_build_barriers()
 	_build_tunnels()
+	_build_bridges()
 
 	# 7. Racing line assist
 	_build_racing_line()
 
 	# 8. Trackside TV cameras (first, so the trees can leave them a clear view), then roadside trees
 	_setup_tv_cameras()
+	_build_tv_towers()
 	_build_trees(extent)
 
 	# 9. Circuit-specific venue structures
 	_build_grandstands()
+	_build_lighting()
+	if surroundings:
+		surroundings.build()
+	furniture = FURNITURE.new()
+	furniture.build(self)
 	if track.cfg.theme == "city":
-		_build_city_blocks()
+		if not (surroundings and surroundings.has_buildings()):
+			_build_city_blocks()
 		if track.cfg.sea:
 			_build_monaco_harbor(extent)
 			_build_casino_landmark()
@@ -781,32 +931,35 @@ func _build_terrain(ground: MeshInstance3D) -> void:
 	var height_cap := PackedFloat32Array()
 	height_cap.resize(grid_size)
 	height_cap.fill(INF)
+	var point_height := PackedFloat32Array() # world y of each terrain vertex, for things set on the ground
+	point_height.resize(grid_size)
+	point_height.fill(NAN)
 	var radius := ceili(band / fine) + 1
 	var radius_squared := float(radius * radius)
 	var road_clearance := track.half + track.cfg.runoff + 3.0
 
 	# Splat nearby centreline samples onto a compact grid; this keeps terrain under every road section.
+	var track_x := track.X
+	var track_y := track.Y
+	var track_h := track.H
 	for sample_index in track.n:
-		var cx := roundi((track.X[sample_index] - x0) / fine)
-		var cz := roundi((track.Y[sample_index] - z0) / fine)
+		var sx := track_x[sample_index]
+		var sz := track_y[sample_index]
+		var cap_base := track_h[sample_index] - elevation_base - 0.35
+		var cx := roundi((sx - x0) / fine)
+		var cz := roundi((sz - z0) / fine)
 		for dz in range(-radius, radius + 1):
 			var grid_z := cz + dz
 			if grid_z < 0 or grid_z > nz or float(dz * dz) > radius_squared:
 				continue
 			var dx_limit := floori(sqrt(radius_squared - float(dz * dz)))
-			for dx in range(-dx_limit, dx_limit + 1):
-				var grid_x := cx + dx
-				if grid_x < 0 or grid_x > nx:
-					continue
-				var world_x := x0 + grid_x * fine
-				var world_z := z0 + grid_z * fine
-				var ddx := world_x - track.X[sample_index]
-				var ddz := world_z - track.Y[sample_index]
-				var distance_squared := ddx * ddx + ddz * ddz
+			var ddz := z0 + grid_z * fine - sz
+			var ddz2 := ddz * ddz
+			for grid_x in range(maxi(cx - dx_limit, 0), mini(cx + dx_limit, nx) + 1):
+				var ddx := x0 + grid_x * fine - sx
+				var distance_squared := ddx * ddx + ddz2
 				var cell := grid_z * row + grid_x
-				var distance := sqrt(distance_squared)
-				var track_height := track.H[sample_index] - elevation_base
-				height_cap[cell] = minf(height_cap[cell], track_height - 0.35 + maxf(0.0, distance - road_clearance) * 0.45)
+				height_cap[cell] = minf(height_cap[cell], cap_base + maxf(0.0, sqrt(distance_squared) - road_clearance) * 0.45)
 				if distance_squared < nearest_distance[cell]:
 					nearest_distance[cell] = distance_squared
 					nearest_index[cell] = sample_index
@@ -820,10 +973,17 @@ func _build_terrain(ground: MeshInstance3D) -> void:
 	terrain_material.set_shader_parameter("use_vertex_color", true)
 	terrain_material.set_shader_parameter("tex_color_mix", 0.1)
 	terrain_material.set_shader_parameter("slope_rock", 0.4 if track.cfg.theme == "city" else 1.0)
+	if surroundings:
+		surroundings.apply_land_map(terrain_material)
 	var band_squared := band * band
 	var terrain_vertices := PackedVector3Array()
 	var terrain_colors := PackedColorArray()
 	var terrain_indices := PackedInt32Array()
+	# every grid point is computed once and its vertex shared by the cells round it
+	var vertex_of := PackedInt32Array()
+	vertex_of.resize(grid_size)
+	vertex_of.fill(-1)
+	var corners := PackedInt32Array([0, 0, 0, 0])
 	for z_idx in nz:
 		for x_idx in nx:
 			var i00 := z_idx * row + x_idx
@@ -832,26 +992,36 @@ func _build_terrain(ground: MeshInstance3D) -> void:
 			var i11 := i01 + 1
 			if minf(minf(nearest_distance[i00], nearest_distance[i10]), minf(nearest_distance[i01], nearest_distance[i11])) >= band_squared:
 				continue
-			var cell_base := terrain_vertices.size()
-			for point_idx in [i00, i10, i01, i11]:
+			corners[0] = i00
+			corners[1] = i10
+			corners[2] = i01
+			corners[3] = i11
+			for point_idx in corners:
+				if vertex_of[point_idx] >= 0:
+					continue
+				vertex_of[point_idx] = terrain_vertices.size()
 				var px: float = x0 + (point_idx % row) * fine
 				var pz: float = z0 + floori(float(point_idx) / float(row)) * fine
 				var distance := sqrt(nearest_distance[point_idx]) if nearest_index[point_idx] >= 0 else INF
 				var y := _terrain_height(px, pz, nearest_index[point_idx], distance, height_cap[point_idx], grid) * ALTITUDE_SCALE
+				point_height[point_idx] = y
 				terrain_vertices.append(Vector3(px - world_center.x, y, pz - world_center.y))
 				terrain_colors.append(_terrain_color(px, pz, base_color))
-			terrain_indices.append_array(PackedInt32Array([cell_base, cell_base + 2, cell_base + 1, cell_base + 1, cell_base + 2, cell_base + 3]))
+			var v00 := vertex_of[i00]
+			var v10 := vertex_of[i10]
+			var v01 := vertex_of[i01]
+			var v11 := vertex_of[i11]
+			terrain_indices.append_array(PackedInt32Array([v00, v01, v10, v10, v01, v11]))
+	_terrain_grid = {"x0": x0, "z0": z0, "fine": fine, "row": row, "nx": nx, "nz": nz, "h": point_height,
+		"d2": nearest_distance, "i": nearest_index}
 	if not terrain_vertices.is_empty():
 		var terrain_arrays := []
 		terrain_arrays.resize(Mesh.ARRAY_MAX)
 		terrain_arrays[Mesh.ARRAY_VERTEX] = terrain_vertices
 		terrain_arrays[Mesh.ARRAY_COLOR] = terrain_colors
 		terrain_arrays[Mesh.ARRAY_INDEX] = terrain_indices
-		var terrain_mesh := ArrayMesh.new()
-		terrain_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, terrain_arrays)
 		var terrain_st := SurfaceTool.new()
-		terrain_st.create_from(terrain_mesh, 0)
-		terrain_st.index()
+		terrain_st.create_from_arrays(terrain_arrays)
 		terrain_st.generate_normals()
 		var detailed := MeshInstance3D.new()
 		detailed.name = "DetailedTerrain"
@@ -1121,55 +1291,41 @@ func _build_start_finish_gantry() -> void:
 	line.material_override = line_mat
 	track_root.add_child(line)
 
-	# 2. Overhead steel gantry
+	# 2. Overhead gantry (Blender pieces): lattice legs, a box truss stretched across the road and the
+	# start-light housing, with two rows of five lights (both rows of a column share one material)
 	var gantry_root := Node3D.new()
+	gantry_root.name = "Gantry"
 	gantry_root.position = s0_pos
 	gantry_root.rotation.y = -heading
 	track_root.add_child(gantry_root)
-
-	var steel := _material(Color("#2c3138"), 0.4)
-	steel.metallic = 0.7
-
-	# Vertical support posts
+	var parts := trackside_meshes()
+	var leg_z := track.half + 2.2
 	for side in [-1.0, 1.0]:
-		var post := MeshInstance3D.new()
-		var pmesh := BoxMesh.new()
-		pmesh.size = Vector3(0.5, 7.5, 0.5)
-		post.mesh = pmesh
-		post.position = Vector3(0, 3.75, side * (track.half + 2.2))
-		post.material_override = steel
-		gantry_root.add_child(post)
-
-	# Crossbeam
-	var beam := MeshInstance3D.new()
-	var bmesh := BoxMesh.new()
-	bmesh.size = Vector3(1.1, 1.3, track.width + 5.0)
-	beam.mesh = bmesh
-	beam.position = Vector3(0, 7.2, 0)
-	beam.material_override = steel
-	gantry_root.add_child(beam)
-
-	# 5 Start light pods
+		_add_part(gantry_root, parts, "GantryLeg", Transform3D(Basis.IDENTITY, Vector3(0, -0.09, side * leg_z)))
+	_add_part(gantry_root, parts, "GantryBeam", Transform3D(Basis.from_scale(Vector3(1, 1, leg_z * 2.0 / 10.0)), Vector3(0, GANTRY_BEAM_Y, 0)))
+	_add_part(gantry_root, parts, "GantryLights", Transform3D(Basis.IDENTITY, Vector3(0, GANTRY_BEAM_Y, 0)))
+	var disc := CylinderMesh.new()
+	disc.top_radius = 0.22
+	disc.bottom_radius = 0.22
+	disc.height = 0.06
+	disc.radial_segments = 16
 	for i in 5:
-		var light := MeshInstance3D.new()
-		var lmesh := CylinderMesh.new()
-		lmesh.top_radius = 0.32
-		lmesh.bottom_radius = 0.32
-		lmesh.height = 0.16
-		light.mesh = lmesh
-		light.rotation.z = PI / 2.0
-		light.position = Vector3(-0.6, 7.2, (i - 2) * 1.1)
-
 		var lmat := StandardMaterial3D.new()
 		lmat.albedo_color = START_LIGHT_OFF
 		# emission stays enabled (energy 0 when off) so switching a light never swaps shaders
 		lmat.emission_enabled = true
 		lmat.emission = START_LIGHT_ON
 		lmat.emission_energy_multiplier = 0.0
-		light.material_override = lmat
-
-		gantry_root.add_child(light)
-		start_lights.append(light)
+		for row in 2:
+			var light := MeshInstance3D.new()
+			light.mesh = disc
+			light.rotation.z = PI / 2.0
+			light.position = Vector3(-0.64, GANTRY_BEAM_Y - (0.8 if row == 0 else 1.35), -(i - 2) * 1.1)
+			light.material_override = lmat
+			light.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			gantry_root.add_child(light)
+			if row == 0:
+				start_lights.append(light)
 
 func _build_pit_lane() -> void:
 	var cfg := track.cfg
@@ -1272,68 +1428,90 @@ func _build_pit_lane() -> void:
 	wall_inst.material_override = wall_mat
 	track_root.add_child(wall_inst)
 
-## The pit building along the lane: a row of garages with their doors facing it (one per box), a glazed
-## hospitality floor set back above, and a flat roof, following the JS version's garage block.
+## The pit building along the lane (Blender pieces): one garage per box, each with its team's colours
+## over the door, a glazed hospitality floor with a balcony and a roof terrace; end walls, and race
+## control beside the pit exit.
 func _build_pit_garages() -> void:
 	var span := _garage_span()
 	if span == Vector2.ZERO:
 		return
-	var sg := signf(track.cfg.pit_offset)
-	var po := track.cfg.pit_offset
-	var front := po + sg * 5.4
-	var upper := po + sg * 7.4
-	var back := po + sg * 20.0
-	var doors_h := 6.5
-	var top := 10.0
-	var doors := SurfaceTool.new()
-	var glass := SurfaceTool.new()
-	var shell := SurfaceTool.new()
-	for st in [doors, glass, shell]:
-		st.begin(Mesh.PRIMITIVE_TRIANGLES)
-		st.set_smooth_group(0xFFFFFFFF)
-	var steps := maxi(2, ceili((span.y - span.x) / 4.0))
-	var prev := {}
-	for k in steps + 1:
-		var s := span.x + (span.y - span.x) * k / steps
-		var u := (s - track.box_s(0)) / track.cfg.box_spacing + 0.5 # one door per box
-		var cur := {
-			"f0": _pit_point(s, front, -0.3), "f1": _pit_point(s, front, doors_h),
-			"u0": _pit_point(s, upper, doors_h), "u1": _pit_point(s, upper, top),
-			"b0": _pit_point(s, back, -0.3), "b1": _pit_point(s, back, top), "u": u}
-		if k > 0:
-			doors.set_uv(Vector2(prev.u, 1.0)); doors.add_vertex(prev.f0)
-			doors.set_uv(Vector2(prev.u, 0.0)); doors.add_vertex(prev.f1)
-			doors.set_uv(Vector2(cur.u, 0.0)); doors.add_vertex(cur.f1)
-			doors.set_uv(Vector2(prev.u, 1.0)); doors.add_vertex(prev.f0)
-			doors.set_uv(Vector2(cur.u, 0.0)); doors.add_vertex(cur.f1)
-			doors.set_uv(Vector2(cur.u, 1.0)); doors.add_vertex(cur.f0)
-			_quad(shell, prev.f1, prev.u0, cur.u0, cur.f1) # the ledge over the doors
-			_quad(glass, prev.u0, prev.u1, cur.u1, cur.u0)
-			_quad(shell, prev.u1, prev.b1, cur.b1, cur.u1) # roof
-			_quad(shell, prev.b1, prev.b0, cur.b0, cur.b1) # back wall
-		if k == 0 or k == steps:
-			# end walls: the garage storey and the hospitality floor above it
-			_quad(shell, cur.f0, cur.f1, _pit_point(s, back, doors_h), cur.b0)
-			_quad(shell, cur.u0, cur.u1, cur.b1, _pit_point(s, back, doors_h))
-		prev = cur
-	var door_mat := _material(Color.WHITE, 0.75)
-	door_mat.albedo_texture = _garage_texture()
-	door_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	var glass_mat := _material(Color("#2a3a48"), 0.08)
-	glass_mat.metallic = 0.6
-	glass_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	var shell_mat := _material(Color("#c9ccd0"), 0.8)
-	shell_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var parts := trackside_meshes()
+	if not parts.has("PitBay"):
+		return
+	var cfg := track.cfg
+	var sg := signf(cfg.pit_offset)
+	var front := cfg.pit_offset + sg * 5.4
+	var spacing := cfg.box_spacing
+	var stretch := Basis.from_scale(Vector3(spacing / PIT_BAY, 1.0, 1.0))
+	var bays: Array[Transform3D] = []
+	var boxes := PackedInt32Array()
+	# a garage per box, plus a spare one at each end where the lane is still full width
+	for i in range(-1, 17):
+		var s := track.box_s(i)
+		if i < 0 or i > 15:
+			if s - spacing * 0.5 < span.x or s + spacing * 0.5 > span.y:
+				continue
+		bays.append(_pit_frame(s, front, sg) * Transform3D(stretch, Vector3.ZERO))
+		boxes.append(i)
+	if bays.is_empty():
+		return
 	var root := Node3D.new()
 	root.name = "PitGarages"
 	track_root.add_child(root)
-	for part in [[doors, door_mat, "Doors"], [glass, glass_mat, "Glazing"], [shell, shell_mat, "Shell"]]:
-		part[0].generate_normals()
-		var inst := MeshInstance3D.new()
-		inst.name = part[2]
-		inst.mesh = part[0].commit()
-		inst.material_override = part[1]
-		root.add_child(inst)
+	_add_multimesh(root, "Bays", _multimesh(parts.PitBay, bays, []), null)
+	var band_mm := MultiMesh.new()
+	band_mm.transform_format = MultiMesh.TRANSFORM_3D
+	band_mm.use_colors = true
+	band_mm.mesh = parts.PitBayBand
+	band_mm.instance_count = bays.size()
+	for k in bays.size():
+		band_mm.set_instance_transform(k, bays[k])
+		band_mm.set_instance_color(k, Color("#d8dadd"))
+	pit_bands = band_mm
+	pit_band_boxes = boxes
+	var band_mat := _material(Color.WHITE, 0.45)
+	band_mat.vertex_color_use_as_albedo = true
+	_add_multimesh(root, "TeamBands", band_mm, band_mat)
+	# end walls: local +x runs along the lane or against it, depending on the side
+	var along := _pit_frame(track.box_s(boxes[0]), front, sg).basis.x.dot(_tangent(track.box_s(boxes[0]))) > 0.0
+	var first := bays[0]
+	var last := bays[bays.size() - 1]
+	_add_part(root, parts, "PitEndL" if along else "PitEndR", first)
+	_add_part(root, parts, "PitEndR" if along else "PitEndL", last)
+	# race control just past the last garage (towards the exit), or before the first one
+	var lookup := _track_lookup(24.0)
+	var clear := track.half + cfg.runoff * 0.5 + 1.0
+	for s in [track.box_s(boxes[boxes.size() - 1]) + spacing * 0.5 + 7.6, track.box_s(boxes[0]) - spacing * 0.5 - 7.6]:
+		var xf := _pit_frame(s, front, sg)
+		var p := track.pos(s, front)
+		if _footprint_clear(lookup, p, xf.basis.get_euler().y, Rect2(-7.4, -PIT_DEPTH - 0.5, 14.8, PIT_DEPTH + 2.5), clear):
+			_add_part(root, parts, "RaceControl", xf)
+			race_control_s = s
+			break
+
+## Frame of a pit piece at s: origin at the garage front line (front metres from the centreline), local
+## -z pointing away from the lane.
+func _pit_frame(s: float, front: float, side: float) -> Transform3D:
+	var p := track.pos(s, front)
+	var basis := Basis(Vector3.UP, -track.heading(s) + (PI if side > 0.0 else 0.0))
+	return Transform3D(basis, Vector3(p[0] - world_center.x, _road_y(s) - 0.09, p[1] - world_center.y))
+
+## Direction of travel at s, in world x/z.
+func _tangent(s: float) -> Vector3:
+	var h := track.heading(s)
+	return Vector3(cos(h), 0.0, sin(h))
+
+## Paints each garage's band in the colours of the car that uses that box.
+func _paint_pit_bands() -> void:
+	if furniture and race:
+		furniture.paint(race) # the transporters too
+	if not pit_bands or not race:
+		return
+	var by_box := {}
+	for car in race.cars:
+		by_box[car.box] = car.color
+	for k in pit_band_boxes.size():
+		pit_bands.set_instance_color(k, by_box.get(pit_band_boxes[k], Color("#d8dadd")))
 
 ## Where the pit building runs, as distances from the start line: from before the first box to after the
 ## sixteenth, kept within the full-width part of the lane. Vector2.ZERO when the track has no pit lane.
@@ -1349,18 +1527,25 @@ func _pit_point(s: float, d: float, h: float) -> Vector3:
 	var p := track.pos(s, d)
 	return Vector3(p[0] - world_center.x, _road_y(s) - 0.09 + h, p[1] - world_center.y)
 
-## One garage bay: the red team band along the top, a grey front and a dark roller door with slats.
-static func _garage_texture() -> ImageTexture:
-	var w := 128
-	var h := 64
-	var img := Image.create(w, h, false, Image.FORMAT_RGB8)
-	img.fill(Color("#d9dbe0"))
-	img.fill_rect(Rect2i(0, 4, w, 6), Color("#c8102e"))
-	img.fill_rect(Rect2i(10, 18, w - 20, h - 18), Color("#3a3f48"))
-	for y in range(22, h, 6):
-		img.fill_rect(Rect2i(10, y, w - 20, 2), Color("#50555e"))
-	img.generate_mipmaps()
-	return ImageTexture.create_from_image(img)
+## The Blender-built trackside pieces (tools/blender/build_trackside.py) by object name.
+static func trackside_meshes() -> Dictionary:
+	if _trackside.is_empty():
+		var root: Node = WORLD_ASSETS._load_model(TRACKSIDE_PATH)
+		if root:
+			for mi in root.find_children("*", "MeshInstance3D", true, false):
+				_trackside[mi.name] = (mi as MeshInstance3D).mesh
+			root.free()
+	return _trackside
+
+func _add_part(parent: Node3D, parts: Dictionary, part: String, xf: Transform3D) -> MeshInstance3D:
+	if not parts.has(part):
+		return null
+	var inst := MeshInstance3D.new()
+	inst.name = part
+	inst.mesh = parts[part]
+	inst.transform = xf
+	parent.add_child(inst)
+	return inst
 
 func _build_barriers() -> void:
 	var cfg := track.cfg
@@ -1644,6 +1829,95 @@ static func _chain_link_texture() -> ImageTexture:
 	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
 
+## Where the circuit crosses itself (Suzuka's figure of eight): Vector2(upper s, lower s) for each crossing,
+## found as the closest pair of centreline samples far apart along the lap and at least 4 m apart in height.
+func _crossings() -> Array[Vector2]:
+	var lookup := _track_lookup(24.0)
+	var cell: float = lookup.cell
+	var found: Array[Vector3] = [] # (upper sample, lower sample, distance)
+	for i in track.n:
+		var key := Vector2i(floori(track.X[i] / cell), floori(track.Y[i] / cell))
+		for dz in range(-1, 2):
+			for dx in range(-1, 2):
+				for j in lookup.get(key + Vector2i(dx, dz), PackedInt32Array()):
+					var apart := absi(i - j)
+					if mini(apart, track.n - apart) * track.step < 200.0 or track.H[i] - track.H[j] < 4.0:
+						continue
+					var dist := Vector2(track.X[i] - track.X[j], track.Y[i] - track.Y[j]).length()
+					if dist > track.width:
+						continue
+					# keep the closest pair of each crossing
+					var merged := false
+					for k in found.size():
+						if absi(int(found[k].x) - i) < 60 and absi(int(found[k].y) - j) < 60:
+							if dist < found[k].z:
+								found[k] = Vector3(i, j, dist)
+							merged = true
+							break
+					if not merged:
+						found.append(Vector3(i, j, dist))
+	var out: Array[Vector2] = []
+	for f in found:
+		out.append(Vector2(f.x * track.step, f.y * track.step))
+	return out
+
+## A concrete bridge where the circuit crosses itself: a deep deck under the upper road, wide enough for
+## its run-off, and an abutment wall along each side of the road passing underneath.
+func _build_bridges() -> void:
+	var crossings := _crossings()
+	if crossings.is_empty():
+		return
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_smooth_group(0xFFFFFFFF) # flat faces
+	var edge := track.half + track.cfg.runoff + 0.8 # deck edge, just outside the upper road's barriers
+	var deck_h := 1.6
+	for c in crossings:
+		var su := c.x
+		var sl := c.y
+		var sin_a := maxf(absf(sin(track.heading(su) - track.heading(sl))), 0.3)
+		# the deck clears the lower road's run-off and abutments; the abutments run under the whole deck
+		var half_span := (edge + 2.0) / sin_a + 2.0
+		_sweep_box(st, su - half_span, su + half_span, -edge, edge, func(s: float) -> Vector2:
+			var top := _road_y(s) - 0.14
+			return Vector2(top - deck_h, top))
+		var soffit := _road_y(su) - 0.14 - deck_h
+		var half_len := (edge + 1.5) / sin_a + 1.5
+		for side in [-1.0, 1.0]:
+			var d0: float = side * (edge + 0.2)
+			_sweep_box(st, sl - half_len, sl + half_len, minf(d0, d0 + side * 1.2), maxf(d0, d0 + side * 1.2), func(s: float) -> Vector2:
+				return Vector2(_road_y(s) - 1.0, soffit + 0.02))
+	st.generate_normals()
+	var mat := _material(Color("#a8a39a"), 0.88)
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var inst := MeshInstance3D.new()
+	inst.name = "Bridges"
+	inst.mesh = st.commit()
+	inst.material_override = mat
+	track_root.add_child(inst)
+
+## A box swept along the road from s0 to s1 between lateral offsets d0 < d1; y_range(s) gives its (bottom, top).
+func _sweep_box(st: SurfaceTool, s0: float, s1: float, d0: float, d1: float, y_range: Callable) -> void:
+	var steps := maxi(1, ceili((s1 - s0) / 2.0))
+	var prev: Array[Vector3] = []
+	for k in steps + 1:
+		var s := s0 + (s1 - s0) * k / steps
+		var y: Vector2 = y_range.call(s)
+		var a := track.pos(s, d0)
+		var b := track.pos(s, d1)
+		var pa := Vector3(a[0] - world_center.x, 0.0, a[1] - world_center.y)
+		var pb := Vector3(b[0] - world_center.x, 0.0, b[1] - world_center.y)
+		# ring: bottom-left, top-left, top-right, bottom-right
+		var ring: Array[Vector3] = [pa + Vector3.UP * y.x, pa + Vector3.UP * y.y, pb + Vector3.UP * y.y, pb + Vector3.UP * y.x]
+		if k > 0:
+			for j in 4:
+				_quad(st, prev[j], prev[(j + 1) % 4], ring[(j + 1) % 4], ring[j])
+		if k == 0:
+			_quad(st, ring[0], ring[3], ring[2], ring[1])
+		elif k == steps:
+			_quad(st, ring[0], ring[1], ring[2], ring[3])
+		prev = ring
+
 func _build_racing_line() -> void:
 	var verts := PackedVector3Array()
 	var colors := PackedColorArray()
@@ -1737,6 +2011,8 @@ func _smooth_loop(src: PackedFloat64Array, win: int) -> PackedFloat64Array:
 ## Woods and clearings of spruce and broadleaf trees standing on the terrain, kept off every part of the
 ## circuit. Tree models in assets/models/trees replace the procedural ones when present.
 func _build_trees(_extent: float) -> void:
+	if surroundings:
+		return # the real woods come from surroundings.gd
 	if track.cfg.theme == "city":
 		return # Monaco uses city buildings instead of trees
 	var want := mini(int(track.L / 18.0 * track.cfg.tree_density * 2.4 * TREE_SCALE[quality]), int(1500 * TREE_SCALE[quality]))
@@ -1768,7 +2044,7 @@ func _build_trees(_extent: float) -> void:
 		if rng.next() > lerpf(1.0, clump * 1.7, patch):
 			continue
 		var rel_s := track.rel(s)
-		if side == signf(track.cfg.pit_offset) and dist < absf(track.cfg.pit_offset) + 26.0 and rel_s > garages.x - 15.0 and rel_s < garages.y + 15.0:
+		if side == signf(track.cfg.pit_offset) and dist < absf(track.cfg.pit_offset) + 26.0 and rel_s > garages.x - 30.0 and rel_s < garages.y + 30.0:
 			continue
 		if track.cfg.grandstands and side == _stands_side() and dist < 48.0 and rel_s > track.cfg.stands.x - 20.0 and rel_s < track.cfg.stands.y + 20.0:
 			continue
@@ -1856,9 +2132,17 @@ static func _cylinder(top: float, bottom: float, height: float, segments: int) -
 	c.cap_top = top > 0.0
 	return c
 
+## Whether a tree at (x, z) would stand in a TV camera's view of the road: round the camera, or on the line
+## from it to the centreline.
 func _near_tv_camera(x: float, z: float) -> bool:
-	for cam in tv_cameras:
-		if Vector2(cam.x - x, cam.z - z).length_squared() < 16.0 * 16.0:
+	var q := Vector2(x, z)
+	for i in tv_cameras.size():
+		var cam := Vector2(tv_cameras[i].x, tv_cameras[i].z)
+		if cam.distance_squared_to(q) < 16.0 * 16.0:
+			return true
+		var p := track.pos(tv_camera_s[i], 0.0)
+		var road := Vector2(p[0] - world_center.x, p[1] - world_center.y)
+		if Geometry2D.get_closest_point_to_segment(q, cam, road).distance_squared_to(q) < 9.0 * 9.0:
 			return true
 	return false
 
@@ -1933,7 +2217,7 @@ func _stands_front() -> float:
 	return track.half + track.cfg.runoff + 4.0
 
 func _stands_depth() -> float:
-	return _stand_tiers() * 0.96 + 0.3
+	return _stand_tiers() * STAND_TREAD + STAND_CONCOURSE + 0.5
 
 func _stand_tiers() -> int:
 	return clampi(track.cfg.stand_tiers, 3, 14)
@@ -1945,6 +2229,224 @@ func _ground_y(x: float, z: float, s: float, dist: float) -> float:
 	var nearest := int(roundf(track.wrap_s(s) / track.step)) % track.n
 	return _terrain_height(x, z, nearest, dist, INF, track.grid) * ALTITUDE_SCALE
 
+## Lamps for the dark: street lamps along the city circuit, floodlight masts round the oval and behind the
+## grandstands, lamp posts and a light strip along the pit building, and lamps in the tunnel. The fixtures are
+## MultiMeshes whose lamp heads glow with the hour; a light per lamp would be hundreds, so a small pool of real
+## lights is handed to the lamps nearest the camera each frame (_update_lamp_lights).
+func _build_lighting() -> void:
+	var cfg := track.cfg
+	var lookup := _track_lookup(24.0)
+	_lamp_material = _material(Color("#fff4dc"), 0.4)
+	_lamp_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_lamp_material.emission_enabled = true
+	_lamp_material.emission = Color("#ffe2a8")
+	_lamp_material.emission_energy_multiplier = 7.0 * _lamp_on
+	var poles: Array[Transform3D] = []
+	var arms: Array[Transform3D] = []
+	var heads: Array[Transform3D] = []
+	var fx := [poles, arms, heads]
+	var edge := track.half + cfg.runoff
+	var pit_side := signf(cfg.pit_offset)
+	var pit_lo := cfg.pit_entry - 10.0
+	var pit_hi := cfg.pit_exit + 10.0
+	var tunnels := _tunnel_spans()
+
+	# street lamps on alternate sides just behind the barriers
+	if cfg.theme == "city":
+		var k := 0
+		var s := 10.0
+		while s < track.L - 5.0:
+			var lit := not tunnels.any(func(t: Vector2) -> bool: return _in_span(s, t, 12.0))
+			var side := 1.0 if k % 2 == 0 else -1.0
+			var rel_s := track.rel(s)
+			if absf(cfg.pit_offset) >= 1.0 and side == pit_side and rel_s > pit_lo and rel_s < pit_hi:
+				side = -side # the pit building's own lamps stand on that side
+			s += 28.0
+			k += 1
+			if not lit:
+				continue
+			var c := track.pos(s - 28.0, side * (edge + 1.7))
+			if cfg.sea and _sample_dem(track.grid, c[0], c[1]) < 1.0:
+				continue # the harbour
+			var mid := track.pos(s - 28.0, 0.0)
+			_lamp_post(fx, Vector2(c[0], c[1]), _ground_y(c[0], c[1], s - 28.0, edge + 1.7), Vector2(mid[0], mid[1]), false)
+
+	# floodlight masts round the lap, outside the run-off (the city has street lamps instead): on the pit side
+	# behind the garages, and alternating sides elsewhere, wherever there is room
+	if cfg.theme != "city" and cfg.floodlight_spacing > 0.0:
+		var spacing := cfg.floodlight_spacing
+		var count := maxi(1, roundi(track.L / spacing))
+		for k in count:
+			var s := track.L * (k + 0.5) / count
+			var rel_s := track.rel(s)
+			var in_pits := absf(cfg.pit_offset) >= 1.0 and rel_s > pit_lo and rel_s < pit_hi
+			var side := pit_side if in_pits else (1.0 if k % 2 == 0 else -1.0)
+			if cfg.theme == "oval" and not in_pits:
+				side = -_stands_side()
+			if cfg.grandstands and side == _stands_side() and rel_s > cfg.stands.x - 20.0 and rel_s < cfg.stands.y + 20.0:
+				continue # the stands have their own masts
+			if tunnels.any(func(t: Vector2) -> bool: return _in_span(s, t, 12.0)):
+				continue
+			var d := side * (absf(cfg.pit_offset) + 24.0 if in_pits else edge + 10.0)
+			var c := track.pos(s, d)
+			if not _clear_of_track(lookup, c[0], c[1], edge + 6.0):
+				d = -d # a bend or another straight in the way: try the other side
+				c = track.pos(s, d)
+				if not _clear_of_track(lookup, c[0], c[1], edge + 6.0):
+					continue
+			var mid := track.pos(s, 0.0)
+			_lamp_post(fx, Vector2(c[0], c[1]), _ground_y(c[0], c[1], s, absf(d)), Vector2(mid[0], mid[1]), true)
+
+	# floodlight masts behind the grandstands, lighting the crowd and the track in front of them
+	if cfg.grandstands and cfg.stands.y > cfg.stands.x:
+		var side := _stands_side()
+		var d := side * (_stands_front() + _stands_depth() + 3.6)
+		var count := maxi(2, ceili((cfg.stands.y - cfg.stands.x) / 90.0))
+		for k in count + 1:
+			var s := track.wrap_s(cfg.stands.x + (cfg.stands.y - cfg.stands.x) * k / count)
+			var c := track.pos(s, d)
+			if not _clear_of_track(lookup, c[0], c[1], edge + 6.0):
+				continue
+			if cfg.sea and _sample_dem(track.grid, c[0], c[1]) < 1.0:
+				continue
+			var mid := track.pos(s, 0.0)
+			_lamp_post(fx, Vector2(c[0], c[1]), _ground_y(c[0], c[1], s, absf(d)), Vector2(mid[0], mid[1]), true)
+
+	# the pit building: a post between the lane and the doors every 30 m, and a light strip under the ledge
+	var garages := _garage_span()
+	if garages != Vector2.ZERO:
+		var sg := pit_side
+		var s := garages.x + 8.0
+		while s < garages.y - 4.0:
+			var c := track.pos(s, cfg.pit_offset + sg * 4.6)
+			var lane := track.pos(s, cfg.pit_offset)
+			_lamp_post(fx, Vector2(c[0], c[1]), _road_y(s) - 0.09, Vector2(lane[0], lane[1]), false)
+			s += 30.0
+		var strip := SurfaceTool.new()
+		strip.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var steps := maxi(2, ceili((garages.y - garages.x) / 6.0))
+		var prev: Array = []
+		for k in steps + 1:
+			var sk := garages.x + (garages.y - garages.x) * k / steps
+			var cur := [_pit_point(sk, cfg.pit_offset + sg * 5.5, 6.42), _pit_point(sk, cfg.pit_offset + sg * 6.5, 6.42)]
+			if k > 0:
+				_quad(strip, prev[0], prev[1], cur[1], cur[0])
+			prev = cur
+		strip.generate_normals()
+		var strip_inst := MeshInstance3D.new()
+		strip_inst.name = "PitLightStrip"
+		strip_inst.mesh = strip.commit()
+		strip_inst.material_override = _lamp_material
+		strip_inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		track_root.add_child(strip_inst)
+
+	# lamps in the tunnel: the fittings are in _build_tunnels, these are the lights they give
+	for t in tunnels:
+		var s := t.x + 8.0
+		while s < t.y - 8.0:
+			_register_lamp(_tunnel_point(s, Vector2(0.0, 5.6)), Color("#ffd28a"), 3.5, 16.0, true)
+			s += 16.0
+
+	var root := Node3D.new()
+	root.name = "Lighting"
+	track_root.add_child(root)
+	var unit := BoxMesh.new()
+	var steel := _material(Color("#585d62"), 0.6)
+	steel.metallic = 0.4
+	_add_multimesh(root, "LampPoles", _multimesh(unit, poles, []), steel)
+	_add_multimesh(root, "LampArms", _multimesh(unit, arms, []), steel)
+	_add_multimesh(root, "LampHeads", _multimesh(unit, heads, []), _lamp_material)
+	for inst in root.get_children():
+		inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	for i in LAMP_POOL.max():
+		var light := OmniLight3D.new()
+		light.name = "LampLight%d" % i
+		light.shadow_enabled = false
+		light.light_specular = 0.6
+		light.visible = false
+		root.add_child(light)
+		_lamp_pool.append(light)
+	_lamp_pick.resize(LAMP_POOL.max() + 1)
+	_lamp_pick_d2.resize(LAMP_POOL.max() + 1)
+
+## One lamp post with its foot at track point p (ground height in world units), turned towards track point
+## look. A street post is a pole with a short arm and a lantern; a mast is a tall pole carrying a bank of
+## floodlights tilted down at the circuit. fx is [poles, arms, heads].
+func _lamp_post(fx: Array, p: Vector2, ground: float, look: Vector2, mast: bool) -> void:
+	var foot := Vector3(p.x - world_center.x, ground - 0.8, p.y - world_center.y)
+	var to := Vector3(look.x - p.x, 0.0, look.y - p.y).normalized()
+	var h := 27.0 if mast else 7.6
+	var w := 0.7 if mast else 0.2
+	var top := foot + Vector3.UP * (h + 0.8)
+	fx[0].append(Transform3D(Basis.from_scale(Vector3(w, h + 0.8, w)), top - Vector3.UP * (h + 0.8) * 0.5))
+	if mast:
+		var dir := (to * cos(0.45) - Vector3.UP * sin(0.45)).normalized()
+		var basis := Basis.looking_at(dir)
+		var at := top + to * 0.9 + Vector3.UP * 0.2
+		fx[1].append(Transform3D(basis.scaled_local(Vector3(5.7, 2.7, 0.3)), at - dir * 0.22))
+		fx[2].append(Transform3D(basis.scaled_local(Vector3(5.2, 2.2, 0.25)), at))
+		_register_lamp(at + dir * 2.0, Color("#eaf1ff"), 120.0, 110.0, false)
+	else:
+		var arm := 1.7
+		var basis := Basis.looking_at(to)
+		fx[1].append(Transform3D(basis.scaled_local(Vector3(0.11, 0.11, arm)), top + to * arm * 0.5))
+		var at := top + to * (arm - 0.1) - Vector3.UP * 0.12
+		fx[2].append(Transform3D(basis.scaled_local(Vector3(0.42, 0.1, 0.95)), at))
+		_register_lamp(at - Vector3.UP * 0.5, Color("#ffd08a"), 10.0, 30.0, false)
+
+func _register_lamp(at: Vector3, color: Color, energy: float, reach: float, always: bool) -> void:
+	_lamp_pos.append(at)
+	_lamp_color.append(color)
+	_lamp_energy.append(energy)
+	_lamp_range.append(reach)
+	_lamp_always.append(1 if always else 0)
+
+func _hide_lamp_lights() -> void:
+	for light in _lamp_pool:
+		light.visible = false
+
+## Hands the pooled lights to the lamps nearest the camera. A lamp's light fades out as it becomes the
+## farthest of the pool, so a nearer lamp taking its place is not a pop.
+func _update_lamp_lights() -> void:
+	if _lamp_pool.is_empty() or not camera:
+		return
+	var count := mini(LAMP_POOL[quality], _lamp_pool.size())
+	var cam := camera.global_position
+	var reach2 := LAMP_REACH * LAMP_REACH
+	var picked := 0
+	for i in _lamp_pos.size():
+		if _lamp_on < 0.01 and _lamp_always[i] == 0:
+			continue
+		var d2 := cam.distance_squared_to(_lamp_pos[i])
+		if d2 > reach2 or (picked > count and d2 >= _lamp_pick_d2[count]):
+			continue
+		var j := picked if picked <= count else count
+		if picked <= count:
+			picked += 1
+		while j > 0 and _lamp_pick_d2[j - 1] > d2:
+			_lamp_pick[j] = _lamp_pick[j - 1]
+			_lamp_pick_d2[j] = _lamp_pick_d2[j - 1]
+			j -= 1
+		_lamp_pick[j] = i
+		_lamp_pick_d2[j] = d2
+	var ref := sqrt(_lamp_pick_d2[count]) if picked > count else LAMP_REACH
+	for k in _lamp_pool.size():
+		var light := _lamp_pool[k]
+		if k >= count or k >= picked:
+			light.visible = false
+			continue
+		var i := _lamp_pick[k]
+		var d := sqrt(_lamp_pick_d2[k])
+		var fade := clampf((ref - d) / (ref * 0.3), 0.0, 1.0) * (1.0 - smoothstep(LAMP_REACH * 0.7, LAMP_REACH, d))
+		light.light_energy = _lamp_energy[i] * (1.0 if _lamp_always[i] == 1 else _lamp_on) * fade
+		light.visible = light.light_energy > 0.02
+		light.position = _lamp_pos[i]
+		light.light_color = _lamp_color[i]
+		light.omni_range = _lamp_range[i]
+
+## Covered grandstands built from the Blender pieces: 10 m bays of concrete tiers with plastic seats and a
+## seated crowd, a cantilever roof with sponsor boards on its fascia and the front wall, closed at each
+## end by a side wall and stair. The run is split into straight stands that follow the road round bends.
 func _build_grandstands() -> void:
 	if not track.cfg.grandstands:
 		return
@@ -1952,72 +2454,99 @@ func _build_grandstands() -> void:
 	var end_s: float = track.cfg.stands.y
 	if end_s <= start_s:
 		return
+	var tiers := _stand_tiers()
+	if not trackside_meshes().has("StandFrame_T%02d" % tiers):
+		return
 	var span: float = end_s - start_s
-	# short straight sections, so the run of stands follows the road round a bend
 	var pieces: int = maxi(1, ceili(span / 70.0))
-	var tiers: int = clampi(track.cfg.stand_tiers, 3, 14)
 	var side := _stands_side()
-	var front := track.half + track.cfg.runoff + 4.0
-	var depth := tiers * 0.96 + 0.3
+	var front := _stands_front()
+	var depth := _stands_depth()
 	var lookup := _track_lookup(24.0)
-	var seat_mat := _material(Color("#b8b5a7"), 0.82)
-	var roof_mat := _material(Color("#41464a"), 0.58)
-	var support_mat := _material(Color("#777b7a"), 0.7)
-	var accents: Array[Color] = [Color("#c82e27"), Color("#e3e0d6"), Color("#2355a0")]
-	# one crowd material for every tier; the seat colour is a per-tier instance uniform
-	var crowd := ShaderMaterial.new()
-	crowd.shader = CROWD_SHADER
 	for piece in pieces:
 		var s := start_s + (float(piece) + 0.5) * span / float(pieces)
 		var center := track.pos(s, side * front)
-		var height := 1.4 + float(tiers) * 0.36
 		var y := (track.sample(track.H, s) - elevation_base) * ALTITUDE_SCALE
 		# local x runs along the road and the tiers climb away from it (-z)
 		var rot := -track.heading(s) + (PI if side > 0.0 else 0.0)
 		# on a bend the ends of a straight stand swing towards the road, and behind it may be another part
-		# of the circuit: shorten it until it is clear, or leave it out
-		var width := span / float(pieces) - 6.0
-		while width >= 16.0 and not _footprint_clear(lookup, center, rot, Rect2(-width * 0.5, -depth, width, depth + 2.0), track.half + track.cfg.runoff + 1.5):
-			width -= 8.0
-		if width < 16.0:
+		# of the circuit: drop bays until it is clear, or leave it out
+		var bays := floori((span / float(pieces) - 6.0) / STAND_BAY)
+		while bays >= 2 and not _footprint_clear(lookup, center, rot, Rect2(-bays * STAND_BAY * 0.5 - 2.0, -depth, bays * STAND_BAY + 4.0, depth + 2.0), track.half + track.cfg.runoff + 1.5):
+			bays -= 1
+		if bays < 2:
 			continue
-		var root := Node3D.new()
-		root.name = "Grandstand_%02d" % piece
-		root.position = Vector3(center[0] - world_center.x, y, center[1] - world_center.y)
-		root.rotation.y = rot
-		track_root.add_child(root)
-		for tier in tiers:
-			var bench := MeshInstance3D.new()
-			var mesh := BoxMesh.new()
-			mesh.size = Vector3(width, 0.34, 1.35)
-			bench.mesh = mesh
-			bench.position = Vector3(-0.35, 0.55 + tier * 0.36, -tier * 0.92)
-			bench.material_override = crowd
-			bench.set_instance_shader_parameter("seat_color", accents[tier % accents.size()])
-			root.add_child(bench)
-		var back := MeshInstance3D.new()
-		var back_mesh := BoxMesh.new()
-		back_mesh.size = Vector3(width, height, 0.42)
-		back.mesh = back_mesh
-		back.position = Vector3(-0.3, height * 0.48, -tiers * 0.96)
-		back.material_override = seat_mat
-		root.add_child(back)
-		var canopy := MeshInstance3D.new()
-		var canopy_mesh := BoxMesh.new()
-		# over the seats, overhanging the front row but not the run-off
-		canopy_mesh.size = Vector3(width + 3.0, 0.36, depth + 1.8)
-		canopy.mesh = canopy_mesh
-		canopy.position = Vector3(-0.3, height + 1.6, 1.5 - (depth + 1.8) * 0.5)
-		canopy.material_override = roof_mat
-		root.add_child(canopy)
-		for post_x in [-width * 0.46, width * 0.46]:
-			var post := MeshInstance3D.new()
-			var post_mesh := BoxMesh.new()
-			post_mesh.size = Vector3(0.38, height + 1.4, 0.38)
-			post.mesh = post_mesh
-			post.position = Vector3(post_x, (height + 1.4) * 0.5, -tiers * 0.38)
-			post.material_override = support_mat
-			root.add_child(post)
+		var xf := Transform3D(Basis(Vector3.UP, rot), Vector3(center[0] - world_center.x, y, center[1] - world_center.y))
+		add_stand(track_root, "Grandstand_%02d" % piece, xf, bays, tiers, piece)
+
+## One covered grandstand from the Blender pieces: bays of STAND_BAY metres (stretched along by width_scale)
+## and tiers rows, its origin at the front of the first tier in the middle, local -z up the tiers. With a
+## crowd_range the spectators are only drawn that close.
+func add_stand(parent: Node3D, label: String, xf: Transform3D, bays: int, tiers: int, piece: int, width_scale := 1.0, crowd_range := 0.0) -> Node3D:
+	var parts := trackside_meshes()
+	var frame_name := "StandFrame_T%02d" % tiers
+	if not parts.has(frame_name):
+		return null
+	var z_top := STAND_FIRST_Z + (tiers - 1) * STAND_RISE
+	var fascia := Vector3(0.0, z_top + STAND_ROOF_FRONT - 0.95, STAND_ROOF_OVERHANG + 0.14)
+	var parapet := Vector3(0.0, 0.55, 0.33) # its top just under the front wall's
+	var root := Node3D.new()
+	root.name = label
+	root.transform = xf * Transform3D(Basis.from_scale(Vector3(width_scale, 1.0, 1.0)), Vector3.ZERO)
+	parent.add_child(root)
+	var xfs := {}
+	for b in bays:
+		var at := Vector3((b - (bays - 1) * 0.5) * STAND_BAY, 0.0, 0.0)
+		_append_xf(xfs, frame_name, Transform3D(Basis.IDENTITY, at))
+		_append_xf(xfs, "StandBoard_%d" % ((piece * 3 + b * 5) % STAND_BOARDS), Transform3D(Basis.IDENTITY, at + parapet))
+		_append_xf(xfs, "StandBoard_%d" % (0 if b % 3 == 1 else (piece + b * 3 + 1) % STAND_BOARDS), Transform3D(Basis.IDENTITY, at + fascia))
+		for k in tiers:
+			var row := Transform3D(Basis.IDENTITY, at + Vector3(0.0, STAND_FIRST_Z + k * STAND_RISE, -k * STAND_TREAD))
+			_append_xf(xfs, "StandRow", row)
+			_append_xf(xfs, "StandCrowd", row)
+	var half := (bays - 1) * 0.5 * STAND_BAY
+	_append_xf(xfs, "StandEndL_T%02d" % tiers, Transform3D(Basis.IDENTITY, Vector3(-half, 0, 0)))
+	_append_xf(xfs, "StandEndR_T%02d" % tiers, Transform3D(Basis.IDENTITY, Vector3(half, 0, 0)))
+	var crowd := _stand_crowd_material()
+	for part in xfs:
+		if not parts.has(part):
+			continue
+		var list: Array[Transform3D] = []
+		list.assign(xfs[part])
+		var inst := MultiMeshInstance3D.new()
+		inst.name = part
+		inst.multimesh = _multimesh(parts[part], list, [])
+		if part == "StandCrowd":
+			inst.material_override = crowd
+			if crowd_range > 0.0:
+				inst.visibility_range_end = crowd_range
+				inst.visibility_range_end_margin = 60.0
+				inst.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+		if part == "StandCrowd" or part == "StandRow" or part.begins_with("StandBoard"):
+			inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		root.add_child(inst)
+	return root
+
+## The crowd material shared by every grandstand, and the seats painted in one of the circuit's colours.
+func _stand_crowd_material() -> ShaderMaterial:
+	if _crowd_material and _crowd_material_track == track:
+		return _crowd_material
+	var seat_colors: Array[Color] = [Color("#1f4fa0"), Color("#c0262d"), Color("#1d7a47"), Color("#e0a91c"), Color("#5f6a75")]
+	var seat_color := seat_colors[absi(hash(track.cfg.resource_path)) % seat_colors.size()]
+	var row_mesh: Mesh = trackside_meshes().StandRow
+	for i in row_mesh.get_surface_count():
+		var m := row_mesh.surface_get_material(i) as StandardMaterial3D
+		if m and m.resource_name == "Seat":
+			m.albedo_color = seat_color
+	_crowd_material = ShaderMaterial.new()
+	_crowd_material.shader = CROWD_SHADER
+	_crowd_material_track = track
+	return _crowd_material
+
+func _append_xf(xfs: Dictionary, part: String, xf: Transform3D) -> void:
+	if not xfs.has(part):
+		xfs[part] = []
+	xfs[part].append(xf)
 
 ## Monaco: blocks of flats and hotels behind the barriers, up to four rows deep and stepping up the
 ## hillside, as in the JS version. Windows, shutters and floor bands come from the facade shader, so every
@@ -2335,17 +2864,53 @@ func _add_yacht(i: int, at: Vector3, rot: float, length: float, hull_mat: Materi
 func _setup_tv_cameras() -> void:
 	tv_cameras.clear()
 	tv_camera_s.clear()
-	# a camera every ~140 m, on the outside of the bend
-	var num_cams := maxi(4, int(track.L / 140.0))
+	tv_camera_kind.clear()
+	# a camera every ~110 m: a tower, a ground camera, a telephoto, a ground camera, and so on
+	var num_cams := maxi(6, int(track.L / 110.0))
 	for i in num_cams:
 		var s := float(i) * (track.L / float(num_cams))
 		var k := track.sample(track.KC, s)
-		var side := -signf(k) if absf(k) > 1.0 / 300.0 else 1.0
-		var lateral := side * (track.half + track.cfg.runoff + 16.0)
+		# on the outside of the bend, alternating sides on the straights
+		var side := -signf(k) if absf(k) > 1.0 / 300.0 else (1.0 if i % 2 == 0 else -1.0)
+		var kind := TvKind.TOWER if i % 4 == 0 else (TvKind.LONG if i % 4 == 2 else TvKind.GROUND)
+		# low cameras stand behind the barrier, except where it carries a catch fence, which would fill the
+		# shot at close range: there they stand on the road side of it
+		var edge := track.half + track.cfg.runoff
+		if kind == TvKind.TOWER:
+			edge += 16.0
+		elif track.cfg.barrier in ["safer", "armco+fence"]:
+			edge -= minf(1.0, track.cfg.runoff - 0.3)
+		else:
+			edge += 2.5
+		var lateral := side * edge
 		var p := track.pos(s, lateral)
-		var y := _road_y(s) + 6.4 + track.bank_rise(s, lateral)
+		var y := _road_y(s) + track.bank_rise(s, lateral)
+		if kind == TvKind.TOWER:
+			y += 6.4
+		else:
+			y = maxf(_ground_y(p[0], p[1], s, absf(lateral)) + 1.5, y + 1.8)
 		tv_cameras.append(Vector3(p[0] - world_center.x, y, p[1] - world_center.y))
 		tv_camera_s.append(s)
+		tv_camera_kind.append(kind)
+
+## A scaffold tower under each trackside TV camera, its camera turned towards the road.
+func _build_tv_towers() -> void:
+	var parts := trackside_meshes()
+	if not parts.has("TvTower"):
+		return
+	var xfs: Array[Transform3D] = []
+	for i in tv_cameras.size():
+		if tv_camera_kind[i] != TvKind.TOWER:
+			continue
+		var eye := tv_cameras[i]
+		var p := track.pos(tv_camera_s[i], 0.0)
+		var to_road := Vector3(p[0] - world_center.x, 0.0, p[1] - world_center.y) - Vector3(eye.x, 0.0, eye.z)
+		var basis := Basis(Vector3.UP, atan2(-to_road.z, to_road.x))
+		xfs.append(Transform3D(basis, eye - Vector3(0, 1.6, 0) - basis.x * 0.7))
+	var root := Node3D.new()
+	root.name = "TvTowers"
+	track_root.add_child(root)
+	_add_multimesh(root, "Towers", _multimesh(parts.TvTower, xfs, []), null)
 
 func _reset_skids() -> void:
 	_skid_last.clear()

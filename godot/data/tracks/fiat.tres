@@ -1,0 +1,51 @@
+[gd_resource type="Resource" script_class="TrackDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/corner_name.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/data/track_def.gd" id="2"]
+
+[sub_resource type="Resource" id="Resource_main"]
+script = ExtResource("1")
+name = "Main Straight"
+
+[sub_resource type="Resource" id="Resource_east"]
+script = ExtResource("1")
+distance = 566.0
+name = "East Turn"
+
+[sub_resource type="Resource" id="Resource_back"]
+script = ExtResource("1")
+distance = 940.0
+name = "Back Straight"
+
+[sub_resource type="Resource" id="Resource_west"]
+script = ExtResource("1")
+distance = 1972.0
+name = "West Turn"
+
+[sub_resource type="Resource" id="Resource_main2"]
+script = ExtResource("1")
+distance = 2320.0
+name = "Main Straight"
+
+[resource]
+script = ExtResource("2")
+key = "fiat"
+display_name = "Fiat Track"
+short_name = "Fiat Track"
+width = 6.5
+pit_entry = -300.0
+pit_exit = 420.0
+pit_offset = 9.75
+box_start = -150.0
+box_spacing = 12.0
+runoff = 5.0
+runoff_color = Color(0.5, 0.46, 0.33, 1)
+runoff_surface = "grass"
+barrier = "tyres"
+tree_density = 0.8
+tree_patch = 0.5
+tree_conifer = 0.55
+grandstands = false
+stand_tiers = 3
+osm_names = false
+corners = Array[ExtResource("1")]([SubResource("Resource_main"), SubResource("Resource_east"), SubResource("Resource_back"), SubResource("Resource_west"), SubResource("Resource_main2")])

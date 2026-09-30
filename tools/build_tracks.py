@@ -11,6 +11,9 @@ Suzuka and Zandvoort come from the main API (relation/<id>/full, plus Zandvoort'
 converted to the same relation-with-geometry layout, with the member ways' tags stored alongside:
   Suzuka        relation 284570   (鈴鹿サーキット)                                -> osm_suzuka.json
   Zandvoort     relation 13545573 (Grand Prix Formule 1 van Nederland)             -> osm_zandvoort.json
+Fiat Track (Tor Fiata, the Fiat Auto Poland test circuit in Tychy) is one closed service way in the main API's
+map call (way 143622821, traced from the GUGiK orthophoto, inside the 'Motodrom' landuse way 143653966):
+  Fiat Track    api/0.6/map?bbox=19.055,50.090,19.090,50.106, way 143622821        -> osm_fiat.json
 """
 import json, math, os
 
@@ -75,6 +78,10 @@ TRACKS = {
     'zandvoort': dict(src='osm_zandvoort.json', ids='relation', origin=(52.3880, 4.5440), start=(52.3889948, 4.5408762),
                       pits=('osm_zandvoort.json', [38144527]), dem='eudem25m', grid=30, length=4259, oneway=True,
                       rename={'CM.com Circuit Zandvoort': None}, godot=True),
+    # OSM has no start line or pit lane here: the line is on the north straight, at the junction with the
+    # infield roads (where the paddock buildings are); the loop keeps the direction it is drawn in
+    'fiat': dict(src='osm_fiat.json', ids=[143622821], origin=(50.0975, 19.0720), start=(50.0972148, 19.0704380),
+                 dem='eudem25m', grid=30, godot=True),
 }
 
 _cache = {}

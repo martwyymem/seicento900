@@ -1,1 +1,3 @@
 __pycache__/
+# raw Overpass responses (tools/fetch_surroundings.py); build_surroundings.py turns them into godot/data/tracks/*_env.json and *_land.png
+tools/osm_env/

@@ -35,6 +35,7 @@ extends Resource
 @export var stands := Vector2(-330, 250) ## grandstand span relative to the start line
 @export var stand_tiers := 5
 @export var sea := false
+@export var floodlight_spacing := 180.0 ## metres between floodlight masts round the lap; 0 for none (the city has street lamps)
 
 @export_group("Names")
 @export var osm_names := false ## use the section names from OpenStreetMap

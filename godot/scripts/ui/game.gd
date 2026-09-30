@@ -5,11 +5,12 @@ extends Control
 
 const RaceHud = preload("res://scripts/ui/race_hud.gd")
 
-const TRACK_KEYS := ["gp", "nordschleife", "monaco", "indy", "lemans", "monza", "silverstone", "spa", "suzuka", "zandvoort"]
-const TRACK_NAMES := ["Nürburgring GP", "Nordschleife", "Monaco", "Indianapolis", "Le Mans", "Monza", "Silverstone", "Spa-Francorchamps", "Suzuka", "Zandvoort"]
+const TRACK_KEYS := ["gp", "nordschleife", "monaco", "indy", "lemans", "monza", "silverstone", "spa", "suzuka", "zandvoort", "fiat"]
+const TRACK_NAMES := ["Nürburgring GP", "Nordschleife", "Monaco", "Indianapolis", "Le Mans", "Monza", "Silverstone", "Spa-Francorchamps", "Suzuka", "Zandvoort", "Fiat Track"]
 
 const CHAMPIONSHIP_CALENDAR := ["monza", "silverstone", "spa", "gp", "monaco", "indy", "lemans", "nordschleife"]
 const CHAMPIONSHIP_POINTS := [25, 18, 15, 12, 10, 8, 6, 4, 2, 1]
+const PROJECT_FINISH_ABOVE := 0.05 ## share of the race left beyond which a DNF projects the finish instead of simulating it
 const TOP_MENU_TABS := ["Information", "Set Up", "Repair", "Race", "Save", "Quit"]
 const MENU_TRACK_ART := preload("res://scripts/ui/menu_track_art.gd")
 const MENU_WEATHER_ICON := preload("res://scripts/ui/menu_weather_icon.gd")
@@ -35,6 +36,7 @@ const TRACK_DEFAULTS := {
 	"spa": {"laps": 5, "wear": 2.0},
 	"suzuka": {"laps": 6, "wear": 2.0},
 	"zandvoort": {"laps": 6, "wear": 2.0},
+	"fiat": {"laps": 8, "wear": 2.0},
 }
 
 const WARP_VALUES := [1, 2, 5, 10, 30, 60]
@@ -354,6 +356,11 @@ func _update_input(dt: float) -> void:
 ## Once the player is out of it, the rest of the race runs as fast as the machine allows.
 func _begin_skip() -> void:
 	if not race or race.phase == "finished" or skipping:
+		return
+	# out of the race with more than 5% still to run: project the finish instead of simulating it
+	if race.player.dnf and race.remaining_fraction() > PROJECT_FINISH_ABOVE:
+		race.approximate_finish()
+		_show_results()
 		return
 	skipping = true
 	race.warp = 60 # the field drops to the cheap rail model
@@ -2217,6 +2224,8 @@ func _show_results() -> void:
 	var laps: int = race.winner.finish_lap if race.winner else race.R
 	var sub := "%s · %s%d laps · %s" % [race.track.name, ("%s · " % _fmt_hours(race.duration / 3600.0)) if race.timed else "", laps,
 		{"dry": "Dry", "wet": "Wet", "variable": "Variable weather"}.get(race.s.weather, "Dry")]
+	if race.projected:
+		sub += " · Finish projected from the field's pace"
 	if fast:
 		sub += " · Fastest lap %s %s" % [fast.car.name, Race.fmt_time(fast.t)]
 	col.add_child(_label("CHEQUERED FLAG · %s" % title, 26, INK))

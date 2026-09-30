@@ -277,7 +277,8 @@ class MB:
 		me.polygons.foreach_set("material_index", [names.index(n) for n in self.m])
 		# linear float colours reach glTF (and Godot's COLOR) unchanged
 		attr = me.color_attributes.new("Col", "FLOAT_COLOR", "POINT")
-		attr.data.foreach_set("color", [x for c in self.c for x in (*c, 1.0)])
+		# (a fourth component is kept as the alpha, e.g. the foliage flag of the trees)
+		attr.data.foreach_set("color", [x for c in self.c for x in (c if len(c) == 4 else (*c, 1.0))])
 		me.color_attributes.active_color = attr
 		if any(self.uv):
 			layer = me.uv_layers.new(name="UVMap")

@@ -26,6 +26,19 @@ uniform bool has_rough_tex = false;
 uniform float tex_scale = 0.35;
 uniform float tex_color_mix = 0.3;
 
+// The land map from OpenStreetMap (surroundings.gd): per texel how much is paved (R), farmland (G), bare
+// ground (B) and forest (A), over a rectangle of the world's x/z.
+uniform bool use_land = false;
+uniform sampler2D land_map : filter_linear, repeat_disable;
+uniform vec2 land_origin = vec2(0.0);
+uniform vec2 land_size = vec2(1.0);
+uniform vec3 paved_color : source_color = vec3(0.34, 0.34, 0.33);
+uniform vec3 farm_color_a : source_color = vec3(0.62, 0.58, 0.33); // ripe crops
+uniform vec3 farm_color_b : source_color = vec3(0.4, 0.5, 0.24); // green crops
+uniform vec3 farm_color_c : source_color = vec3(0.42, 0.33, 0.24); // ploughed
+uniform vec3 bare_color : source_color = vec3(0.5, 0.43, 0.32);
+uniform vec3 forest_floor_color : source_color = vec3(0.2, 0.22, 0.13);
+
 varying vec3 world_pos;
 varying vec3 world_normal;
 
@@ -68,9 +81,29 @@ void fragment() {
 	vec3 lush_tint = vec3(0.86, 0.96, 0.86);
 	col *= mix(vec3(1.0), mix(lush_tint, dry_tint, smoothstep(0.3, 0.7, macro)), tuft) * (0.8 + 0.4 * broad);
 
+	float paved = 0.0;
+	if (use_land) {
+		vec2 luv = (p - land_origin) / land_size;
+		if (luv.x > 0.0 && luv.y > 0.0 && luv.x < 1.0 && luv.y < 1.0) {
+			vec4 lm = texture(land_map, luv);
+			// farmland: G is 0.35-1 in a field, its value the field's crop; rows in the tractor's direction
+			float field = smoothstep(0.12, 0.3, lm.g);
+			float crop = clamp((lm.g - 0.35) / 0.65, 0.0, 1.0);
+			vec3 farm = crop < 0.45 ? farm_color_b : (crop < 0.75 ? farm_color_a : farm_color_c);
+			farm *= 0.9 + 0.15 * fract(crop * 7.3);
+			farm *= 0.88 + 0.16 * step(0.5, fract(dot(p, vec2(0.6, 0.8)) * 0.9)) * (0.4 + fine);
+			col = mix(col, farm * (0.88 + 0.2 * broad), field);
+			col = mix(col, forest_floor_color * (0.7 + 0.5 * fine), lm.a * 0.9);
+			col = mix(col, bare_color * (0.8 + 0.3 * fine + 0.15 * micro), lm.b);
+			paved = smoothstep(0.25, 0.75, lm.r);
+			col = mix(col, paved_color * (0.88 + 0.16 * fine + 0.08 * micro), paved);
+			rough = mix(rough, 0.82, paved);
+		}
+	}
+
 	// steep ground turns to bare earth and rock
 	if (!is_runoff) {
-		float steep = smoothstep(0.8, 0.62, abs(world_normal.y)) * slope_rock; // abs: the terrain is two-sided
+		float steep = smoothstep(0.8, 0.62, abs(world_normal.y)) * slope_rock * (1.0 - paved); // abs: the terrain is two-sided
 		col = mix(col, rock_color * (0.8 + 0.4 * fine), steep);
 		rough = mix(rough, 0.85, steep);
 	} else {

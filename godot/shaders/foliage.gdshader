@@ -8,6 +8,7 @@ uniform float sway_height = 9.0;
 uniform float translucency = 0.35;
 uniform float roughness_value = 0.88;
 uniform sampler2D grain : filter_linear_mipmap, repeat_enable;
+uniform bool linear_colors = false; // the Blender trees (models/trees.glb) store linear vertex colours
 
 varying vec3 world_pos;
 
@@ -31,8 +32,9 @@ void vertex() {
 
 void fragment() {
 	float n = texture(grain, world_pos.xz * 0.9 + world_pos.y * 0.37).r;
-	ALBEDO = to_linear(COLOR.rgb) * (0.82 + 0.36 * n);
+	vec3 col = linear_colors ? COLOR.rgb : to_linear(COLOR.rgb);
+	ALBEDO = col * (0.82 + 0.36 * n);
 	ROUGHNESS = roughness_value;
 	SPECULAR = 0.3;
-	BACKLIGHT = to_linear(COLOR.rgb) * translucency * COLOR.a;
+	BACKLIGHT = col * translucency * COLOR.a;
 }

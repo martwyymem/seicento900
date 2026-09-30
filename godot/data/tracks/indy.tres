@@ -69,5 +69,5 @@ tree_patch = 0.55
 tree_conifer = 0.2
 terrain_fine = 6.0
 stands = Vector2(-600, 250)
-stand_tiers = 60
+stand_tiers = 14
 corners = Array[ExtResource("1_s4a08")]([SubResource("Resource_3wl3s"), SubResource("Resource_3kph7"), SubResource("Resource_n3hqc"), SubResource("Resource_rx6dr"), SubResource("Resource_13fox"), SubResource("Resource_q1rsh"), SubResource("Resource_vw7e2"), SubResource("Resource_p7hmx"), SubResource("Resource_332x6")])

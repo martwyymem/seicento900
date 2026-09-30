@@ -22,4 +22,5 @@ tree_density = 1.25
 tree_patch = 0.28
 tree_conifer = 0.82
 grandstands = false
+floodlight_spacing = 400.0
 osm_names = true

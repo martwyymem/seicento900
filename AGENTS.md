@@ -29,3 +29,10 @@ rather than editing a GLB by hand. The car is
 opening Godot. `--blend FILE` also saves the .blend. `race_car_visual.gd` finds the meshes by object name
 (`Body`, `Details`, `Stripes`, `Wheel`) and the per-car surfaces by material name (`Paint`, `Taillight`,
 `Glass`, `Headlight`), so keep those names stable.
+
+The trackside structures come from [`tools/blender/build_trackside.py`](tools/blender/build_trackside.py), which writes
+`godot/models/trackside.glb`. It builds modular pieces: grandstand bays, tiers, crowd and sponsor boards, pit
+garages and race control, the start gantry, and TV towers. `race_world.gd` lays them out along each circuit.
+Shared mesh helpers are in [`tools/blender/kit.py`](tools/blender/kit.py). Keep the object names and the layout
+constants (`STAND_*`, `PIT_*`, `GANTRY_BEAM_Y` in `race_world.gd`) in step with the script. The seated crowd is
+coloured by `shaders/crowd.gdshader` from codes in its vertex colours, so it looks green and orange in Blender.

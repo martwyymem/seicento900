@@ -1,6 +1,8 @@
-## Temporary scenery check: builds a circuit and saves screenshots of the grandstands, pits and buildings.
-## Env: TRACK (default gp), HOUR, VIEWS (comma list: stands, stands_near, pits, pits_near, gantry, aerial,
-## city, casino), OUT (directory).
+## Scenery check (dev tool): builds a circuit and saves screenshots of its scenery.
+## Env: TRACK (default gp), HOUR, OUT (directory), VIEWS (comma list):
+##   obj:<Name> (the first, or INDEX-th, of a furniture MultiMesh, from in front), stands, stands_near, stands_back, pits, pits_near, gantry, aerial, high, city, casino,
+##   top<S> (from above the road at S metres), lap<N> (driver's-eye view N/8 of the way round the lap, e.g. lap3), at<S> (driver's eye at S metres)
+##   godot --path godot -s tests/_scenery_shot.gd
 extends SceneTree
 
 func _initialize() -> void:
@@ -34,38 +36,62 @@ func _initialize() -> void:
 	for v in views:
 		var eye := Vector3.ZERO
 		var at := Vector3.ZERO
-		match v:
-			"stands": # from the pit wall across the track
-				eye = _pt(world, sm - 30.0, ps * tr.half, 2.0)
-				at = _pt(world, sm + 10.0, ss * (tr.half + tr.cfg.runoff + 8.0), 5.0)
-			"stands_near":
-				eye = _pt(world, sm, ss * (tr.half + 2.0), 1.4)
-				at = _pt(world, sm + 25.0, ss * (tr.half + tr.cfg.runoff + 6.0), 6.0)
-			"stands_back":
-				eye = _pt(world, sm - 50.0, ss * (tr.half + tr.cfg.runoff + 40.0), 25.0)
-				at = _pt(world, sm, ss * (tr.half + tr.cfg.runoff + 5.0), 3.0)
-			"pits":
-				eye = _pt(world, gm - 40.0, ss * tr.half, 3.0)
-				at = _pt(world, gm, tr.cfg.pit_offset + ps * 10.0, 5.0)
-			"pits_near":
-				eye = _pt(world, gm, tr.cfg.pit_offset - ps * 1.0, 1.7)
-				at = _pt(world, gm + 20.0, tr.cfg.pit_offset + ps * 8.0, 4.0)
-			"gantry":
-				eye = _pt(world, -70.0, 0.0, 2.0)
-				at = _pt(world, 0.0, 0.0, 5.0)
-			"aerial":
-				eye = _pt(world, -140.0, -ss * 90.0, 70.0)
-				at = _pt(world, 0.0, ss * 10.0, 0.0)
-			"city":
-				eye = _pt(world, 300.0, 0.0, 2.0)
-				at = _pt(world, 340.0, 12.0, 8.0)
-			"casino":
-				var c: Dictionary = world._casino_spot()
-				eye = _pt(world, c.s - 45.0, -c.side * 2.0, 2.0)
-				at = _pt(world, c.s, c.side * 15.0, 8.0)
+		cam.fov = 60.0
+		cam.far = 4000.0
+		if v.begins_with("obj:"): # the first of a named furniture piece, from 14 m in front of it
+			var mmi: MultiMeshInstance3D = world.track_root.find_child(v.substr(4), true, false)
+			if mmi == null or mmi.multimesh.instance_count == 0:
+				continue
+			var k := mini(int(OS.get_environment("INDEX")), mmi.multimesh.instance_count - 1) if OS.get_environment("INDEX") != "" else 0
+			var xf := mmi.global_transform * mmi.multimesh.get_instance_transform(k)
+			at = xf.origin + Vector3.UP * 2.0
+			eye = at + (xf.basis.z.normalized() * 12.0 + xf.basis.x.normalized() * 5.0) + Vector3.UP * 1.5
+		elif v.begins_with("top"): # from above and to the side of the road at S metres
+			var s := float(v.substr(3))
+			eye = _pt(world, s - 70.0, 60.0, 45.0)
+			at = _pt(world, s, 0.0, 0.0)
+		elif v.begins_with("lap") or v.begins_with("at"):
+			var s := float(v.substr(3)) / 8.0 * tr.L if v.begins_with("lap") else float(v.substr(2))
+			eye = _pt(world, s, 0.0, 1.3)
+			at = _pt(world, s + 40.0, 0.0, 1.0)
+			cam.fov = 70.0
+		else:
+			match v:
+				"stands": # from the pit wall across the track
+					eye = _pt(world, sm - 30.0, ps * tr.half, 2.0)
+					at = _pt(world, sm + 10.0, ss * (tr.half + tr.cfg.runoff + 8.0), 5.0)
+				"stands_near":
+					eye = _pt(world, sm, ss * (tr.half + 2.0), 1.4)
+					at = _pt(world, sm + 25.0, ss * (tr.half + tr.cfg.runoff + 6.0), 6.0)
+				"stands_back":
+					eye = _pt(world, sm - 50.0, ss * (tr.half + tr.cfg.runoff + 40.0), 25.0)
+					at = _pt(world, sm, ss * (tr.half + tr.cfg.runoff + 5.0), 3.0)
+				"pits":
+					eye = _pt(world, gm - 40.0, ss * tr.half, 3.0)
+					at = _pt(world, gm, tr.cfg.pit_offset + ps * 10.0, 5.0)
+				"pits_near":
+					eye = _pt(world, gm, tr.cfg.pit_offset - ps * 1.0, 1.7)
+					at = _pt(world, gm + 20.0, tr.cfg.pit_offset + ps * 8.0, 4.0)
+				"gantry":
+					eye = _pt(world, -70.0, 0.0, 2.0)
+					at = _pt(world, 0.0, 0.0, 5.0)
+				"aerial":
+					eye = _pt(world, -140.0, -ss * 90.0, 70.0)
+					at = _pt(world, 0.0, ss * 10.0, 0.0)
+				"high": # the whole circuit from above
+					var dist: float = world.overview_distance
+					eye = Vector3(0.0, dist * 0.6, dist * 0.55)
+					at = Vector3.ZERO
+					cam.far = dist * 4.0
+				"city":
+					eye = _pt(world, 300.0, 0.0, 2.0)
+					at = _pt(world, 340.0, 12.0, 8.0)
+				"casino":
+					var c: Dictionary = world._casino_spot()
+					eye = _pt(world, c.s - 45.0, -c.side * 2.0, 2.0)
+					at = _pt(world, c.s, c.side * 15.0, 8.0)
 		cam.position = eye
 		cam.look_at(at, Vector3.UP)
-		cam.fov = 60.0
 		for f in 4:
 			await process_frame
 		await RenderingServer.frame_post_draw

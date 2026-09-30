@@ -121,6 +121,7 @@ var cp := {} ## checkpoint index -> race time the leader passed it
 var cp_step := 25.0
 var finish_count := 0
 var winner: RaceCar = null
+var projected := false ## the finish was projected from the field's pace rather than raced (approximate_finish)
 var fastest = null ## {t, car}
 var penalty_time := 0.0
 var weather: Weather
@@ -380,6 +381,134 @@ func step(dt: float, input: PlayerInput) -> void:
 			phase = "finished"
 			if brain:
 				brain.commit(true)
+
+## Share of the race still to run: 1 at the start, 0 once the chequered flag is out.
+func remaining_fraction() -> float:
+	if winner or phase == "finished":
+		return 0.0
+	if phase != "racing":
+		return 1.0
+	if timed:
+		return time_left / duration if duration > 0.0 else 0.0
+	var lead := 0.0
+	for c in cars:
+		if not c.dnf:
+			lead = maxf(lead, c.lap * track.L + c.s)
+	return clampf(1.0 - lead / (R * track.L), 0.0, 1.0) if R > 0 else 0.0
+
+## Ends the race at once by projecting every running car to the flag from its recent pace and
+## its remaining planned stops, instead of simulating the laps (used once the player is out).
+func approximate_finish() -> void:
+	if phase == "finished":
+		return
+	projected = true
+	var runs := {} # car -> {t0, lt, p0, stops: [[lap, cost, compound]]}
+	var paces := []
+	for c in cars:
+		if not c.dnf and not c.finished:
+			runs[c] = _projection(c)
+			if runs[c].n:
+				paces.append(runs[c].lt)
+	# a few laps say little about a car's real pace: pull thin samples towards the field's
+	paces.sort()
+	var field: float = paces[paces.size() >> 1] if paces.size() else cal.T0 * 1.05
+	for c in runs:
+		var r: Dictionary = runs[c]
+		r.lt = field + (r.lt - field) * r.n / (r.n + 3.0)
+	if not runs.is_empty() and not winner:
+		# the winner: first to complete R laps, or in a timed race the leader's first crossing after time
+		var best_t := INF
+		var best_n := -1
+		for c in runs:
+			var n: int = R if not timed else c.lap + 1
+			if timed:
+				while _projected_time(runs[c], n) < duration:
+					n += 1
+			var t := _projected_time(runs[c], maxi(n, c.lap + 1))
+			if (timed and (n > best_n or (n == best_n and t < best_t))) or (not timed and t < best_t):
+				best_t = t
+				best_n = n
+				winner = c
+		winner.lap = best_n
+	var tw: float = winner.finish_time if winner and winner.finish_time != null else race_time
+	if winner and runs.has(winner):
+		tw = _projected_time(runs[winner], winner.lap)
+		if timed:
+			R = winner.lap
+	var cap := maxf(240.0, cal.T0 * 1.6)
+	var arrivals := []
+	for c in runs:
+		var n: int = c.lap if c == winner else c.lap + 1
+		while _projected_time(runs[c], n) < tw:
+			n += 1
+		var t := _projected_time(runs[c], n)
+		var running := t - tw > cap
+		if running:
+			t = tw + cap
+			n -= 1 # still out on track when the marshals call it
+		arrivals.append({"car": c, "lap": n, "t": t, "running": running})
+	arrivals.sort_custom(func(a, b): return a.t < b.t)
+	for a in arrivals:
+		var c: RaceCar = a.car
+		for st in runs[c].stops:
+			if st[0] < a.lap:
+				c.stops += 1
+				c.used_mask |= Tyres.compound_bit(st[2])
+				c.history.append(st[2])
+		if a.running:
+			var r: Dictionary = runs[c]
+			var p: float = r.p0 + (a.t - r.t0 - _stop_time(r, a.lap)) / r.lt * track.L
+			c.lap = maxi(c.lap, floori(p / track.L))
+			c.s = clampf(p - c.lap * track.L, 0.0, track.L - 0.01)
+		else:
+			c.lap = a.lap
+			c.s = 0.0
+		c.mode = "race"
+		c.pit = null
+		clock = green_at + a.t
+		finish(c, a.running)
+	update_order()
+	phase = "finished"
+	if brain:
+		brain.commit(true)
+
+## A running car's recent pace and the stops its plan still has in it.
+func _projection(c: RaceCar) -> Dictionary:
+	# the median of the last few laps (never the standing start) ignores pit and safety-car laps
+	var recent: Array = c.lap_times.slice(maxi(1, c.lap_times.size() - 5))
+	recent.sort()
+	var lt: float = recent[recent.size() >> 1] if recent.size() else 0.0
+	var stops := []
+	var start := c.stint_start_lap
+	var idx := c.stint_idx
+	if c.mode == "pit" and c.pit and (c.pit.phase == "in" or c.pit.phase == "service"):
+		# a stop already under way costs what is left of it
+		var cost: float = c.pit.left if c.pit.phase == "service" else cal.pit_drive_loss + (c.service.time if c.service else 0.0)
+		var nxt: Dictionary = c.service if c.service else {"c": c.tyre.c}
+		stops.append([c.lap, cost, nxt.c if nxt.c else c.tyre.c])
+		idx += 1
+		start = c.lap
+	while idx + 1 < c.plan.size():
+		start = maxi(start + int(c.plan[idx].laps), c.lap + 1)
+		var nxt: Dictionary = c.plan[idx + 1]
+		var litres := minf(spec.tank, Strategy.fuel_need(int(nxt.laps), car_fpl(c))) if rules.refuel else 0.0
+		var cost: float = cal.pit_drive_loss + Strategy.service_time(s.crew, s.parallel, true, litres)
+		if stops.is_empty() and rc:
+			cost += rc.repair_time(c)
+		stops.append([start, cost, nxt.c])
+		idx += 1
+	return {"t0": race_time, "lt": lt, "n": recent.size(), "p0": c.lap * track.L + c.s, "stops": stops}
+
+## Race time at which a projected car crosses the line to complete lap n.
+func _projected_time(r: Dictionary, n: int) -> float:
+	return r.t0 + (n * track.L - r.p0) / track.L * r.lt + _stop_time(r, n)
+
+func _stop_time(r: Dictionary, n: int) -> float:
+	var t := 0.0
+	for st in r.stops:
+		if st[0] < n:
+			t += st[1]
+	return t
 
 func move_s(car: RaceCar, ds: float) -> void:
 	var L := track.L

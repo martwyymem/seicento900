@@ -451,8 +451,11 @@ def build_pit_bay():
 	# lintel over the door (the team band sits in front of it), slab edge
 	mb.box((dw0, 0, door_h), (dw1, 0.35, PIT_GF), "White", skip=("-x", "+x", "+y"))
 	# interior: floor, walls, ceiling with light panels, the rolled-up door drum
+	# (floors 5.5 cm up, over the run-off surface; the apron reaches the pit lane's edge 1.2 m out)
+	mb.colour = srgb("#a9aba8")
+	mb.quad((-hw, -1.25, 0.055), (hw, -1.25, 0.055), (hw, 0.35, 0.055), (-hw, 0.35, 0.055), "Concrete", (0, 0, 1))
 	mb.colour = srgb("#a3a8ab")
-	mb.quad((dw0, 0.35, 0.005), (dw1, 0.35, 0.005), (dw1, D - 0.3, 0.005), (dw0, D - 0.3, 0.005), "PitFloor", (0, 0, 1))
+	mb.quad((dw0, 0.35, 0.055), (dw1, 0.35, 0.055), (dw1, D - 0.3, 0.055), (dw0, D - 0.3, 0.055), "PitFloor", (0, 0, 1))
 	mb.colour = srgb("#e4e6e8")
 	mb.quad((dw0, D - 0.3, 0), (dw1, D - 0.3, 0), (dw1, D - 0.3, door_h + 0.5), (dw0, D - 0.3, door_h + 0.5), "PitInterior", (0, -1, 0))
 	mb.quad((dw0, 0.35, 0), (dw0, D - 0.3, 0), (dw0, D - 0.3, door_h + 0.5), (dw0, 0.35, door_h + 0.5), "PitInterior", (1, 0, 0))
