@@ -428,9 +428,6 @@ func _update_atmosphere(hour: float, wet: float, rain: float) -> void:
 	world_environment.fog_light_color = FOG_NIGHT.lerp(horizon, day_t).lerp(FOG_RAIN * lerpf(0.15, 1.0, day_t), overcast * 0.6)
 	world_environment.fog_density = 0.00032 + 0.00045 * overcast + 0.0024 * rain
 	world_environment.fog_sun_scatter = 0.18 * glow + 0.05 * (1.0 - overcast) * day_t
-	if far_land:
-		far_land.material.set_shader_parameter("haze_color", world_environment.fog_light_color)
-		far_land.material.set_shader_parameter("haze_density", world_environment.fog_density)
 	world_environment.glow_hdr_threshold = lerpf(1.0, 0.75, night)
 	# volumetric fog shows the headlight beams in the rain and after dark (High and Ultra only)
 	var volumetric := quality >= 2 and (rain > 0.08 or night > 0.45)
@@ -438,6 +435,8 @@ func _update_atmosphere(hour: float, wet: float, rain: float) -> void:
 		world_environment.volumetric_fog_enabled = volumetric
 	world_environment.volumetric_fog_density = 0.002 + 0.008 * rain + 0.002 * night
 	world_environment.volumetric_fog_albedo = Color(0.9, 0.92, 0.95).lerp(Color(0.62, 0.66, 0.72), night)
+	if far_land:
+		far_land.match_sky(sky_material, world_environment)
 	for m in _wet_materials:
 		m.set_shader_parameter("wet", wet)
 		m.set_shader_parameter("rain", rain)
@@ -853,6 +852,7 @@ func _build_track() -> void:
 	if far_land.build(self, track_root):
 		ground.visible = false # the far land reaches the horizon; the flat plane would only hide it
 		_wet_materials.append(far_land.material)
+		_night_materials.append(far_land.material)
 	else:
 		far_land = null
 
@@ -1655,7 +1655,6 @@ func _build_barriers() -> void:
 	var kind := cfg.barrier
 	tyre_cells = FURNITURE.tyre_cells(self)
 	var is_armco := kind != "safer" # tyre tracks have armco between their tyre walls
-	var has_fence := kind == "safer" or kind == "armco+fence"
 	var wall_bottom := 0.3 if is_armco else 0.0
 	var wall_top := 1.0 if is_armco else (1.2 if kind == "safer" else 0.9)
 	var fence_top := 5.0 if kind == "safer" else 3.2
@@ -1685,8 +1684,9 @@ func _build_barriers() -> void:
 	var post_transforms: Array[Transform3D] = []
 
 	for side in [-1.0, 1.0]:
-		if kind == "safer" and side != safer_outside:
-			continue
+		# the sim walls both sides in; the catch fence stands only on the outside of an oval's bends,
+		# the inside is a plain wall
+		var has_fence: bool = (kind == "safer" and side == safer_outside) or kind == "armco+fence"
 		var verts := PackedVector3Array()
 		var indices := PackedInt32Array()
 		var fence_verts := PackedVector3Array()

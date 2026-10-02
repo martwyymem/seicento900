@@ -22,6 +22,11 @@ const SNOW := Color("#e8ecef")
 
 var material: ShaderMaterial
 
+## sky.gdshader's uniforms that make up its horizon, which far_land.gdshader matches its haze to
+const SKY_UNIFORMS := ["horizon_color", "glow_color", "glow_amount", "sun_dir", "sky_energy", "hdri_a", "hdri_b",
+	"hdri_o", "hdri_rot_a", "hdri_rot_b", "hdri_rot_o", "hdri_gain_a", "hdri_gain_b", "hdri_gain_o", "hdri_ab",
+	"hdri_mix", "hdri_o_mix", "hdri_clamp"]
+
 ## Adds the far land under parent; false where the circuit has no data.
 func build(world: Node3D, parent: Node3D) -> bool:
 	var track: Track = world.track
@@ -177,3 +182,14 @@ static func _slope(xs: Array, zs: Array, hs: Array, i: int, j: int) -> float:
 	var dx := (float(hs[j * nx + i1]) - float(hs[j * nx + i0])) / maxf(float(xs[i1]) - float(xs[i0]), 1.0)
 	var dz := (float(hs[j1 * nx + i]) - float(hs[j0 * nx + i])) / maxf(float(zs[j1]) - float(zs[j0]), 1.0)
 	return sqrt(dx * dx + dz * dz)
+
+## Matches the haze to the sky and the scene's fog; race_world.gd calls it whenever the atmosphere changes.
+func match_sky(sky: ShaderMaterial, env: Environment) -> void:
+	for u in SKY_UNIFORMS:
+		var v = sky.get_shader_parameter(u)
+		if v != null:
+			material.set_shader_parameter(u, v)
+	material.set_shader_parameter("haze_color", env.fog_light_color)
+	material.set_shader_parameter("haze_density", env.fog_density)
+	material.set_shader_parameter("aerial", env.fog_aerial_perspective)
+	material.set_shader_parameter("mist", env.volumetric_fog_density if env.volumetric_fog_enabled else 0.0)
