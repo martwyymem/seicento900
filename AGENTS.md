@@ -36,3 +36,11 @@ garages and race control, the start gantry, and TV towers. `race_world.gd` lays 
 Shared mesh helpers are in [`tools/blender/kit.py`](tools/blender/kit.py). Keep the object names and the layout
 constants (`STAND_*`, `PIT_*`, `GANTRY_BEAM_Y` in `race_world.gd`) in step with the script. The seated crowd is
 coloured by `shaders/crowd.gdshader` from codes in its vertex colours, so it looks green and orange in Blender.
+
+Other Blender scripts follow the same pattern: `build_trees.py` (`trees.glb`, the species the surroundings plant),
+`build_furniture.py` (`furniture.glb`, marshal posts, braking boards, hoardings, bridges, paddock, tyre walls) and
+`build_landmarks.py` (`landmarks.glb`: Indianapolis Pagoda and scoring pylon, Suzuka Ferris wheel, Le Mans tyre
+bridge, Monza podium, Nürburg castle, Casino de Monte-Carlo, Silverstone Wing, harbour yachts). The surroundings
+(`tools/fetch_surroundings.py` then `tools/build_surroundings.py`) come from OpenStreetMap and are baked to
+`godot/data/tracks/<key>_env.json`; add a landmark by naming its OSM element in `LANDMARKS` in
+`build_surroundings.py` and its nominal footprint in `LANDMARK_SIZE` in `surroundings.gd`.

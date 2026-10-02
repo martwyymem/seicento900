@@ -22,8 +22,18 @@ extends Resource
 @export var runoff := 8.0 ## metres of run-off beyond the track edge
 @export var runoff_color := Color(0.4, 0.55, 0.3)
 @export_enum("grass", "gravel", "asphalt") var runoff_surface := "grass"
-@export_enum("armco", "tyres", "armco+fence", "safer") var barrier := "armco"
+@export var runoff_paved := 0.0 ## metres of tarmac along the track edge in the run-off (widest on the outside of the bends), the rest is runoff_surface
+@export var runoff_paved_color := Color(0.3, 0.31, 0.32)
+@export_enum("armco", "tyres", "armco+fence", "safer") var barrier := "armco" ## tyres: tyre walls round the bends, armco between them
+@export var barrier_color := Color(0, 0, 0, 0) ## the barrier's colour; transparent for the usual (galvanised armco, dark wall, grey SAFER)
 @export_range(0.0, 35.0, 0.1, "suffix:°") var banking := 0.0 ## banking in the turns; the outside edge is higher
+@export var bank_zones := PackedVector3Array() ## banked turns one by one, instead of `banking`: (from s, to s, degrees), s from the start line
+
+@export_group("Kerbs")
+@export_enum("red_white", "yellow_black", "blue_white", "green_white", "none") var kerb_style := "red_white"
+@export var kerb_width := 1.4
+@export var kerb_stripe := 2.0 ## length of each stripe (m)
+@export var kerb_height := 0.075
 
 @export_group("Scenery")
 @export_enum("forest", "city", "oval") var theme := "forest"

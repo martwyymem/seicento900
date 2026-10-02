@@ -1,7 +1,8 @@
 ## The smaller things round a circuit, from the Blender pieces in models/furniture.glb
 ## (tools/blender/build_furniture.py): marshal posts along the lap, braking boards before the corners that
-## end a straight, footbridges and road bridges where OpenStreetMap has one over the circuit, and the teams'
-## transporters in the paddock behind the pits (in the teams' colours).
+## end a straight, footbridges and road bridges where OpenStreetMap has one over the circuit, tyre walls with
+## belt covers on the outside of the bends where the barrier is tyres, and the teams' transporters in the
+## paddock behind the pits (in the teams' colours).
 ## race_world.gd owns one per circuit and builds it after the rest of the scenery.
 extends RefCounted
 
@@ -10,6 +11,10 @@ const FURNITURE_PATH := "res://models/furniture.glb"
 const BRIDGE_DECK := 6.5 ## footbridge deck height over the road (build_furniture.py DECK)
 const POST_SPACING := 320.0
 const TRANSPORTER_LENGTH := 16.5
+const TYRE_SEGMENT := 4.0 ## the TyreWall piece's length, two track samples
+const TYRE_DEPTH := 1.36 ## how far it reaches behind the barrier line
+## colours of the belt covers, by how many of every 20 stretches wear them
+const BELT_COLOURS := [[Color("#1b1c1e"), 11], [Color("#d9d9d6"), 3], [Color("#b3151b"), 3], [Color("#1c3f94"), 3]]
 
 static var _meshes := {}
 
@@ -41,6 +46,7 @@ func build(w: Node3D) -> void:
 	_build_marshal_posts()
 	if track.cfg.theme != "oval":
 		_build_braking_boards()
+	_build_tyre_walls()
 	_build_hoardings()
 	_build_bridges()
 	_build_paddock()
@@ -185,6 +191,124 @@ func _build_braking_boards() -> void:
 	for part in boards:
 		_add(part, boards[part])
 
+# --------------------------------------------------------------------------------------------- tyre walls
+
+## Key of the barrier segment (two track samples) that sample i is in, on one side of the road.
+static func _cell_key(i: int, side: float) -> int:
+	return (i >> 1) * 2 + (1 if side > 0.0 else 0)
+
+## The barrier segments that are tyre walls, as _cell_key()s: the outside of every real bend, from a little before
+## it to a little after. Empty unless the barrier is tyres. race_world.gd leaves the plain barrier out there.
+static func tyre_cells(w: Node3D) -> Dictionary:
+	var t: Track = w.track
+	var cfg := t.cfg
+	var cells := {}
+	if cfg.barrier != "tyres":
+		return cells
+	var count := t.n >> 1
+	var bend := PackedFloat32Array() # signed curvature over 40 m, per segment
+	bend.resize(count)
+	for k in count:
+		var total := 0.0
+		for a in range(-20, 21, 5):
+			total += t.sample(t.KC, (k * 2 + 1) * t.step + a)
+		bend[k] = total / 9.0
+	var first := -1
+	for k in count:
+		if absf(bend[k]) < 1.0 / 400.0:
+			first = k
+			break
+	if first < 0:
+		return cells
+	var c := 0
+	while c < count:
+		var c0 := (first + c) % count
+		var sign_c := signf(bend[c0])
+		if absf(bend[c0]) < 1.0 / 400.0:
+			c += 1
+			continue
+		var run := 1
+		while c + run < count and absf(bend[(first + c + run) % count]) >= 1.0 / 400.0 and signf(bend[(first + c + run) % count]) == sign_c:
+			run += 1
+		if run >= 8: # 32 m of bend
+			for k in range(-6, run + 4):
+				var cc := (first + c + k + count * 2) % count
+				var side := -sign_c
+				var s := (cc * 2 + 1) * t.step
+				var rel_s := t.rel(s)
+				if absf(cfg.pit_offset) > 1.0 and side == signf(cfg.pit_offset) and rel_s > cfg.pit_entry - 20.0 and rel_s < cfg.pit_exit + 20.0:
+					continue
+				if cfg.grandstands and side == w._stands_side() and rel_s > cfg.stands.x - 30.0 and rel_s < cfg.stands.y + 30.0:
+					continue
+				cells[_cell_key(cc * 2, side)] = run * 1000 + c0 # the stretch it belongs to
+		c += run
+	return cells
+
+## A 4 m tyre wall piece for every tyre cell, its front face on the barrier line, with its belt covers in
+## the colour of its stretch. Chunked along the lap so the camera only draws the ones it can see.
+func _build_tyre_walls() -> void:
+	var cells: Dictionary = world.tyre_cells
+	var m: Dictionary = meshes()
+	if cells.is_empty() or not m.has("TyreWall") or not m.has("TyreWallBelt"):
+		return
+	var bd := track.half + track.cfg.runoff + 0.3
+	var chunks := {}
+	for key in cells:
+		var side := 1.0 if (key & 1) == 1 else -1.0
+		var i0: int = (key >> 1) * 2
+		var s0 := i0 * track.step
+		var s1 := (i0 + 2) * track.step
+		var p0 := track.pos(s0, side * bd)
+		var p1 := track.pos(s1, side * bd)
+		var along := Vector3(p1[0] - p0[0], 0.0, p1[1] - p0[1])
+		var chord := along.length()
+		if chord < 0.5:
+			continue
+		along /= chord
+		var centre := track.pos((s0 + s1) * 0.5, 0.0)
+		var mid := Vector3((p0[0] + p1[0]) * 0.5, 0.0, (p0[1] + p1[1]) * 0.5)
+		var z := along.cross(Vector3.UP) # local +z faces the road
+		if z.dot(Vector3(centre[0] - mid.x, 0.0, centre[1] - mid.z)) < 0.0:
+			along = -along
+			z = -z
+		var y := 0.0
+		for i in [i0, i0 + 1, i0 + 2]:
+			var sm: float = i * track.step
+			y += (track.H[i % track.n] - world.elevation_base) * world.ALTITUDE_SCALE + track.bank_rise(sm, side * bd)
+		y = y / 3.0 - 0.02
+		var basis := Basis(along, Vector3.UP, z).scaled_local(Vector3(chord / TYRE_SEGMENT, 1.0, 1.0))
+		var at := Vector3(mid.x - world.world_center.x, y, mid.z - world.world_center.y)
+		var chunk: int = floori(s0 / 500.0)
+		if not chunks.has(chunk):
+			chunks[chunk] = {"xf": [] as Array[Transform3D], "col": [] as Array[Color]}
+		var stretch: int = cells[key]
+		(chunks[chunk].xf as Array[Transform3D]).append(Transform3D(basis, at))
+		(chunks[chunk].col as Array[Color]).append(_belt_colour(stretch))
+	var belt_mat := StandardMaterial3D.new()
+	belt_mat.vertex_color_use_as_albedo = true
+	belt_mat.vertex_color_is_srgb = true # BELT_COLOURS are as written, not linear
+	belt_mat.roughness = 0.7
+	for chunk in chunks:
+		var xfs: Array[Transform3D] = chunks[chunk].xf
+		var cols: Array[Color] = chunks[chunk].col
+		var tyres := _add("TyreWall", xfs)
+		var belts := _add("TyreWallBelt", xfs, cols)
+		if tyres:
+			(root.get_child(root.get_child_count() - 2) as MultiMeshInstance3D).name = "TyreWall_%d" % chunk
+		if belts:
+			var inst := root.get_child(root.get_child_count() - 1) as MultiMeshInstance3D
+			inst.name = "TyreWallBelt_%d" % chunk
+			inst.material_override = belt_mat
+
+## Black belts mostly, with some white, red and blue stretches; every cell of a stretch the same.
+func _belt_colour(stretch: int) -> Color:
+	var pick := int(absi(stretch * 2654435761) % 20)
+	for entry in BELT_COLOURS:
+		pick -= entry[1]
+		if pick < 0:
+			return entry[0]
+	return BELT_COLOURS[0][0]
+
 # --------------------------------------------------------------------------------------------- hoardings
 
 ## Sponsor boards (the grandstands' fascia boards, models/trackside.glb) along the barrier on the outside of
@@ -195,7 +319,7 @@ func _build_hoardings() -> void:
 		return
 	var cfg := track.cfg
 	var d0 := track.half + cfg.runoff + 0.65
-	var top := 0.9 if cfg.barrier == "tyres" else 1.05
+	var top := 1.05
 	var per_board := {}
 	var s := 0.0
 	var placed := 0
@@ -206,7 +330,9 @@ func _build_hoardings() -> void:
 			s += 10.0
 			continue
 		var side := -signf(kc)
-		var d: float = side * d0
+		# on a tyre wall the boards stand on its rear stack
+		var tyres: bool = world.tyre_cells.has(_cell_key(int(s / track.step), side))
+		var d: float = side * (d0 + 0.65 if tyres else d0)
 		var a := track.pos(s - 5.0, d)
 		var b := track.pos(s + 5.0, d)
 		if not _taken(s, d, d0 - 0.4):

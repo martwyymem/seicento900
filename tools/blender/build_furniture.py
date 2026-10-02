@@ -19,7 +19,12 @@ Frames (Blender; glTF turns +Y into Godot -Z): X along the road, +Y away from it
   BridgeTower          a stair tower rising to the deck at 6.5 m, origin at its foot, the deck end at +Y
   Transporter          a team's articulated truck, 16.5 m, nose towards -X
   TransporterLivery    the trailer's side panels, white (tinted per team by Godot)
+  TyreWall             4 m of tyre barrier along X, its front face at Y = 0: a front stack three tyres high and a
+                       rear stack four high, in staggered courses
+  TyreWallBelt         its conveyor-belt covers: a cap over each stack and three straps down the front, white
+                       (tinted per stretch by Godot)
 """
+import random
 import bpy
 import math
 import os
@@ -49,6 +54,7 @@ kit.MATERIALS.update({
 	"Livery": (srgb("#ffffff"), 0.35, 0.1, {}),
 	"Rubber": (srgb("#141414"), 0.85, 0.0, {}),
 	"Chrome": (srgb("#d8dcdf"), 0.2, 0.9, {}),
+	"Belt": (srgb("#ffffff"), 0.7, 0.0, {}),
 })
 
 
@@ -226,10 +232,59 @@ def transporter_livery():
 	return mb
 
 
+WALL_L = 4.0  # Godot: trackside_furniture.gd TYRE_SEGMENT
+TYRE_R = 0.333
+TYRE_H = 0.25
+# the belt covers hide the tops, so a tyre is just its tread with the chamfered rims (12 sides, open ends)
+TYRE_PROFILE = [(0.0, 0.3), (0.03, TYRE_R), (TYRE_H - 0.03, TYRE_R), (TYRE_H, 0.3)]
+FRONT_LAYERS, REAR_LAYERS = 3, 4
+
+
+def tyre_wall():
+	mb = MB()
+	rnd = random.Random(11)
+	n = 6
+	pitch = WALL_L / n
+	# the dark core behind the tyres, so the gaps between them don't show the sky
+	mb.colour = srgb("#0c0c0d")
+	mb.box((-WALL_L / 2, 0.12, 0), (WALL_L / 2, 1.24, FRONT_LAYERS * TYRE_H - 0.02), "Rubber")
+	mb.box((-WALL_L / 2, 0.7, 0), (WALL_L / 2, 1.24, REAR_LAYERS * TYRE_H - 0.02), "Rubber")
+	# the rear stack only shows over the front one (its lower courses are hidden)
+	for y, first, layers in ((TYRE_R, 0, FRONT_LAYERS), (3 * TYRE_R, FRONT_LAYERS, REAR_LAYERS)):
+		for layer in range(first, layers):
+			# every other course shifted half a tyre; the pattern repeats from one segment to the next
+			shift = 0.5 * pitch if layer % 2 else 0.0
+			for k in range(n):
+				x = -WALL_L / 2 + pitch * (k + 0.5) + shift
+				g = rnd.uniform(0.09, 0.2)
+				mb.colour = (g * 0.5, g * 0.5, g * 0.5 + 0.004)
+				mb.lathe(TYRE_PROFILE, 12, "Rubber", centre=(x, y, layer * TYRE_H))
+	return mb
+
+
+def tyre_wall_belt():
+	mb = MB()
+	mb.colour = (1, 1, 1)
+	h1, h2 = FRONT_LAYERS * TYRE_H, REAR_LAYERS * TYRE_H
+	t = 0.016
+	half = WALL_L / 2
+	# a cap belt over each stack, a riser on the step between them, and straps over the front stack
+	mb.box((-half, 0.0, h1), (half, 0.68, h1 + t), "Belt")
+	mb.box((-half, 0.68, h2), (half, 1.36, h2 + t), "Belt")
+	mb.box((-half, 0.66, h1), (half, 0.66 + t, h2), "Belt")
+	for x in (-1.33, 0.0, 1.33):
+		mb.box((x - 0.09, -0.025, 0.02), (x + 0.09, 0.0, h1), "Belt")
+	mb.colour = srgb("#a4aaaf")
+	for x in (-1.33, 0.0, 1.33):
+		for z in (0.12, h1 - 0.14):
+			mb.box((x - 0.035, -0.04, z - 0.035), (x + 0.035, -0.025, z + 0.035), "Steel")
+	return mb
+
+
 PIECES = {"MarshalPost": marshal_post, "BrakeBoard_100": lambda: brake_board("100"),
 	"BrakeBoard_200": lambda: brake_board("200"), "BrakeBoard_300": lambda: brake_board("300"),
 	"BridgeSpan": bridge_span, "BridgeTower": bridge_tower, "Transporter": transporter,
-	"TransporterLivery": transporter_livery}
+	"TransporterLivery": transporter_livery, "TyreWall": tyre_wall, "TyreWallBelt": tyre_wall_belt}
 
 
 def main():
@@ -252,10 +307,14 @@ def main():
 		kit.place(objs["BridgeSpan"], (0, 25, 0), scale=(2.0, 1, 1))
 		kit.place(objs["BridgeTower"], (-12, 25, 0))
 		kit.place(objs["BridgeTower"], (12, 25, 0), rot_z=math.pi)
+		for i in range(3):
+			kit.place(objs["TyreWall"], (-14 + i * WALL_L, -9, 0))
+			kit.place(objs["TyreWallBelt"], (-14 + i * WALL_L, -9, 0))
 		for ob in objs.values():
 			ob.hide_render = True
 		kit.render(cam, os.path.join(out, "furniture.png"), (0, -26, 9), (0, 6, 2.5), 60)
 		kit.render(cam, os.path.join(out, "furniture_close.png"), (-9, -7, 3.2), (-12, 0, 2.2), 50)
+		kit.render(cam, os.path.join(out, "tyrewall.png"), (-6, -14, 2.4), (-10, -9, 0.6), 50)
 
 
 main()

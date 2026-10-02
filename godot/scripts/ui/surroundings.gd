@@ -10,6 +10,9 @@ const CANOPY_SHADER := preload("res://shaders/canopy.gdshader")
 const FOLIAGE_SHADER := preload("res://shaders/foliage.gdshader")
 const WORLD_ASSETS := preload("res://scripts/ui/world_assets.gd")
 const TREES_PATH := "res://models/trees.glb"
+const BANK_WIDTH := 12.0 ## metres across the disused banking (Monza's Sopraelevata), from its inner edge
+const BANK_RISE := 7.0 ## metres the banking climbs to its outer edge, on a curve steepening to about 40 degrees
+const BANK_BRIDGE := 6.5 ## metres the ring is lifted where it passes over a road
 const LANDMARKS_PATH := "res://models/landmarks.glb"
 ## Footprint (length along the model's x, width along z; metres) each Blender landmark (build_landmarks.py) is
 ## modelled at. The mapped footprint stretches it to fit; pieces not listed keep their size.
@@ -64,6 +67,7 @@ var land_texture: Texture2D
 var land_rect := Rect2() ## track metres
 var _res := 2.0 ## land map metres per texel
 static var _tree_meshes := {} ## Blender tree meshes by species
+var _bank_cells := {} ## 16 m cells (Vector2i) within reach of the banking, kept clear of trees
 static var _landmark_meshes := {} ## Blender landmark meshes (and yachts) by name
 
 ## Loads the circuit's data; false where there is none.
@@ -186,6 +190,7 @@ func build() -> void:
 	var root := Node3D.new()
 	root.name = "Surroundings"
 	world.track_root.add_child(root)
+	_build_banking(root) # first: it keeps the trees off its ground
 	_build_woods(root)
 	_build_buildings(root)
 	_build_stands(root)
@@ -199,6 +204,8 @@ func build() -> void:
 ## Whether a spot is kept for the circuit's own structures: the run-off (clear metres from the centreline),
 ## the pit building and race control, the main grandstands and the TV towers.
 func _reserved(x: float, z: float, clear: float) -> bool:
+	if not _bank_cells.is_empty() and _bank_cells.has(Vector2i(floori(x / 16.0), floori(z / 16.0))):
+		return true
 	var near: Vector2 = track_distance(x, z)
 	if near.x < 0:
 		return false
@@ -384,7 +391,7 @@ func _build_canopy(root: Node3D, inner: float) -> void:
 			var lm := land_at(x, z)
 			if lm.a > 0.5 and lm.r < 0.3:
 				var near: Vector2 = track_distance(x, z)
-				if near.y > inner:
+				if near.y > inner and not _bank_cells.has(Vector2i(floori(x / 16.0), floori(z / 16.0))):
 					inside[jz * (nx + 1) + jx] = 1
 	var chunks := {} # chunk -> SurfaceTool
 	var top := func(jx: int, jz: int, rim: bool) -> Vector3:
@@ -714,15 +721,19 @@ static func _fit_rect(pts: PackedVector2Array) -> Dictionary:
 
 # --------------------------------------------------------------------------------------------- water
 
-## Lakes and ponds as flat water at their lowest shore, rivers as ribbons over the ground.
+## Lakes and ponds as flat water at their lowest shore, rivers mapped as areas and rivers mapped as lines as
+## ribbons over the ground. The areas are cut to the circuit's own terrain: past it is only the far land
+## (far_land.gd, which has the lakes and rivers from its land cover), drawn behind everything, so water carried
+## on out there would lie over the hills as a flat sheet.
 func _build_water(root: Node3D) -> void:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var any := false
 	var c: Vector2 = world.world_center
+	var r := land_rect.grow(-2.0)
+	var terrain := PackedVector2Array([r.position, Vector2(r.end.x, r.position.y), r.end, Vector2(r.position.x, r.end.y)])
 	for ring in env.get("water", []):
 		var poly := PackedVector2Array()
-		var shore := INF
 		for k in range(0, ring.size() - 1, 2):
 			poly.append(Vector2(ring[k], ring[k + 1]))
 		if poly.size() > 1 and poly[0].is_equal_approx(poly[poly.size() - 1]):
@@ -731,27 +742,37 @@ func _build_water(root: Node3D) -> void:
 			continue
 		var skip := false
 		for p in poly:
-			shore = minf(shore, ground_height(p.x, p.y))
 			if track_distance(p.x, p.y).y < track.half + track.cfg.runoff + 1.0:
 				skip = true
 		if skip:
 			continue
-		var tris := Geometry2D.triangulate_polygon(poly)
-		for k in range(0, tris.size(), 3):
-			var pts := []
-			var uvs := []
-			for j in 3:
-				var v := poly[tris[k + j]]
-				pts.append(Vector3(v.x - c.x, shore + 0.35, v.y - c.y))
-				uvs.append(Vector2(0.5, 0.5))
-			_tri(st, pts, uvs, Vector3.UP, Color.WHITE, Vector2.ZERO)
-			any = true
+		for part in Geometry2D.intersect_polygons(poly, terrain):
+			var shore := INF
+			var top := -INF
+			for p in part:
+				var h := ground_height(p.x, p.y)
+				shore = minf(shore, h)
+				top = maxf(top, h)
+			# a river's banks fall along it (1 is 4 m): it follows the ground rather than lying flat
+			var flowing := top - shore > 1.0
+			var tris := Geometry2D.triangulate_polygon(part)
+			for k in range(0, tris.size(), 3):
+				var pts := []
+				var uvs := []
+				for j in 3:
+					var v := part[tris[k + j]]
+					pts.append(Vector3(v.x - c.x, (ground_height(v.x, v.y) + 0.25) if flowing else shore + 0.35, v.y - c.y))
+					uvs.append(Vector2(0.5, 0.5))
+				_tri(st, pts, uvs, Vector3.UP, Color.WHITE, Vector2.ZERO)
+				any = true
 	for river in env.get("rivers", []):
 		var width: float = river[0]
 		var pts := _along(river.slice(1), 4.0)
 		for k in pts.size() - 1:
 			var a := pts[k]
 			var b := pts[k + 1]
+			if not (r.has_point(a) and r.has_point(b)):
+				continue
 			var side := Vector2(-(b - a).y, (b - a).x).normalized() * width * 0.5
 			var ya: float = ground_height(a.x, a.y) + 0.25
 			var yb: float = ground_height(b.x, b.y) + 0.25
@@ -940,3 +961,126 @@ func _build_pools(root: Node3D) -> void:
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	mi.visibility_range_end = 600.0
 	root.add_child(mi)
+
+# --------------------------------------------------------------------------------------------- banking
+
+## The disused banked ring (env "banking": [banked, x, y, bridge, ...] chains; Monza's Sopraelevata): a concrete
+## slab climbing to the outside of each bend, an earth bank behind it, and lifted where it crosses a road.
+## Scenery only: the road course does not use it. Flat chains (the ring's straight) are painted on the land map.
+func _build_banking(root: Node3D) -> void:
+	var slab := SurfaceTool.new()
+	slab.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var earth := SurfaceTool.new()
+	earth.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var any := false
+	var c: Vector2 = world.world_center
+	for chain in env.get("banking", []):
+		if int(chain[0]) != 1:
+			continue
+		var raw: Array[Vector2] = []
+		var bridge: Array[float] = []
+		for k in range(1, chain.size() - 2, 3):
+			raw.append(Vector2(chain[k], chain[k + 1]))
+			bridge.append(float(chain[k + 2]))
+		var line := _smooth_line(raw, bridge, 5.0)
+		var pts: Array[Vector2] = line.pts
+		var lift: Array[float] = line.lift
+		if pts.size() < 3:
+			continue
+		var turn := 0.0
+		for i in range(1, pts.size() - 1):
+			turn += (pts[i] - pts[i - 1]).cross(pts[i + 1] - pts[i])
+		var out_sign := -1.0 if turn > 0.0 else 1.0 # the outside of the bend, as a side of the heading's normal
+		var rows := []
+		for i in pts.size():
+			var t := (pts[mini(i + 1, pts.size() - 1)] - pts[maxi(i - 1, 0)]).normalized()
+			var n := Vector2(-t.y, t.x) * out_sign
+			var inner := pts[i] - n * BANK_WIDTH * 0.5
+			var g := ground_height(inner.x, inner.y) + lift[i] * BANK_BRIDGE
+			var row := []
+			for j in 7: # across the slab: height follows a curve that steepens towards the top
+				var u := float(j) / 6.0
+				var p := inner + n * BANK_WIDTH * u
+				row.append(Vector3(p.x - c.x, g + BANK_RISE * pow(u, 1.5), p.y - c.y))
+			var top: Vector3 = row[6]
+			var foot := Vector2(top.x + c.x, top.z + c.y) + n * 9.0
+			for back in [9.0, 6.0, 4.0, 2.0]: # the earth bank stops short of the circuit's run-off
+				foot = Vector2(top.x + c.x, top.z + c.y) + n * back
+				if track_distance(foot.x, foot.y).y > _clear_distance():
+					break
+			var gf := minf(ground_height(foot.x, foot.y), g) - 0.3
+			row.append(Vector3(foot.x - c.x, maxf(gf, g - BANK_RISE * 1.1), foot.y - c.y)) # [7] foot of the earth bank
+			rows.append(row)
+			for dx in range(-1, 2):
+				for dz in range(-1, 2):
+					_bank_cells[Vector2i(floori(pts[i].x / 16.0) + dx, floori(pts[i].y / 16.0) + dz)] = true
+		for i in rows.size() - 1:
+			# slabs every 10 m, each a little different, mossy and stained towards the inner edge where water runs
+			var slab_tint := 0.9 + 0.12 * _rand(float(i / 2), float(chain.size()), 5.0)
+			for j in 6:
+				var moss := clampf(1.0 - float(j) / 4.0, 0.0, 1.0) * (0.35 + 0.5 * _rand(float(i), float(j), 9.0))
+				var col := Color(0.62, 0.61, 0.57).lerp(Color(0.42, 0.5, 0.3), moss) * slab_tint
+				_bank_quad(slab, rows[i][j], rows[i][j + 1], rows[i + 1][j + 1], rows[i + 1][j], col)
+			_bank_quad(earth, rows[i][6], rows[i][7], rows[i + 1][7], rows[i + 1][6], Color(0.42, 0.5, 0.28))
+			any = true
+	if not any:
+		return
+	slab.generate_normals()
+	earth.generate_normals()
+	for part in [["BankingSlab", slab, Color("#9a9890"), 0.95], ["BankingEarth", earth, Color("#6a7a46"), 1.0]]:
+		var m := StandardMaterial3D.new()
+		m.albedo_color = part[2]
+		m.vertex_color_use_as_albedo = true
+		m.roughness = part[3]
+		m.cull_mode = BaseMaterial3D.CULL_DISABLED
+		var mi := MeshInstance3D.new()
+		mi.name = part[0]
+		mi.mesh = (part[1] as SurfaceTool).commit()
+		mi.material_override = m
+		root.add_child(mi)
+
+func _bank_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, col: Color) -> void:
+	for v in [a, b, c, a, c, d]:
+		st.set_color(col)
+		st.add_vertex(v)
+
+## A polyline smoothed (Chaikin) and resampled every `step` metres, with a 0-1 lift where the mapped bridge flags
+## are, eased over 25 m either side.
+func _smooth_line(raw: Array[Vector2], flags: Array[float], step: float) -> Dictionary:
+	var pts: Array[Vector2] = raw.duplicate()
+	var fl: Array[float] = flags.duplicate()
+	for _it in 3:
+		var np: Array[Vector2] = [pts[0]]
+		var nf: Array[float] = [fl[0]]
+		for i in pts.size() - 1:
+			np.append(pts[i].lerp(pts[i + 1], 0.25))
+			np.append(pts[i].lerp(pts[i + 1], 0.75))
+			nf.append(fl[i])
+			nf.append(fl[i + 1])
+		np.append(pts[pts.size() - 1])
+		nf.append(fl[fl.size() - 1])
+		pts = np
+		fl = nf
+	var out_pts: Array[Vector2] = []
+	var out_fl: Array[float] = []
+	var carry := 0.0
+	out_pts.append(pts[0])
+	out_fl.append(fl[0])
+	for i in pts.size() - 1:
+		var seg := pts[i].distance_to(pts[i + 1])
+		var pos := step - carry
+		while pos <= seg:
+			out_pts.append(pts[i].lerp(pts[i + 1], pos / seg))
+			out_fl.append(maxf(fl[i], fl[i + 1]))
+			pos += step
+		carry = seg - (pos - step)
+	var lift: Array[float] = []
+	var reach := int(25.0 / step)
+	for i in out_fl.size():
+		var best := 0.0
+		for q in range(-reach, reach + 1):
+			var k := i + q
+			if k >= 0 and k < out_fl.size() and out_fl[k] > 0.0:
+				best = maxf(best, smoothstep(0.0, 1.0, 1.0 - absf(q) / float(reach + 1) * 0.9))
+		lift.append(best)
+	return {"pts": out_pts, "lift": lift}

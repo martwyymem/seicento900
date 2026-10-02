@@ -127,6 +127,16 @@ func build_frames() -> void:
 func build_banking() -> void:
 	BANK.resize(n)
 	BANK.fill(0.0)
+	for z in cfg.bank_zones:
+		var turn := 0.0
+		for i in n:
+			if i * step >= z.x and i * step <= z.y:
+				turn += KC[i]
+		var t := tan(deg_to_rad(z.z))
+		for i in n:
+			var s := i * step
+			if s >= z.x and s <= z.y:
+				BANK[i] = -signf(turn) * t * SimUtil.smooth01(minf(s - z.x, z.y - s) / 40.0)
 	if cfg.banking == 0.0:
 		return
 	var k_full := 0.0

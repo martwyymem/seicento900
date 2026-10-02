@@ -1,6 +1,6 @@
 ## Scenery check (dev tool): builds a circuit and saves screenshots of its scenery.
 ## Env: TRACK (default gp), HOUR, OUT (directory), VIEWS (comma list):
-##   lm:<Name> (a landmark from its front), obj:<Name> (the first, or INDEX-th, of a furniture MultiMesh, from in front), stands, stands_near, stands_back, pits, pits_near, gantry, aerial, high, city, casino,
+##   pos:<x>;<y>[;<dist>;<height>] (a track point from the south-west), lm:<Name> (a landmark from its front), wall<S> (the first tyre wall after S metres), kerb (the kerb of the tightest bend), obj:<Name> (the first, or INDEX-th, of a furniture MultiMesh, from in front), stands, stands_near, stands_back, pits, pits_near, gantry, aerial, high, city, casino,
 ##   top<S> (from above the road at S metres), lap<N> (driver's-eye view N/8 of the way round the lap, e.g. lap3), at<S> (driver's eye at S metres)
 ##   godot --path godot -s tests/_scenery_shot.gd
 extends SceneTree
@@ -58,6 +58,38 @@ func _initialize() -> void:
 			var reach := maxf(box.size.x, box.size.z) * 0.9 + 25.0
 			at = box.get_center()
 			eye = at + lmi.global_transform.basis.z.normalized() * reach + lmi.global_transform.basis.x.normalized() * reach * 0.4 + Vector3.UP * (box.size.y * 0.5 + reach * 0.25)
+		elif v.begins_with("pos:"): # track point x;y (metres) from DIST m away to the south-west and HEIGHT m up
+			var a := v.substr(4).split(";")
+			var cw: Vector2 = world.world_center
+			at = Vector3(float(a[0]) - cw.x, world.surroundings.ground_height(float(a[0]), float(a[1])) + 3.0, float(a[1]) - cw.y)
+			var dist := float(a[2]) if a.size() > 2 else 60.0
+			eye = at + Vector3(-dist * 0.7, float(a[3]) if a.size() > 3 else 25.0, dist * 0.7)
+		elif v.begins_with("wall"): # the first tyre wall at or after S metres, from the run-off in front of it
+			var s := float(v.substr(4))
+			var best_s := INF
+			var best_side := 1.0
+			for cell in world.tyre_cells:
+				var ks: float = (int(cell) >> 1) * 2 * tr.step
+				if ks >= s and ks < best_s:
+					best_s = ks
+					best_side = 1.0 if (int(cell) & 1) == 1 else -1.0
+			var bd := tr.half + tr.cfg.runoff + 0.3
+			eye = _pt(world, best_s - 14.0, best_side * (bd - 4.0), 1.6)
+			at = _pt(world, best_s + 6.0, best_side * bd, 0.7)
+		elif v == "kerb": # the inside kerb of the tightest bend
+			var ki := 0
+			var best_k := 0.0
+			for i in range(0, tr.n, 4):
+				var avg := 0.0
+				for j in range(-10, 11): # curvature over 40 m, so a kink in the data doesn't win
+					avg += tr.KC[posmod(i + j, tr.n)]
+				if absf(avg) > best_k:
+					best_k = absf(avg)
+					ki = i
+			var ks := ki * tr.step
+			var kd := signf(tr.KC[ki])
+			eye = _pt(world, ks - 12.0, kd * (tr.half - 3.0), 1.8)
+			at = _pt(world, ks + 6.0, kd * tr.half, 0.0)
 		elif v.begins_with("top"): # from above and to the side of the road at S metres
 			var s := float(v.substr(3))
 			eye = _pt(world, s - 70.0, 60.0, 45.0)

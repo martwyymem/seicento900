@@ -2,7 +2,7 @@
 // It is drawn behind everything the scene draws, past the camera's far plane: its depth is pushed back
 // (reversed Z, so a tiny depth is far away) while it keeps its true place on screen, so it shows only where
 // the scene leaves sky. The colour comes from the vertex (sea, field, wood, town, rock) with patches of fields
-// from noise; the haze is its own (FOG) and thins out beyond the scene's range, as distant hills do.
+// and town blocks from noise; the haze is its own (FOG) and thins out beyond the scene's range, as distant hills do.
 shader_type spatial;
 render_mode depth_draw_opaque, cull_back, shadows_disabled;
 
@@ -41,6 +41,12 @@ void fragment() {
 	float shade = texture(grain, p * 0.0007 + 0.6).r;
 	vec3 crop = fields < 0.4 ? field_a : (fields < 0.62 ? field_b : field_c);
 	vec3 col = mix(COLOR.rgb, crop, COLOR.a * 0.8) * (0.82 + 0.36 * shade);
+	// UV.y is 1 in towns: blocks of roofs, streets and gardens rather than one flat sheet
+	float blocks = texture(grain, p * 0.011 + 0.37).r;
+	float roofs = texture(grain, p * 0.043 + 0.81).r;
+	vec3 town = col * (0.62 + 0.75 * roofs);
+	town = mix(town, vec3(0.2, 0.27, 0.16), smoothstep(0.62, 0.72, blocks) * 0.7);
+	col = mix(col, town, UV.y);
 	ALBEDO = col * mix(1.0, 0.78, wet);
 	// UV.x is 1 on the open sea: a smooth surface that catches the sky
 	ROUGHNESS = mix(0.95, 0.2, UV.x);

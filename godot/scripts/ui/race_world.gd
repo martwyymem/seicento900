@@ -101,6 +101,8 @@ var surroundings: RefCounted
 var far_land: RefCounted ## far_land.gd: the hills and sea on the horizon, null where there is no data
 ## Marshal posts, braking boards, bridges and the paddock (trackside_furniture.gd)
 var furniture: RefCounted
+## Barrier segments built as tyre walls (trackside_furniture.gd tyre_cells), left out of the plain barrier
+var tyre_cells := {}
 ## The detailed terrain's grid (_build_terrain): corner, spacing, and per point its height, squared distance to
 ## the nearest centreline sample and that sample
 var _terrain_grid := {}
@@ -868,6 +870,9 @@ func _build_track() -> void:
 		runoff_material.set_shader_parameter("track_half", track.half)
 		runoff_material.set_shader_parameter("tuft", 1.0 if surface == "grass" else 0.35)
 		runoff_material.set_shader_parameter("worn_color", Color("#6b6152") if surface == "grass" else track.cfg.runoff_color.darkened(0.15))
+		if track.cfg.runoff_paved > 0.0:
+			runoff_material.set_shader_parameter("use_paved", true)
+			runoff_material.set_shader_parameter("paved_run_color", track.cfg.runoff_paved_color)
 	asphalt_material = _surface_material(ROAD_SHADER, "asphalt")
 	asphalt_material.set_shader_parameter("base_color", ASPHALT_DRY)
 	asphalt_material.set_shader_parameter("half_width", track.half)
@@ -1121,6 +1126,23 @@ func _terrain_color(x: float, z: float, base: Color) -> Color:
 	var detail := sin((x + z) * 0.083) * cos((z - x) * 0.071)
 	return base.lerp(base.darkened(0.34), clampf(0.28 + broad * 0.2 + detail * 0.08, 0.0, 0.72))
 
+## Tarmac run-off width at sample i as (left, right): the full width on the outside of a bend, less on the
+## inside and on the straights, easing in and out over about 100 m.
+func _paved_reach(i: int) -> Vector2:
+	var total := 0.0
+	for k in range(-25, 26, 5):
+		total += track.KC[posmod(i + k, track.n)]
+	var kc := total / 11.0
+	var bend := smoothstep(1.0 / 700.0, 1.0 / 220.0, absf(kc))
+	var wide := track.cfg.runoff_paved
+	var limit := maxf(track.cfg.runoff - 0.5, 0.0)
+	var outer := minf(wide * (0.5 + 0.5 * bend), limit)
+	var inner := minf(wide * (0.5 - 0.2 * bend), limit)
+	var straight := minf(wide * 0.5, limit)
+	# the outside is the side the bend turns away from (negative d for a positive curvature, as for the barriers)
+	var left_outside := kc > 0.0
+	return Vector2(outer if left_outside else inner, inner if left_outside else outer) if absf(kc) > 1.0 / 2000.0 else Vector2(straight, straight)
+
 func _add_ribbon(width: float, lift: float, material: Material, label: String) -> void:
 	var vertices := PackedVector3Array()
 	var indices := PackedInt32Array()
@@ -1140,8 +1162,11 @@ func _add_ribbon(width: float, lift: float, material: Material, label: String) -
 	# The last ring repeats the first with s = L so the along-track UV does not jump back to 0.
 	var uvs := PackedVector2Array()
 	var uv2s := PackedVector2Array()
+	var paved_cols := PackedColorArray() # run-off tarmac width per side, for the ground shader
+	var paved := label == "Runoff" and track.cfg.runoff_paved > 0.0 and track.cfg.runoff_surface != "asphalt"
 	for ring in track.n + 1:
 		var i := ring % track.n
+		var reach := _paved_reach(i) if paved else Vector2.ZERO
 		var y := (track.H[i] - elevation_base) * ALTITUDE_SCALE + lift
 		var center := Vector3(track.X[i] - world_center.x, y, track.Y[i] - world_center.y)
 		var normal := Vector3(-track.TY[i], 0.0, track.TX[i])
@@ -1149,6 +1174,8 @@ func _add_ribbon(width: float, lift: float, material: Material, label: String) -
 			vertices.append(center + normal * d + Vector3.UP * track.bank_rise(i * track.step, d))
 			uvs.append(Vector2(d, ring * track.step))
 			uv2s.append(Vector2(d - track.RLD[i], 0.0))
+			if paved:
+				paved_cols.append(Color(reach.x / 32.0, reach.y / 32.0, 0.0))
 
 	for i in track.n:
 		for c in nc - 1:
@@ -1163,6 +1190,8 @@ func _add_ribbon(width: float, lift: float, material: Material, label: String) -
 	arrays[Mesh.ARRAY_VERTEX] = vertices
 	arrays[Mesh.ARRAY_TEX_UV] = uvs
 	arrays[Mesh.ARRAY_TEX_UV2] = uv2s
+	if paved:
+		arrays[Mesh.ARRAY_COLOR] = paved_cols
 	arrays[Mesh.ARRAY_INDEX] = indices
 
 	var mesh := ArrayMesh.new()
@@ -1218,49 +1247,71 @@ func _add_edge_lines() -> void:
 	line.material_override = mat
 	track_root.add_child(line)
 
+## The two colours of each kerb style (tracks pick one in `kerb_style`).
+const KERB_COLOURS := {
+	"red_white": [Color("#cc2218"), Color("#f5f5f5")],
+	"yellow_black": [Color("#e8b800"), Color("#1c1c1c")],
+	"blue_white": [Color("#1d4fa8"), Color("#f5f5f5")],
+	"green_white": [Color("#2e8b3a"), Color("#f5f5f5")],
+}
+
+## Striped kerbs on the inside of every bend, in the circuit's own colours, width, stripe length and height.
 func _build_kerbs() -> void:
 	var vertices := PackedVector3Array()
 	var colors := PackedColorArray()
 	var indices := PackedInt32Array()
 
-	var red := Color("#cc2218")
-	var white := Color("#f5f5f5")
+	var cfg := track.cfg
+	if not KERB_COLOURS.has(cfg.kerb_style):
+		return
+	var pair: Array = KERB_COLOURS[cfg.kerb_style]
 	var half := track.half
+	var inner := half - cfg.kerb_width * 0.54
+	var outer := half + cfg.kerb_width * 0.46
+	# a stripe is at least one whole piece of a sample; shorter stripes split each sample
+	var pieces := clampi(roundi(track.step / maxf(cfg.kerb_stripe, 0.4)), 1, 4)
+	var stripe_len := 0
 
 	var vert_idx := 0
 	for i in track.n:
 		var k := track.KC[i]
 		if absf(k) < 1.0 / 180.0:
+			stripe_len = 0
 			continue
 
 		var sd := signf(k)
 		var nxt := (i + 1) % track.n
+		var h0 := (track.H[i] - elevation_base) * ALTITUDE_SCALE
+		var h1 := (track.H[nxt] - elevation_base) * ALTITUDE_SCALE
+		var stripe_every := maxi(1, roundi(cfg.kerb_stripe / track.step * pieces))
 
-		var y0 := (track.H[i] - elevation_base) * ALTITUDE_SCALE + 0.075
-		var y1 := (track.H[nxt] - elevation_base) * ALTITUDE_SCALE + 0.075
+		for piece in pieces:
+			var t0 := float(piece) / pieces
+			var t1 := float(piece + 1) / pieces
+			var s0 := (i + t0) * track.step
+			var s1 := (i + t1) * track.step
+			var y0 := lerpf(h0, h1, t0) + cfg.kerb_height
+			var y1 := lerpf(h0, h1, t1) + cfg.kerb_height
+			var a0_p := track.pos(s0, sd * inner)
+			var a1_p := track.pos(s1, sd * inner)
+			var b0_p := track.pos(s0, sd * outer)
+			var b1_p := track.pos(s1, sd * outer)
+			var a0 := Vector3(a0_p[0] - world_center.x, y0 + track.bank_rise(s0, sd * inner), a0_p[1] - world_center.y)
+			var a1 := Vector3(a1_p[0] - world_center.x, y1 + track.bank_rise(s1, sd * inner), a1_p[1] - world_center.y)
+			var b0 := Vector3(b0_p[0] - world_center.x, y0 - cfg.kerb_height * 0.6 + track.bank_rise(s0, sd * outer), b0_p[1] - world_center.y)
+			var b1 := Vector3(b1_p[0] - world_center.x, y1 - cfg.kerb_height * 0.6 + track.bank_rise(s1, sd * outer), b1_p[1] - world_center.y)
 
-		var a0_p := track.pos(i * track.step, sd * (half - 0.75))
-		var a1_p := track.pos(nxt * track.step, sd * (half - 0.75))
-		var b0_p := track.pos(i * track.step, sd * (half + 0.65))
-		var b1_p := track.pos(nxt * track.step, sd * (half + 0.65))
+			var c: Color = pair[(stripe_len / stripe_every) % 2]
+			stripe_len += 1
 
-		var s0 := i * track.step
-		var s1 := nxt * track.step
-		var a0 := Vector3(a0_p[0] - world_center.x, y0 + track.bank_rise(s0, sd * (half - 0.75)), a0_p[1] - world_center.y)
-		var a1 := Vector3(a1_p[0] - world_center.x, y1 + track.bank_rise(s1, sd * (half - 0.75)), a1_p[1] - world_center.y)
-		var b0 := Vector3(b0_p[0] - world_center.x, y0 + 0.03 + track.bank_rise(s0, sd * (half + 0.65)), b0_p[1] - world_center.y)
-		var b1 := Vector3(b1_p[0] - world_center.x, y1 + 0.03 + track.bank_rise(s1, sd * (half + 0.65)), b1_p[1] - world_center.y)
+			vertices.append_array(PackedVector3Array([a0, b0, a1, b1]))
+			colors.append_array(PackedColorArray([c, c, c, c]))
 
-		var c := red if (i % 2 == 0) else white
-
-		vertices.append_array(PackedVector3Array([a0, b0, a1, b1]))
-		colors.append_array(PackedColorArray([c, c, c, c]))
-
-		if sd > 0:
-			indices.append_array(PackedInt32Array([vert_idx, vert_idx + 1, vert_idx + 2, vert_idx + 1, vert_idx + 3, vert_idx + 2]))
-		else:
-			indices.append_array(PackedInt32Array([vert_idx, vert_idx + 2, vert_idx + 1, vert_idx + 1, vert_idx + 2, vert_idx + 3]))
-		vert_idx += 4
+			if sd > 0:
+				indices.append_array(PackedInt32Array([vert_idx, vert_idx + 1, vert_idx + 2, vert_idx + 1, vert_idx + 3, vert_idx + 2]))
+			else:
+				indices.append_array(PackedInt32Array([vert_idx, vert_idx + 2, vert_idx + 1, vert_idx + 1, vert_idx + 2, vert_idx + 3]))
+			vert_idx += 4
 
 	if vertices.size() > 0:
 		var arrays := []
@@ -1281,6 +1332,7 @@ func _build_kerbs() -> void:
 		var km := StandardMaterial3D.new()
 		km.vertex_color_use_as_albedo = true
 		km.vertex_color_is_srgb = true
+		km.cull_mode = BaseMaterial3D.CULL_DISABLED
 		km.roughness = 0.7
 		kerb_inst.material_override = km
 		track_root.add_child(kerb_inst)
@@ -1601,12 +1653,16 @@ func _build_barriers() -> void:
 	var po := cfg.pit_offset
 	var sg := signf(po)
 	var kind := cfg.barrier
-	var is_armco := kind == "armco" or kind == "armco+fence"
+	tyre_cells = FURNITURE.tyre_cells(self)
+	var is_armco := kind != "safer" # tyre tracks have armco between their tyre walls
 	var has_fence := kind == "safer" or kind == "armco+fence"
 	var wall_bottom := 0.3 if is_armco else 0.0
 	var wall_top := 1.0 if is_armco else (1.2 if kind == "safer" else 0.9)
 	var fence_top := 5.0 if kind == "safer" else 3.2
-	var barrier_mat := _material(Color("#7d848a") if is_armco else (Color("#89877f") if kind == "safer" else Color("#242528")), 0.45)
+	var barrier_color := Color("#7d848a") if is_armco else Color("#89877f")
+	if cfg.barrier_color.a > 0.0:
+		barrier_color = cfg.barrier_color
+	var barrier_mat := _material(barrier_color, 0.45)
 	if is_armco:
 		barrier_mat.metallic = 0.65
 	# walls are single quads seen from both the road and the infield
@@ -1643,6 +1699,8 @@ func _build_barriers() -> void:
 			var s := i * track.step
 			var p_rel := track.rel(s)
 			if skip and (p_rel > cfg.pit_entry - 20.0 and p_rel < cfg.pit_exit + 20.0):
+				continue
+			if tyre_cells.has(FURNITURE._cell_key(i, side)):
 				continue
 
 			var nxt := (i + 1) % track.n

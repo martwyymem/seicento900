@@ -8,6 +8,8 @@ uniform vec3 base_color : source_color = vec3(0.4, 0.55, 0.3);
 uniform bool use_vertex_color = false;
 uniform bool is_runoff = false;
 uniform float track_half = 6.0;
+uniform bool use_paved = false; // run-off: tarmac next to the track, its width per side in the vertex colour (r left, g right, 32 m per 1.0)
+uniform vec3 paved_run_color : source_color = vec3(0.3);
 uniform vec3 worn_color : source_color = vec3(0.42, 0.38, 0.3);
 uniform float roughness_dry = 0.95;
 uniform float wet = 0.0;
@@ -81,6 +83,7 @@ void fragment() {
 	vec3 lush_tint = vec3(0.86, 0.96, 0.86);
 	col *= mix(vec3(1.0), mix(lush_tint, dry_tint, smoothstep(0.3, 0.7, macro)), tuft) * (0.8 + 0.4 * broad);
 
+	float nmap_depth = use_textures ? 1.0 : 0.45;
 	float paved = 0.0;
 	if (use_land) {
 		vec2 luv = (p - land_origin) / land_size;
@@ -110,7 +113,16 @@ void fragment() {
 		// tyre-worn strip along the road edge
 		float from_edge = abs(UV.x) - track_half;
 		float worn = smoothstep(1.6, 0.2, from_edge) * step(0.0, from_edge) * (0.5 + 0.5 * broad);
+		float tarmac = 0.0;
+		if (use_paved) {
+			float reach = (UV.x < 0.0 ? COLOR.r : COLOR.g) * 32.0;
+			tarmac = smoothstep(reach, reach - 0.4, from_edge) * step(0.0, from_edge);
+			worn *= 1.0 - tarmac;
+		}
 		col = mix(col, worn_color * (0.85 + 0.3 * fine), worn * tuft * 0.8);
+		col = mix(col, paved_run_color * (0.86 + 0.22 * fine + 0.1 * micro), tarmac);
+		rough = mix(rough, 0.86, tarmac);
+		nmap_depth = mix(nmap_depth, 0.3, tarmac);
 	}
 
 	col *= mix(1.0, 0.72, wet);
@@ -118,5 +130,5 @@ void fragment() {
 	ROUGHNESS = clamp(mix(rough, rough * 0.62, wet), 0.05, 1.0);
 	SPECULAR = 0.35;
 	NORMAL_MAP = nmap;
-	NORMAL_MAP_DEPTH = use_textures ? 1.0 : 0.45;
+	NORMAL_MAP_DEPTH = nmap_depth;
 }

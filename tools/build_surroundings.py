@@ -17,7 +17,10 @@ into what race_world.gd draws around the track:
                                      features drawn by a Blender model (tools/blender/build_landmarks.py):
                                      the footprint's centre, its fitted rectangle (length along angle,
                                      radians from +x towards +y) and height (0 for a point),
-                                     "pools": [[x, y, ...]] open-air swimming pools}
+                                     "pools": [[x, y, ...]] open-air swimming pools,
+                                     "banking": [[banked, x, y, bridge, x, y, bridge, ...]] the disused banked
+                                     ring (Monza's Sopraelevata), banked 1 concrete / 0 flat asphalt, bridge 1
+                                     where it passes over a road}
 
 Coordinates are track metres (x east, y south), as in <key>.json. Building kinds: 0 house, 1 flats/town,
 2 industrial or large, 3 shed/garage, 4 farm, 5 church, 6 grandstand.
@@ -26,7 +29,7 @@ Coordinates are track metres (x east, y south), as in <key>.json. Building kinds
 
 Data © OpenStreetMap contributors, ODbL.
 """
-import json, math, os, sys
+import re, json, math, os, sys
 
 from PIL import Image, ImageDraw, ImageFilter
 
@@ -299,7 +302,8 @@ def build(key):
 
     out = {'land': {'x0': round(x0, 2), 'y0': round(y0, 2), 'w': round(tw * res, 2), 'h': round(th * res, 2)},
            'buildings': [], 'stands': [], 'bridges': [], 'water': [], 'rivers': [], 'hedges': [], 'trees': [], 'towers': [],
-           'landmarks': [], 'pools': []}
+           'landmarks': [], 'pools': [], 'banking': []}
+    bank_ways = []
     # areas first (larger features under smaller ones), then lines
     els = data['elements']
     areas = []
@@ -340,6 +344,9 @@ def build(key):
         if len(pts) < 2:
             continue
         hw = tags.get('highway')
+        if hw == 'raceway' and tags.get('historic') == 'ruins' and re.search('sopraelevata|alta velocit|rettilineo anello', tags.get('name', ''), re.I):
+            bank_ways.append((tags.get('surface') == 'concrete', tags.get('bridge') == 'yes', pts))
+            continue
         if hw in ROAD_WIDTH and tags.get('area') != 'yes':
             width = number(tags.get('width')) or ROAD_WIDTH[hw]
             paved = tags.get('surface', 'asphalt') not in ('gravel', 'dirt', 'ground', 'grass', 'unpaved', 'compacted',
@@ -412,6 +419,10 @@ def build(key):
             ht = number(tags.get('height')) or {'water_tower': 25, 'chimney': 40, 'mast': 35}.get(tags['man_made'], 20)
             out['towers'].append([tags['man_made'], round(ht, 1), round(p[0], 1), round(p[1], 1)])
     out['landmarks'] += castle_walls(castle)
+    for banked, chain in banking_chains(bank_ways):
+        out['banking'].append([1 if banked else 0] + [round(v, 1) for p in chain for v in p])
+        if not banked:
+            line(0, [(p[0], p[1]) for p in chain], 9.0, 1.0)
     for el in els:  # tower outlines mapped as ways: their centre
         tags = el.get('tags', {})
         if el['type'] == 'way' and tags.get('man_made') in ('tower', 'water_tower', 'chimney', 'silo') and 'building' not in tags \
@@ -454,6 +465,35 @@ def build(key):
           f'{len(out["rivers"])} rivers, {len(out["hedges"])} hedges/tree rows, {len(out["trees"]) // 2} trees, '
           f'{len(out["towers"])} towers, {len(out["pools"])} pools, landmarks: '
           f'{", ".join(sorted(set(m[0] for m in out["landmarks"])))}')
+
+
+def banking_chains(ways, tol=4.0):
+    """Joins mapped pieces of a disused banked ring (Monza's Sopraelevata) end to end, concrete with concrete and
+    asphalt with asphalt: [(banked, [(x, y, bridge), ...])]. bridge is 1 where the ring passes over a road."""
+    pieces = [(b, [(p[0], p[1], 1 if bridge else 0) for p in pts]) for b, bridge, pts in ways]
+    chains = []
+    while pieces:
+        banked, chain = pieces.pop(0)
+        grew = True
+        while grew:
+            grew = False
+            for i, (b2, pts) in enumerate(pieces):
+                if b2 != banked:
+                    continue
+                for cand in (pts, pts[::-1]):
+                    if math.dist(chain[-1][:2], cand[0][:2]) < tol:
+                        chain = chain + cand[1:]
+                    elif math.dist(chain[0][:2], cand[-1][:2]) < tol:
+                        chain = cand[:-1] + chain
+                    else:
+                        continue
+                    pieces.pop(i)
+                    grew = True
+                    break
+                if grew:
+                    break
+        chains.append((banked, chain))
+    return chains
 
 
 def cross_point(a, b, c, d):

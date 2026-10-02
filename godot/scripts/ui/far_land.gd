@@ -8,13 +8,15 @@ extends RefCounted
 
 const SHADER := preload("res://shaders/far_land.gdshader")
 const TREE_HEIGHT := 17.0 ## metres a wood stands over the ground
+const SINK := 60.0 ## metres the land is sunk under the circuit's own terrain, fading out over SINK_REACH beyond it
+const SINK_REACH := 3000.0
 const SEA := Color("#2a4a58")
 const ROCK := Color("#7d786e")
 const MEADOW := Color("#4f6236")
 const WOOD_BROADLEAF := Color("#2f4524")
 const WOOD_CONIFER := Color("#223a26")
-const TOWN := Color("#9b958a")
-const TOWN_WARM := Color("#b39a84") ## tiled roofs and pale walls of the south
+const TOWN := Color("#837d74")
+const TOWN_WARM := Color("#94806e") ## tiled roofs and pale walls of the south
 const WETLAND := Color("#465a3c")
 const SNOW := Color("#e8ecef")
 
@@ -36,12 +38,13 @@ func build(world: Node3D, parent: Node3D) -> bool:
 	var cover: String = data.get("cover", "")
 	var nx := xs.size()
 	var nz := zs.size()
-	# the circuit's own terrain covers its elevation grid: leave a hole there, overlapping it by a cell
-	var g: Dictionary = track.grid
-	var step := float(g.step)
-	var hole := Rect2(float(g.x0) + step, float(g.y0) + step, (int(g.nx) - 3) * step, (int(g.ny) - 3) * step)
 	var c: Vector2 = world.world_center
 	var base: float = world.elevation_base
+	# the circuit's own terrain is drawn in front of this land, which must stay below it: its coarse heights and
+	# tree tops stand tens of metres over the circuit, so near the circuit it is sunk and rises back to level
+	var g: Dictionary = track.grid
+	var step := float(g.step)
+	var own := Rect2(float(g.x0), float(g.y0), int(g.nx) * step, int(g.ny) * step)
 	var city: bool = track.cfg.theme == "city"
 	var south: bool = track.cfg.key in ["monaco", "monza"]
 	var forest_share := clampf(0.3 + 0.15 * track.cfg.tree_density, 0.2, 0.55) * (0.6 if track.cfg.theme == "oval" else 1.0)
@@ -67,9 +70,12 @@ func build(world: Node3D, parent: Node3D) -> bool:
 			var z := float(zs[j])
 			var h := float(hs[k])
 			var y: float = (h - base) * world.ALTITUDE_SCALE - 1.2
+			var out := Vector2(maxf(maxf(own.position.x - x, x - own.end.x), 0.0), maxf(maxf(own.position.y - z, z - own.end.y), 0.0)).length()
+			var sink := SINK * (1.0 - smoothstep(0.0, SINK_REACH, out))
 			var col := MEADOW
 			var farmland := 1.0
 			var water := 0.0
+			var built := 0.0
 			# open sea, though not the polders below sea level that the land cover has as dry land
 			if int(sea[k]) == 1 and (cover.is_empty() or cover[k] == "w"):
 				col = SEA
@@ -87,6 +93,7 @@ func build(world: Node3D, parent: Node3D) -> bool:
 					"t":
 						col = TOWN_WARM if south else TOWN
 						farmland = 0.0
+						built = 1.0
 						y += 6.0
 					"g":
 						farmland = 0.25
@@ -117,24 +124,28 @@ func build(world: Node3D, parent: Node3D) -> bool:
 				elif urban or near_city:
 					col = TOWN_WARM if south else TOWN
 					farmland = 0.0
+					built = 1.0
 					y += 6.0
 				elif wild > 1.0 - forest_share:
 					var conifer := clampf(track.cfg.tree_conifer + (h - 500.0) / 1500.0, 0.0, 1.0)
 					col = WOOD_BROADLEAF.lerp(WOOD_CONIFER, conifer)
 					farmland = 0.0
 					y += TREE_HEIGHT * (0.8 + 0.4 * absf(noise.get_noise_2d(x * 7.0, z * 7.0)))
+			if water < 1.0:
+				y -= sink
 			var lin := col.srgb_to_linear()
 			lin.a = farmland
 			verts[k] = Vector3(x - c.x, y, z - c.y)
 			colors[k] = lin
-			uvs[k] = Vector2(water, 0.0)
+			uvs[k] = Vector2(water, built)
+	# no hole under the circuit's own terrain: that is drawn in front wherever it is, and where the camera's
+	# far plane cuts it off (looking across the circuit from up high) the far land shows instead of the sky.
+	# Wound clockwise seen from above, so the faces (and the normals generate_normals gives them) point up.
 	var indices := PackedInt32Array()
 	for j in nz - 1:
 		for i in nx - 1:
-			if hole.has_point(Vector2(xs[i], zs[j])) and hole.has_point(Vector2(xs[i + 1], zs[j + 1])):
-				continue
 			var a := j * nx + i
-			indices.append_array(PackedInt32Array([a, a + nx, a + 1, a + 1, a + nx, a + nx + 1]))
+			indices.append_array(PackedInt32Array([a, a + 1, a + nx, a + 1, a + nx + 1, a + nx]))
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = verts
