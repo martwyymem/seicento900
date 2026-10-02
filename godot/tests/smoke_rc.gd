@@ -44,9 +44,26 @@ func _init():
 				if c.mode == "pit":
 					in_pit += 1
 			var pf := rc.player_flag()
-			print("%7.1f flag=%s/%s sc=%s sc_s=%.0f v=%.1f lead=%s L%d s=%.0f v=%.1f pit=%d stranded=%d yellow=%s player=%s" % [
+			var front := -INF
+			var back := INF
+			for c in race.cars:
+				if not c.dnf and c.mode != "pit":
+					var pr: float = c.lap * race.track.L + c.s
+					front = maxf(front, pr)
+					back = minf(back, pr)
+			print("%7.1f flag=%s/%s sc=%s sc_s=%.0f v=%.1f lead=%s L%d s=%.0f v=%.1f pit=%d stranded=%d yellow=%s queue=%.0fm player=%s" % [
 				race.race_time, rc.flag, rc.red_state, rc.sc_state, rc.sc.s, rc.sc.v, lead.name.substr(0, 8), lead.lap, lead.s,
-				lead.v, in_pit, rc._stranded(), str(Array(rc.yellow).filter(func(x): return x > 0).size()), pf.get("title", "")])
+				lead.v, in_pit, rc._stranded(), str(Array(rc.yellow).filter(func(x): return x > 0).size()), front - back, pf.get("title", "")])
+			if rc.flag != "green" and args.size() > 3:
+				var q := race.cars.filter(func(c): return not c.dnf and c.mode != "pit")
+				q.sort_custom(func(a, b): return a.lap * race.track.L + a.s > b.lap * race.track.L + b.s)
+				var line := "        "
+				var prev := INF
+				for c in q:
+					var pr: float = c.lap * race.track.L + c.s
+					line += "%s%s v%.0f%s | " % [c.name.substr(0, 3), (" +%.0f" % (prev - pr)) if prev < INF else "", c.v, " dmg%.1f" % c.damage if c.damage > 0.05 else ""]
+					prev = pr
+				print(line)
 	print("done phase=%s t=%.0f" % [race.phase, race.race_time])
 	for r in race.results():
 		print("%2d %-24s laps %d %s dmg %.2f pen %.0f %s" % [r.pos, r.car.name, r.laps, Race.fmt_time(r.total), r.car.damage, r.car.penalty, r.status])

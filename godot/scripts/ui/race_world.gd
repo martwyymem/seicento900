@@ -17,6 +17,7 @@ const WATER_SHADER := preload("res://shaders/water.gdshader")
 const FACADE_SHADER := preload("res://shaders/facade.gdshader")
 const CROWD_SHADER := preload("res://shaders/crowd.gdshader")
 const SURROUNDINGS := preload("res://scripts/ui/surroundings.gd")
+const FAR_LAND := preload("res://scripts/ui/far_land.gd")
 const FURNITURE := preload("res://scripts/ui/trackside_furniture.gd")
 const ALTITUDE_SCALE := 1.0 ## heights at their real scale (the physics ignores elevation)
 const BEAM_COUNT := 4 ## headlight spotlights handed to the cars nearest the camera after dark
@@ -97,6 +98,7 @@ var _night_materials: Array[ShaderMaterial] = []
 var _sky_textures := {} ## sky uniform -> path currently bound
 ## The circuit's real surroundings from OpenStreetMap (surroundings.gd), or null where there is no data
 var surroundings: RefCounted
+var far_land: RefCounted ## far_land.gd: the hills and sea on the horizon, null where there is no data
 ## Marshal posts, braking boards, bridges and the paddock (trackside_furniture.gd)
 var furniture: RefCounted
 ## The detailed terrain's grid (_build_terrain): corner, spacing, and per point its height, squared distance to
@@ -424,6 +426,9 @@ func _update_atmosphere(hour: float, wet: float, rain: float) -> void:
 	world_environment.fog_light_color = FOG_NIGHT.lerp(horizon, day_t).lerp(FOG_RAIN * lerpf(0.15, 1.0, day_t), overcast * 0.6)
 	world_environment.fog_density = 0.00032 + 0.00045 * overcast + 0.0024 * rain
 	world_environment.fog_sun_scatter = 0.18 * glow + 0.05 * (1.0 - overcast) * day_t
+	if far_land:
+		far_land.material.set_shader_parameter("haze_color", world_environment.fog_light_color)
+		far_land.material.set_shader_parameter("haze_density", world_environment.fog_density)
 	world_environment.glow_hdr_threshold = lerpf(1.0, 0.75, night)
 	# volumetric fog shows the headlight beams in the rain and after dark (High and Ultra only)
 	var volumetric := quality >= 2 and (rain > 0.08 or night > 0.45)
@@ -842,6 +847,12 @@ func _build_track() -> void:
 	if not surroundings.setup(self):
 		surroundings = null
 	_build_terrain(ground)
+	far_land = FAR_LAND.new()
+	if far_land.build(self, track_root):
+		ground.visible = false # the far land reaches the horizon; the flat plane would only hide it
+		_wet_materials.append(far_land.material)
+	else:
+		far_land = null
 
 	# 2. Track ribbons (Runoff, Edge line, Asphalt road)
 	var ro_width: float = track.width + track.cfg.runoff * 2.0
@@ -936,7 +947,7 @@ func _build_terrain(ground: MeshInstance3D) -> void:
 	point_height.fill(NAN)
 	var radius := ceili(band / fine) + 1
 	var radius_squared := float(radius * radius)
-	var road_clearance := track.half + track.cfg.runoff + 3.0
+	var road_clearance := _terrain_clear_distance()
 
 	# Splat nearby centreline samples onto a compact grid; this keeps terrain under every road section.
 	var track_x := track.X
@@ -1070,12 +1081,18 @@ func _build_terrain(ground: MeshInstance3D) -> void:
 	track_root.add_child(coarse)
 	ground.position.y = (dem_min - 55.0) * ALTITUDE_SCALE
 
+## Distance from the centreline out to which the terrain sits just under the road. A terrain cell is `fine` wide,
+## so a vertex lifted any nearer would tilt the triangles that span the road edge up through the tarmac.
+func _terrain_clear_distance() -> float:
+	var fine := maxf(track.cfg.terrain_fine * 2.0, 18.0)
+	return track.half + track.cfg.runoff + 3.0 + fine * 1.5
+
 func _terrain_height(x: float, z: float, nearest: int, distance: float, cap: float, grid: Dictionary) -> float:
 	var dem_height := _sample_dem(grid, x, z) - elevation_base
 	var height := dem_height - 1.0
 	if nearest >= 0 and distance <= 175.0:
 		var track_height := track.H[nearest] - elevation_base
-		var clear_distance := track.half + track.cfg.runoff + 3.0
+		var clear_distance := _terrain_clear_distance()
 		var blend := clampf((distance - clear_distance) / 70.0, 0.0, 1.0)
 		blend = blend * blend * (3.0 - 2.0 * blend)
 		height = track_height - 0.35 + (dem_height - track_height + 0.35) * blend
@@ -1343,26 +1360,35 @@ func _build_pit_lane() -> void:
 	var uv2s := PackedVector2Array()
 	var indices := PackedInt32Array()
 	var steps := 60
+	# three columns: the lane's outer edge, its inner edge, and the point on the track's edge it joins.
+	# While the lane leaves or rejoins the track the last two pull apart, paving the wedge between them.
 	for step_idx in (steps + 1):
 		var s := p0 + (p1 - p0) * (float(step_idx) / float(steps))
 		var blend := track.pit_blend(s)
-		var center_d := sg * (track.half - 1.5) * (1.0 - blend) + (po + sg * 1.0) * blend
-		var y := (track.sample(track.H, s) - elevation_base) * ALTITUDE_SCALE + 0.045
+		# where it meets the track the whole lane lies under the track's asphalt, not out on the run-off
+		var center_d := sg * (track.half - 3.2) * (1.0 - blend) + (po + sg * 1.0) * blend
+		# between the run-off (0.01) and the track's asphalt (0.04), so where the two overlap the track is on top
+		var y := (track.sample(track.H, s) - elevation_base) * ALTITUDE_SCALE + 0.025
 
-		var p_left := track.pos(s, center_d - 3.2)
-		var p_right := track.pos(s, center_d + 3.2)
-
-		vertices.append(Vector3(p_left[0] - world_center.x, y, p_left[1] - world_center.y))
-		vertices.append(Vector3(p_right[0] - world_center.x, y, p_right[1] - world_center.y))
-		uvs.append_array(PackedVector2Array([Vector2(-3.2, s), Vector2(3.2, s)]))
-		uv2s.append_array(PackedVector2Array([Vector2(-3.2, 0.0), Vector2(3.2, 0.0)]))
+		var inner_d := center_d - sg * 3.2
+		var join_d := lerpf(sg * (track.half - 3.2), inner_d, blend)
+		for d_col in [center_d + sg * 3.2, inner_d, join_d]:
+			var p := track.pos(s, d_col)
+			vertices.append(Vector3(p[0] - world_center.x, y, p[1] - world_center.y))
+		uvs.append_array(PackedVector2Array([Vector2(3.2 * sg, s), Vector2(-3.2 * sg, s), Vector2(join_d - center_d, s)]))
+		uv2s.append_array(PackedVector2Array([Vector2(3.2 * sg, 0.0), Vector2(-3.2 * sg, 0.0), Vector2(join_d - center_d, 0.0)]))
 
 	for step_idx in steps:
-		var a := step_idx * 2
-		var b := a + 1
-		var c := (step_idx + 1) * 2
-		var d := c + 1
-		indices.append_array(PackedInt32Array([a, c, b, b, c, d]))
+		for col in 2:
+			var a := step_idx * 3 + col
+			var b := a + 1
+			var c := (step_idx + 1) * 3 + col
+			var d := c + 1
+			# the columns run outer to inner, so the winding follows the side the lane is on
+			if sg < 0.0:
+				indices.append_array(PackedInt32Array([a, c, b, b, c, d]))
+			else:
+				indices.append_array(PackedInt32Array([a, b, c, b, d, c]))
 
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
@@ -1401,8 +1427,10 @@ func _build_pit_lane() -> void:
 		var y := (track.sample(track.H, s) - elevation_base) * ALTITUDE_SCALE
 		var pos_bot := track.pos(s, sg * track.wall_d)
 		var base_p := Vector3(pos_bot[0] - world_center.x, y, pos_bot[1] - world_center.y)
+		# the wall sinks into the ground over its last few metres instead of ending in a blunt face
+		var end_gap := minf(s - wall_s0, wall_s1 - s)
 		wall_verts.append(base_p)
-		wall_verts.append(base_p + Vector3.UP * 1.15)
+		wall_verts.append(base_p + Vector3.UP * lerpf(0.1, 1.15, clampf(end_gap / 12.0, 0.0, 1.0)))
 
 	for step_idx in wall_steps:
 		var a := step_idx * 2

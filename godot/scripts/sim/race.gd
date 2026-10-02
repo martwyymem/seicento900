@@ -133,6 +133,7 @@ var _order_key_cache := {} ## car -> order_key, recomputed once per tick and reu
 var _collide_live: Array[RaceCar] = [] ## scratch for collide(), reused every tick
 var player: RaceCar
 var phys_bots := true
+var phys_near_only := false ## battery saver: bots far from the player stay on the rail model
 var warp := 1
 var brain: Brain = null
 var limiter := false ## the player has the flag speed limiter switched on (V)
@@ -181,6 +182,7 @@ func _init(settings: RaceSettings, player_plan = null, seed_ := -1, models := {}
 	# bots drive the same four-wheel physics as the player; the UI sets warp, and anything faster than
 	# real time (or the menu demo) runs them on the cheaper rail model
 	phys_bots = not settings.demo and settings.bot_physics != "off"
+	phys_near_only = settings.bot_physics == "near"
 	# learning AI (off: every bot drives one fixed pace everywhere, as before)
 	brain = Brain.new(self, not settings.demo) if settings.ai_learning != "off" else null
 	build_field(player_plan)
@@ -1422,8 +1424,10 @@ func brake_assist(car: RaceCar) -> float:
 		x += 5.0
 	return clampf((v - v_ref - 1.0) * 0.35, 0.0, 1.0)
 
-## A spun or beached player car is set back on the track after a moment, facing the right way — the
-## bots get the same (bot_control), so one slide into the gravel doesn't end the race.
+## A beached player car is set back on the track after a moment — the bots get the same
+## (bot_control), so one slide into the gravel doesn't end the race. A car that has merely spun to face
+## the wrong way is never moved: the player turns it round themselves (reverse and lock), so this only
+## counts time spent stopped while pointing along the track.
 func player_rejoin(car: RaceCar, dt: float) -> void:
 	if phase != "racing" or race_time < 3.0 or car.mode != "race" or car.finished or car.out_of_fuel:
 		car.stuck_t = 0.0
@@ -1431,8 +1435,8 @@ func player_rejoin(car: RaceCar, dt: float) -> void:
 	var tr := track
 	var off := absf(SimUtil.wrap_angle(car.heading - tr.heading(car.s)))
 	var v := sqrt(car.vx * car.vx + car.vy * car.vy)
-	car.stuck_t = car.stuck_t + dt if off > 1.4 or v < 2.5 else 0.0
-	if car.stuck_t < (1.5 if off > 1.4 else 3.0):
+	car.stuck_t = car.stuck_t + dt if off <= 1.4 and v < 2.5 else 0.0
+	if car.stuck_t < 3.0:
 		return
 	car.stuck_t = 0.0
 	var lim := tr.half - 1.5
@@ -1493,6 +1497,9 @@ func slipstream(car: RaceCar, dt: float) -> float:
 			drag = minf(drag, 1.0 - 0.3 * (1.0 - g / 30.0))
 	return drag
 
+const NEAR_PHYS_PICK_UP := 250.0 ## m along the track: a rail bot this close to the player switches to the physics
+const NEAR_PHYS_DROP := 350.0 ## m: a physics bot this far away goes back on the rail model
+
 ## Bots drive the full car physics at normal speed. Under time warp, in the pits, after the flag, or
 ## while recovering from a spin they fall back to the rail model.
 func bot_control(car: RaceCar) -> void:
@@ -1500,6 +1507,10 @@ func bot_control(car: RaceCar) -> void:
 	if car.recover_t > 0.0:
 		car.recover_t -= 1.0 / 120.0
 	var want := phys_bots and warp == 1 and car.mode == "race" and not car.finished and not (car.recover_t > 0.0)
+	if want and phys_near_only and player:
+		# battery saver: the physics only runs within sight of the player (with a margin so a car on the
+		# edge does not flip between models every tick)
+		want = absf(track.rel(car.s - player.s)) < (NEAR_PHYS_DROP if car.control == "free" else NEAR_PHYS_PICK_UP)
 	if not want:
 		if car.control == "free":
 			to_rail(car)
@@ -1509,17 +1520,16 @@ func bot_control(car: RaceCar) -> void:
 		return
 	if phase != "racing" or race_time < car.reaction + 3.0:
 		return
-	# spun or stuck: rejoin
+	# spun or stuck: a car facing the wrong way drives itself round (bot_input) instead of being lifted
+	# back onto the line; only one that stays wedged and stopped is put back
 	var off := absf(SimUtil.wrap_angle(car.heading - tr.heading(car.s)))
 	var v := sqrt(car.vx * car.vx + car.vy * car.vy)
-	if rc:
-		# a spun car drives itself round (bot_input) instead of being lifted back onto the line
-		if off > 1.4 and v < 14.0:
-			car.uturn = true
-		elif off < 0.7:
-			car.uturn = false
-	car.stuck_t = car.stuck_t + 1.0 / 120.0 if off > 1.4 or (v < 2.5 and not car.out_of_fuel and not (rc and rc.neutral)) else 0.0
-	if car.stuck_t > ((10.0 if rc else 1.2) if off > 1.4 else 2.5):
+	if off > 1.4 and v < 14.0:
+		car.uturn = true
+	elif off < 0.7:
+		car.uturn = false
+	car.stuck_t = car.stuck_t + 1.0 / 120.0 if v < 2.5 and not car.out_of_fuel and not (rc and rc.neutral) else 0.0
+	if car.stuck_t > (10.0 if off > 1.4 else 2.5):
 		car.stuck_t = 0.0
 		car.uturn = false
 		to_rail(car)
@@ -1529,7 +1539,7 @@ func bot_control(car: RaceCar) -> void:
 			log_event("%s spins and rejoins" % car.name, "info")
 
 func bot_input(car: RaceCar, dt: float) -> Physics.Controls:
-	if car.uturn and rc:
+	if car.uturn:
 		# facing the wrong way: creep forwards on full lock towards the direction of the track
 		var diff := SimUtil.wrap_angle(track.heading(car.s) - car.heading)
 		var v := sqrt(car.vx * car.vx + car.vy * car.vy)

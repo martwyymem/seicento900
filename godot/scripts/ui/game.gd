@@ -668,7 +668,8 @@ func _build_setup() -> void:
 	var bot_row := HBoxContainer.new()
 	col.add_child(bot_row)
 	ai_learning_picker = _option_field(bot_row, "AI LEARNING", ["On", "Off"])
-	bot_physics_picker = _option_field(bot_row, "BOT PHYSICS", ["Full physics", "Rail model"])
+	bot_physics_picker = _option_field(bot_row, "BOT PHYSICS", ["Full physics", "Rail model", "Nearby only"])
+	bot_physics_picker.tooltip_text = "Rail model and Nearby only use much less CPU (better battery life). Nearby only runs the full physics just for cars near you"
 	var memory_row := HBoxContainer.new()
 	memory_row.add_theme_constant_override("separation", 10)
 	col.add_child(memory_row)
@@ -2145,7 +2146,7 @@ func _start_race() -> void:
 	settings.player_color = player_color_picker.color
 	settings.stripes = player_stripes_toggle.button_pressed
 	settings.ai_learning = "off" if ai_learning_picker.selected == 1 else "on"
-	settings.bot_physics = "off" if bot_physics_picker.selected == 1 else "on"
+	settings.bot_physics = ["on", "off", "near"][bot_physics_picker.selected]
 	settings.grid = ["pole", "middle", "back", "random"][grid_picker.selected]
 	settings.assists = ["full", "abs", "off"][assists_picker.selected]
 	if not is_championship_mode:

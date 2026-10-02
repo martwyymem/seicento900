@@ -44,7 +44,11 @@ def query(key):
         f'way["landuse"~"^({LANDUSE})$"]{b};', f'relation["landuse"~"^({LANDUSE})$"]{b};',
         f'way["natural"~"^({NATURAL})$"]{b};', f'relation["natural"~"^({NATURAL})$"]{b};',
         f'way["waterway"~"^(river|stream|canal|riverbank|dock)$"]{b};',
-        f'way["leisure"~"^(park|pitch|golf_course|garden|marina|stadium|track)$"]{b};',
+        f'relation["waterway"~"^(riverbank|dock)$"]{b};',
+        f'way["leisure"~"^(park|pitch|golf_course|garden|marina|stadium|track|swimming_pool)$"]{b};',
+        f'relation["leisure"~"^(park|golf_course|garden|marina|stadium)$"]{b};',
+        f'way["historic"~"^(castle|ruins|fort)$"]{b};', f'relation["historic"~"^(castle|ruins|fort)$"]{b};',
+        f'nwr["attraction"]{b};', f'nwr["amenity"="casino"]{b};',
         f'way["amenity"="parking"]{b};',
         f'way["highway"~"^({HIGHWAY})$"]{b};',
         f'way["railway"~"^(rail|light_rail|narrow_gauge|tram)$"]{b};',
@@ -53,7 +57,8 @@ def query(key):
         f'node["natural"="tree"]{b};',
         f'way["barrier"="hedge"]{b};',
     ]
-    return '[out:json][timeout:300];(' + ''.join(parts) + ');out tags geom;'
+    # body (not just tags) so multipolygon relations come with their members' geometry
+    return '[out:json][timeout:300];(' + ''.join(parts) + ');out body geom;'
 
 
 def fetch(key):

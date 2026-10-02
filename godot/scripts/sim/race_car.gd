@@ -133,4 +133,4 @@ var sc_waved := false ## lapped car between the safety car and the leader, waved
 var spin_t := -100.0 ## race clock of the last moment this car was out of control (spun, off, wrecked)
 var offences := 0 ## penalties and warnings for causing collisions, so repeat offenders pay more
 var repair_asked := false
-var uturn := false ## a spun bot is driving itself round to face the right way again
+var uturn := false ## a bot facing the wrong way is driving itself round to face the right way again

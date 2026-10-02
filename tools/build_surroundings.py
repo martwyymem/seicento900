@@ -12,7 +12,12 @@ into what race_world.gd draws around the track:
                                      "bridges": [[kind, x, y, dx, dy]] where a mapped bridge crosses the
                                      circuit (kind 0 foot, 1 road; (dx, dy) the bridge's direction),
                                      "hedges": [[x, y, ...]], "trees": [x, y, ...],
-                                     "towers": [[kind, height, x, y]]}
+                                     "towers": [[kind, height, x, y]],
+                                     "landmarks": [[model, x, y, length, width, angle, height]] the
+                                     features drawn by a Blender model (tools/blender/build_landmarks.py):
+                                     the footprint's centre, its fitted rectangle (length along angle,
+                                     radians from +x towards +y) and height (0 for a point),
+                                     "pools": [[x, y, ...]] open-air swimming pools}
 
 Coordinates are track metres (x east, y south), as in <key>.json. Building kinds: 0 house, 1 flats/town,
 2 industrial or large, 3 shed/garage, 4 farm, 5 church, 6 grandstand.
@@ -51,6 +56,16 @@ BARE_AREAS = {('natural', 'sand'): 1.0, ('natural', 'beach'): 1.0, ('natural', '
               ('natural', 'scree'): 0.9, ('natural', 'shingle'): 0.8, ('landuse', 'quarry'): 0.9,
               ('landuse', 'farmyard'): 0.5, ('landuse', 'construction'): 0.5, ('landuse', 'brownfield'): 0.5}
 FOREST_AREAS = {('landuse', 'forest'): 1.0, ('natural', 'wood'): 1.0, ('leisure', 'park'): 0.5}
+# OSM features drawn by a landmark model instead of a plain block: (type, id) -> model in landmarks.glb.
+# Castle towers (castle:tower=yes, or a ruined man_made=tower) and big wheels are found by their tags.
+LANDMARKS = {
+    'indy': {('way', 286357114): 'IndyPagoda', ('node', 5623124056): 'ScoringPylon'},
+    'suzuka': {('way', 183394069): 'FerrisWheel'},
+    'silverstone': {('way', 227332429): 'SilverstoneWing'},
+    'monza': {('way', 219396377): 'MonzaPodio'},
+    'lemans': {('way', 256129642): 'TyreBridge'},  # the Dunlop (now Goodyear) footbridge
+    'monaco': {('way', 161769674): 'Casino'},
+}
 WATER_AREAS = {('natural', 'water'), ('landuse', 'reservoir'), ('landuse', 'basin'), ('waterway', 'riverbank'),
                ('waterway', 'dock')}
 
@@ -166,6 +181,86 @@ def building_kind(tags, footprint):
     return 0, 7.5
 
 
+def landmark_of(key, el):
+    tags = el.get('tags', {})
+    name = LANDMARKS.get(key, {}).get((el['type'], el['id']))
+    if name:
+        return name
+    if tags.get('attraction') == 'big_wheel':
+        return 'FerrisWheel'
+    if tags.get('castle:tower') == 'yes' or (tags.get('man_made') == 'tower' and tags.get('historic') == 'ruins'):
+        return 'CastleKeep' if tags.get('defensive') == 'Bergfried' or (number(tags.get('height')) or 0) >= 15 else 'CastleTower'
+    return None
+
+
+def hull(pts):
+    pts = sorted(set(pts))
+    if len(pts) < 3:
+        return pts
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    lo, up = [], []
+    for p in pts:
+        while len(lo) >= 2 and cross(lo[-2], lo[-1], p) <= 0:
+            lo.pop()
+        lo.append(p)
+    for p in reversed(pts):
+        while len(up) >= 2 and cross(up[-2], up[-1], p) <= 0:
+            up.pop()
+        up.append(p)
+    return lo[:-1] + up[:-1]
+
+
+def fit_rect(pts):
+    """The smallest rectangle round pts: (cx, cy, length, width, angle of the long side)."""
+    h = hull(pts)
+    best = None
+    for i in range(len(h)):
+        a, b = h[i], h[(i + 1) % len(h)]
+        ang = math.atan2(b[1] - a[1], b[0] - a[0])
+        c, s = math.cos(ang), math.sin(ang)
+        us = [p[0] * c + p[1] * s for p in h]
+        vs = [-p[0] * s + p[1] * c for p in h]
+        du, dv = max(us) - min(us), max(vs) - min(vs)
+        if best is None or du * dv < best[0]:
+            cu, cv = (max(us) + min(us)) / 2, (max(vs) + min(vs)) / 2
+            if du < dv:
+                du, dv, ang = dv, du, ang + math.pi / 2
+            best = (du * dv, cu * c - cv * s, cu * s + cv * c, du, dv, math.atan2(math.sin(ang), math.cos(ang)))
+    return best[1:]
+
+
+def castle_walls(towers):
+    """Curtain walls between a castle's towers: round the towers of each castle in angle order, skipping
+    gaps too wide to be one wall. towers: [x, y, radius]."""
+    walls = []
+    used = set()
+    for i in range(len(towers)):
+        if i in used:
+            continue
+        group, todo = [], [i]
+        while todo:  # the towers within 60 m of each other are one castle
+            k = todo.pop()
+            if k in used:
+                continue
+            used.add(k)
+            group.append(towers[k])
+            todo += [j for j in range(len(towers)) if j not in used and math.dist(towers[k][:2], towers[j][:2]) < 60]
+        if len(group) < 3:
+            continue
+        cx = sum(t[0] for t in group) / len(group)
+        cy = sum(t[1] for t in group) / len(group)
+        group.sort(key=lambda t: math.atan2(t[1] - cy, t[0] - cx))
+        for a, b in zip(group, group[1:] + group[:1]):
+            d = math.dist(a[:2], b[:2])
+            span = d - a[2] - b[2] + 1.0
+            if 2 < span < 45:
+                walls.append(['CastleWall', round((a[0] + b[0]) / 2, 1), round((a[1] + b[1]) / 2, 1), round(span, 1), 1.8,
+                              round(math.atan2(b[1] - a[1], b[0] - a[0]), 3), 7.0])
+    return walls
+
+
 def build(key):
     src = os.path.join(ENV_DIR, key + '.json')
     if not os.path.exists(src):
@@ -203,7 +298,8 @@ def build(key):
             draws[ch].ellipse((q[0] - r, q[1] - r, q[0] + r, q[1] + r), fill=int(255 * weight))
 
     out = {'land': {'x0': round(x0, 2), 'y0': round(y0, 2), 'w': round(tw * res, 2), 'h': round(th * res, 2)},
-           'buildings': [], 'stands': [], 'bridges': [], 'water': [], 'rivers': [], 'hedges': [], 'trees': [], 'towers': []}
+           'buildings': [], 'stands': [], 'bridges': [], 'water': [], 'rivers': [], 'hedges': [], 'trees': [], 'towers': [],
+           'landmarks': [], 'pools': []}
     # areas first (larger features under smaller ones), then lines
     els = data['elements']
     areas = []
@@ -220,6 +316,14 @@ def build(key):
                 if ch == 1:  # one crop per field: the value picks it (0.35-1), so it can't be a coverage
                     wgt = 0.35 + 0.65 * ((el['id'] * 2654435761) % 1000) / 999.0
                 areas.append((-sum(area(r) for r in outer), ch, outer, inner, wgt))
+        if tags.get('leisure') == 'swimming_pool' and 'building' not in tags and tags.get('indoor') != 'yes' \
+                and tags.get('covered') != 'yes':
+            outer, _ = rings_of(el, proj)
+            for r in outer:
+                r = simplify(r, 0.2)
+                if len(r) >= 4 and area(r) > 6:
+                    out['pools'].append(flat(r[:-1]))
+                    line(0, r, 3.0, 1.0)  # the paved surround
         if match(tags, WATER_AREAS) is not None:
             outer, _ = rings_of(el, proj)
             for r in outer:
@@ -256,6 +360,7 @@ def build(key):
             out['hedges'].append(flat(simplify(pts, 0.5)))
         elif tags.get('natural') == 'tree_row':
             out['hedges'].append([-1.0] + flat(simplify(pts, 0.5)))  # -1: a row of trees, not a hedge
+    castle = []
     for el in els:
         tags = el.get('tags', {})
         if 'building' not in tags and 'building:part' not in tags:
@@ -273,6 +378,14 @@ def build(key):
             if fp < 8:
                 continue
             fill(0, [r], [], 1.0)  # (no trees through the house)
+            lm = landmark_of(key, el)
+            if lm:
+                cx, cy, ln, wd, ang = fit_rect(r[:-1])
+                ht = number(tags.get('height')) or 0.0
+                out['landmarks'].append([lm, round(cx, 1), round(cy, 1), round(ln, 1), round(wd, 1), round(ang, 3), ht])
+                if lm.startswith('Castle'):
+                    castle.append([cx, cy, wd / 2])
+                continue
             kind, height = building_kind(tags, fp)
             levels = number(tags.get('building:levels'))
             if number(tags.get('height')):
@@ -290,14 +403,19 @@ def build(key):
         if el['type'] != 'node':
             continue
         p = proj(el)
-        if tags.get('natural') == 'tree':
+        lm = landmark_of(key, el)
+        if lm:
+            out['landmarks'].append([lm, round(p[0], 1), round(p[1], 1), 0.0, 0.0, 0.0, number(tags.get('height')) or 0.0])
+        elif tags.get('natural') == 'tree':
             out['trees'] += [round(p[0], 1), round(p[1], 1)]
         elif tags.get('man_made') in ('tower', 'water_tower', 'chimney', 'mast'):
             ht = number(tags.get('height')) or {'water_tower': 25, 'chimney': 40, 'mast': 35}.get(tags['man_made'], 20)
             out['towers'].append([tags['man_made'], round(ht, 1), round(p[0], 1), round(p[1], 1)])
+    out['landmarks'] += castle_walls(castle)
     for el in els:  # tower outlines mapped as ways: their centre
         tags = el.get('tags', {})
-        if el['type'] == 'way' and tags.get('man_made') in ('tower', 'water_tower', 'chimney', 'silo') and 'building' not in tags:
+        if el['type'] == 'way' and tags.get('man_made') in ('tower', 'water_tower', 'chimney', 'silo') and 'building' not in tags \
+                and not landmark_of(key, el):
             pts = [proj(p) for p in el.get('geometry', []) if p]
             if pts:
                 cx = sum(p[0] for p in pts) / len(pts)
@@ -317,7 +435,12 @@ def build(key):
         for a, b in zip(pts, pts[1:]):
             for c, d in tsegs:
                 hit = cross_point(a, b, c, d)
-                if hit:
+                if hit and landmark_of(key, el):
+                    ln = math.dist(a, b) or 1.0
+                    out['landmarks'].append([landmark_of(key, el), round(hit[0], 1), round(hit[1], 1),
+                                             round(math.dist(pts[0], pts[-1]), 1), 5.0,
+                                             round(math.atan2(b[1] - a[1], b[0] - a[0]), 3), 0.0])
+                elif hit:
                     foot = tags['highway'] in ('footway', 'path', 'cycleway', 'steps', 'pedestrian', 'track', 'bridleway')
                     ln = math.dist(a, b) or 1.0
                     out['bridges'].append([0 if foot else 1, round(hit[0], 1), round(hit[1], 1),
@@ -329,7 +452,8 @@ def build(key):
     print(f'{key}: land map {tw}x{th} at {res:.1f} m, {len(out["buildings"])} buildings, {len(out["stands"])} stands, '
           f'{len(out["water"])} water, '
           f'{len(out["rivers"])} rivers, {len(out["hedges"])} hedges/tree rows, {len(out["trees"]) // 2} trees, '
-          f'{len(out["towers"])} towers')
+          f'{len(out["towers"])} towers, {len(out["pools"])} pools, landmarks: '
+          f'{", ".join(sorted(set(m[0] for m in out["landmarks"])))}')
 
 
 def cross_point(a, b, c, d):

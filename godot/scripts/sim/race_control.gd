@@ -23,7 +23,8 @@ const REPAIR_AT := 0.3 ## damage at which a team calls the car in for repairs
 const YELLOW_PACE := [1.0, 0.9, 0.72] ## bots' pace in a clear / yellow / double-yellow sector
 const PLAYER_SLOW := 0.86 ## share of the racing line's limit you may do under double yellow
 const HAZARD_PACE := 0.9 ## bots elsewhere on the lap while a double yellow is out
-const CATCHUP_PACE := 0.95 ## bots far behind the queue under the safety car
+const CATCHUP_PACE := 0.95 ## anyone more than CATCHUP_GAP off the car ahead under the safety car
+const CATCHUP_GAP := 25.0
 const DELTA_PACE := 0.8 ## the fastest anyone may go under the safety car while catching the queue
 const RED_PACE := 0.6 ## ... and under a red flag on the way back to the pits
 const SC_PACE := 0.7
@@ -710,29 +711,20 @@ func limit_speed(car: RaceCar, t: Dictionary, mu: float) -> void:
 		var v_prof := track.sample(track.PROF, car.s + car.v * 0.12) * sqrt(mu)
 		vT = minf(vT, track.sample(track.PROF, car.s + car.v * 0.12) * sqrt(mu) * pace)
 		# close up to whatever is physically ahead: the safety car or the next car in the queue
-		var gap := INF
-		var v_ahead := 0.0
-		for o in race.cars:
-			if o == car or o.dnf or o.mode == "pit":
-				continue
-			var g := track.rel(o.s - car.s)
-			if g > 0.0 and g < gap:
-				gap = g
-				v_ahead = _speed(o)
-		if sc_on_track and not car.sc_waved:
-			var g := track.rel(sc.s - car.s)
-			if g > 0.0 and g < gap:
-				gap = g
-				v_ahead = sc.v
+		var ahead := _queue_ahead(car)
+		var gap: float = ahead[0]
+		var v_ahead: float = ahead[1]
 		if gap < 4000.0:
-			# close up at a steady 2.5 m/s² to about half a second behind, so the queue can concertina
-			# through the braking zones without anyone running into the car ahead
+			# close up to about half a second behind, braking for the car ahead at a steady 2.5 m/s² near
+			# it so the queue can concertina through the braking zones, and twice as late while well back
+			# (otherwise every follower lifts the moment the car ahead does and the gap never closes)
 			var want := SC_GAP + 0.5 * _speed(car)
 			if gap > want:
-				if flag != "red" and gap > 150.0:
-					# well back: hurry up to the queue at nearly racing speed
+				if flag != "red" and gap > want + CATCHUP_GAP:
+					# off the back of the queue: hurry up to it at nearly racing speed
 					vT = maxf(vT, minf(v_race, v_prof * CATCHUP_PACE))
-				vT = minf(vT, sqrt(v_ahead * v_ahead + 2.0 * 2.5 * (gap - want)))
+				var room := 2.0 * 2.5 * ((gap - want) + maxf(0.0, gap - want - 15.0))
+				vT = minf(vT, sqrt(v_ahead * v_ahead + room))
 			else:
 				vT = minf(vT, maxf(0.0, v_ahead - (want - gap) * 0.5))
 		if car.sc_waved and sc_on_track:
@@ -743,6 +735,25 @@ func limit_speed(car: RaceCar, t: Dictionary, mu: float) -> void:
 				var lim := track.half - 1.0
 				t.dT = clampf(sc.d + (2.8 if sc.d < 0.0 else -2.8), -lim, lim)
 	t.vT = vT
+
+## [gap, speed] to whatever is physically ahead of this car under a neutralisation: the safety car or
+## the next running car; gap is INF when there is nothing.
+func _queue_ahead(car: RaceCar) -> Array:
+	var gap := INF
+	var v_ahead := 0.0
+	for o in race.cars:
+		if o == car or o.dnf or o.mode == "pit":
+			continue
+		var g := track.rel(o.s - car.s)
+		if g > 0.0 and g < gap:
+			gap = g
+			v_ahead = _speed(o)
+	if sc_on_track and not car.sc_waved:
+		var g := track.rel(sc.s - car.s)
+		if g > 0.0 and g < gap:
+			gap = g
+			v_ahead = sc.v
+	return [gap, v_ahead]
 
 # ---------------- the player's obligations ----------------
 ## A car lies on the racing surface within reach ahead of (or just alongside) this position.
@@ -761,6 +772,8 @@ func speed_cap(p: RaceCar) -> float:
 		cap = RED_PACE + 0.1
 	elif neutral:
 		cap = DELTA_PACE + 0.08
+		if _queue_ahead(p)[0] > SC_GAP + 0.5 * _speed(p) + CATCHUP_GAP + 20.0:
+			cap = CATCHUP_PACE + 0.05 # catching the queue
 	elif yellow_at(p.s) == 2:
 		cap = PLAYER_SLOW
 	if cap <= 0.0:

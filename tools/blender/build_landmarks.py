@@ -1,0 +1,701 @@
+"""Builds the circuits' landmarks: the buildings and structures you'd know a circuit by.
+
+Run from the repository root (Blender 4.2 or newer, headless):
+
+    blender -b -P tools/blender/build_landmarks.py -- [--renders DIR]
+
+Writes godot/models/landmarks.glb. surroundings.gd places the pieces where OpenStreetMap maps them
+(build_surroundings.py LANDMARKS); keep the object names and the nominal sizes (surroundings.gd
+LANDMARK_SIZE) in step with this script.
+
+Frame (Blender; glTF turns +Y into Godot -Z): X along the footprint's long side, -Y the front (turned
+towards the circuit by Godot), Z up, origin on the ground at the footprint's centre.
+
+  IndyPagoda       Indianapolis: the ten-storey Pagoda, a glass tower under stacked white roofs on a
+                   two-storey base (57.5 x 33.4 m footprint)
+  ScoringPylon     Indianapolis: the timing and scoring pylon, 33 rows of car numbers on its faces
+  FerrisWheel      Suzuka: the 50 m Ferris wheel in the park, the wheel in the X-Z plane
+  TyreBridge       Le Mans: the tyre-shaped footbridge; the circuit runs through it along Y, the arch
+                   (inner radius 11.5 m) spans X
+  MonzaPodio       Monza: the podium over the pit straight, the platform at the origin, its
+                   cantilever and support at +Y (the pit side)
+  CastleKeep       a ruined round keep (Nurburg's Bergfried), 9.5 m across and 20 m tall
+  CastleTower      a ruined round wall tower, 6 m across and 9 m tall
+  CastleWall       1 m of ruined curtain wall along X (stretched by Godot between the towers)
+  Casino           Monaco: the Casino de Monte-Carlo and its Opera (60 x 160 m), the front with the twin
+                   towers on the short side to -Y
+  SilverstoneWing  Silverstone: the Wing pit and paddock building under its wing roof (374 x 32.6 m)
+  Yacht_S/M/L      motor yachts of 14, 28 and 50 m for Monaco's harbour, bow to +X, waterline at z=0
+"""
+import bpy
+import math
+import os
+import random
+import sys
+from mathutils import Vector
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import kit  # noqa: E402
+from kit import MB, srgb  # noqa: E402
+
+OUT_GLB = os.path.join(kit.ROOT, "godot", "models", "landmarks.glb")
+
+kit.MATERIALS.update({
+	"Concrete": (srgb("#c9c5bc"), 0.88, 0.0, {}),
+	"White": (srgb("#f1f2f0"), 0.45, 0.0, {}),
+	"Steel": (srgb("#a4aaaf"), 0.4, 0.7, {}),
+	"SteelPaint": (srgb("#3a3f45"), 0.5, 0.35, {}),
+	"Glass": (srgb("#2b3c48"), 0.05, 0.7, {}),
+	"Stone": (srgb("#ffffff"), 0.92, 0.0, {}),
+	"Copper": (srgb("#6f9c8a"), 0.55, 0.25, {}),
+	"Slate": (srgb("#4e5559"), 0.7, 0.0, {}),
+	"Rubber": (srgb("#1a1a1b"), 0.82, 0.0, {}),
+	"Paint": (srgb("#ffffff"), 0.4, 0.0, {}),
+	"Panel": (srgb("#141618"), 0.35, 0.2, {}),
+	"Digit": (srgb("#ffffff"), 0.5, 0.0, {"emit": ((1.0, 0.95, 0.85), 1.2)}),
+	"Gold": (srgb("#c9a050"), 0.35, 0.8, {}),
+	"Teak": (srgb("#9a6f45"), 0.75, 0.0, {}),
+	"ClearGlass": (srgb("#b9d0d8"), 0.08, 0.3, {"alpha": 0.4}),
+})
+
+
+def rnd(seed):
+	return random.Random(seed)
+
+
+# --------------------------------------------------------------------------- Indianapolis
+
+def mullions(mb, x0, x1, y0, y1, z0, z1, every, mat="White", w=0.18):
+	"""White vertical bars round a glass box's walls."""
+	for (ax, ay), (bx, by) in (((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)), ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0))):
+		ln = math.hypot(bx - ax, by - ay)
+		n = max(1, int(ln / every))
+		for k in range(n + 1):
+			t = k / n
+			x, y = ax + (bx - ax) * t, ay + (by - ay) * t
+			mb.box((x - w, y - w, z0), (x + w, y + w, z1), mat, skip=("-z", "+z"))
+
+
+def indy_pagoda():
+	mb = MB()
+	L, W = 57.5, 33.4
+	# the base: two storeys, glass between white bands, wider than the tower
+	mb.colour = srgb("#2b3c48")
+	mb.box((-L / 2 + 1, -W / 2 + 1, 0), (L / 2 - 1, W / 2 - 1, 8.0), "Glass", skip=("-z",))
+	mb.colour = (1, 1, 1)
+	mullions(mb, -L / 2 + 1, L / 2 - 1, -W / 2 + 1, W / 2 - 1, 0, 8.0, 3.0)
+	for z in (3.8, 7.6):
+		mb.box((-L / 2, -W / 2, z), (L / 2, W / 2, z + 0.5), "White")
+	# the tower: nine more storeys stepping in, each under a wide white roof whose edge turns up
+	z = 8.1
+	tw, td = 30.0, 19.0
+	for k in range(9):
+		h = 4.3
+		w = tw - k * 0.9
+		d = td - k * 0.55
+		mb.colour = srgb("#2b3c48")
+		mb.box((-w / 2, -d / 2, z), (w / 2, d / 2, z + h), "Glass", skip=("-z", "+z"))
+		mb.colour = (1, 1, 1)
+		mullions(mb, -w / 2, w / 2, -d / 2, d / 2, z, z + h, 2.4, w=0.12)
+		# a balcony rail round the floor
+		o = 1.4
+		for (ax, ay), (bx, by) in (((-w / 2 - o, -d / 2 - o), (w / 2 + o, -d / 2 - o)),
+				((w / 2 + o, -d / 2 - o), (w / 2 + o, d / 2 + o)), ((w / 2 + o, d / 2 + o), (-w / 2 - o, d / 2 + o)),
+				((-w / 2 - o, d / 2 + o), (-w / 2 - o, -d / 2 - o))):
+			mb.beam((ax, ay, z + 1.05), (bx, by, z + 1.05), 0.08, 0.08, "White")
+		# the roof over it: a slab reaching 2.6 m out with a turned-up lip
+		r = 2.6 + 0.15 * k
+		zr = z + h
+		mb.box((-w / 2 - r, -d / 2 - r, zr), (w / 2 + r, d / 2 + r, zr + 0.45), "White")
+		lip = [(-w / 2 - r, -d / 2 - r), (w / 2 + r, -d / 2 - r), (w / 2 + r, d / 2 + r), (-w / 2 - r, d / 2 + r)]
+		for i in range(4):
+			a, b = lip[i], lip[(i + 1) % 4]
+			ca = Vector((a[0] * 1.03, a[1] * 1.06, zr + 0.95))
+			cb = Vector((b[0] * 1.03, b[1] * 1.06, zr + 0.95))
+			mb.quad((a[0], a[1], zr + 0.45), (b[0], b[1], zr + 0.45), cb, ca, "White", lambda q: Vector((q.x, q.y, 0.3)))
+			mb.quad(ca, cb, (b[0], b[1], zr + 0.45), (a[0], a[1], zr + 0.45), "White", lambda q: Vector((-q.x, -q.y, 0.3)))
+		z = zr + 0.45
+	# the top: a small glass cupola under a peaked white roof, and the flag mast
+	mb.colour = srgb("#2b3c48")
+	mb.box((-6, -4, z), (6, 4, z + 3.2), "Glass", skip=("-z", "+z"))
+	mb.colour = (1, 1, 1)
+	z += 3.2
+	mb.poly([(-9, -6.5, z), (9, -6.5, z), (9, 6.5, z), (-9, 6.5, z)], "White", (0, 0, -1))
+	for a, b in (((-9, -6.5), (9, -6.5)), ((9, -6.5), (9, 6.5)), ((9, 6.5), (-9, 6.5)), ((-9, 6.5), (-9, -6.5))):
+		mb.poly([(a[0], a[1], z), (b[0], b[1], z), (0, 0, z + 3.5)], "White", lambda q: Vector((q.x, q.y, 1.0)))
+	mb.colour = srgb("#a4aaaf")
+	mb.tube((0, 0, z + 3.5), (0, 0, z + 12.0), 0.15, "Steel", segs=6)
+	mb.colour = srgb("#3a3f45")
+	# the stair core at the back and a skybridge stub to the press centre
+	mb.box((-3, td / 2 - 1, 8.0), (3, td / 2 + 2.5, z - 3.2), "Concrete")
+	return mb
+
+
+def scoring_pylon():
+	mb = MB()
+	W, D, H = 4.4, 2.0, 46.0
+	mb.colour = srgb("#2a2d31")
+	mb.box((-W / 2, -D / 2, 0), (W / 2, D / 2, H), "SteelPaint")
+	mb.colour = srgb("#3a3f45")
+	mb.box((-1.0, -0.6, -0.1), (1.0, 0.6, 0.01), "SteelPaint")
+	# the head: lap counter and the IMS wing-and-wheel badge
+	mb.colour = srgb("#2a2d31")
+	mb.box((-W / 2 - 0.5, -D / 2 - 0.3, H), (W / 2 + 0.5, D / 2 + 0.3, H + 4.5), "SteelPaint")
+	r = rnd(7)
+	for side, n in ((-1, (0, -1, 0)), (1, (0, 1, 0))):
+		y = side * (D / 2 + 0.02)
+		yh = side * (D / 2 + 0.32)
+		u = (1, 0, 0) if side < 0 else (-1, 0, 0)
+		mb.colour = srgb("#141618")
+		mb.quad((-W / 2, y, 1.5), (W / 2, y, 1.5), (W / 2, y, H - 0.5), (-W / 2, y, H - 0.5), "Panel", n)
+		mb.colour = (1, 1, 1)
+		kit.text_mesh(mb, "IMS", (0, yh + side * 0.01, H + 2.2), 1.6, "Digit", axis_u=u, axis_v=(0, 0, 1))
+		kit.text_mesh(mb, "LAP 200", (0, yh + side * 0.01, H + 0.6), 0.8, "Digit", axis_u=u, axis_v=(0, 0, 1))
+		# 33 rows: the position (white) and the car number (yellow)
+		cars = r.sample(range(2, 99), 33)
+		for i in range(33):
+			zr = H - 1.6 - i * 1.3
+			mb.colour = (1, 1, 1)
+			kit.text_mesh(mb, str(i + 1), (-W / 2 + 0.9 if side < 0 else W / 2 - 0.9, y + side * 0.01, zr), 0.75, "Digit",
+				axis_u=u, axis_v=(0, 0, 1))
+			mb.colour = srgb("#ffd21a")
+			kit.text_mesh(mb, str(cars[i]), (0.8 if side < 0 else -0.8, y + side * 0.01, zr), 0.9, "Digit",
+				axis_u=u, axis_v=(0, 0, 1))
+	return mb
+
+
+# --------------------------------------------------------------------------- Suzuka
+
+def ferris_wheel():
+	mb = MB()
+	R, hub, gap = 24.0, 27.0, 1.6
+	n = 48
+	mb.colour = srgb("#e8e9e6")
+	# two rims, braced together, with spokes to the hub
+	for y in (-gap, gap):
+		for k in range(n):
+			a0, a1 = 2 * math.pi * k / n, 2 * math.pi * (k + 1) / n
+			mb.tube((R * math.cos(a0), y, hub + R * math.sin(a0)), (R * math.cos(a1), y, hub + R * math.sin(a1)), 0.28, "White", segs=6, caps=False)
+			r2 = R * 0.9
+			mb.tube((r2 * math.cos(a0), y, hub + r2 * math.sin(a0)), (r2 * math.cos(a1), y, hub + r2 * math.sin(a1)), 0.16, "White", segs=5, caps=False)
+		for k in range(0, n, 2):
+			a = 2 * math.pi * k / n
+			mb.tube((0, y * 0.4, hub), (R * math.cos(a), y, hub + R * math.sin(a)), 0.09, "White", segs=4, caps=False)
+	for k in range(n):
+		a = 2 * math.pi * k / n
+		p = (R * math.cos(a), 0, hub + R * math.sin(a))
+		mb.tube((p[0], -gap, p[2]), (p[0], gap, p[2]), 0.12, "White", segs=4, caps=False)
+	mb.colour = srgb("#a4aaaf")
+	mb.tube((0, -3.2, hub), (0, 3.2, hub), 1.0, "Steel", segs=12)
+	# A-frame legs on both sides
+	mb.colour = srgb("#e8e9e6")
+	for y in (-1, 1):
+		for x in (-1, 1):
+			mb.tube((x * 15.0, y * 9.0, 0), (0, y * 3.0, hub), 0.6, "White", segs=8)
+		mb.tube((-9.0, y * 6.0, hub * 0.4), (9.0, y * 6.0, hub * 0.4), 0.3, "White", segs=6)
+	# gondolas in four colours, hanging under the rim
+	cols = ["#e8483c", "#f2c230", "#3c8fd8", "#4bb06a"]
+	for k in range(32):
+		a = 2 * math.pi * k / 32
+		cx, cz = R * math.cos(a) * 1.02, hub + R * math.sin(a) * 1.02 - 1.6
+		mb.colour = srgb(cols[k % 4])
+		mb.lathe([(-1.1, 0.0), (-1.0, 0.9), (0.0, 1.25), (0.8, 1.1), (1.1, 0.0)], 10, "Paint", centre=(cx, 0, cz + 0.2))
+		mb.colour = srgb("#a4aaaf")
+		mb.tube((cx, 0, cz + 1.3), (cx, 0, cz + 1.9), 0.08, "Steel", segs=4)
+	# boarding station
+	mb.colour = srgb("#d9d4c8")
+	mb.box((-8, -6, 0), (8, 6, 2.6), "Concrete")
+	mb.colour = srgb("#c8102e")
+	mb.box((-8.5, -6.5, 2.6), (8.5, 6.5, 3.0), "Paint")
+	return mb
+
+
+# --------------------------------------------------------------------------- Le Mans
+
+def tyre_section():
+	"""The tyre's cross-section as (radial offset, across) points, outside first, closed."""
+	pts = []
+	# tread (outer, flat with rounded shoulders) -> sidewall -> bead (inner) -> other sidewall
+	for t in range(9):
+		a = -math.pi / 2 + math.pi * t / 8
+		pts.append((2.0 + 0.35 * math.cos(a) - 0.35 + 0.0, 2.5 * math.sin(a) * 0.92))
+	return pts
+
+
+def tyre_bridge():
+	mb = MB()
+	Rc = 13.5  # the middle of the tyre's section; inner edge at 11.5, outer at 15.5
+	n = 64
+	a0, a1 = math.radians(-8), math.radians(188)
+	# the section: a rounded rectangle 4 m deep (radially) and 5 m wide, bulging a little at the sidewalls
+	sec = []
+	for k in range(24):
+		t = 2 * math.pi * k / 24
+		c, s = math.cos(t), math.sin(t)
+		dr = 2.0 * math.copysign(abs(c) ** 0.45, c)
+		dy = 2.5 * math.copysign(abs(s) ** 0.3, s)
+		sec.append((dr, dy))
+	rows = []
+	for i in range(n + 1):
+		a = a0 + (a1 - a0) * i / n
+		radial = Vector((math.cos(a), 0, math.sin(a)))
+		c = radial * Rc
+		rows.append([c + radial * dr + Vector((0, dy, 0)) for dr, dy in sec])
+	mb.colour = srgb("#1a1a1b")
+	ids = [[mb.vert(p) for p in row] for row in rows]
+	m = len(sec)
+	for i in range(n):
+		a = a0 + (a1 - a0) * (i + 0.5) / n
+		cen = Vector((math.cos(a), 0, math.sin(a))) * Rc
+		for j in range(m):
+			j2 = (j + 1) % m
+			mb.face([ids[i][j], ids[i][j2], ids[i + 1][j2], ids[i + 1][j]], "Rubber",
+				lambda q, cen=cen, a=a: (q - cen) - Vector((-math.sin(a), 0, math.cos(a))) * (q - cen).dot(Vector((-math.sin(a), 0, math.cos(a)))))
+	# tread blocks across the outer face
+	for i in range(0, 2 * n):
+		a = a0 + (a1 - a0) * (i + 0.5) / (2 * n)
+		radial = Vector((math.cos(a), 0, math.sin(a)))
+		tang = Vector((-math.sin(a), 0, math.cos(a)))
+		for y0, y1 in ((-2.0, -0.3), (0.3, 2.0)):
+			off = 0.4 if i % 2 else 0.0
+			base = radial * (Rc + 1.98)
+			lo, hi = y0 + off * 0.5, y1 + off * 0.5 - 0.2
+			p = [base + tang * -0.35 + Vector((0, lo, 0)), base + tang * 0.35 + Vector((0, lo, 0)),
+				base + tang * 0.35 + Vector((0, hi, 0)), base + tang * -0.35 + Vector((0, hi, 0))]
+			top = [q + radial * 0.18 for q in p]
+			mb.poly(top, "Rubber", radial)
+			for k in range(4):
+				mb.poly([p[k], p[(k + 1) % 4], top[(k + 1) % 4], top[k]], "Rubber", lambda q, c=base + radial * 0.09 + Vector((0, (lo + hi) / 2, 0)): q - c)
+	# the lettering round the top of both sidewalls, white
+	word = "24 HEURES DU MANS"
+	step = math.radians(4.6)
+	mid = math.pi / 2
+	for side in (-1, 1):
+		y = side * 2.62
+		for i, ch in enumerate(word):
+			if ch == " ":
+				continue
+			off = (i - (len(word) - 1) / 2) * step
+			a = mid - off if side < 0 else mid + off
+			radial = Vector((math.cos(a), 0, math.sin(a)))
+			u = Vector((math.sin(a), 0, -math.cos(a))) * (1 if side < 0 else -1)
+			mb.colour = (1, 1, 1)
+			kit.text_mesh(mb, ch, radial * (Rc - 0.55) + Vector((0, y, 0)), 1.7, "Paint", axis_u=tuple(u), axis_v=tuple(radial))
+	# the walkway inside the crown, its floor and a glazed slot along each side
+	mb.colour = srgb("#3a3f45")
+	mb.box((-6.0, -1.3, Rc - 2.1), (6.0, 1.3, Rc - 1.95), "SteelPaint")
+	# stair towers down to the ground at both ends, outside the tyre
+	for x in (-1, 1):
+		cx = x * (Rc + 4.5)
+		mb.colour = srgb("#c9c5bc")
+		mb.box((cx - 1.6, -1.6, 0), (cx + 1.6, 1.6, Rc - 1.0), "Concrete", skip=("-z",))
+		mb.colour = srgb("#3a3f45")
+		mb.box((cx - 2.0, -2.0, Rc - 1.0), (cx + 2.0, 2.0, Rc - 0.6), "SteelPaint")
+		mb.beam((cx - x * 1.6, 0, Rc - 1.6), (x * (Rc + 1.0), 0, Rc - 1.0), 2.2, 0.5, "SteelPaint")
+	return mb
+
+
+# --------------------------------------------------------------------------- Monza
+
+def monza_podio():
+	mb = MB()
+	Z = 8.5  # platform level over the track
+	S = 10.8
+	mb.colour = srgb("#e9eaea")
+	# the platform, its underside dark
+	mb.box((-S / 2, -S / 2, Z - 0.9), (S / 2, S / 2, Z), "White")
+	# glass balustrade round the front and the sides, a steel rail on top
+	mb.colour = srgb("#9fb6c0")
+	for a, b, n in (((-S / 2, -S / 2), (S / 2, -S / 2), (0, -1, 0)), ((-S / 2, -S / 2), (-S / 2, S / 2), (-1, 0, 0)),
+			((S / 2, -S / 2), (S / 2, S / 2), (1, 0, 0))):
+		mb.quad((a[0], a[1], Z), (b[0], b[1], Z), (b[0], b[1], Z + 1.1), (a[0], a[1], Z + 1.1), "ClearGlass", n)
+		mb.colour = srgb("#a4aaaf")
+		mb.tube((a[0], a[1], Z + 1.12), (b[0], b[1], Z + 1.12), 0.05, "Steel", segs=5)
+		mb.colour = srgb("#9fb6c0")
+	# the steps: 2 - 1 - 3 from the left, seen from the track
+	mb.colour = srgb("#c8102e")
+	for x, h in ((-2.0, 0.6), (0.0, 0.9), (2.0, 0.4)):
+		mb.box((x - 0.95, -1.0, Z), (x + 0.95, 0.6, Z + h), "Paint")
+	# backdrop wall at the back of the platform, red with a white band
+	mb.colour = srgb("#c8102e")
+	mb.box((-S / 2, S / 2 - 0.4, Z), (S / 2, S / 2, Z + 4.2), "Paint")
+	mb.colour = (1, 1, 1)
+	mb.quad((-S / 2, S / 2 - 0.41, Z + 1.5), (S / 2, S / 2 - 0.41, Z + 1.5), (S / 2, S / 2 - 0.41, Z + 1.9), (-S / 2, S / 2 - 0.41, Z + 1.9), "White", (0, -1, 0))
+	kit.text_mesh(mb, "MONZA", (0, S / 2 - 0.43, Z + 3.05), 1.1, "White", axis_u=(1, 0, 0), axis_v=(0, 0, 1))
+	# the cantilever: two steel box girders reaching back over the pit lane to the support tower
+	mb.colour = srgb("#3a3f45")
+	back = 30.0
+	for x in (-3.5, 3.5):
+		mb.beam((x, -S / 2, Z - 0.5), (x, back, Z + 0.5), 0.8, 1.6, "SteelPaint")
+		mb.beam((x, S / 2, Z + 0.4), (x, back - 3, Z + 6.0), 0.4, 0.4, "SteelPaint")
+	mb.colour = srgb("#e9eaea")
+	mb.box((-5.0, back - 4, 0), (5.0, back + 2, Z + 7.0), "White", skip=("-z",))
+	mb.colour = srgb("#2b3c48")
+	mb.quad((-5.01, back - 3, 2), (-5.01, back + 1, 2), (-5.01, back + 1, Z + 6), (-5.01, back - 3, Z + 6), "Glass", (-1, 0, 0))
+	mb.quad((5.01, back - 3, 2), (5.01, back - 3, Z + 6), (5.01, back + 1, Z + 6), (5.01, back + 1, 2), "Glass", (1, 0, 0))
+	return mb
+
+
+# --------------------------------------------------------------------------- castles
+
+STONE = ["#8d8577", "#9b927f", "#7f786c", "#a39a88", "#878074"]
+
+
+def stone_shaded(mb, r, k):
+	mb.colour = srgb(STONE[(k * 7 + r.randrange(5)) % 5])
+
+
+def round_tower(r, radius, height, ragged, segs=16, windows=3):
+	mb = MB()
+	rows = 6
+	for i in range(rows):
+		z0, z1 = height * i / rows, height * (i + 1) / rows
+		for k in range(segs):
+			a0, a1 = 2 * math.pi * k / segs, 2 * math.pi * (k + 1) / segs
+			top0 = z1 if i < rows - 1 else height - ragged * (0.5 + 0.5 * math.sin(k * 2.3 + 1.0))
+			top1 = z1 if i < rows - 1 else height - ragged * (0.5 + 0.5 * math.sin((k + 1) * 2.3 + 1.0))
+			if i == rows - 1 and k % 3 == 0:
+				top0 += 1.0
+				top1 += 1.0
+			rb = radius * (1.06 if i == 0 else 1.0)
+			p = [(rb * math.cos(a0), rb * math.sin(a0), z0), (rb * math.cos(a1), rb * math.sin(a1), z0),
+				(radius * math.cos(a1), radius * math.sin(a1), top1), (radius * math.cos(a0), radius * math.sin(a0), top0)]
+			stone_shaded(mb, r, i * segs + k)
+			mb.poly(p, "Stone", lambda q: Vector((q.x, q.y, 0)))
+			# the wall's thickness at the top
+			if i == rows - 1:
+				ri = radius - 1.6
+				mb.poly([(radius * math.cos(a0), radius * math.sin(a0), top0), (radius * math.cos(a1), radius * math.sin(a1), top1),
+					(ri * math.cos(a1), ri * math.sin(a1), top1), (ri * math.cos(a0), ri * math.sin(a0), top0)], "Stone", (0, 0, 1))
+				mb.poly([(ri * math.cos(a0), ri * math.sin(a0), top0), (ri * math.cos(a1), ri * math.sin(a1), top1),
+					(ri * math.cos(a1), ri * math.sin(a1), top0 - 3), (ri * math.cos(a0), ri * math.sin(a0), top0 - 3)], "Stone",
+					lambda q: Vector((-q.x, -q.y, 0)))
+	# slit windows
+	mb.colour = srgb("#1d1b18")
+	for w in range(windows):
+		a = 2 * math.pi * (w + 0.3) / windows
+		z = height * (0.35 + 0.18 * w)
+		c = Vector((math.cos(a), math.sin(a), 0)) * (radius + 0.02)
+		t = Vector((-math.sin(a), math.cos(a), 0))
+		mb.poly([c + t * -0.25 + Vector((0, 0, z)), c + t * 0.25 + Vector((0, 0, z)), c + t * 0.25 + Vector((0, 0, z + 1.4)),
+			c + t * -0.25 + Vector((0, 0, z + 1.4))], "Slate", Vector((math.cos(a), math.sin(a), 0)))
+	return mb
+
+
+def castle_keep():
+	return round_tower(rnd(11), 4.75, 20.0, 0.6, segs=20, windows=4)
+
+
+def castle_tower():
+	return round_tower(rnd(12), 3.0, 9.0, 2.2, segs=14, windows=2)
+
+
+def castle_wall():
+	mb = MB()
+	r = rnd(13)
+	H, T = 7.0, 1.8
+	n = 4
+	for k in range(n):
+		x0, x1 = -0.5 + k / n, -0.5 + (k + 1) / n
+		h0 = H - 1.5 * (0.5 + 0.5 * math.sin(k * 2.1))
+		h1 = H - 1.5 * (0.5 + 0.5 * math.sin((k + 1) * 2.1))
+		stone_shaded(mb, r, k)
+		mb.quad((x0, -T / 2, 0), (x1, -T / 2, 0), (x1, -T / 2, h1), (x0, -T / 2, h0), "Stone", (0, -1, 0))
+		mb.quad((x1, T / 2, 0), (x0, T / 2, 0), (x0, T / 2, h0), (x1, T / 2, h1), "Stone", (0, 1, 0))
+		mb.quad((x0, -T / 2, h0), (x1, -T / 2, h1), (x1, T / 2, h1), (x0, T / 2, h0), "Stone", (0, 0, 1))
+	return mb
+
+
+# --------------------------------------------------------------------------- Monaco
+
+def casino():
+	"""The Casino's front (the twin towers, the clock and the entrance) on the short side at -Y, facing the
+	Place du Casino; the gaming rooms behind it and the Opera (Salle Garnier) at the far end, over the sea."""
+	mb = MB()
+	L, D = 60.0, 160.0
+	stone = "#e7d8b9"
+	trim = "#f3ead8"
+	fy = -D / 2
+	x0, x1 = -L / 2 + 2, L / 2 - 2
+
+	def block(ya, yb, h, roof_h, xa=x0, xb=x1):
+		mb.colour = srgb(stone)
+		mb.box((xa, ya, 0), (xb, yb, h), "Stone", skip=("-z",))
+		mb.colour = srgb(trim)
+		mb.box((xa - 0.5, ya - 0.5, h - 0.8), (xb + 0.5, yb + 0.5, h + 0.4), "Stone")
+		mb.colour = srgb("#6f9c8a")
+		ins = 3.0
+		top = [(xa + ins, ya + ins, h + 0.4 + roof_h), (xb - ins, ya + ins, h + 0.4 + roof_h), (xb - ins, yb - ins, h + 0.4 + roof_h),
+			(xa + ins, yb - ins, h + 0.4 + roof_h)]
+		base = [(xa, ya, h + 0.4), (xb, ya, h + 0.4), (xb, yb, h + 0.4), (xa, yb, h + 0.4)]
+		cx, cy = (xa + xb) / 2, (ya + yb) / 2
+		for i in range(4):
+			mb.quad(base[i], base[(i + 1) % 4], top[(i + 1) % 4], top[i], "Copper", lambda q: Vector((q.x - cx, q.y - cy, 4.0)))
+		mb.poly(top, "Copper", (0, 0, 1))
+
+	def windows(xa, xb, y, n, rows, face):
+		mb.colour = srgb("#2c3a42")
+		for k in range(n):
+			x = xa + (k + 0.5) * (xb - xa) / n
+			for z0, z1 in rows:
+				arch = [(x - 1.1, y, z0), (x + 1.1, y, z0), (x + 1.1, y, z1 - 1.1)]
+				for j in range(7):
+					a = math.pi * j / 6
+					arch.append((x + 1.1 * math.cos(a), y, z1 - 1.1 + 1.1 * math.sin(a)))
+				arch.append((x - 1.1, y, z1 - 1.1))
+				mb.poly(arch if face < 0 else list(reversed(arch)), "Glass", (0, face, 0))
+
+	def side_windows(x, ya, yb, n, rows, face):
+		mb.colour = srgb("#2c3a42")
+		for k in range(n):
+			y = ya + (k + 0.5) * (yb - ya) / n
+			for z0, z1 in rows:
+				mb.poly([(x, y - 1.1, z0), (x, y + 1.1, z0), (x, y + 1.1, z1), (x, y - 1.1, z1)], "Glass", (face, 0, 0))
+
+	rows = ((2.0, 7.0), (9.5, 14.5))
+	# the front block and the gaming rooms behind it, two tall storeys under copper mansards
+	block(fy + 3, fy + 45, 17.0, 5.0)
+	block(fy + 45, fy + 110, 15.0, 4.0, x0 + 3, x1 - 3)
+	# the Opera at the far end, its own front with two small towers looking out to sea
+	block(fy + 110, D / 2, 19.0, 4.5)
+	for sx in (-1, 1):
+		cx = sx * (L / 2 - 7)
+		mb.colour = srgb(stone)
+		mb.box((cx - 4, D / 2 - 8, 0), (cx + 4, D / 2, 25.0), "Stone", skip=("-z",))
+		mb.colour = srgb("#6f9c8a")
+		mb.lathe([(25.0, 4.4), (27.0, 3.8), (29.0, 2.0), (30.0, 0.0)], 4, "Copper", centre=(cx, D / 2 - 4, 0))
+	windows(x0 + 12, x1 - 12, fy + 2.95, 3, rows, -1)
+	for sx in (-1, 1):
+		side_windows(sx * (x1 + 0.02), fy + 16, fy + 44, 7, rows, sx)
+		side_windows(sx * (x1 - 3 + 0.02), fy + 46, fy + 109, 14, ((2.0, 6.5), (8.5, 13.0)), sx)
+		side_windows(sx * (x1 + 0.02), fy + 112, D / 2 - 10, 8, ((3.0, 8.0), (10.5, 16.0)), sx)
+	windows(x0 + 10, x1 - 10, D / 2 + 0.02, 6, ((3.0, 8.0), (10.5, 16.0)), 1)
+	# the central dome over the atrium
+	mb.colour = srgb("#6f9c8a")
+	mb.lathe([(21.0, 8.0), (24.0, 7.6), (27.0, 5.6), (29.0, 3.0), (30.0, 0.5), (30.2, 0.0)], 20, "Copper", centre=(0, fy + 30, 0))
+	# the two towers at the front corners, with their copper caps and gilded finials
+	for sx in (-1, 1):
+		cx = sx * (L / 2 - 6)
+		cy = fy + 6
+		mb.colour = srgb(stone)
+		mb.box((cx - 6, cy - 6, 0), (cx + 6, cy + 6, 26.0), "Stone", skip=("-z",))
+		mb.colour = srgb(trim)
+		mb.box((cx - 6.5, cy - 6.5, 25.5), (cx + 6.5, cy + 6.5, 26.6), "Stone")
+		mb.box((cx - 6.3, cy - 6.3, 16.3), (cx + 6.3, cy + 6.3, 17.2), "Stone")
+		mb.colour = srgb("#2c3a42")
+		for z in (3.0, 10.0, 19.0):
+			mb.quad((cx - 1.6, cy - 6.02, z), (cx + 1.6, cy - 6.02, z), (cx + 1.6, cy - 6.02, z + 4), (cx - 1.6, cy - 6.02, z + 4), "Glass", (0, -1, 0))
+			fx = cx + sx * 6.02
+			mb.quad((fx, cy - 1.6, z), (fx, cy + 1.6, z), (fx, cy + 1.6, z + 4), (fx, cy - 1.6, z + 4), "Glass", (sx, 0, 0))
+		mb.colour = srgb("#6f9c8a")
+		mb.lathe([(26.6, 6.2), (29.0, 6.0), (31.0, 5.0), (33.0, 3.2), (34.5, 1.2), (35.0, 0.0)], 4, "Copper", centre=(cx, cy, 0))
+		mb.colour = srgb("#c9a050")
+		mb.tube((cx, cy, 35.0), (cx, cy, 38.0), 0.25, "Gold", segs=6)
+		mb.lathe([(37.0, 0.0), (37.4, 0.6), (38.0, 0.0)], 8, "Gold", centre=(cx, cy, 0))
+	# the central entrance pavilion with its clock and the big arched window
+	mb.colour = srgb(trim)
+	mb.box((-8, fy + 1.0, 0), (8, fy + 3.2, 21.0), "Stone", skip=("-z",))
+	mb.colour = srgb("#6f9c8a")
+	mb.prism([(fy + 1.0, 21.0), (fy + 3.2, 21.0), (fy + 3.2, 23.5)], -8.5, 8.5, "Copper")
+	mb.colour = srgb("#2c3a42")
+	arch = [(-4.5, fy + 0.95, 6.0), (4.5, fy + 0.95, 6.0), (4.5, fy + 0.95, 13.0)]
+	for j in range(9):
+		a = math.pi * j / 8
+		arch.append((4.5 * math.cos(a), fy + 0.95, 13.0 + 4.5 * math.sin(a)))
+	arch.append((-4.5, fy + 0.95, 13.0))
+	mb.poly(arch, "Glass", (0, -1, 0))
+	mb.colour = srgb("#c9a050")
+	mb.disc((0, fy + 0.9, 18.6), 1.3, "Gold", normal=(0, -1, 0), segs=16)
+	# glass canopy (marquise) over the doors
+	mb.box((-6, fy - 3.5, 4.8), (6, fy + 1.0, 5.2), "Gold")
+	return mb
+
+
+def yacht(L):
+	mb = MB()
+	B = L * 0.2  # beam
+	F = 0.11 * L ** 0.75  # freeboard above the waterline
+	n = 12
+	# hull from stations: half-width and keel depth along the length, bow at +X
+	def half(t):  # t: 0 stern -> 1 bow
+		return B / 2 * (1.0 if t < 0.55 else max(0.0, math.cos((t - 0.55) / 0.45 * math.pi / 2)) ** 0.8)
+	rows = []
+	for i in range(n + 1):
+		t = i / n
+		x = -L / 2 + L * t
+		hw = max(half(t), 0.05)
+		deck = F + 0.25 * L ** 0.5 * max(0.0, t - 0.6)
+		keel = -0.08 * L ** 0.8 * (1.0 - 0.6 * t)
+		rows.append([(x, -hw, deck), (x, -hw * 0.95, 0.0), (x, -hw * 0.5, keel), (x, 0, keel - 0.1),
+			(x, hw * 0.5, keel), (x, hw * 0.95, 0.0), (x, hw, deck)])
+	mb.colour = srgb("#f6f5f1")
+	ids = [[mb.vert(p) for p in row] for row in rows]
+	for i in range(n):
+		for j in range(6):
+			mb.face([ids[i][j], ids[i][j + 1], ids[i + 1][j + 1], ids[i + 1][j]], "White",
+				lambda q: Vector((0, q.y, q.z - F * 0.3)))
+	# transom and deck
+	mb.face(ids[0], "White", (-1, 0, 0))
+	mb.colour = srgb("#9a6f45")
+	deck_ids = [ids[i][0] for i in range(n + 1)] + [ids[i][6] for i in range(n, -1, -1)]
+	mb.face(deck_ids, "Teak", (0, 0, 1))
+	# the boot-top stripe and a dark window band on the hull
+	mb.colour = srgb("#1f2a33")
+	for side in (-1, 1):
+		for i in range(2, n - 3):
+			t0, t1 = i / n, (i + 1) / n
+			x0, x1 = -L / 2 + L * t0, -L / 2 + L * t1
+			h0, h1 = half(t0) * 1.005 + 0.02, half(t1) * 1.005 + 0.02
+			mb.quad((x0, side * h0, F * 0.45), (x1, side * h1, F * 0.45), (x1, side * h1, F * 0.65), (x0, side * h0, F * 0.65),
+				"Glass", (0, side, 0))
+	# superstructure: decks stepping back, with dark glazing; more of them on a bigger boat
+	tiers = 1 if L < 20 else (2 if L < 40 else 3)
+	z = F + 0.25 * L ** 0.5 * 0.0
+	for k in range(tiers):
+		x0 = -L * (0.36 - 0.06 * k)
+		x1 = L * (0.22 - 0.07 * k)
+		hw = B / 2 * (0.82 - 0.1 * k)
+		h = 2.3
+		mb.colour = srgb("#f6f5f1")
+		mb.box((x0, -hw, z), (x1, hw, z + h), "White", skip=("-z",))
+		# a dark band of windows round it, the hardtop's overhang above
+		mb.colour = srgb("#1f2a33")
+		for side in (-1, 1):
+			y = side * (hw + 0.02)
+			pts = [(x0 + 0.5, y, z + 0.8), (x1 - 0.3, y, z + 0.8), (x1 - 0.3, y, z + 1.9), (x0 + 0.5, y, z + 1.9)]
+			mb.poly(pts, "Glass", (0, side, 0))
+		mb.quad((x1 + 0.02, -hw + 0.3, z + 0.8), (x1 + 0.02, hw - 0.3, z + 0.8), (x1 + 0.02, hw - 0.3, z + 1.9),
+			(x1 + 0.02, -hw + 0.3, z + 1.9), "Glass", (1, 0, 0))
+		mb.colour = srgb("#f6f5f1")
+		mb.box((x0 - 0.8, -hw - 0.2, z + h), (x1 + 0.5, hw + 0.2, z + h + 0.25), "White")
+		z += h + 0.25
+	# mast with radar and antennae
+	mb.colour = srgb("#f6f5f1")
+	xm = -L * 0.05
+	mb.box((xm - 0.3, -0.2, z), (xm + 0.3, 0.2, z + 0.4 * L ** 0.5), "White")
+	mb.colour = srgb("#3a3f45")
+	mb.box((xm - 0.9, -0.12, z + 0.4 * L ** 0.5), (xm + 0.9, 0.12, z + 0.4 * L ** 0.5 + 0.15), "SteelPaint")
+	return mb
+
+
+# --------------------------------------------------------------------------- Silverstone
+
+def silverstone_wing():
+	mb = MB()
+	L, W = 374.0, 32.6
+	front = -W / 2
+	n = 34
+	# ground floor: the pit garages, open towards the pit lane (-Y)
+	mb.colour = srgb("#d9dbdc")
+	mb.box((-L / 2, front + 1.5, 0), (L / 2, W / 2, 6.5), "Concrete", skip=("-z", "-y"))
+	mb.colour = srgb("#2a2d31")
+	for k in range(n * 2):
+		x0 = -L / 2 + L * k / (n * 2) + 0.6
+		x1 = -L / 2 + L * (k + 1) / (n * 2) - 0.6
+		mb.quad((x0, front + 1.52, 0.0), (x1, front + 1.52, 0.0), (x1, front + 1.52, 5.2), (x0, front + 1.52, 5.2), "Panel", (0, -1, 0))
+	mb.colour = srgb("#e9eaea")
+	for k in range(n * 2 + 1):
+		x = -L / 2 + L * k / (n * 2)
+		mb.box((x - 0.6, front + 1.5, 0), (x + 0.6, front + 2.0, 6.5), "White", skip=("-z",))
+	mb.box((-L / 2, front + 1.0, 5.2), (L / 2, front + 2.0, 6.5), "White")
+	# the two hospitality floors above, glazed and leaning out towards the track
+	mb.colour = srgb("#2b3c48")
+	for x0, x1 in ((-L / 2, L / 2),):
+		mb.quad((x0, front + 1.5, 6.5), (x1, front + 1.5, 6.5), (x1, front - 1.5, 15.0), (x0, front - 1.5, 15.0), "Glass", (0, -1, 0.3))
+		mb.quad((x1, W / 2 - 2, 6.5), (x0, W / 2 - 2, 6.5), (x0, W / 2 - 2, 15.0), (x1, W / 2 - 2, 15.0), "Glass", (0, 1, 0))
+	for x in (-L / 2, L / 2):
+		sgn = 1 if x > 0 else -1
+		mb.colour = srgb("#e9eaea")
+		mb.poly([(x, front + 1.5, 6.5), (x, W / 2 - 2, 6.5), (x, W / 2 - 2, 15.0), (x, front - 1.5, 15.0)], "White", (sgn, 0, 0))
+	mb.colour = srgb("#e9eaea")
+	for k in range(n * 4 + 1):
+		x = -L / 2 + L * k / (n * 4)
+		mb.beam((x, front + 1.5, 6.5), (x, front - 1.5, 15.0), 0.25, 0.25, "White")
+	mb.box((-L / 2, front - 1.2, 10.5), (L / 2, W / 2 - 2, 10.9), "White")
+	mb.box((-L / 2, front + 1.5, 6.5), (L / 2, W / 2 - 2, 6.9), "White")
+	# the wing roof: an aerofoil section along the whole building, its leading edge over the pit lane
+	sec = [(-W / 2 - 9.0, 0.0), (-W / 2 - 7.5, 1.0), (-W / 2 - 4.0, 2.0), (-W / 2 + 4.0, 2.6), (0.0, 2.3), (W / 2 - 4, 1.2),
+		(W / 2 + 2.0, 0.0), (W / 2 - 4, 0.45), (0.0, 0.9), (-W / 2 + 4.0, 0.9), (-W / 2 - 4.0, 0.5)]
+	m = 40
+	rows = []
+	for i in range(m + 1):
+		x = -L / 2 - 4 + (L + 8) * i / m
+		u = 2 * x / (L + 8)
+		z0 = 15.4 + 5.5 * (1 - u * u) ** 2  # rising towards the middle
+		tilt = 0.06 * (1 - u * u)
+		rows.append([(x, y, z0 + z - y * tilt) for y, z in sec])
+	mb.colour = srgb("#9aa1a7")
+	ids = [[mb.vert(p) for p in row] for row in rows]
+	k = len(sec)
+	for i in range(m):
+		for j in range(k):
+			j2 = (j + 1) % k
+			mb.face([ids[i][j], ids[i][j2], ids[i + 1][j2], ids[i + 1][j]], "Steel", lambda q: Vector((0, 0, 1)) if j < 6 else Vector((0, 0, -1)))
+	mb.face(ids[0], "Steel", (-1, 0, 0))
+	mb.face(ids[-1], "Steel", (1, 0, 0))
+	# the struts holding the wing over the glazed floors
+	mb.colour = srgb("#e9eaea")
+	for k2 in range(n + 1):
+		x = -L / 2 + L * k2 / n
+		u = 2 * x / (L + 8)
+		z0 = 15.4 + 5.5 * (1 - u * u) ** 2
+		mb.beam((x, front - 1.5, 15.0), (x, front - 4.0, z0 + 0.6), 0.5, 0.5, "White")
+		mb.beam((x, W / 2 - 2, 15.0), (x, W / 2 - 5.0, z0 + 0.8), 0.5, 0.5, "White")
+	# the race control and media bridge: a raised glass box over the middle
+	mb.colour = srgb("#2b3c48")
+	mb.box((-22, -W / 2 + 2, 15.0), (22, W / 2 - 6, 19.5), "Glass")
+	return mb
+
+
+PIECES = {
+	"IndyPagoda": indy_pagoda, "ScoringPylon": scoring_pylon, "FerrisWheel": ferris_wheel,
+	"TyreBridge": tyre_bridge, "MonzaPodio": monza_podio, "CastleKeep": castle_keep, "CastleTower": castle_tower,
+	"CastleWall": castle_wall, "Casino": casino, "SilverstoneWing": silverstone_wing,
+	"Yacht_S": lambda: yacht(14.0), "Yacht_M": lambda: yacht(28.0), "Yacht_L": lambda: yacht(50.0),
+}
+
+
+def main():
+	for ob in list(bpy.data.objects):
+		bpy.data.objects.remove(ob)
+	only = kit.arg("--only")
+	objs = {}
+	for name, fn in PIECES.items():
+		mb = fn()
+		print(f"{name}: {mb.tris()} tris")
+		objs[name] = mb.emit(name)
+	if not only:
+		kit.export_glb(OUT_GLB, list(objs.values()))
+	out = kit.arg("--renders")
+	if out:
+		cam = kit.setup_preview(ground=1200.0)
+		views = {
+			"IndyPagoda": ((90, -120, 40), (0, 0, 24), 45),
+			"ScoringPylon": ((14, -30, 20), (0, 0, 26), 55),
+			"FerrisWheel": ((50, -80, 25), (0, 0, 26), 50),
+			"TyreBridge": ((18, -45, 6), (0, 0, 9), 50),
+			"MonzaPodio": ((25, -30, 8), (0, 8, 7), 55),
+			"CastleKeep": ((30, -45, 14), (5, 0, 9), 50),
+			"Casino": ((70, -150, 40), (0, -30, 12), 50),
+			"SilverstoneWing": ((90, -140, 45), (60, 0, 10), 55),
+			"Yacht_L": ((50, -55, 18), (0, 0, 3), 50),
+		}
+		for ob in objs.values():
+			ob.hide_render = True
+		for name, (eye, target, fov) in views.items():
+			if only and name not in only.split(","):
+				continue
+			v = kit.place(objs[name])
+			if name == "CastleKeep":
+				kit.place(objs["CastleTower"], (14, 8, 0))
+				kit.place(objs["CastleWall"], (7, 4, 0), rot_z=math.atan2(8, 14), scale=(14.0, 1, 1))
+			if name == "Yacht_L":
+				kit.place(objs["Yacht_M"], (0, 22, 0))
+				kit.place(objs["Yacht_S"], (-10, -20, 0))
+			kit.render(cam, os.path.join(out, name + ".png"), eye, target, fov)
+			for o in list(bpy.context.scene.objects):
+				if o.name.endswith(".view"):
+					bpy.data.objects.remove(o)
+
+
+main()

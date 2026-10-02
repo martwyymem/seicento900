@@ -17,7 +17,7 @@ extends Resource
 @export var draft := true ## slipstream: a car behind another one, close and in line, pulls less air and gains speed
 @export var race_control := true ## flags, safety car, red flags, stewards' penalties and crash damage
 @export_enum("on", "off") var ai_learning := "on"
-@export_enum("on", "off") var bot_physics := "on"
+@export_enum("on", "off", "near") var bot_physics := "on" ## near: only bots close to the player run the physics (saves battery)
 @export var demo := false ## menu background race: bots on rails, nothing learned
 
 @export_group("Conditions")
@@ -43,4 +43,4 @@ extends Resource
 @export_enum("auto", "manual") var gearbox := "auto"
 @export_enum("full", "abs", "off") var assists := "full"
 @export var brake_assist := true ## with full assists, brake for a corner the car is arriving at too fast
-@export var auto_rejoin := true ## a spun or stuck player car is put back on the track, as the bots are
+@export var auto_rejoin := true ## a beached player car is put back on the track, as the bots are (a car that merely faces the wrong way is not)
