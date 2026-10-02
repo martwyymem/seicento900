@@ -14,7 +14,7 @@ const LANDMARKS_PATH := "res://models/landmarks.glb"
 ## Footprint (length along the model's x, width along z; metres) each Blender landmark (build_landmarks.py) is
 ## modelled at. The mapped footprint stretches it to fit; pieces not listed keep their size.
 const LANDMARK_SIZE := {
-	"IndyPagoda": Vector2(57.5, 33.4), "SilverstoneWing": Vector2(374.0, 32.6), "Casino": Vector2(160.0, 60.0),
+	"IndyPagoda": Vector2(57.5, 33.4), "SilverstoneWing": Vector2(374.0, 32.6), "Casino": Vector2(60.0, 160.0),
 	"CastleKeep": Vector2(9.5, 9.5), "CastleTower": Vector2(6.0, 6.0), "CastleWall": Vector2(1.0, 1.8),
 }
 const WATER_SHADER := preload("res://shaders/water.gdshader")

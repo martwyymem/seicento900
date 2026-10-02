@@ -1,5 +1,6 @@
 ## The land round a circuit out to 40 km (data/tracks/<key>_far.json, from tools/fetch_horizon.py): the hills,
-## mountains and sea on the horizon, past the circuit's own terrain. far_land.gdshader draws it behind the
+## mountains and sea on the horizon, past the circuit's own terrain, with the woods, towns, fields and lakes
+## where the land cover ("cover", from tools/fetch_landcover.py) has them. far_land.gdshader draws it behind the
 ## whole scene, so it fills the sky line without being clipped by the camera's far plane. Woods stand up from
 ## it by the height of their trees so even a flat horizon is broken by tree lines; towns, fields and rock
 ## colour the rest. race_world.gd builds one per circuit and drives its haze with the weather.
@@ -14,6 +15,8 @@ const WOOD_BROADLEAF := Color("#2f4524")
 const WOOD_CONIFER := Color("#223a26")
 const TOWN := Color("#9b958a")
 const TOWN_WARM := Color("#b39a84") ## tiled roofs and pale walls of the south
+const WETLAND := Color("#465a3c")
+const SNOW := Color("#e8ecef")
 
 var material: ShaderMaterial
 
@@ -30,6 +33,7 @@ func build(world: Node3D, parent: Node3D) -> bool:
 	var zs: Array = data.zs
 	var hs: Array = data.h
 	var sea: Array = data.sea
+	var cover: String = data.get("cover", "")
 	var nx := xs.size()
 	var nz := zs.size()
 	# the circuit's own terrain covers its elevation grid: leave a hole there, overlapping it by a cell
@@ -62,15 +66,43 @@ func build(world: Node3D, parent: Node3D) -> bool:
 			var x := float(xs[i])
 			var z := float(zs[j])
 			var h := float(hs[k])
-			var y := (h - base) * world.ALTITUDE_SCALE - 1.2
+			var y: float = (h - base) * world.ALTITUDE_SCALE - 1.2
 			var col := MEADOW
 			var farmland := 1.0
 			var water := 0.0
-			if int(sea[k]) == 1:
+			# open sea, though not the polders below sea level that the land cover has as dry land
+			if int(sea[k]) == 1 and (cover.is_empty() or cover[k] == "w"):
 				col = SEA
 				farmland = 0.0
 				water = 1.0
 				y = (0.0 - base) * world.ALTITUDE_SCALE - 0.5
+			elif not cover.is_empty():
+				# the real land cover (ESA WorldCover, tools/fetch_landcover.py)
+				match cover[k]:
+					"f":
+						var conifer := clampf(track.cfg.tree_conifer + (h - 500.0) / 1500.0, 0.0, 1.0)
+						col = WOOD_BROADLEAF.lerp(WOOD_CONIFER, conifer)
+						farmland = 0.0
+						y += TREE_HEIGHT * (0.8 + 0.4 * absf(noise.get_noise_2d(x * 7.0, z * 7.0)))
+					"t":
+						col = TOWN_WARM if south else TOWN
+						farmland = 0.0
+						y += 6.0
+					"g":
+						farmland = 0.25
+					"m":
+						col = WETLAND
+						farmland = 0.0
+					"r":
+						col = ROCK
+						farmland = 0.0
+					"s":
+						col = SNOW
+						farmland = 0.0
+					"w": # a lake: the elevation model already has its surface
+						col = SEA
+						farmland = 0.0
+						water = 1.0
 			else:
 				# steep ground and high ground are wooded, then rock above the tree line
 				var slope := _slope(xs, zs, hs, i, j)

@@ -1,6 +1,6 @@
 ## Scenery check (dev tool): builds a circuit and saves screenshots of its scenery.
 ## Env: TRACK (default gp), HOUR, OUT (directory), VIEWS (comma list):
-##   obj:<Name> (the first, or INDEX-th, of a furniture MultiMesh, from in front), stands, stands_near, stands_back, pits, pits_near, gantry, aerial, high, city, casino,
+##   lm:<Name> (a landmark from its front), obj:<Name> (the first, or INDEX-th, of a furniture MultiMesh, from in front), stands, stands_near, stands_back, pits, pits_near, gantry, aerial, high, city, casino,
 ##   top<S> (from above the road at S metres), lap<N> (driver's-eye view N/8 of the way round the lap, e.g. lap3), at<S> (driver's eye at S metres)
 ##   godot --path godot -s tests/_scenery_shot.gd
 extends SceneTree
@@ -46,6 +46,18 @@ func _initialize() -> void:
 			var xf := mmi.global_transform * mmi.multimesh.get_instance_transform(k)
 			at = xf.origin + Vector3.UP * 2.0
 			eye = at + (xf.basis.z.normalized() * 12.0 + xf.basis.x.normalized() * 5.0) + Vector3.UP * 1.5
+		elif v.begins_with("lm:"): # a landmark (MeshInstance3D), from its front and a little above and aside
+			var lmi := world.track_root.find_child(v.substr(3), true, false) as MeshInstance3D
+			if lmi == null: # a group node (HarborYacht_00): its first mesh
+				var group: Node = world.track_root.find_child(v.substr(3), true, false)
+				if group:
+					lmi = group.find_children("*", "MeshInstance3D", true, false)[0] as MeshInstance3D
+			if lmi == null:
+				continue
+			var box := lmi.global_transform * lmi.get_aabb()
+			var reach := maxf(box.size.x, box.size.z) * 0.9 + 25.0
+			at = box.get_center()
+			eye = at + lmi.global_transform.basis.z.normalized() * reach + lmi.global_transform.basis.x.normalized() * reach * 0.4 + Vector3.UP * (box.size.y * 0.5 + reach * 0.25)
 		elif v.begins_with("top"): # from above and to the side of the road at S metres
 			var s := float(v.substr(3))
 			eye = _pt(world, s - 70.0, 60.0, 45.0)

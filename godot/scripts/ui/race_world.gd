@@ -1285,6 +1285,20 @@ func _build_kerbs() -> void:
 		kerb_inst.material_override = km
 		track_root.add_child(kerb_inst)
 
+## Red bricks laid in running bond, 12 courses of `count` bricks (23 x 7.5 cm), with grey mortar.
+func _brick_texture(count: int) -> ImageTexture:
+	var img := Image.create(count * 8, 12 * 4, false, Image.FORMAT_RGB8)
+	for row in 12:
+		for x in count * 8:
+			var brick := (x + (4 if row % 2 == 1 else 0)) / 8
+			var tone := fposmod(sin(float(brick * 7 + row * 13)) * 43758.5453, 1.0)
+			var col := Color("#8c3b2b").lerp(Color("#6e2f25"), tone)
+			for y in 4:
+				var mortar := y == 3 or (x + (4 if row % 2 == 1 else 0)) % 8 == 7
+				img.set_pixel(x, row * 4 + y, Color("#8f8b84") if mortar else col)
+	img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
+
 func _build_start_finish_gantry() -> void:
 	var s0_pos := _world_pos(track.X[0], track.Y[0], 0)
 	var heading := track.heading(0)
@@ -1306,6 +1320,11 @@ func _build_start_finish_gantry() -> void:
 	var line_mat := _material(Color.WHITE, 0.6)
 	line_mat.albedo_texture = ImageTexture.create_from_image(checker)
 	line_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	if track.cfg.key == "indy": # the Yard of Bricks: a 36 inch strip of the old brick surface
+		strip.size = Vector2(track.width, 0.91)
+		line_mat.albedo_texture = _brick_texture(roundi(track.width / 0.23))
+		line_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+		line_mat.roughness = 0.9
 	line.material_override = line_mat
 	track_root.add_child(line)
 
@@ -2848,7 +2867,7 @@ func _build_monaco_harbor(_extent: float) -> void:
 	while s < track.L and moored.size() < 14:
 		s += 9.0
 		var i := moored.size()
-		var length := 18.0 if i % 3 == 0 else 11.0
+		var length := 28.0 if i % 3 == 0 else 14.0 # the Blender yachts (build_landmarks.py) are 14 and 28 m
 		for side in [-1.0, 1.0]:
 			for dist in [45.0, 60.0, 80.0, 100.0]:
 				var p := track.pos(s, side * dist)
@@ -2876,6 +2895,14 @@ func _add_yacht(i: int, at: Vector3, rot: float, length: float, hull_mat: Materi
 	boat_root.position = at
 	boat_root.rotation.y = rot
 	track_root.add_child(boat_root)
+	var yachts: Dictionary = SURROUNDINGS.landmark_meshes()
+	var model := "Yacht_M" if length > 20.0 else "Yacht_S"
+	if yachts.has(model):
+		var boat := MeshInstance3D.new()
+		boat.mesh = yachts[model]
+		boat.position.y = -0.35 # the hull's waterline is at the model's origin
+		boat_root.add_child(boat)
+		return
 	var hull := MeshInstance3D.new()
 	var hull_mesh := BoxMesh.new()
 	hull_mesh.size = Vector3(length, 1.2, 3.5 if length > 12.0 else 2.5)

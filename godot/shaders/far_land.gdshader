@@ -25,8 +25,8 @@ varying float dist;
 
 void vertex() {
 	vec3 w = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	vec2 flat = w.xz - CAMERA_POSITION_WORLD.xz;
-	w.y -= dot(flat, flat) * CURVE;
+	vec2 across = w.xz - CAMERA_POSITION_WORLD.xz;
+	w.y -= dot(across, across) * CURVE;
 	world_pos = w;
 	dist = length(w - CAMERA_POSITION_WORLD);
 	vec4 clip = PROJECTION_MATRIX * VIEW_MATRIX * vec4(w, 1.0);
