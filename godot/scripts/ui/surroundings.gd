@@ -10,6 +10,13 @@ const CANOPY_SHADER := preload("res://shaders/canopy.gdshader")
 const FOLIAGE_SHADER := preload("res://shaders/foliage.gdshader")
 const WORLD_ASSETS := preload("res://scripts/ui/world_assets.gd")
 const TREES_PATH := "res://models/trees.glb"
+const LANDMARKS_PATH := "res://models/landmarks.glb"
+## Footprint (length along the model's x, width along z; metres) each Blender landmark (build_landmarks.py) is
+## modelled at. The mapped footprint stretches it to fit; pieces not listed keep their size.
+const LANDMARK_SIZE := {
+	"IndyPagoda": Vector2(57.5, 33.4), "SilverstoneWing": Vector2(374.0, 32.6), "Casino": Vector2(160.0, 60.0),
+	"CastleKeep": Vector2(9.5, 9.5), "CastleTower": Vector2(6.0, 6.0), "CastleWall": Vector2(1.0, 1.8),
+}
 const WATER_SHADER := preload("res://shaders/water.gdshader")
 const CHUNK := 256.0 ## metres: trees, canopy and buildings are split into tiles of this size for culling
 const TREE_BAND := [70.0, 90.0, 110.0, 140.0] ## trees one by one this far beyond the run-off, per quality
@@ -57,6 +64,7 @@ var land_texture: Texture2D
 var land_rect := Rect2() ## track metres
 var _res := 2.0 ## land map metres per texel
 static var _tree_meshes := {} ## Blender tree meshes by species
+static var _landmark_meshes := {} ## Blender landmark meshes (and yachts) by name
 
 ## Loads the circuit's data; false where there is none.
 func setup(w: Node3D) -> bool:
@@ -131,6 +139,25 @@ func track_distance(x: float, z: float) -> Vector2:
 func has_buildings() -> bool:
 	return not env.get("buildings", []).is_empty()
 
+## Whether the circuit has the mapped landmark of this name (and its model).
+func has_landmark(part: String) -> bool:
+	if not landmark_meshes().has(part):
+		return false
+	for lm in env.get("landmarks", []):
+		if lm[0] == part:
+			return true
+	return false
+
+## The Blender landmarks and yachts (tools/blender/build_landmarks.py) by name.
+static func landmark_meshes() -> Dictionary:
+	if _landmark_meshes.is_empty():
+		var scene: Node = WORLD_ASSETS._load_model(LANDMARKS_PATH)
+		if scene:
+			for mi in scene.find_children("*", "MeshInstance3D", true, false):
+				_landmark_meshes[mi.name] = (mi as MeshInstance3D).mesh
+			scene.free()
+	return _landmark_meshes
+
 ## Binds the land map to a ground material (ground.gdshader), with the country's field and soil colours.
 func apply_land_map(m: ShaderMaterial) -> void:
 	m.set_shader_parameter("use_land", true)
@@ -164,6 +191,8 @@ func build() -> void:
 	_build_stands(root)
 	_build_water(root)
 	_build_hedges(root)
+	_build_landmarks(root)
+	_build_pools(root)
 
 # --------------------------------------------------------------------------------------------- exclusions
 
@@ -449,7 +478,7 @@ func _build_buildings(root: Node3D) -> void:
 	var palette: Array = PALETTES[country]
 	var city := track.cfg.theme == "city"
 	var clear := track.half + track.cfg.runoff + (1.2 if city else 4.0)
-	var casino: Dictionary = world._casino_spot()
+	var casino: Dictionary = {} if has_landmark("Casino") else world._casino_spot()
 	var chunks := {}
 	for b in env.get("buildings", []):
 		var height: float = b[0]
@@ -801,3 +830,113 @@ func _build_hedges(root: Node3D) -> void:
 	inst.mesh = st.commit()
 	inst.material_override = mat
 	root.add_child(inst)
+
+# --------------------------------------------------------------------------------------------- landmarks
+
+## The mapped landmarks (env "landmarks": [model, x, y, length, width, angle, height]) as their Blender models,
+## stretched to the mapped footprint, on the ground, and turned so the front faces the nearest track.
+func _build_landmarks(root: Node3D) -> void:
+	var meshes := landmark_meshes()
+	var c: Vector2 = world.world_center
+	for lm in env.get("landmarks", []):
+		var part: String = lm[0]
+		if not meshes.has(part):
+			continue
+		var at := Vector2(lm[1], lm[2])
+		var length: float = lm[3]
+		var width: float = lm[4]
+		var angle: float = lm[5]
+		var height: float = lm[6]
+		var nominal: Vector2 = LANDMARK_SIZE.get(part, Vector2.ZERO)
+		var scale := Vector3.ONE
+		if nominal != Vector2.ZERO:
+			if (nominal.x >= nominal.y) != (length >= width): # the mapped long side is the model's short one
+				var t := length
+				length = width
+				width = t
+				angle += PI * 0.5
+			scale.x = length / nominal.x
+			scale.z = width / nominal.y
+			if part == "CastleKeep" and height > 0.0:
+				scale.y = height / 20.0
+		var rot := -angle
+		var near := _nearest_track_point(at)
+		var to_track := near - at
+		var front := Vector2(-sin(angle), cos(angle)) # the model's +z
+		if part != "TyreBridge" and to_track.dot(front) < 0.0:
+			rot += PI
+		var y := INF
+		var half := Vector2(length, width) * 0.5
+		var cs := cos(angle)
+		var sn := sin(angle)
+		for o in [Vector2.ZERO, Vector2(1, 1), Vector2(1, -1), Vector2(-1, 1), Vector2(-1, -1)]:
+			var q: Vector2 = Vector2(o.x * half.x, o.y * half.y)
+			y = minf(y, ground_height(at.x + q.x * cs - q.y * sn, at.y + q.x * sn + q.y * cs))
+		if part == "TyreBridge": # arches over the road, wide enough for the run-off
+			var k := clampf((track.half + track.cfg.runoff + 1.5) / 11.5, 1.0, 2.2)
+			scale.x = k
+			scale.y = k
+			y = ground_height(at.x, at.y)
+		var mi := MeshInstance3D.new()
+		mi.name = part
+		mi.mesh = meshes[part]
+		mi.transform = Transform3D(Basis(Vector3.UP, rot) * Basis.from_scale(scale),
+				Vector3(at.x - c.x, y, at.y - c.y))
+		root.add_child(mi)
+
+## The nearest centreline sample to a track point.
+func _nearest_track_point(p: Vector2) -> Vector2:
+	var best := INF
+	var out := p
+	for i in track.X.size():
+		var d := (track.X[i] - p.x) * (track.X[i] - p.x) + (track.Y[i] - p.y) * (track.Y[i] - p.y)
+		if d < best:
+			best = d
+			out = Vector2(track.X[i], track.Y[i])
+	return out
+
+## Swimming pools in the gardens (env "pools": flat rings of x, y), a flat blue surface just above the ground.
+func _build_pools(root: Node3D) -> void:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var any := false
+	var c: Vector2 = world.world_center
+	for ring in env.get("pools", []):
+		var poly := PackedVector2Array()
+		for k in range(0, ring.size() - 1, 2):
+			poly.append(Vector2(ring[k], ring[k + 1]))
+		if poly.size() > 1 and poly[0].is_equal_approx(poly[poly.size() - 1]):
+			poly.remove_at(poly.size() - 1)
+		if poly.size() < 3:
+			continue
+		var centre := Vector2.ZERO
+		for p in poly:
+			centre += p
+		centre /= poly.size()
+		if track_distance(centre.x, centre.y).y < _clear_distance():
+			continue
+		var tris := Geometry2D.triangulate_polygon(poly)
+		if tris.is_empty():
+			continue
+		var y := INF
+		for p in poly:
+			y = minf(y, ground_height(p.x, p.y))
+		y += 0.08
+		for i in tris:
+			st.set_normal(Vector3.UP)
+			st.add_vertex(Vector3(poly[i].x - c.x, y, poly[i].y - c.y))
+		any = true
+	if not any:
+		return
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color("#3fb5d0")
+	m.roughness = 0.12
+	m.metallic_specular = 0.8
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var mi := MeshInstance3D.new()
+	mi.name = "Pools"
+	mi.mesh = st.commit()
+	mi.material_override = m
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.visibility_range_end = 600.0
+	root.add_child(mi)

@@ -910,7 +910,8 @@ func _build_track() -> void:
 			_build_city_blocks()
 		if track.cfg.sea:
 			_build_monaco_harbor(extent)
-			_build_casino_landmark()
+			if not (surroundings and surroundings.has_landmark("Casino")):
+				_build_casino_landmark()
 
 func _build_terrain(ground: MeshInstance3D) -> void:
 	if typeof(track.grid) != TYPE_DICTIONARY:
