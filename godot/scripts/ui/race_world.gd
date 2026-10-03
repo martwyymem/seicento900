@@ -120,6 +120,7 @@ const TV_END_AHEAD := [-45.0, 22.0, 70.0]
 const TV_FRAME := [12.0, 9.0, 7.0]
 const TV_FOV_MIN := [16.0, 20.0, 5.0]
 const TV_FOV_MAX := [55.0, 50.0, 22.0]
+const TV_KEEPOUT_CELL := 32.0 ## m: grid of _near_tv_camera's lookup
 ## What the director cuts to, in turn
 const TV_SEQUENCE := [TvKind.GROUND, TvKind.TOWER, TvKind.LONG, TvKind.GROUND, TvKind.LONG, TvKind.TOWER]
 const CAMERA_NAMES := ["CHASE", "FAR CHASE", "ROOF CAM", "TRACKSIDE TV", "BIRD'S-EYE", "FULL TRACK"]
@@ -137,6 +138,8 @@ var _focus_s := 0.0
 var tv_cameras: Array[Vector3] = []
 var tv_camera_s := PackedFloat64Array()
 var tv_camera_kind := PackedInt32Array()
+var _tv_road := PackedVector2Array() ## the point on the centreline each camera looks across to
+var _tv_keepout := {} ## Vector2i cell of TV_KEEPOUT_CELL m -> the cameras whose clear zone reaches it (_near_tv_camera)
 var _tv_index := -1
 var _tv_shot := 0
 var _tv_look := Vector3.ZERO
@@ -255,6 +258,8 @@ func set_track(value: Track) -> void:
 	tv_cameras.clear()
 	tv_camera_s.clear()
 	tv_camera_kind.clear()
+	_tv_road.clear()
+	_tv_keepout.clear()
 	_wet_materials.clear()
 	_night_materials.clear()
 	_lamp_pos.clear()
@@ -2239,16 +2244,15 @@ static func _cylinder(top: float, bottom: float, height: float, segments: int) -
 	return c
 
 ## Whether a tree at (x, z) would stand in a TV camera's view of the road: round the camera, or on the line
-## from it to the centreline.
+## from it to the centreline. Only the cameras whose zone reaches q's cell are tried (a long circuit has
+## a couple of hundred, and the scenery asks this for every tree).
 func _near_tv_camera(x: float, z: float) -> bool:
 	var q := Vector2(x, z)
-	for i in tv_cameras.size():
+	for i in _tv_keepout.get(Vector2i(floori(x / TV_KEEPOUT_CELL), floori(z / TV_KEEPOUT_CELL)), []):
 		var cam := Vector2(tv_cameras[i].x, tv_cameras[i].z)
 		if cam.distance_squared_to(q) < 16.0 * 16.0:
 			return true
-		var p := track.pos(tv_camera_s[i], 0.0)
-		var road := Vector2(p[0] - world_center.x, p[1] - world_center.y)
-		if Geometry2D.get_closest_point_to_segment(q, cam, road).distance_squared_to(q) < 9.0 * 9.0:
+		if Geometry2D.get_closest_point_to_segment(q, cam, _tv_road[i]).distance_squared_to(q) < 9.0 * 9.0:
 			return true
 	return false
 
@@ -3006,6 +3010,22 @@ func _setup_tv_cameras() -> void:
 		tv_cameras.append(Vector3(p[0] - world_center.x, y, p[1] - world_center.y))
 		tv_camera_s.append(s)
 		tv_camera_kind.append(kind)
+	# _near_tv_camera's lookup: every cell the box round each camera's clear zone touches
+	_tv_road.clear()
+	_tv_keepout.clear()
+	for i in tv_cameras.size():
+		var cam := Vector2(tv_cameras[i].x, tv_cameras[i].z)
+		var p := track.pos(tv_camera_s[i], 0.0)
+		var road := Vector2(p[0] - world_center.x, p[1] - world_center.y)
+		_tv_road.append(road)
+		var lo := ((cam.min(road) - Vector2(16.0, 16.0)) / TV_KEEPOUT_CELL).floor()
+		var hi := ((cam.max(road) + Vector2(16.0, 16.0)) / TV_KEEPOUT_CELL).floor()
+		for cz in range(int(lo.y), int(hi.y) + 1):
+			for cx in range(int(lo.x), int(hi.x) + 1):
+				var cell := Vector2i(cx, cz)
+				if not _tv_keepout.has(cell):
+					_tv_keepout[cell] = []
+				_tv_keepout[cell].append(i)
 
 ## A scaffold tower under each trackside TV camera, its camera turned towards the road.
 func _build_tv_towers() -> void:

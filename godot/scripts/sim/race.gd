@@ -134,6 +134,7 @@ var _collide_live: Array[RaceCar] = [] ## scratch for collide(), reused every ti
 var player: RaceCar
 var phys_bots := true
 var phys_near_only := false ## battery saver: bots far from the player stay on the rail model
+var bot_uturn := true ## a spun bot drives itself round; false lifts it back onto the line within 1.2 s, as the JS reference does (tests/test_race.gd)
 var warp := 1
 var brain: Brain = null
 var limiter := false ## the player has the flag speed limiter switched on (V)
@@ -1524,12 +1525,15 @@ func bot_control(car: RaceCar) -> void:
 	# back onto the line; only one that stays wedged and stopped is put back
 	var off := absf(SimUtil.wrap_angle(car.heading - tr.heading(car.s)))
 	var v := sqrt(car.vx * car.vx + car.vy * car.vy)
-	if off > 1.4 and v < 14.0:
-		car.uturn = true
-	elif off < 0.7:
-		car.uturn = false
-	car.stuck_t = car.stuck_t + 1.0 / 120.0 if v < 2.5 and not car.out_of_fuel and not (rc and rc.neutral) else 0.0
-	if car.stuck_t > (10.0 if off > 1.4 else 2.5):
+	if bot_uturn:
+		if off > 1.4 and v < 14.0:
+			car.uturn = true
+		elif off < 0.7:
+			car.uturn = false
+	# without the U-turn a car facing the wrong way counts as stuck at any speed and is put back quickly
+	var wrong_way := off > 1.4 and not bot_uturn
+	car.stuck_t = car.stuck_t + 1.0 / 120.0 if wrong_way or (v < 2.5 and not car.out_of_fuel and not (rc and rc.neutral)) else 0.0
+	if car.stuck_t > ((10.0 if bot_uturn else 1.2) if off > 1.4 else 2.5):
 		car.stuck_t = 0.0
 		car.uturn = false
 		to_rail(car)

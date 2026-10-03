@@ -393,51 +393,43 @@ func _build_canopy(root: Node3D, inner: float) -> void:
 				var near: Vector2 = track_distance(x, z)
 				if near.y > inner and not _bank_cells.has(Vector2i(floori(x / 16.0), floori(z / 16.0))):
 					inside[jz * (nx + 1) + jx] = 1
-	var chunks := {} # chunk -> SurfaceTool
-	var top := func(jx: int, jz: int, rim: bool) -> Vector3:
-		var x := x0 + jx * cell
-		var z := z0 + jz * cell
-		var lump := _rand(float(jx), float(jz), 11.0)
-		var broad := 0.5 + 0.5 * sin(x * 0.013 + z * 0.007) * cos(z * 0.009 - x * 0.005)
-		var h := (4.0 + lump * 3.0) if rim else (14.0 + broad * 6.0 + lump * 4.0)
-		return Vector3(x - world.world_center.x, ground_height(x, z) + h, z - world.world_center.y)
+	# the cells drawn (three or four corners in the wood), by chunk, and the grid points they need
 	var row := nx + 1
+	var chunks := {} # chunk -> [index of the cell's first corner, ...]
+	var need := PackedByteArray()
+	need.resize(inside.size())
 	for jz in nz:
 		for jx in nx:
-			var a := inside[jz * row + jx]
-			var b := inside[jz * row + jx + 1]
-			var c := inside[(jz + 1) * row + jx]
-			var d := inside[(jz + 1) * row + jx + 1]
-			if a + b + c + d < 3:
+			var k := jz * row + jx
+			if inside[k] + inside[k + 1] + inside[k + row] + inside[k + row + 1] < 3:
 				continue
-			# a corner outside the wood is the rim: it comes down towards the ground
-			var p00: Vector3 = top.call(jx, jz, a == 0 or _is_rim(inside, row, nx, nz, jx, jz))
-			var p10: Vector3 = top.call(jx + 1, jz, b == 0 or _is_rim(inside, row, nx, nz, jx + 1, jz))
-			var p01: Vector3 = top.call(jx, jz + 1, c == 0 or _is_rim(inside, row, nx, nz, jx, jz + 1))
-			var p11: Vector3 = top.call(jx + 1, jz + 1, d == 0 or _is_rim(inside, row, nx, nz, jx + 1, jz + 1))
+			need[k] = 1
+			need[k + 1] = 1
+			need[k + row] = 1
+			need[k + row + 1] = 1
 			var key := _chunk(x0 + jx * cell, z0 + jz * cell)
 			if not chunks.has(key):
-				var st := SurfaceTool.new()
-				st.begin(Mesh.PRIMITIVE_TRIANGLES)
-				chunks[key] = st
-			var st: SurfaceTool = chunks[key]
-			if a + b + c + d == 4:
-				for v in [p00, p10, p01, p10, p11, p01]:
-					st.add_vertex(v)
-			elif a == 0:
-				for v in [p10, p11, p01]:
-					st.add_vertex(v)
-			elif b == 0:
-				for v in [p00, p11, p01]:
-					st.add_vertex(v)
-			elif c == 0:
-				for v in [p00, p10, p11]:
-					st.add_vertex(v)
-			else:
-				for v in [p00, p10, p01]:
-					st.add_vertex(v)
+				chunks[key] = []
+			chunks[key].append(k)
 	if chunks.is_empty():
 		return
+	# the crown's top at each of those points, once: a point outside the wood or on its edge is the rim,
+	# which comes down towards the ground
+	var tops := PackedVector3Array()
+	tops.resize(inside.size())
+	for jz in nz + 1:
+		for jx in nx + 1:
+			var k := jz * row + jx
+			if need[k] == 0:
+				continue
+			var x := x0 + jx * cell
+			var z := z0 + jz * cell
+			var lump := _rand(float(jx), float(jz), 11.0)
+			var h := 4.0 + lump * 3.0
+			if inside[k] == 1 and not _is_rim(inside, row, nx, nz, jx, jz):
+				var broad := 0.5 + 0.5 * sin(x * 0.013 + z * 0.007) * cos(z * 0.009 - x * 0.005)
+				h = 14.0 + broad * 6.0 + lump * 4.0
+			tops[k] = Vector3(x - world.world_center.x, ground_height(x, z) + h, z - world.world_center.y)
 	var mat := ShaderMaterial.new()
 	mat.shader = CANOPY_SHADER
 	mat.set_shader_parameter("grain", world.noise_texture("grain"))
@@ -447,19 +439,39 @@ func _build_canopy(root: Node3D, inner: float) -> void:
 	canopy.name = "Canopy"
 	root.add_child(canopy)
 	for key in chunks:
+		var verts := PackedVector3Array()
+		for k in chunks[key]:
+			var p00 := tops[k]
+			var p10 := tops[k + 1]
+			var p01 := tops[k + row]
+			var p11 := tops[k + row + 1]
+			# a corner outside the wood drops its triangle
+			if inside[k] == 0:
+				verts.append_array(PackedVector3Array([p10, p11, p01]))
+			elif inside[k + 1] == 0:
+				verts.append_array(PackedVector3Array([p00, p11, p01]))
+			elif inside[k + row] == 0:
+				verts.append_array(PackedVector3Array([p00, p10, p11]))
+			elif inside[k + row + 1] == 0:
+				verts.append_array(PackedVector3Array([p00, p10, p01]))
+			else:
+				verts.append_array(PackedVector3Array([p00, p10, p01, p10, p11, p01]))
+		var arrays := []
+		arrays.resize(Mesh.ARRAY_MAX)
+		arrays[Mesh.ARRAY_VERTEX] = verts
+		var mesh := ArrayMesh.new()
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 		var inst := MeshInstance3D.new()
-		inst.mesh = (chunks[key] as SurfaceTool).commit()
+		inst.mesh = mesh
 		inst.material_override = mat
 		canopy.add_child(inst)
 
-## A wood's grid point next to one outside it.
+## A wood's grid point next to one outside it (or on the grid's edge).
 static func _is_rim(inside: PackedByteArray, row: int, nx: int, nz: int, jx: int, jz: int) -> bool:
-	for o in [Vector2i(-1, 0), Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1)]:
-		var x: int = jx + o.x
-		var z: int = jz + o.y
-		if x < 0 or z < 0 or x > nx or z > nz or inside[z * row + x] == 0:
-			return true
-	return false
+	if jx == 0 or jz == 0 or jx == nx or jz == nz:
+		return true
+	var k := jz * row + jx
+	return inside[k - 1] == 0 or inside[k + 1] == 0 or inside[k - row] == 0 or inside[k + row] == 0
 
 ## Points every step metres along a flat [x, y, x, y, ...] line.
 static func _along(flat: Array, step: float) -> Array[Vector2]:

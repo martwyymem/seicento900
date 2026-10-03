@@ -208,7 +208,7 @@ func sky_texture(path: String, wait := false) -> Texture2D:
 		return null
 	if not WorkerThreadPool.is_task_completed(_pending[path]) and not wait:
 		return null
-	WorkerThreadPool.wait_for_task_completion(_pending[path])
+	_wait_for(_pending[path])
 	_pending.erase(path)
 	_mutex.lock()
 	var img: Image = _pending_images.get(path)
@@ -232,8 +232,16 @@ func _store(path: String, tex: Texture2D) -> void:
 ## Waits for any worker still reading a panorama (call before freeing).
 func finish() -> void:
 	for id in _pending.values():
-		WorkerThreadPool.wait_for_task_completion(id)
+		_wait_for(id)
 	_pending.clear()
+
+## Blocks until a panorama worker is done. Its get_image() is answered by the main thread's rendering
+## queue, so that queue is flushed while waiting: a bare wait_for_task_completion() would deadlock.
+static func _wait_for(id: int) -> void:
+	while not WorkerThreadPool.is_task_completed(id):
+		RenderingServer.force_sync()
+		OS.delay_usec(500)
+	WorkerThreadPool.wait_for_task_completion(id)
 
 # ---------------- ground textures ----------------
 

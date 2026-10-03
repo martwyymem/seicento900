@@ -136,6 +136,7 @@ func _initialize() -> void:
 					at = _pt(world, c.s, c.side * 15.0, 8.0)
 		cam.position = eye
 		cam.look_at(at, Vector3.UP)
+		world._update_lamp_lights() # the lamps' lights go to the ones nearest the camera (the world's _process is off)
 		for f in 4:
 			await process_frame
 		await RenderingServer.frame_post_draw
@@ -146,4 +147,4 @@ func _initialize() -> void:
 
 func _pt(world: Node, s: float, d: float, h: float) -> Vector3:
 	var p: PackedFloat64Array = world.track.pos(s, d)
-	return Vector3(p[0] - world.world_center.x, world._road_y(s) + h, p[1] - world.world_center.y)
+	return Vector3(p[0] - world.world_center.x, world._road_y(s) + world.track.bank_rise(s, d) + h, p[1] - world.world_center.y)

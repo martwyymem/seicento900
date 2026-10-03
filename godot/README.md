@@ -57,7 +57,8 @@ addition that the JS reference doesn't have. It acts after the contact physics:
 
 The HUD shows the flag board under the pace notes, yellow sectors, wrecks and the safety car on the
 minimap, damage and penalties on the pit wall, and race-control messages in the feed. With race control
-off (and in the parity tests), the race behaves exactly as the reference does. To run the scenarios
+off, the race behaves as the reference does, except that a spun bot drives itself round instead of being
+lifted back onto the line; the parity tests turn that off too (`Race.bot_uturn`). To run the scenarios
 headless: `godot --headless --path godot -s tests/smoke_rc.gd -- [clean|sc|red] [track] [laps]`.
 
 ## Live wear, fuel and pit calls
