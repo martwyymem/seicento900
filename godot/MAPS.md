@@ -15,6 +15,12 @@ cd godot && TRACK=spa VIEWS=high,lap1,lap3 godot --path . -s tests/_scenery_shot
 - [x] **True-scale elevation.** The renderer drew heights at 25 % (`ALTITUDE_SCALE`). At full scale you can see
       Eau Rouge/Raidillon, the Nordschleife's 290 m of climb, Monaco's hill to Casino Square and Suzuka's crossover.
       The physics ignores elevation, so lap times and the parity tests don't change.
+- [x] **Road supports.** Where the ground falls away from the road edge (a hillside, a viaduct, a hairpin above its lower
+      leg) `_build_road_supports` builds a retaining wall (city circuits) or a steep bank of the ground's own material down
+      to the terrain, so the tarmac never hangs in the air. A road far below no longer drags the ground under the one above
+      it down with it (`height_cap` in `_build_terrain` only counts roads within the clear distance). `tests/_gap_probe.gd`
+      lists how far the ground lies below the road at each circuit. Landmarks stand on the upper ground of their footprint
+      with a stone terrace down to the lowest (the Casino spans 25 m of slope).
 - [x] **Suzuka's crossover bridge**: a concrete deck with parapets where the figure of eight crosses itself.
       True-scale elevation puts it 7.5 m up.
 - [x] **Real surroundings from OpenStreetMap.** `tools/fetch_surroundings.py` fetches the area and

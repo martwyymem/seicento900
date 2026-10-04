@@ -333,11 +333,17 @@ func _build_hoardings() -> void:
 		# on a tyre wall the boards stand on its rear stack
 		var tyres: bool = world.tyre_cells.has(_cell_key(int(s / track.step), side))
 		var d: float = side * (d0 + 0.65 if tyres else d0)
-		var a := track.pos(s - 5.0, d)
-		var b := track.pos(s + 5.0, d)
 		if not _taken(s, d, d0 - 0.4):
-			var mid := Vector3((a[0] + b[0]) * 0.5, 0.0, (a[1] + b[1]) * 0.5)
-			var along := Vector3(b[0] - a[0], 0.0, b[1] - a[1]).normalized()
+			# a straight 10 m board: round a tight bend its middle would cut inside the barrier's line (onto the road
+			# at Monaco's hairpins), so it stands out by the bend's sag over its length, its ends on the line
+			var k_here := track.sample(track.KC, s)
+			var sag := 0.0
+			if signf(k_here) == -side:
+				var r := 1.0 / maxf(absf(k_here), 0.001) + absf(d)
+				sag = r - sqrt(maxf(r * r - 25.0, 0.0))
+			var c := track.pos(s, d + side * sag)
+			var mid := Vector3(c[0], 0.0, c[1])
+			var along := _tangent(s)
 			var toward := -Vector3(track.NX[int(s / track.step) % track.n], 0.0, track.NY[int(s / track.step) % track.n]) * side
 			var basis := Basis(along, Vector3.UP, toward.normalized())
 			if basis.determinant() < 0.0:
@@ -400,6 +406,13 @@ func _build_bridges() -> void:
 			continue
 		placed.append(at)
 		var dir := Vector3(b[3], 0.0, b[4]).normalized()
+		# centred where its line crosses the game's centreline, which need not be where OSM has it, so neither
+		# abutment stands on the road
+		var i := int(near.x)
+		var normal := Vector2(track.NX[i], track.NY[i])
+		var across := Vector2(dir.x, dir.z).dot(normal)
+		if absf(across) > 0.3:
+			at -= Vector2(dir.x, dir.z) * ((at - Vector2(track.X[i], track.Y[i])).dot(normal) / across)
 		var sin_a := maxf(absf(dir.cross(_tangent(s)).y), 0.35)
 		var half_len := minf((track.half + track.cfg.runoff + 3.0) / sin_a, 45.0)
 		var road_y: float = world._road_y(s) - 0.09
@@ -415,6 +428,10 @@ func _build_bridges() -> void:
 				var tb := _facing(dir * sgn).scaled_local(Vector3(1.0, rise, 1.0))
 				towers.append(Transform3D(tb, Vector3(foot.x, ground, foot.z)))
 		else:
+			# long enough that the abutments (10.8 m walls square to the bridge) keep their nearer ends clear of the
+			# run-off where it crosses at a slant or on a bend (Monaco's Portier)
+			var cos_a := sqrt(1.0 - sin_a * sin_a)
+			half_len = minf((track.half + track.cfg.runoff + 2.0 + 5.4 * cos_a) / sin_a + 2.0, 90.0)
 			_road_bridge(road, centre, dir, half_len, road_y)
 			roads += 1
 	_add("BridgeSpan", spans)

@@ -133,7 +133,16 @@ var _order_key_cache := {} ## car -> order_key, recomputed once per tick and reu
 var _collide_live: Array[RaceCar] = [] ## scratch for collide(), reused every tick
 var player: RaceCar
 var phys_bots := true
+var quali_bots: Array[RaceCar] = [] ## qualifying session: the field that "ran" elsewhere, kept off the circuit
+var quali_times := {} ## bot id -> qualifying lap time
+var quali_fuel := 0.0 ## litres in the tank for a qualifying run
 var phys_near_only := false ## battery saver: bots far from the player stay on the rail model
+var bot_smooth_line := true ## physics bots ease mistakes in (and slew their lateral target, see line_slew); false steers at the raw target, as the JS reference does
+## m/s a bot may move its lateral target across the track; 0 leaves it unslewed. Off: at 6 or 12 m/s it cost more
+## contacts and cautions than it saved (Monaco's damage doubled over 12 seeds), even with dodges exempt
+var line_slew := 0.0
+var line_slew_per_m := 0.25 ## and at most this far across per metre it travels
+const ERR_RAMP := 0.8 ## s a driving error takes to build up to its full sideways offset
 var bot_uturn := true ## a spun bot drives itself round; false lifts it back onto the line within 1.2 s, as the JS reference does (tests/test_race.gd)
 var warp := 1
 var brain: Brain = null
@@ -173,10 +182,14 @@ func _init(settings: RaceSettings, player_plan = null, seed_ := -1, models := {}
 	timed = settings.format == "time"
 	duration = settings.hours * 3600.0 if timed else 0.0
 	R = strategy.estimate_laps(track, duration, _est_settings()) if timed else settings.laps
+	if settings.qualifying:
+		R = 1 + Qualifying.timed_laps(cal.T0) # an out lap, then the timed laps
 	start_hour = settings.start_hour
 	rng = SimUtil.Rng.new(seed_ if seed_ >= 0 else randi() & 0x7fffffff)
 	rules = {"mandatory_stop": settings.mandatory_stop, "two_compounds": settings.two_compounds, "refuel": settings.refuel}
 	lights_out_at = 6.0 + rng.next() * 2.0
+	if settings.qualifying:
+		lights_out_at = 2.0 # no start lights: the session opens when the pit lane does
 	penalty_time = SimUtil.js_round(cal.pit_drive_loss + 15.0)
 	weather = Weather.new(settings.weather, duration if timed else R * cal.T0 * 1.08, rng)
 	plan_wet_start = weather.wet
@@ -185,9 +198,9 @@ func _init(settings: RaceSettings, player_plan = null, seed_ := -1, models := {}
 	phys_bots = not settings.demo and settings.bot_physics != "off"
 	phys_near_only = settings.bot_physics == "near"
 	# learning AI (off: every bot drives one fixed pace everywhere, as before)
-	brain = Brain.new(self, not settings.demo) if settings.ai_learning != "off" else null
+	brain = Brain.new(self, not settings.demo) if settings.ai_learning != "off" and not settings.qualifying else null
 	build_field(player_plan)
-	rc = RaceControl.new(self) if settings.race_control and not settings.demo else null
+	rc = RaceControl.new(self) if settings.race_control and not settings.demo and not settings.qualifying else null
 	order = cars.duplicate()
 	for i in cars.size():
 		_order_idx[cars[i]] = i
@@ -220,6 +233,10 @@ func plan_opts(extra := {}) -> Dictionary:
 	}
 	o.merge(extra, true)
 	return o
+
+## Tyre for a qualifying run: the softest slick, or the wets when the track is soaked.
+func quali_compound() -> String:
+	return "W" if weather.wet > 0.4 else "S"
 
 func make_car(id: int, name: String, color: Color, number: int, is_player: bool) -> RaceCar:
 	var c := RaceCar.new()
@@ -260,6 +277,8 @@ func build_field(player_plan) -> void:
 	for i in s.opponents:
 		var car := make_car(i + 1, BOTS[i][0], Color(BOTS[i][1]), numbers[i], false)
 		car.skill = diff.skill + (rng.next() - 0.6) * diff.spread
+		if s.quali_grid.has("skills") and s.quali_grid.skills.has(str(car.id)):
+			car.skill = float(s.quali_grid.skills[str(car.id)]) # the field races as it qualified
 		car.stripes = rng.next() < 0.3
 		car.agg = 0.9 + rng.next() * 0.2
 		car.mistake_rate = diff.mistakes
@@ -278,6 +297,8 @@ func build_field(player_plan) -> void:
 		apply_plan(car, pick)
 		car.strategy_label = Strategy.label(pick)
 		car.quali = car.skill + (rng.next() - 0.5) * 0.02
+		if s.quali_grid.has("quali") and s.quali_grid.quali.has(str(car.id)):
+			car.quali = float(s.quali_grid.quali[str(car.id)])
 		bots.append(car)
 	_stable_sort(bots, func(a: RaceCar, b: RaceCar) -> bool: return b.quali < a.quali)
 
@@ -285,25 +306,35 @@ func build_field(player_plan) -> void:
 	pl.stripes = s.stripes
 	pl.skill = 0.97 # used only while on autopilot
 	var pp: Dictionary = player_plan if player_plan else (options[0] if options.size() else fallback)
-	if not player_plan and not pp.get("stints", []).is_empty():
+	if s.qualifying:
+		quali_fuel = minf(spec.tank, Strategy.fuel_need(R, fpl))
+		pp = {"stops": 0, "stints": [{"c": quali_compound(), "laps": R, "fuel": quali_fuel}]}
+	elif not player_plan and not pp.get("stints", []).is_empty():
 		pp = pp.duplicate(true)
 		pp.stints[0].c = s.starting_tyre
 	apply_plan(pl, pp)
 	pl.strategy_label = Strategy.label(pp)
 	player = pl
 
-	var slot: int
-	var n := bots.size() + 1
-	if s.grid == "pole":
-		slot = 0
-	elif s.grid == "back":
-		slot = n - 1
-	elif s.grid == "middle":
-		slot = n / 2
-	else:
-		slot = int(floorf(rng.next() * n))
 	var field: Array[RaceCar] = bots.duplicate()
-	field.insert(slot, pl)
+	if s.qualifying:
+		# the player runs alone; the rest of the field only sets times on the sheet
+		quali_bots = bots
+		field = [pl]
+	elif s.quali_grid.has("order"):
+		field = _qualified_field(bots, pl)
+	else:
+		var slot: int
+		var n := bots.size() + 1
+		if s.grid == "pole":
+			slot = 0
+		elif s.grid == "back":
+			slot = n - 1
+		elif s.grid == "middle":
+			slot = n / 2
+		else:
+			slot = int(floorf(rng.next() * n))
+		field.insert(slot, pl)
 
 	var tr := track
 	for k in field.size():
@@ -319,7 +350,31 @@ func build_field(player_plan) -> void:
 		car.reaction = 0.18 + rng.next() * 0.35 + (1.0 - car.skill) * 2.0
 		car.pace = 1.0
 		cars.append(car)
-	log_event("Grid set — you start P%d of %d" % [pl.grid, field.size()])
+	if s.qualifying:
+		var times := Qualifying.lap_times(self, bots.map(func(b: RaceCar) -> float: return b.quali))
+		for i in bots.size():
+			quali_times[bots[i].id] = times[i]
+		log_event("Qualifying — out lap, then %d timed lap%s" % [R - 1, "s" if R > 2 else ""], "info")
+	else:
+		log_event("Grid set — you start P%d of %d" % [pl.grid, field.size()])
+
+## The grid a championship round's qualifying produced: order is car ids, fastest first. A car missing
+## from it (the player when no time was set) starts behind the rest.
+func _qualified_field(bots: Array[RaceCar], pl: RaceCar) -> Array[RaceCar]:
+	var by_id := {pl.id: pl}
+	for b in bots:
+		by_id[b.id] = b
+	var field: Array[RaceCar] = []
+	for id in s.quali_grid.order:
+		var car: RaceCar = by_id.get(int(id))
+		if car and not field.has(car):
+			field.append(car)
+	for b in bots:
+		if not field.has(b):
+			field.append(b)
+	if not field.has(pl):
+		field.append(pl)
+	return field
 
 ## Array.sort that keeps equal elements in order (JS sort is stable, sort_custom isn't).
 static func _stable_sort(arr: Array, before: Callable) -> void:
@@ -353,7 +408,7 @@ func step(dt: float, input: PlayerInput) -> void:
 			continue
 		var prev_p := track.rel(car.s)
 		if not car.is_player:
-			bot_control(car)
+			bot_control(car, dt)
 		if car.control == "free":
 			if car.is_player:
 				if s.auto_rejoin:
@@ -533,7 +588,7 @@ func on_line(car: RaceCar) -> void:
 	car.lap_start = rt
 	car.last_lap = lt
 	car.lap_times.append(lt)
-	if not car.invalid_lap:
+	if not car.invalid_lap and not (s.qualifying and car.lap <= 1): # the out lap is only a warm-up
 		if car.best_lap == null or lt < car.best_lap:
 			car.best_lap = lt
 		if not fastest or lt < fastest.t:
@@ -612,6 +667,8 @@ func after_move(car: RaceCar, prev_p: float) -> void:
 			enter_pit(car)
 	if car.mode == "pit" and car.pit.phase == "out" and p >= cfg.pit_exit and p - cfg.pit_exit < 60.0:
 		exit_pit(car)
+	if s.qualifying and car.lap >= 1 and car.mode == "race" and absf(car.d) > tr.half + 1.0:
+		car.invalid_lap = true # a timed lap with the car off the tarmac does not count (the out lap is free; the line clears the flag)
 	if car.mistake_p != null and absf(tr.wrap_s(car.s) - car.mistake_p) < 3.0:
 		car.mistake_p = null
 		bot_mistake(car, 1.3)
@@ -655,6 +712,8 @@ func _observe_rates(car: RaceCar) -> void:
 	car.rate_mark = {"lap": car.lap, "stops": car.stops, "wear": car.tyre.wear, "fuel": car.fuel}
 
 func decide(car: RaceCar) -> void:
+	if s.qualifying:
+		return # nobody pits in a qualifying run
 	var dyn := s.dynamic_running
 	if dyn:
 		_observe_rates(car)
@@ -859,6 +918,7 @@ func to_free(car: RaceCar) -> void:
 	car.yaw_rate = 0.0
 	car.phys = null
 	car.rev = false
+	car.line_off = car.d - track.sample(track.RLD, car.s)
 
 # ---------------- AI / rail driving ----------------
 func traffic(car: RaceCar, vT: float, rl: float, dt: float) -> Dictionary:
@@ -964,6 +1024,7 @@ func avoid_wrecks(car: RaceCar, t: Dictionary) -> Dictionary:
 			t.vT = minf(t.vT, sqrt(2.0 * 3.0 * maxf(0.0, g - 10.0)))
 			continue
 		t.dT = d
+		t.urgent = true # bot_input does not ease a swerve round a wreck
 		var lat := absf(car.d - o.d)
 		if lat < 2.8:
 			t.vT = minf(t.vT, clampf(5.0 + maxf(0.0, g - 12.0) * 0.3, 5.0, 30.0))
@@ -1013,9 +1074,11 @@ func apply_side_room(car: RaceCar, t: Dictionary, side: Dictionary) -> Dictionar
 	var hi := minf(side.hi, lim)
 	if lo <= hi:
 		t.dT = clampf(t.dT, lo, hi)
+		t.room = Vector2(lo, hi)
 	else:
 		# no room alongside: stay in the middle of the gap and drop back rather than lean on anyone
 		t.dT = clampf((side.lo + side.hi) / 2.0, -lim, lim)
+		t.urgent = true
 		if not is_nan(side.squeeze_v):
 			t.vT = minf(t.vT, side.squeeze_v - 1.5)
 	if car.overtake_t > 0.0 and (car.overtake_d < lo - 0.3 or car.overtake_d > hi + 0.3):
@@ -1115,6 +1178,8 @@ func targets(car: RaceCar, dt: float, mu: float, is_phys: bool) -> Dictionary:
 	var vT := tr.sample(tr.PROF, look) * K
 	var dT := rl
 	var drag := 1.0
+	var room := Vector2(-INF, INF) # the lateral room cars alongside leave
+	var urgent := false # dT dodges a wreck or a squeeze
 	var hindered: bool = car.finished or car.slow_t > 0.0 or car.err != null
 	if car.finished:
 		vT *= 0.8
@@ -1132,11 +1197,13 @@ func targets(car: RaceCar, dt: float, mu: float, is_phys: bool) -> Dictionary:
 		vT = t.vT
 		dT = t.dT
 		drag = t.drag
+		room = t.get("room", room)
+		urgent = t.get("urgent", false)
 	if phase != "racing" or race_time < car.reaction:
 		vT = 0.0
 	if br:
 		br.rail_step(car, dt, hindered)
-	return {"vT": vT, "dT": dT, "drag": drag, "K": K, "err": car.err}
+	return {"vT": vT, "dT": dT, "drag": drag, "K": K, "err": car.err, "rl": rl, "room": room, "urgent": urgent}
 
 func step_rail(car: RaceCar, dt: float) -> void:
 	var tr := track
@@ -1328,13 +1395,14 @@ func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float,
 	env.gx = -grade * tx - bank_g * tr.sample(tr.NX, car.s)
 	env.gy = -grade * ty - bank_g * tr.sample(tr.NY, car.s)
 	if car.is_player and limiter and rc and not car.rev:
-		# the limiter holds the car just under the speed flags allow; the driver still steers and brakes
-		var cap := rc.speed_cap(car)
-		if cap > 0.0:
-			var over := vF - (cap - 1.5)
-			thr = minf(thr, clampf(-over * 0.35, 0.0, 1.0))
-			if over > 1.0:
-				brk = maxf(brk, clampf((over - 1.0) * 0.25, 0.0, 0.7))
+		# the limiter holds the car under the speed the flags allow and short of the car ahead; the driver
+		# still steers and brakes
+		var cap := rc.limiter_cap(car)
+		if cap > 0.0 or rc.neutral:
+			var over := vF - (cap - 1.0)
+			thr = minf(thr, clampf(-over * 0.5, 0.0, 1.0))
+			if over > 0.5:
+				brk = maxf(brk, clampf((over - 0.5) * 0.4, 0.0, 0.8))
 	if car.damage > 0.0:
 		# bent bodywork and suspension: less power, more drag, a pull to one side
 		thr *= 1.0 - 0.3 * car.damage
@@ -1503,10 +1571,10 @@ const NEAR_PHYS_DROP := 350.0 ## m: a physics bot this far away goes back on the
 
 ## Bots drive the full car physics at normal speed. Under time warp, in the pits, after the flag, or
 ## while recovering from a spin they fall back to the rail model.
-func bot_control(car: RaceCar) -> void:
+func bot_control(car: RaceCar, dt: float) -> void:
 	var tr := track
 	if car.recover_t > 0.0:
-		car.recover_t -= 1.0 / 120.0
+		car.recover_t -= dt
 	var want := phys_bots and warp == 1 and car.mode == "race" and not car.finished and not (car.recover_t > 0.0)
 	if want and phys_near_only and player:
 		# battery saver: the physics only runs within sight of the player (with a margin so a car on the
@@ -1532,7 +1600,7 @@ func bot_control(car: RaceCar) -> void:
 			car.uturn = false
 	# without the U-turn a car facing the wrong way counts as stuck at any speed and is put back quickly
 	var wrong_way := off > 1.4 and not bot_uturn
-	car.stuck_t = car.stuck_t + 1.0 / 120.0 if wrong_way or (v < 2.5 and not car.out_of_fuel and not (rc and rc.neutral)) else 0.0
+	car.stuck_t = car.stuck_t + dt if wrong_way or (v < 2.5 and not car.out_of_fuel and not (rc and rc.neutral)) else 0.0
 	if car.stuck_t > ((10.0 if bot_uturn else 1.2) if off > 1.4 else 2.5):
 		car.stuck_t = 0.0
 		car.uturn = false
@@ -1544,6 +1612,7 @@ func bot_control(car: RaceCar) -> void:
 
 func bot_input(car: RaceCar, dt: float) -> Physics.Controls:
 	if car.uturn:
+		car.line_off = car.d - track.sample(track.RLD, car.s) # rejoins easing across from wherever it turned round
 		# facing the wrong way: creep forwards on full lock towards the direction of the track
 		var diff := SimUtil.wrap_angle(track.heading(car.s) - car.heading)
 		var v := sqrt(car.vx * car.vx + car.vy * car.vy)
@@ -1554,7 +1623,22 @@ func bot_input(car: RaceCar, dt: float) -> Physics.Controls:
 	var mu := tyres.tyre_grip(car.tyre, weather.wet)
 	var tg := targets(car, dt, mu, true)
 	car.slip_drag = tg.drag
+	if bot_smooth_line and line_slew > 0.0:
+		# targets() can jump (an overtake, a block, the racing line after a squeeze): a driver moves across the
+		# track smoothly instead of snapping the wheel to the new line, and no faster than the car is moving
+		# (on the grid it holds its slot). Dodging a wreck or a squeeze is not eased, and the room a car
+		# alongside leaves is a hard limit either way.
+		var rl: float = tg.rl
+		if tg.urgent:
+			car.line_off = tg.dT - rl
+		else:
+			var rate := minf(line_slew, line_slew_per_m * maxf(0.0, car.speed)) * dt
+			car.line_off += clampf(tg.dT - rl - car.line_off, -rate, rate)
+		tg.dT = clampf(rl + car.line_off, tg.room.x, tg.room.y)
+		car.line_off = tg.dT - rl
 	if car.err:
+		if bot_smooth_line:
+			car.err.age = car.err.get("age", 0.0) + dt
 		car.err.t -= dt
 		if car.err.t <= 0.0:
 			car.err = null
@@ -1852,7 +1936,7 @@ func results() -> Array:
 # ---------------- player pit-wall controls ----------------
 func player_toggle_pit() -> void:
 	var p := player
-	if p.mode == "pit" or p.finished:
+	if p.mode == "pit" or p.finished or s.qualifying:
 		return
 	p.pit_request = not p.pit_request
 	if not p.service:

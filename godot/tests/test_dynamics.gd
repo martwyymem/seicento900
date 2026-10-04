@@ -68,5 +68,32 @@ func run() -> Array:
 	check("refuelling uses the measured fuel per lap", race.car_fpl(car) == car.fuel_lap)
 	st.dynamic_running = false
 	check("with live running off the calibrated fuel figure is used", race.car_fpl(car) == race.fpl)
+
+	# the safety-car delta: a moment over it at each braking zone of a long safety-car period does not add up
+	# to a penalty, staying over it does
+	var sct := RaceSettings.new()
+	sct.track = "monaco"
+	sct.laps = 3
+	sct.opponents = 1
+	var scr := Race.new(sct, null, 1)
+	var rc := scr.rc
+	var p := scr.player
+	scr.phase = "racing"
+	rc.flag = "sc"
+	p.control = "free"
+	var lim := rc.speed_cap(p)
+	check("the safety car caps your speed", lim > 0.0, str(lim))
+	var fwd := Vector2(cos(scr.track.heading(p.s)), sin(scr.track.heading(p.s)))
+	for k in 120 * 120: # two minutes: half a second over the delta every six seconds
+		var v := lim + 3.0 if k % 720 < 60 else lim * 0.8
+		p.vx = fwd.x * v
+		p.vy = fwd.y * v
+		rc._player_rules(dt)
+	check("brief moments over the delta are not penalised", p.penalties.is_empty(), str(p.penalties))
+	p.vx = fwd.x * (lim + 3.0)
+	p.vy = fwd.y * (lim + 3.0)
+	for k in 120 * 5:
+		rc._player_rules(dt)
+	check("staying over the delta is penalised", p.penalties.size() == 1, str(p.penalties))
 	completed = true
 	return errors

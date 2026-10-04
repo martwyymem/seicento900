@@ -9,7 +9,8 @@ const SUITES := [
 	"res://tests/test_track.gd",
 	"res://tests/test_strategy.gd",
 	"res://tests/test_dynamics.gd",
-	"res://tests/test_ui_and_audio.gd"
+	"res://tests/test_ui_and_audio.gd",
+	"res://tests/test_qualifying.gd"
 ]
 
 func _init() -> void:

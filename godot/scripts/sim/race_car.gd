@@ -119,6 +119,7 @@ var recover_t := 0.0
 var stuck_t := 0.0
 var last_hit := 0.0
 var off_target := 0.0
+var line_off := 0.0 ## a physics bot's smoothed lateral target, relative to the racing line (m)
 
 # ---- race control (see RaceControl)
 var damage := 0.0 ## 0 = straight, 1 = wrecked; costs power, drag and pace until repaired in the pits

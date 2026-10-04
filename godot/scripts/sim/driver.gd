@@ -17,7 +17,11 @@ static func pursuit_steer(phys: Physics, tr: Track, car: RaceCar, mu: float, off
 	var lim := tr.half + tr.cfg.runoff - 1.0
 	var Ld := clampf(5.0 + v * 0.42, 6.0, 26.0)
 	var sl := car.s + Ld
-	var dl := clampf(tr.sample(tr.RLD, sl) + offs + (err.d if err else 0.0), -lim, lim)
+	# a driving error builds up over a moment rather than snapping the line sideways
+	var err_d := 0.0
+	if err:
+		err_d = err.d * minf(1.0, err.get("age", 1e9) / Race.ERR_RAMP)
+	var dl := clampf(tr.sample(tr.RLD, sl) + offs + err_d, -lim, lim)
 	var p := tr.pos(sl, dl)
 	var dx := p[0] - car.x
 	var dy := p[1] - car.y

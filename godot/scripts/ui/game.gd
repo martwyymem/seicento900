@@ -18,12 +18,13 @@ const MENU_TEMPERATURE_BAR := preload("res://scripts/ui/menu_temperature_bar.gd"
 const MENU_REPAIR_ART := preload("res://scripts/ui/menu_repair_art.gd")
 const MENU_REPAIR_STATUS := preload("res://scripts/ui/menu_repair_status.gd")
 const MENU_CAR_SCENE := preload("res://scripts/ui/race_car_visual.tscn")
+const LOADING_SCREEN := preload("res://scripts/ui/loading_screen.gd")
 const FRONT_MENU := [
-	{"id": "drivers", "word": "drivers", "desc": "Choose your car and racing setup."},
-	{"id": "rally", "word": "rally", "desc": "Choose a circuit, set the conditions and race."},
-	{"id": "arcade", "word": "arcade", "desc": "Race an eight-round championship."},
-	{"id": "options", "word": "options", "desc": "Graphics and display settings."},
-	{"id": "quit", "word": "quit", "desc": "Leave the Seicento Cup."},
+	{"id": "quick_race", "word": "quick race", "desc": "One race on any circuit. Pick the track, laps and weather."},
+	{"id": "endurance", "word": "endurance", "desc": "Race for hours instead of laps, with pit stops and the light changing."},
+	{"id": "championship", "word": "championship", "desc": "Eight rounds around the calendar, with points carried from race to race."},
+	{"id": "options", "word": "options", "desc": "Display, frame rate and graphics settings."},
+	{"id": "quit", "word": "quit", "desc": "Close the game."},
 ]
 const TRACK_DEFAULTS := {
 	"gp": {"laps": 6, "wear": 2.0},
@@ -72,11 +73,13 @@ const FPS_LIMITS := [
 	{"name": "120 fps", "fps": 120},
 	{"name": "Unlimited", "fps": 0},
 ]
-const MENU_FPS := 30 ## cap while the 3D view is hidden or holding a still image (menus, pause, results)
+const STILL_FPS := 30 ## cap while the 3D view holds a still image (pause, results)
 const BACKGROUND_FPS := 10 ## cap while the window is not in front
 const STILL_FRAMES := 3 ## frames the 3D view keeps drawing after it stops changing, so its last image is the current one
 
 const TICK := 1.0 / 120.0
+const WARP_TICKS := {2: 2, 5: 4, 10: 4, 30: 4, 60: 6} ## ticks the rail model steps at once at each time warp
+const WARP_SIM_SHARE := 0.6 ## at most this much of each frame goes on the simulation under time warp
 const INK := CmrStyle.TEXT
 const MUTED := CmrStyle.MUTED
 const ACCENT := CmrStyle.ORANGE
@@ -101,15 +104,14 @@ var menu_home: Control
 var menu_home_art: Control
 var menu_home_strip: HBoxContainer
 var menu_home_desc: Label
-var menu_home_clock: Label
+var menu_home_track: Label
 var options_panel: PanelContainer
 var upscaler_picker: OptionButton
 var upscale_preset_picker: OptionButton
 var sharpening_picker: OptionButton
 var render_viewport: SubViewport
-var home_menu_index := 1
+var home_menu_index := 0
 var home_tween: Tween
-var menu_clock := 0.0
 var information_panel: Control
 var information_map: Control
 var information_title: Label
@@ -154,11 +156,13 @@ var menu_tab_dividers: Dictionary = {}
 var menu_tab_index := 1
 var active_menu_page := "home"
 var hud: RaceHud
+var loading_screen: LoadingScreen
 var result_panel: PanelContainer
 var result_scroll: ScrollContainer
 var pause_panel: PanelContainer
 var pause_buttons: Array[Button] = []
 var skipping := false
+var quali_session := false ## the session on screen is a qualifying run, not a race
 var _idle_input := Race.PlayerInput.new()
 
 # Setup controls
@@ -175,6 +179,7 @@ var difficulty_picker: OptionButton
 var weather_picker: OptionButton
 var gearbox_picker: OptionButton
 var grid_picker: OptionButton
+var quali_picker: OptionButton ## championship qualifying: drive it, let the co-driver run it, or skip it
 var assists_picker: OptionButton
 var wear_picker: SpinBox
 var fuel_picker: SpinBox
@@ -255,6 +260,8 @@ func _ready() -> void:
 	_build_options_page()
 	_build_hud()
 	_build_results()
+	loading_screen = LOADING_SCREEN.new()
+	add_child(loading_screen)
 	_show_home()
 	_fit_3d_views.call_deferred()
 
@@ -274,21 +281,18 @@ func _sync_rendering() -> void:
 		_view_live = live
 		render_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS if live else SubViewport.UPDATE_DISABLED
 		world_view.process_mode = Node.PROCESS_MODE_INHERIT if live else Node.PROCESS_MODE_DISABLED
+	# the front-end pages draw only UI (the 3D view is off behind them), so they run at the player's own limit
 	var fps: int = FPS_LIMITS[graphics_fps_limit].fps
 	if not _app_focused:
 		fps = BACKGROUND_FPS
-	elif not live:
-		fps = MENU_FPS if fps == 0 else mini(fps, MENU_FPS)
+	elif not live and not covered:
+		fps = STILL_FPS if fps == 0 else mini(fps, STILL_FPS)
 	if Engine.max_fps != fps:
 		Engine.max_fps = fps
 
 func _process(delta: float) -> void:
 	_sync_rendering()
 	if not race:
-		menu_clock += delta
-		if is_instance_valid(menu_home_clock):
-			var whole_seconds := int(menu_clock)
-			menu_home_clock.text = "%02d:%02d.%02d" % [int(floor(float(whole_seconds) / 60.0)), whole_seconds % 60, int(fmod(menu_clock, 1.0) * 100.0)]
 		# the showroom turntable keeps turning, as on the CMR car screens
 		if is_instance_valid(menu_preview_car) and menu_car_preview.visible:
 			menu_preview_car.rotation.y += delta * 0.3
@@ -315,27 +319,43 @@ func _process(delta: float) -> void:
 	input.shift_down = shift_down
 
 	var steps := 0
+	var tick := _tick()
 	var cap := 40 * race.warp
+	# never let a slow machine fall into a spiral at high warp: there the simulation gets at most
+	# WARP_SIM_SHARE of a frame at the frame-rate limit, so the picture stays smooth and the warp runs
+	# as fast as the machine allows instead of pinning a core
+	var budget := 40000
+	if race.warp > 1:
+		var fps: int = Engine.max_fps if Engine.max_fps > 0 else 60
+		budget = int(WARP_SIM_SHARE * 1e6 / fps)
 	var t0 := Time.get_ticks_usec()
-	while accumulator >= TICK and steps < cap and race.phase != "finished":
-		race.step(TICK, input)
-		accumulator -= TICK
+	while accumulator >= tick and steps < cap and race.phase != "finished":
+		race.step(tick, input)
+		accumulator -= tick
 		steps += 1
-		# never let a slow machine fall into a spiral at high warp
-		if (steps & 63) == 0 and Time.get_ticks_usec() - t0 > 40000:
+		if (steps & 3) == 0 and Time.get_ticks_usec() - t0 > budget:
 			break
-	if steps >= cap or accumulator > TICK * 4.0 * race.warp:
+	if steps >= cap or accumulator > tick * 4.0 * race.warp:
 		accumulator = 0.0
 	if steps > 0:
 		shift_up = false
 		shift_down = false
-	world_view.render_alpha = accumulator / TICK
+	world_view.render_alpha = accumulator / tick
 
 	if is_instance_valid(audio):
 		audio.update_car(p, not p.finished and not p.dnf)
 	hud.update(delta)
 	if race.phase == "finished":
 		_show_results()
+
+## The simulation step. The car physics needs 120 Hz, but under time warp every car is on the rail model,
+## which runs the same race at 1/30 s (1/20 s at x60) within the spread the tick rate alone causes; at
+## 1/120 s a 30x warp would run 3600 ticks a second and drag the frame rate down. The player's car on its
+## own physics keeps the full rate.
+func _tick() -> float:
+	if race.warp == 1 or race.player.control == "free":
+		return TICK
+	return TICK * WARP_TICKS.get(race.warp, 4)
 
 ## Keyboard driving: pedals and steering ease in and out like the reference instead of snapping.
 func _update_input(dt: float) -> void:
@@ -631,6 +651,7 @@ func _build_setup() -> void:
 	row4.add_theme_constant_override("separation", 14)
 	col.add_child(row4)
 	grid_picker = _option_field(row4, "GRID POSITION", ["Pole", "Middle", "Back", "Random"])
+	quali_picker = _option_field(row4, "CHAMPIONSHIP QUALIFYING", ["Drive it", "Simulate", "Skip (use grid position)"])
 	assists_picker = _option_field(row4, "DRIVING AIDS", ["Full assists", "ABS only", "Off"])
 	_menu_rule(col)
 	rules_section = _label("RACE RULES & PIT STRATEGY", 16, CmrStyle.TEXT)
@@ -705,6 +726,7 @@ func _build_setup() -> void:
 	for toggle in [mandatory_stop_toggle, two_compounds_toggle, refuel_toggle, parallel_toggle]:
 		toggle.toggled.connect(func(_on: bool) -> void: _queue_strategy_refresh())
 	ai_learning_picker.item_selected.connect(func(_i: int) -> void: _update_ai_memory())
+	quali_picker.item_selected.connect(func(_i: int) -> void: _update_championship_view())
 	_load_race_settings()
 	_update_championship_view()
 	_update_menu_car_summary()
@@ -1043,7 +1065,7 @@ func _race_setting_controls() -> Dictionary:
 	return {
 		"track": track_picker, "laps": laps_picker, "format": format_picker, "hours": hours_picker,
 		"start_hour": start_hour_picker, "opponents": opponents_picker, "difficulty": difficulty_picker,
-		"weather": weather_picker, "gearbox": gearbox_picker, "grid": grid_picker, "assists": assists_picker,
+		"weather": weather_picker, "gearbox": gearbox_picker, "grid": grid_picker, "quali": quali_picker, "assists": assists_picker,
 		"wear_mult": wear_picker, "fuel_mult": fuel_picker, "mandatory_stop": mandatory_stop_toggle,
 		"two_compounds": two_compounds_toggle, "refuel": refuel_toggle, "collisions": collisions_toggle,
 		"race_control": race_control_toggle, "dynamic_running": dynamic_toggle, "draft": draft_toggle,
@@ -1170,13 +1192,14 @@ func _build_menu_car_preview() -> void:
 	add_child(menu_car_summary)
 	_update_menu_car_summary()
 
+## The circuit the front end is currently pointing at: this round's in a championship, otherwise the picked one.
+func _menu_track_key() -> String:
+	return CHAMPIONSHIP_CALENDAR[_champ_round()] if is_championship_mode else TRACK_KEYS[track_picker.selected]
+
 func _update_menu_car_summary() -> void:
 	if not is_instance_valid(menu_car_summary) or not is_instance_valid(track_picker):
 		return
-	var key: String = TRACK_KEYS[track_picker.selected]
-	if is_championship_mode:
-		key = CHAMPIONSHIP_CALENDAR[_champ_round()]
-	var current_track: Track = Race.get_track(key)
+	var current_track: Track = Race.get_track(_menu_track_key())
 	if is_instance_valid(player_color_picker) and is_instance_valid(menu_preview_car):
 		menu_preview_car.call("set_paint", player_color_picker.color)
 		menu_preview_car.call("set_stripes", player_stripes_toggle.button_pressed)
@@ -1527,7 +1550,7 @@ func _build_home_screen() -> void:
 	menu_home_art.anchor_top = 0.14
 	menu_home_art.anchor_right = 0.92
 	menu_home_art.anchor_bottom = 0.75
-	menu_home_art.set_track(Race.get_track(TRACK_KEYS[track_picker.selected]))
+	menu_home_art.set_track(Race.get_track(_menu_track_key()))
 	menu_home_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	menu_home.add_child(menu_home_art)
 
@@ -1543,10 +1566,9 @@ func _build_home_screen() -> void:
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	top.add_child(title)
-	menu_home_clock = _label("00:00.00", 24, MUTED)
-	menu_home_clock.add_theme_font_override("font", CmrStyle.digits())
-	menu_home_clock.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	top.add_child(menu_home_clock)
+	menu_home_track = _label("", 24, MUTED)
+	menu_home_track.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	top.add_child(menu_home_track)
 
 	# the strip scrolls sideways so the selected word always sits at the same place
 	var clip := Control.new()
@@ -1634,7 +1656,7 @@ func _build_options_page() -> void:
 	column.add_child(frame_row)
 	fps_limit_picker = _option_field(frame_row, "FRAME RATE LIMIT", FPS_LIMITS.map(func(l): return l.name))
 	fps_limit_picker.item_selected.connect(_on_fps_limit_selected)
-	var frame_note := _label("A lower limit runs cooler and saves battery. The race view is drawn only while it is changing, so menus, pause and results are cheap whatever this is set to.", 14, MUTED)
+	var frame_note := _label("A lower limit runs cooler and saves battery. Menus only draw the interface, so they are cheap at any limit; pause and results hold a still image at 30 fps.", 14, MUTED)
 	frame_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	frame_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	frame_row.add_child(frame_note)
@@ -1881,15 +1903,16 @@ func _home_item_pressed(index: int) -> void:
 
 func _activate_home_item() -> void:
 	match FRONT_MENU[home_menu_index].id:
-		"drivers":
-			_set_championship_mode(false)
-			_show_setup_page()
-		"arcade":
-			_set_championship_mode(true)
-			_show_setup_page()
-		"rally":
+		"quick_race":
 			_set_championship_mode(false)
 			_set_race_format(0)
+			_show_setup_page()
+		"endurance":
+			_set_championship_mode(false)
+			_set_race_format(1)
+			_show_setup_page()
+		"championship":
+			_set_championship_mode(true)
 			_show_setup_page()
 		"options":
 			_show_options_page()
@@ -1911,8 +1934,10 @@ func _show_home() -> void:
 	_hide_pages()
 	menu_home.show()
 	menu_tint.color = CmrStyle.TINT_HOME
+	var backdrop := Race.get_track(_menu_track_key())
 	if is_instance_valid(menu_home_art):
-		menu_home_art.set_track(Race.get_track(TRACK_KEYS[track_picker.selected]))
+		menu_home_art.set_track(backdrop)
+	menu_home_track.text = "%s  |  %.1f km" % [backdrop.name, backdrop.L / 1000.0]
 	_home_select(home_menu_index, false)
 
 ## Hide every front-end page, leaving just the backdrop.
@@ -2052,6 +2077,8 @@ func _set_paused(on: bool) -> void:
 		return
 	paused = on
 	pause_panel.visible = on
+	pause_buttons[1].text = "RESTART QUALIFYING" if quali_session else "RESTART RACE"
+	pause_buttons[2].text = "END SESSION" if quali_session else "RETIRE & SEE RESULTS"
 	if on:
 		if is_instance_valid(audio):
 			audio.update_car(race.player, false)
@@ -2071,7 +2098,11 @@ func _pause_action(act: String) -> void:
 			_set_paused(false)
 			race.player.dnf = true
 			race.player.dnf_reason = "Retired"
-			_begin_skip()
+			if quali_session:
+				race.phase = "finished" # no time set: the sheet puts you at the back
+				_show_results()
+			else:
+				_begin_skip()
 		"menu":
 			_quit_race()
 
@@ -2114,6 +2145,7 @@ func _start_race() -> void:
 		return
 	var settings := RaceSettings.new()
 	var plan = current_plan
+	var quali_run := false
 	if is_championship_mode:
 		if _next_round() >= CHAMPIONSHIP_CALENDAR.size():
 			champ_data = {"round": 0, "scored": false, "table": {}}
@@ -2121,21 +2153,27 @@ func _start_race() -> void:
 			champ_data["round"] = int(champ_data.get("round", 0)) + 1
 			champ_data["scored"] = false
 		_save_championship()
+		quali_run = quali_picker.selected != 2 and _round_quali().is_empty()
 		var t_key: String = CHAMPIONSHIP_CALENDAR[int(champ_data.get("round", 0))]
 		settings.track = t_key
 		var defaults: Dictionary = TRACK_DEFAULTS.get(t_key, {"laps": 6, "wear": 2.0})
 		settings.laps = defaults.laps
 		settings.wear_mult = defaults.wear
 		settings.format = "laps"
-		# every round is planned by the strategist for that circuit's race length and tyre wear
-		var options := strategy.plan(_plan_opts(Race.get_track(t_key), defaults.laps, defaults.wear))
-		plan = options[0] if options.size() else null
 	else:
 		settings.track = TRACK_KEYS[track_picker.selected]
 		settings.laps = int(laps_picker.value)
 		settings.format = "time" if format_picker.selected == 1 else "laps"
 		settings.hours = hours_picker.value
 	settings.start_hour = start_hour_picker.value
+
+	await _open_loading_screen(settings, quali_run)
+	if quali_run:
+		plan = {} # the session builds its own one-run plan
+	elif is_championship_mode:
+		# every round is planned by the strategist for that circuit's race length and tyre wear
+		var options := strategy.plan(_plan_opts(Race.get_track(settings.track), settings.laps, settings.wear_mult))
+		plan = options[0] if options.size() else null
 
 	settings.opponents = int(opponents_picker.value)
 	settings.difficulty = ["easy", "medium", "hard", "alien"][difficulty_picker.selected]
@@ -2162,14 +2200,33 @@ func _start_race() -> void:
 	settings.auto_strategist = strategist_toggle.button_pressed
 	settings.parallel = parallel_toggle.button_pressed
 	settings.crew = ["pro", "club", "amateur"][crew_picker.selected]
+	if quali_run:
+		Qualifying.configure(settings)
+	elif is_championship_mode and not _round_quali().is_empty():
+		settings.quali_grid = _round_quali().grid # the round's qualifying sets the grid
 
 	if plan == null:
 		status_label.text = "No valid pit strategy for these settings — pick a plan or fix the custom one."
 		status_label.modulate = DANGER
+		loading_screen.hide()
 		return
 	_save_race_settings()
+	await _loading_progress(0.35)
 	race = Race.new(settings, (plan as Dictionary).duplicate(true), -1, {"car_model": car_model, "tyres": tyre_model, "strategy": strategy})
+	quali_session = quali_run
+	if quali_run and quali_picker.selected == 1:
+		# the co-driver runs the laps: no session to drive, straight to the sheet
+		var sim_race := race
+		race = null
+		quali_session = false
+		_hide_front_end()
+		status_label.text = ""
+		loading_screen.hide()
+		_show_quali_sheet(sim_race, Qualifying.sheet(sim_race, Qualifying.simulated_player_time(sim_race)), true)
+		return
+	await _loading_progress(0.6)
 	world_view.set_race(race)
+	await _loading_progress(1.0)
 
 	accumulator = 0.0
 	warp_index = 0
@@ -2184,6 +2241,18 @@ func _start_race() -> void:
 	shift_up = false
 	shift_down = false
 
+	_hide_front_end()
+	result_panel.hide()
+	pause_panel.hide()
+	get_viewport().gui_release_focus()
+	hud.start(race, world_view, audio)
+	status_label.text = ""
+	loading_screen.hide()
+
+	if is_instance_valid(audio):
+		audio.beep(880.0, 3)
+
+func _hide_front_end() -> void:
 	setup_panel.hide()
 	repair_panel.hide()
 	repair_details.hide()
@@ -2195,16 +2264,29 @@ func _start_race() -> void:
 	menu_home.hide()
 	menu_tint.hide()
 	menu_header.hide()
-	result_panel.hide()
-	pause_panel.hide()
-	get_viewport().gui_release_focus()
-	hud.start(race, world_view, audio)
-	status_label.text = ""
 
-	if is_instance_valid(audio):
-		audio.beep(880.0, 3)
+## Cover the front end with the stage loading screen and let it draw before the race is built on this thread.
+func _open_loading_screen(settings: RaceSettings, qualifying := false) -> void:
+	var track := Race.get_track(settings.track)
+	var race_length := "%d laps" % settings.laps if settings.format == "laps" else "%s hours" % String.num(settings.hours, 1).trim_suffix(".0")
+	if qualifying:
+		race_length = "qualifying"
+	var segments: Array = [track.name, race_length]
+	if is_championship_mode:
+		segments.insert(1, "round %d" % (_champ_round() + 1))
+	loading_screen.open(segments, "Circuit Length", "%.2f km" % (track.L / 1000.0))
+	await _loading_progress(0.15)
+
+func _loading_progress(fraction: float) -> void:
+	loading_screen.set_progress(fraction)
+	await RenderingServer.frame_post_draw
 
 func _show_results() -> void:
+	if quali_session:
+		if is_instance_valid(audio):
+			audio.update_car(race.player, false)
+		_show_quali_sheet(race, Qualifying.sheet(race), false)
+		return
 	hud.hide()
 	pause_panel.hide()
 	if is_instance_valid(audio):
@@ -2288,12 +2370,86 @@ func _show_results() -> void:
 			primary.pressed.connect(_return_to_setup)
 		else:
 			var next_name: String = Race.get_track(CHAMPIONSHIP_CALENDAR[int(champ_data.get("round", 0)) + 1]).name
-			primary = _button("NEXT ROUND: %s ▸" % next_name.to_upper(), ACCENT)
+			var next_label := "NEXT ROUND: %s ▸" % next_name.to_upper()
+			if quali_picker.selected != 2:
+				next_label = "NEXT: %s QUALIFYING ▸" % next_name.to_upper()
+			primary = _button(next_label, ACCENT)
 			primary.pressed.connect(_start_race)
 	else:
 		primary = _button("RACE AGAIN", ACCENT)
 		primary.pressed.connect(_start_race)
 	primary.custom_minimum_size.y = 44
+	buttons.add_child(primary)
+	var back := _button("BACK TO MENU", CmrStyle.FIELD)
+	back.custom_minimum_size.y = 44
+	back.pressed.connect(_return_to_setup)
+	buttons.add_child(back)
+	col.add_child(buttons)
+	primary.grab_focus()
+
+## This round's saved qualifying ({round, grid, pos, rows, simulated}), or {} when it hasn't been run.
+func _round_quali() -> Dictionary:
+	var q = champ_data.get("quali", {})
+	if q is Dictionary and int(q.get("round", -1)) == _next_round() and q.has("grid"):
+		return q
+	return {}
+
+## The qualifying time sheet (NASCAR-style: lap, gap to pole, average speed) that sets the grid. It is saved
+## with the championship, so the race can be started later from the menu.
+func _show_quali_sheet(qrace: Race, rows: Array, simulated: bool) -> void:
+	hud.hide()
+	pause_panel.hide()
+	result_panel.show()
+	for child in result_scroll.get_children():
+		child.queue_free()
+	var me: Dictionary = rows[0]
+	for r in rows:
+		if r.is_player:
+			me = r
+	var saved_rows := rows.map(func(r: Dictionary) -> Dictionary:
+		var d := r.duplicate()
+		d.color = (r.color as Color).to_html(false)
+		return d)
+	champ_data["quali"] = {"round": _next_round(), "grid": Qualifying.grid_from(qrace, rows), "pos": me.pos,
+		"simulated": simulated, "rows": saved_rows}
+	_save_championship()
+
+	var col := _column(result_scroll, 8)
+	col.custom_minimum_size.x = 1060
+	var title := "P%d OF %d" % [me.pos, rows.size()] if me.time != null else "NO TIME SET — YOU START FROM THE BACK"
+	col.add_child(_label("QUALIFYING · %s" % title, 26, INK))
+	var sub := "%s · Round %d of %d" % [qrace.track.name, _next_round() + 1, CHAMPIONSHIP_CALENDAR.size()]
+	if simulated:
+		sub += " · Your co-driver ran the laps"
+	elif me.time != null:
+		var laps: Array = qrace.player.lap_times.slice(1).map(func(x) -> String: return Race.fmt_time(x))
+		sub += " · Timed %s: %s" % ["laps" if laps.size() > 1 else "lap", "  ".join(laps)]
+	var pole: Dictionary = rows[0]
+	if pole.time != null:
+		sub += " · Pole: %s %s" % [pole.name, Race.fmt_time(pole.time)]
+	var sub_label := _label(sub, 13, MUTED)
+	sub_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(sub_label)
+
+	var widths := [46, 44, 250, 130, 110, 130]
+	var table := VBoxContainer.new()
+	table.add_theme_constant_override("separation", 3)
+	col.add_child(table)
+	table.add_child(_result_row(["POS", "NO.", "DRIVER", "LAP TIME", "GAP", "AVG SPEED"], widths,
+		CmrStyle.box(Color(0, 0, 0, 0.25), Color.TRANSPARENT, 14, 3), CmrStyle.ORANGE_SOFT, 12))
+	for r in rows:
+		var cells := [str(r.pos), str(r.number), r.name,
+			Race.fmt_time(r.time) if r.time != null else "NO TIME",
+			("+%.3f" % r.gap) if r.gap != null and r.pos > 1 else "",
+			("%.1f km/h" % r.speed) if r.speed != null else ""]
+		var fill: Color = CmrStyle.ORANGE if r.is_player else (CmrStyle.FIELD if r.pos % 2 == 1 else CmrStyle.FIELD_DIM)
+		table.add_child(_result_row(cells, widths, CmrStyle.box(fill, Color.TRANSPARENT, 14, 3), CmrStyle.INK, 15, r.color))
+
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 10)
+	var primary := _button("START RACE ▸", ACCENT)
+	primary.custom_minimum_size.y = 44
+	primary.pressed.connect(_start_race)
 	buttons.add_child(primary)
 	var back := _button("BACK TO MENU", CmrStyle.FIELD)
 	back.custom_minimum_size.y = 44
@@ -2462,9 +2618,14 @@ func _update_championship_view() -> void:
 	if is_championship_mode:
 		var points := "-".join(CHAMPIONSHIP_POINTS.map(func(x): return str(x)))
 		var info := "%d rounds, one on each circuit, %s points. Race length and tyre wear are set per circuit." % [CHAMPIONSHIP_CALENDAR.size(), points]
+		if quali_picker.selected != 2:
+			info += " Each round opens with single-car qualifying: an out lap, then the timed laps, and the fastest lap takes pole."
 		var nxt := _next_round()
 		if saved and nxt < CHAMPIONSHIP_CALENDAR.size():
 			info += " Saved championship: next is round %d, %s." % [nxt + 1, Race.get_track(CHAMPIONSHIP_CALENDAR[nxt]).name]
+			var q := _round_quali()
+			if not q.is_empty():
+				info += " You qualified P%d: the race is next." % int(q.pos)
 		elif saved:
 			info += " The last championship is complete — racing again starts a new one."
 		champ_info_label.text = info

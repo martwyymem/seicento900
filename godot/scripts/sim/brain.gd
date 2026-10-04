@@ -9,6 +9,7 @@ extends RefCounted
 const STORE_PATH := "user://brain.json"
 const VER := 1
 const BIN := 30 ## metres per learned section
+const COVER_HOLD := 2.5 ## s a defending bot sticks to the side it chose to cover
 
 # ---------------- persistent memory ----------------
 static var _store = null
@@ -288,6 +289,12 @@ func adjust(car: RaceCar, t: Dictionary, lim: float) -> Dictionary:
 		var now := signf(p.d - car.d)
 		var inside := signf(tr.sample(tr.KC, car.s + 40.0))
 		var pred := 0.6 * hist / n + 0.4 * now if n >= 2.0 else 0.5 * now + 0.3 * inside
+		if race.bot_smooth_line:
+			# commit to a side for a moment: a driver covers one side, not whichever way you last twitched
+			if race.clock >= b.cover_until:
+				b.cover_until = race.clock + COVER_HOLD
+				b.cover_pred = pred
+			pred = b.cover_pred
 		if absf(pred) > 0.25:
 			var rl := tr.sample(tr.RLD, car.s)
 			var want := clampf(rl + signf(pred) * 1.3, -lim, lim)
@@ -297,6 +304,7 @@ func adjust(car: RaceCar, t: Dictionary, lim: float) -> Dictionary:
 				say(car, "%s is covering the %s — it has learned where you like to pass" % [short(car), "right" if pred > 0.0 else "left"], "cover")
 	else:
 		b.covering = false
+		b.cover_until = 0.0 # the next defence picks its side afresh
 	# attacking you: remember the attempt, and switch back if you close the door
 	if car.overtake_t > 0.0 and ahead_is(car, p):
 		if not b.att or b.att.id != car.overtake_t0:

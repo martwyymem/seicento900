@@ -13,6 +13,7 @@ const TREES_PATH := "res://models/trees.glb"
 const BANK_WIDTH := 12.0 ## metres across the disused banking (Monza's Sopraelevata), from its inner edge
 const BANK_RISE := 7.0 ## metres the banking climbs to its outer edge, on a curve steepening to about 40 degrees
 const BANK_BRIDGE := 6.5 ## metres the ring is lifted where it passes over a road
+const BANK_EASE := 80.0 ## metres over which the banking climbs from flat, at either end of a stretch
 const LANDMARKS_PATH := "res://models/landmarks.glb"
 ## Footprint (length along the model's x, width along z; metres) each Blender landmark (build_landmarks.py) is
 ## modelled at. The mapped footprint stretches it to fit; pieces not listed keep their size.
@@ -22,10 +23,12 @@ const LANDMARK_SIZE := {
 }
 const WATER_SHADER := preload("res://shaders/water.gdshader")
 const CHUNK := 256.0 ## metres: trees, canopy and buildings are split into tiles of this size for culling
+const STAND_SECTION := 60.0 ## m: a grandstand bending round a corner is built as straight stands about this long
+const STAND_FILL := 0.7 ## share of its best rectangle a straight stand's outline fills; less, and it bends
 const TREE_BAND := [70.0, 90.0, 110.0, 140.0] ## trees one by one this far beyond the run-off, per quality
 const TREE_CELL := [8.0, 7.0, 6.2, 5.5] ## one tree per cell of this size in a wood
 const TREE_CAP := [9000, 16000, 26000, 40000]
-const TREE_VISIBLE := [700.0, 1000.0, 1400.0, 0.0] ## how far the single trees are drawn (0 always)
+const TREE_VISIBLE := [700.0, 1000.0, 1000.0, 0.0] ## how far the single trees are drawn (0 always); past 1 km they barely show but cost a fifth of the GPU frame at Monza
 
 ## Wall and roof colours of the buildings in each country.
 const PALETTES := {
@@ -67,6 +70,7 @@ var land_texture: Texture2D
 var land_rect := Rect2() ## track metres
 var _res := 2.0 ## land map metres per texel
 static var _tree_meshes := {} ## Blender tree meshes by species
+static var _tree_sizes := {} ## species -> Vector2(crown radius, height) of its mesh, for the TV cameras' sightlines
 var _bank_cells := {} ## 16 m cells (Vector2i) within reach of the banking, kept clear of trees
 static var _landmark_meshes := {} ## Blender landmark meshes (and yachts) by name
 
@@ -92,22 +96,48 @@ func setup(w: Node3D) -> bool:
 	_res = land_rect.size.x / land.get_width()
 	return true
 
+## race_world._terrain_grid's layout, copied out of its dictionary once it exists: ground_height and
+## track_distance run for every tree, canopy point and sightline step, and the lookups were most of their cost
+var _grid_ready := false
+var _gx0 := 0.0
+var _gz0 := 0.0
+var _gfine := 1.0
+var _gnx := 0
+var _gnz := 0
+var _grow := 0
+var _gh := PackedFloat32Array()
+var _gi := PackedInt32Array()
+
+func _grid() -> bool:
+	if not _grid_ready:
+		var t: Dictionary = world._terrain_grid
+		if t.is_empty():
+			return false
+		_gx0 = t.x0
+		_gz0 = t.z0
+		_gfine = t.fine
+		_gnx = t.nx
+		_gnz = t.nz
+		_grow = t.row
+		_gh = t.h
+		_gi = t.i
+		_grid_ready = true
+	return true
+
 ## World height of the terrain mesh at track point (x, z): on the detailed grid's triangles near the circuit
 ## (race_world._terrain_grid), from the elevation model (as the coarse terrain has it) further out.
 func ground_height(x: float, z: float) -> float:
-	var t: Dictionary = world._terrain_grid
-	if not t.is_empty():
-		var fx: float = (x - t.x0) / t.fine
-		var fz: float = (z - t.z0) / t.fine
+	if _grid_ready or _grid():
+		var fx: float = (x - _gx0) / _gfine
+		var fz: float = (z - _gz0) / _gfine
 		var ix := floori(fx)
 		var iz := floori(fz)
-		if ix >= 0 and iz >= 0 and ix < t.nx and iz < t.nz:
-			var h: PackedFloat32Array = t.h
-			var row: int = t.row
-			var h00 := h[iz * row + ix]
-			var h10 := h[iz * row + ix + 1]
-			var h01 := h[(iz + 1) * row + ix]
-			var h11 := h[(iz + 1) * row + ix + 1]
+		if ix >= 0 and iz >= 0 and ix < _gnx and iz < _gnz:
+			var row := _grow
+			var h00 := _gh[iz * row + ix]
+			var h10 := _gh[iz * row + ix + 1]
+			var h01 := _gh[(iz + 1) * row + ix]
+			var h11 := _gh[(iz + 1) * row + ix + 1]
 			if not (is_nan(h00) or is_nan(h10) or is_nan(h01) or is_nan(h11)):
 				var u := fx - ix
 				var v := fz - iz
@@ -119,20 +149,18 @@ func ground_height(x: float, z: float) -> float:
 ## Distance from track point (x, z) to the nearest centreline sample, and that sample: Vector2(index,
 ## distance); (-1, INF) beyond the detailed terrain band (175 m) round the circuit.
 func track_distance(x: float, z: float) -> Vector2:
-	var t: Dictionary = world._terrain_grid
 	var best := Vector2(-1, INF)
-	if t.is_empty():
+	if not (_grid_ready or _grid()):
 		return best
-	var ix := floori((x - t.x0) / t.fine)
-	var iz := floori((z - t.z0) / t.fine)
-	var idx: PackedInt32Array = t.i
+	var ix := floori((x - _gx0) / _gfine)
+	var iz := floori((z - _gz0) / _gfine)
 	for dz in 2:
 		for dx in 2:
 			var gx := ix + dx
 			var gz := iz + dz
-			if gx < 0 or gz < 0 or gx > t.nx or gz > t.nz:
+			if gx < 0 or gz < 0 or gx > _gnx or gz > _gnz:
 				continue
-			var k := idx[gz * int(t.row) + gx]
+			var k := _gi[gz * _grow + gx]
 			if k < 0 or k == int(best.x):
 				continue
 			var d := Vector2(track.X[k] - x, track.Y[k] - z).length()
@@ -314,6 +342,15 @@ static func tree_meshes() -> Dictionary:
 			scene.free()
 	return _tree_meshes
 
+## What a species' tree hides at scale 1: Vector2(radius, height). A crown is lumpy and gappy, so its
+## solid part is taken as three quarters of its spread.
+static func _tree_size(species: String) -> Vector2:
+	if not _tree_sizes.has(species):
+		var mesh: Mesh = tree_meshes().get(species)
+		var box := mesh.get_aabb() if mesh else AABB(Vector3(-3.0, 0.0, -3.0), Vector3(6.0, 14.0, 6.0))
+		_tree_sizes[species] = Vector2(0.75 * 0.5 * maxf(box.size.x, box.size.z), box.end.y)
+	return _tree_sizes[species]
+
 ## A species for a tree in a wood at (x, z): conifers stand together in plantations (as much of the wood as
 ## the circuit's tree_conifer says), broadleaves elsewhere, in the country's mix.
 func _wood_species(x: float, z: float) -> String:
@@ -345,9 +382,12 @@ func _add_tree(chunks: Dictionary, species: String, x: float, z: float, scale: f
 	if not chunks[c].has(species):
 		chunks[c][species] = [[], []]
 	var size := (0.72 + _rand(x, z, 5.0) * 0.5) * scale
-	var basis := Basis(Vector3.UP, _rand(x, z, 6.0) * TAU).scaled(Vector3(size, size * (0.9 + _rand(x, z, 7.0) * 0.25), size))
+	var tall := size * (0.9 + _rand(x, z, 7.0) * 0.25)
+	var basis := Basis(Vector3.UP, _rand(x, z, 6.0) * TAU).scaled(Vector3(size, tall, size))
 	var y: float = ground_height(x, z) - 0.3
 	chunks[c][species][0].append(Transform3D(basis, Vector3(x - world.world_center.x, y, z - world.world_center.y)))
+	var dims := _tree_size(species)
+	world.add_occluder(x - world.world_center.x, z - world.world_center.y, dims.x * size, y + dims.y * tall)
 	var tint := 0.8 + _rand(x, z, 8.0) * 0.32
 	chunks[c][species][1].append(Color(tint * (0.94 + _rand(x, z, 9.0) * 0.12), tint, tint * (0.88 + _rand(x, z, 10.0) * 0.16)))
 
@@ -579,6 +619,10 @@ func _add_building(st: SurfaceTool, ring: Array[Vector2], height: float, kind: i
 		ridge = clampf(minf(e0, e1) * 0.42, 1.2, 5.0)
 		eave = ground_hi + maxf(height - ridge * 0.6, 2.6)
 	var c: Vector2 = world.world_center
+	var footprint := PackedVector2Array()
+	for p in ring:
+		footprint.append(p - c)
+	world.add_block_occluder(footprint, eave)
 	var uv2_wall := Vector2(seed, kind)
 	var uv2_roof := Vector2(seed, kind + 10.0)
 	var along := 0.0
@@ -668,40 +712,142 @@ func _build_stands(root: Node3D) -> void:
 		for k in range(0, flat.size() - 1, 2):
 			pts.append(Vector2(flat[k], flat[k + 1]))
 		var rect := _fit_rect(pts)
-		if rect.is_empty():
+		if rect.is_empty() or rect.length < 8.0 or rect.depth < 4.5:
 			continue
-		var centre: Vector2 = rect.centre
-		var u: Vector2 = rect.u
-		var v := Vector2(-u.y, u.x)
-		var length: float = rect.length
-		var depth: float = rect.depth
-		if length < 8.0 or depth < 4.5 or _reserved(centre.x, centre.y, clear):
-			continue
-		# the front is the long side nearer the track
-		var fa := centre + v * depth * 0.5
-		var fb := centre - v * depth * 0.5
-		var toward := v if track_distance(fa.x, fa.y).y < track_distance(fb.x, fb.y).y else -v
-		var front := centre + toward * depth * 0.5
-		# the roof overhangs the front: keep all of it clear of the road, set back if need be (the mapped
-		# outlines and the circuit's line don't always agree to the metre)
-		var nearest := INF
-		for k in 9:
-			var q: Vector2 = front + u * length * (k / 8.0 - 0.5) + toward * (world.STAND_ROOF_OVERHANG + 0.5)
-			nearest = minf(nearest, track_distance(q.x, q.y).y)
-		if nearest < clear + 1.0:
-			if clear + 1.0 - nearest > 10.0:
-				continue
-			front -= toward * (clear + 1.0 - nearest)
-		var ground := INF
+		# the side of the road the outline stands on, from the stretch nearest its middle
+		var mid := Vector2.ZERO
 		for p in pts:
-			ground = minf(ground, ground_height(p.x, p.y))
-		var z := Vector3(toward.x, 0.0, toward.y) # local +z towards the track
-		var basis := Basis(Vector3.UP.cross(z).normalized(), Vector3.UP, z)
-		var tiers := clampi(floori((depth - 2.1) / world.STAND_TREAD), 3, 14)
-		var bays := maxi(1, roundi(length / world.STAND_BAY))
-		var xf := Transform3D(basis, Vector3(front.x - c.x, ground, front.y - c.y))
-		world.add_stand(node, "Stand_%02d" % n, xf, bays, tiers, n + 7, length / (bays * world.STAND_BAY), 700.0)
-		n += 1
+			mid += p
+		mid /= pts.size()
+		var near := track_distance(mid.x, mid.y)
+		if near.x < 0:
+			continue
+		var i := int(near.x)
+		var normal := Vector2(track.NX[i], track.NY[i])
+		var side := 1.0 if (mid - Vector2(track.X[i], track.Y[i])).dot(normal) >= 0.0 else -1.0
+		var pieces: Array = []
+		if absf(_polygon_area(pts)) >= STAND_FILL * rect.length * rect.depth:
+			# a straight stand: its rectangle, the long side towards the road in front
+			var u: Vector2 = rect.u
+			var v := Vector2(-u.y, u.x)
+			var toward := v if v.dot(normal * -side) > 0.0 else -v
+			pieces.append({"front": rect.centre + toward * rect.depth * 0.5, "u": u, "toward": toward,
+				"length": rect.length, "depth": rect.depth, "s": i * track.step})
+		else:
+			# one bending round a corner fills little of its rectangle, whose long side can lie across the road
+			# (Indianapolis): straight stands that follow the road instead
+			pieces = _stand_sections(pts, i * track.step, side)
+		for piece in pieces:
+			var placed := _place_stand(piece, side, clear)
+			if placed.is_empty() or _reserved(placed.middle.x, placed.middle.y, clear):
+				continue
+			var toward: Vector2 = placed.toward
+			var z := Vector3(toward.x, 0.0, toward.y) # local +z towards the track
+			var basis := Basis(Vector3.UP.cross(z).normalized(), Vector3.UP, z)
+			var length: float = placed.length
+			var bays := maxi(1, roundi(length / world.STAND_BAY))
+			var front: Vector2 = placed.front
+			var xf := Transform3D(basis, Vector3(front.x - c.x, placed.ground, front.y - c.y))
+			world.add_stand(node, "Stand_%02d" % n, xf, bays, placed.tiers, n + 7, length / (bays * world.STAND_BAY), 700.0)
+			n += 1
+
+## The straight stands an outline bending round a corner becomes: pieces of about STAND_SECTION m along the road,
+## each parallel to it, from the outline's inner edge to its outer edge (their medians over the piece), found by
+## walking out from the centreline on the stand's side.
+func _stand_sections(pts: PackedVector2Array, s_mid: float, side: float) -> Array:
+	var lo := INF
+	var hi := -INF
+	for p in pts:
+		var near := track_distance(p.x, p.y)
+		if near.x >= 0:
+			var rel := track.rel(near.x * track.step - s_mid)
+			lo = minf(lo, rel)
+			hi = maxf(hi, rel)
+	if hi - lo < 8.0:
+		return []
+	var count := maxi(1, roundi((hi - lo) / STAND_SECTION))
+	var span := (hi - lo) / count
+	var out := []
+	for j in count:
+		var s0 := s_mid + lo + j * span
+		var inner := PackedFloat32Array()
+		var outer := PackedFloat32Array()
+		var s := s0 + 2.5
+		while s < s0 + span:
+			var first := -1.0
+			var last := -1.0
+			var d := 0.0
+			while d <= 120.0:
+				var q := track.pos(s, side * d)
+				if Geometry2D.is_point_in_polygon(Vector2(q[0], q[1]), pts):
+					if first < 0.0:
+						first = d
+					last = d
+				d += 1.5
+			if first >= 0.0:
+				inner.append(first)
+				outer.append(last)
+			s += 5.0
+		if inner.size() < 2:
+			continue
+		inner.sort()
+		outer.sort()
+		var front_d: float = inner[inner.size() >> 1]
+		var back_d: float = outer[outer.size() >> 1]
+		var sm := s0 + span * 0.5
+		var a := track.pos(sm, 0.0)
+		var b := track.pos(sm, side)
+		var away := Vector2(b[0] - a[0], b[1] - a[1]).normalized()
+		out.append({"front": Vector2(a[0], a[1]) + away * front_d, "u": Vector2(-away.y, away.x), "toward": -away,
+			"length": span, "depth": back_d - front_d + 1.5, "s": sm})
+	return out
+
+## Sets a stand ({front, u along it, toward the road, length, depth, s}) back until all of it, from the roof's
+## overhang in front to the concourse behind and end to end, is clear of the road and run-off on its own side of
+## the road (a point across the road falls short by the whole width); {} when that takes more than 10 m. Returns it
+## with tiers, middle (of the footprint) and ground (its lowest point).
+func _place_stand(piece: Dictionary, side: float, clear: float) -> Dictionary:
+	var front: Vector2 = piece.front
+	var u: Vector2 = piece.u
+	var toward: Vector2 = piece.toward
+	var length: float = piece.length
+	var tiers := clampi(floori((float(piece.depth) - 2.1) / world.STAND_TREAD), 3, 14)
+	var back: float = tiers * world.STAND_TREAD + world.STAND_CONCOURSE # as add_stand builds it
+	var along := maxi(2, ceili(length / 8.0))
+	var moved := 0.0
+	for _pass in 4:
+		var deficit := 0.0
+		var ground := INF
+		for k in along + 1:
+			for a in [world.STAND_ROOF_OVERHANG + 0.5, 0.0, -back * 0.5, -back]:
+				var q: Vector2 = front + u * length * (float(k) / along - 0.5) + toward * a
+				var near := track_distance(q.x, q.y)
+				ground = minf(ground, ground_height(q.x, q.y))
+				if near.x < 0:
+					continue
+				var i := int(near.x)
+				var off := near.y
+				# measured across this stretch of road on the stand's side; another stretch by its distance alone
+				if absf(track.rel(i * track.step - float(piece.s))) < 200.0:
+					off = (q - Vector2(track.X[i], track.Y[i])).dot(Vector2(track.NX[i], track.NY[i])) * side
+				deficit = maxf(deficit, clear + 1.0 - off)
+		if deficit <= 0.05:
+			return {"front": front, "toward": toward, "length": length, "tiers": tiers, "ground": ground,
+				"middle": front - toward * back * 0.5}
+		moved += deficit
+		if moved > 10.0:
+			return {}
+		front -= toward * deficit
+	return {}
+
+## Signed area of a polygon (positive anticlockwise).
+static func _polygon_area(pts: PackedVector2Array) -> float:
+	var area := 0.0
+	for k in pts.size():
+		var a := pts[k]
+		var b := pts[(k + 1) % pts.size()]
+		area += a.x * b.y - b.x * a.y
+	return area * 0.5
 
 ## The rectangle of least area round a footprint: {centre, u (unit, along the long side), length, depth}, or
 ## {} for a degenerate one.
@@ -892,19 +1038,39 @@ func _build_landmarks(root: Node3D) -> void:
 			scale.z = width / nominal.y
 			if part == "CastleKeep" and height > 0.0:
 				scale.y = height / 20.0
+		# turned to the track from where it is mapped: moved back clear of the circuit below, it would often be
+		# nearer another stretch (the Casino the tunnel, behind it, instead of Casino Square in front)
 		var rot := -angle
 		var near := _nearest_track_point(at)
 		var to_track := near - at
 		var front := Vector2(-sin(angle), cos(angle)) # the model's +z
 		if part != "TyreBridge" and to_track.dot(front) < 0.0:
 			rot += PI
+		if part not in ["TyreBridge", "MonzaPodio"]: # those two span the road on purpose
+			# the footprint as drawn (the model stretched to the mapped one, or at its own size) round its middle
+			var box: AABB = (meshes[part] as Mesh).get_aabb()
+			var mid := box.get_center() * scale
+			var off := Vector2(mid.x, mid.z).rotated(-rot)
+			at = _clear_of_circuit(at + off, Vector2(box.size.x * scale.x, box.size.z * scale.z), angle) - off
 		var y := INF
+		var low := INF
 		var half := Vector2(length, width) * 0.5
 		var cs := cos(angle)
 		var sn := sin(angle)
-		for o in [Vector2.ZERO, Vector2(1, 1), Vector2(1, -1), Vector2(-1, 1), Vector2(-1, -1)]:
-			var q: Vector2 = Vector2(o.x * half.x, o.y * half.y)
-			y = minf(y, ground_height(at.x + q.x * cs - q.y * sn, at.y + q.x * sn + q.y * cs))
+		# the ground over the footprint: a long building (the Casino) stands across a slope of tens of metres
+		var heights: Array[float] = []
+		for gx in range(-2, 3):
+			for gz in range(-2, 3):
+				var q := Vector2(gx * 0.5 * half.x, gz * 0.5 * half.y)
+				heights.append(ground_height(at.x + q.x * cs - q.y * sn, at.y + q.x * sn + q.y * cs))
+		heights.sort()
+		low = heights[0]
+		if nominal != Vector2.ZERO:
+			# stand on the upper ground, not the lowest corner (which buries the uphill half), and carry the
+			# walls down to the lowest ground on a stone terrace
+			y = heights[int(heights.size() * 0.75)]
+		else:
+			y = low
 		if part == "TyreBridge": # arches over the road, wide enough for the run-off
 			var k := clampf((track.half + track.cfg.runoff + 1.5) / 11.5, 1.0, 2.2)
 			scale.x = k
@@ -916,6 +1082,88 @@ func _build_landmarks(root: Node3D) -> void:
 		mi.transform = Transform3D(Basis(Vector3.UP, rot) * Basis.from_scale(scale),
 				Vector3(at.x - c.x, y, at.y - c.y))
 		root.add_child(mi)
+		if part not in ["TyreBridge", "MonzaPodio"]: # the TV cameras see under those
+			var box: AABB = (meshes[part] as Mesh).get_aabb()
+			var foot := half if half.x > 0.0 and half.y > 0.0 else Vector2(box.size.x, box.size.z) * 0.5
+			var corners := PackedVector2Array()
+			for q in [Vector2(-foot.x, -foot.y), Vector2(foot.x, -foot.y), foot, Vector2(-foot.x, foot.y)]:
+				corners.append(Vector2(at.x + q.x * cs - q.y * sn, at.y + q.x * sn + q.y * cs) - c)
+			world.add_block_occluder(corners, y + box.end.y * scale.y)
+		if nominal != Vector2.ZERO and y - low > 0.4:
+			var terrace := MeshInstance3D.new()
+			terrace.name = part + "Terrace"
+			var box := BoxMesh.new()
+			box.size = Vector3(length + 0.6, y - low + 1.0, width + 0.6)
+			terrace.mesh = box
+			terrace.material_override = _terrace_material()
+			terrace.transform = Transform3D(Basis(Vector3.UP, rot), Vector3(at.x - c.x, (y + low) * 0.5 - 0.4, at.y - c.y))
+			root.add_child(terrace)
+
+func _terrace_material() -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color("#a39b8b")
+	m.roughness = 0.95
+	return m
+
+## A landmark moved straight back from the circuit until its footprint (extent along `angle` and across it)
+## keeps clear of the run-off, and of the pit lane where that runs alongside: the game's road and lane do not
+## lie exactly where the mapped ones do (Indianapolis' scoring pylon was mapped onto the front stretch, the
+## Monaco Casino's corner onto Casino Square). Where it is squeezed between two stretches, the nearest clear
+## spot round the mapped one.
+func _clear_of_circuit(at: Vector2, extent: Vector2, angle: float) -> Vector2:
+	var axis := Vector2(cos(angle), sin(angle))
+	var across := Vector2(-axis.y, axis.x)
+	# the outline every 2 m or so (a road across the footprint crosses it) and the centre
+	var outline: Array[Vector2] = [Vector2.ZERO]
+	var nu := maxi(1, ceili(extent.x / 2.0))
+	var nv := maxi(1, ceili(extent.y / 2.0))
+	for k in nu:
+		var u := (float(k) / nu - 0.5) * extent.x
+		outline.append(axis * u - across * (0.5 * extent.y))
+		outline.append(-axis * u + across * (0.5 * extent.y))
+	for k in nv:
+		var v := (float(k) / nv - 0.5) * extent.y
+		outline.append(axis * (0.5 * extent.x) + across * v)
+		outline.append(-axis * (0.5 * extent.x) - across * v)
+	var mapped := at
+	for _pass in 12:
+		var push := _intrusion(at, outline)
+		if push == Vector2.ZERO:
+			return at
+		at += push
+	for r in range(4, 81, 4):
+		for k in 24:
+			var p := mapped + Vector2.from_angle(k * TAU / 24.0) * r
+			if _intrusion(p, outline) == Vector2.ZERO:
+				return p
+	return at
+
+## How far, and which way, a footprint (outline points round `at`) must move to clear the run-off, and the pit
+## lane where that runs alongside, at its worst point; Vector2.ZERO when it is clear. Each stretch of road pushes
+## it towards the side its centre is on, so a corner that has crossed the road is pulled back over it rather than
+## dragging the rest across.
+func _intrusion(at: Vector2, outline: Array[Vector2]) -> Vector2:
+	var po: float = track.cfg.pit_offset
+	var lane_clear: float = absf(po) + world.PIT_FENCE_D + 1.5
+	var worst := 0.0 # how far the footprint reaches into the space it must keep clear of
+	var away := Vector2.ZERO
+	for q in outline:
+		var p := at + q
+		var near := track_distance(p.x, p.y)
+		if near.x < 0:
+			continue
+		var i := int(near.x)
+		var centre := Vector2(track.X[i], track.Y[i])
+		var normal := Vector2(track.NX[i], track.NY[i])
+		var side := -1.0 if (at - centre).dot(normal) < 0.0 else 1.0
+		var off := (p - centre).dot(normal) * side # below zero once past the centreline
+		var need := _clear_distance()
+		if absf(po) > 1.0 and side == signf(po) and track.pit_blend(i * track.step) > 0.0:
+			need = maxf(need, lane_clear)
+		if need - off > worst:
+			worst = need - off
+			away = normal * side
+	return away * (worst + 0.5) if worst > 0.0 else Vector2.ZERO
 
 ## The nearest centreline sample to a track point.
 func _nearest_track_point(p: Vector2) -> Vector2:
@@ -986,6 +1234,7 @@ func _build_banking(root: Node3D) -> void:
 	earth.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var any := false
 	var c: Vector2 = world.world_center
+	var clear := _clear_distance()
 	for chain in env.get("banking", []):
 		if int(chain[0]) != 1:
 			continue
@@ -1003,37 +1252,80 @@ func _build_banking(root: Node3D) -> void:
 		for i in range(1, pts.size() - 1):
 			turn += (pts[i] - pts[i - 1]).cross(pts[i + 1] - pts[i])
 		var out_sign := -1.0 if turn > 0.0 else 1.0 # the outside of the bend, as a side of the heading's normal
-		var rows := []
-		for i in pts.size():
-			var t := (pts[mini(i + 1, pts.size() - 1)] - pts[maxi(i - 1, 0)]).normalized()
+		var count := pts.size()
+		var normals: Array[Vector2] = []
+		var near: Array[bool] = [] # over the circuit's run-off and its margin
+		for i in count:
+			var t := (pts[mini(i + 1, count - 1)] - pts[maxi(i - 1, 0)]).normalized()
 			var n := Vector2(-t.y, t.x) * out_sign
+			normals.append(n)
+			var on := false
+			for u in [-0.5, 0.0, 0.5]:
+				var p: Vector2 = pts[i] + n * BANK_WIDTH * u
+				on = on or track_distance(p.x, p.y).y < clear
+			near.append(on)
+		# where the ring crosses the circuit, the whole stretch over the run-off is bridge; elsewhere the ring is
+		# left out over it (Monza's runs beside the first chicane before it climbs)
+		var bridged := PackedByteArray()
+		bridged.resize(count)
+		var i0 := 0
+		while i0 < count:
+			var i1 := i0
+			while i1 < count and near[i1] == near[i0]:
+				i1 += 1
+			var crosses := false
+			for k in range(i0, i1):
+				crosses = crosses or (near[k] and lift[k] > 0.5)
+			for k in range(i0, i1):
+				bridged[k] = int(crosses)
+			i0 = i1
+		var keep: Array[bool] = []
+		var dropped := PackedByteArray()
+		var to_bridge := _distance_along(pts, bridged, false)
+		for i in count:
+			keep.append(not near[i] or bridged[i] == 1)
+			dropped.append(int(not keep[i]))
+			lift[i] = maxf(lift[i], 1.0 - smoothstep(0.0, 25.0, to_bridge[i]))
+		# the rise eases in and out at the ends of each stretch, which would otherwise stop in a 7 m cliff
+		var to_end := _distance_along(pts, dropped, true)
+		var rows := []
+		for i in count:
+			var n := normals[i]
 			var inner := pts[i] - n * BANK_WIDTH * 0.5
 			var g := ground_height(inner.x, inner.y) + lift[i] * BANK_BRIDGE
+			var rise := BANK_RISE * smoothstep(0.0, BANK_EASE, to_end[i])
 			var row := []
 			for j in 7: # across the slab: height follows a curve that steepens towards the top
 				var u := float(j) / 6.0
 				var p := inner + n * BANK_WIDTH * u
-				row.append(Vector3(p.x - c.x, g + BANK_RISE * pow(u, 1.5), p.y - c.y))
+				row.append(Vector3(p.x - c.x, g + rise * pow(u, 1.5), p.y - c.y))
 			var top: Vector3 = row[6]
 			var foot := Vector2(top.x + c.x, top.z + c.y) + n * 9.0
+			var grounded := false
 			for back in [9.0, 6.0, 4.0, 2.0]: # the earth bank stops short of the circuit's run-off
 				foot = Vector2(top.x + c.x, top.z + c.y) + n * back
-				if track_distance(foot.x, foot.y).y > _clear_distance():
+				if track_distance(foot.x, foot.y).y > clear:
+					grounded = true
 					break
 			var gf := minf(ground_height(foot.x, foot.y), g) - 0.3
-			row.append(Vector3(foot.x - c.x, maxf(gf, g - BANK_RISE * 1.1), foot.y - c.y)) # [7] foot of the earth bank
+			row.append(Vector3(foot.x - c.x, maxf(gf, g - rise * 1.1), foot.y - c.y)) # [7] foot of the earth bank
+			# none over the road: a bridge is open underneath
+			row.append(grounded and not near[i]) # [8] whether the earth bank stands here
 			rows.append(row)
 			for dx in range(-1, 2):
 				for dz in range(-1, 2):
 					_bank_cells[Vector2i(floori(pts[i].x / 16.0) + dx, floori(pts[i].y / 16.0) + dz)] = true
 		for i in rows.size() - 1:
+			if not keep[i] or not keep[i + 1]:
+				continue
 			# slabs every 10 m, each a little different, mossy and stained towards the inner edge where water runs
 			var slab_tint := 0.9 + 0.12 * _rand(float(i / 2), float(chain.size()), 5.0)
 			for j in 6:
 				var moss := clampf(1.0 - float(j) / 4.0, 0.0, 1.0) * (0.35 + 0.5 * _rand(float(i), float(j), 9.0))
 				var col := Color(0.62, 0.61, 0.57).lerp(Color(0.42, 0.5, 0.3), moss) * slab_tint
 				_bank_quad(slab, rows[i][j], rows[i][j + 1], rows[i + 1][j + 1], rows[i + 1][j], col)
-			_bank_quad(earth, rows[i][6], rows[i][7], rows[i + 1][7], rows[i + 1][6], Color(0.42, 0.5, 0.28))
+			if rows[i][8] and rows[i + 1][8]:
+				_bank_quad(earth, rows[i][6], rows[i][7], rows[i + 1][7], rows[i + 1][6], Color(0.42, 0.5, 0.28))
 			any = true
 	if not any:
 		return
@@ -1050,6 +1342,28 @@ func _build_banking(root: Node3D) -> void:
 		mi.mesh = (part[1] as SurfaceTool).commit()
 		mi.material_override = m
 		root.add_child(mi)
+
+## Per point of a line, the distance along it to the nearest point flagged 1 in `to` (INF if none); with `ends`,
+## the line's two ends count as flagged.
+static func _distance_along(pts: Array[Vector2], to: PackedByteArray, ends: bool) -> PackedFloat32Array:
+	var n := pts.size()
+	var out := PackedFloat32Array()
+	out.resize(n)
+	var run := 0.0 if ends else INF
+	for i in n:
+		if i > 0:
+			run += pts[i].distance_to(pts[i - 1])
+		if to[i] == 1:
+			run = 0.0
+		out[i] = run
+	run = 0.0 if ends else INF
+	for i in range(n - 1, -1, -1):
+		if i < n - 1:
+			run += pts[i].distance_to(pts[i + 1])
+		if to[i] == 1:
+			run = 0.0
+		out[i] = minf(out[i], run)
+	return out
 
 func _bank_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, col: Color) -> void:
 	for v in [a, b, c, a, c, d]:

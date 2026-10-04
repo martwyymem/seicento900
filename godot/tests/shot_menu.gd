@@ -1,6 +1,6 @@
 extends SceneTree
 # Renders front-end pages (and optionally the race HUD) to /tmp/cmr at a given window size.
-# SIZE=3840x2160 PAGES=home,setup,information,repair,options,race godot --path godot -s tests/shot_menu.gd
+# SIZE=3840x2160 PAGES=home,setup,information,repair,options,loading,race godot --path godot -s tests/shot_menu.gd
 var game
 var frame := 0
 var pages: PackedStringArray
@@ -31,6 +31,9 @@ func _process(_dt) -> bool:
 			"repair": game._show_repair_page()
 			"options": game._show_options_page()
 			"race": game._start_race()
+			"loading":
+				game.loading_screen.open(["monza", "6 laps"], "Circuit Length", "5.79 km")
+				game.loading_screen.set_progress(0.6)
 			"pause": game._set_paused(true)
 			"results": game._show_results()
 			"drive": # let the co-driver run a stretch so the HUD shows live values

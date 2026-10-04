@@ -36,8 +36,13 @@ const STAND_BOARDS := 8 ## sponsor boards StandBoard_0..7
 const PIT_BAY := 12.0 ## a garage's width as built (stretched to the box spacing) and the building's depth
 const PIT_DEPTH := 15.0
 const GANTRY_BEAM_Y := 7.2
+const PIT_FENCE_D := 4.4 ## the pit-side barrier's offset past the lane's centre line (the lane is 6.4 m wide, centred 1 m outside pit_offset)
 const LAMP_POOL := [4, 8, 12, 16] ## real lights hopping between the lamps nearest the camera, by quality
 const LAMP_REACH := 150.0
+const RAIN_DROP := 0.7 ## m: a rain streak's length
+## Share of the picture's height a streak may span before it starts to fade, and at which it is gone
+const RAIN_FULL_SPAN := 0.06
+const RAIN_GONE_SPAN := 0.16
 
 # Sky and light palette (parsed once, not every frame).
 const SKY_TOP_NIGHT := Color("#030611")
@@ -90,6 +95,7 @@ var ray_tracing: RayTracing ## ray-traced reflections, off until the options swi
 var asphalt_material: ShaderMaterial
 var runoff_material: ShaderMaterial
 var rain_particles: GPUParticles3D
+var _rain_material: StandardMaterial3D
 var quality := 2
 var assets: RefCounted ## world_assets.gd, shared by every track
 ## Materials that follow the weather ("wet"/"rain") or nightfall ("night") uniforms.
@@ -106,6 +112,7 @@ var tyre_cells := {}
 ## The detailed terrain's grid (_build_terrain): corner, spacing, and per point its height, squared distance to
 ## the nearest centreline sample and that sample
 var _terrain_grid := {}
+var _terrain_material: ShaderMaterial ## the ground's, which the embankments under the road share
 var _hdri_weight := 0.0 ## how much of the sky is HDRI (its sun then decides the light direction)
 static var _noise := {}
 
@@ -121,6 +128,18 @@ const TV_FRAME := [12.0, 9.0, 7.0]
 const TV_FOV_MIN := [16.0, 20.0, 5.0]
 const TV_FOV_MAX := [55.0, 50.0, 22.0]
 const TV_KEEPOUT_CELL := 32.0 ## m: grid of _near_tv_camera's lookup
+const TV_SIGHT_STEP := 5.0 ## m of track between the car positions a camera's view is checked at (_tv_sight)
+const TV_SIGHT_MAX := 320.0 ## m up the track a camera's view is followed
+const TV_MIN_SHOT := 35.0 ## m of clear view a camera needs to be worth cutting to when none is far enough ahead
+const TV_HELI_WAIT := 30.0 ## m the car may still have to go before the camera cut to sees it; further, and the helicopter takes the shot
+const TV_HELI_BACK := 30.0 ## m the helicopter hangs behind the car ...
+const TV_HELI_UP := 42.0 ## ... and over it, above the trees
+const OCCLUDER_CELL := 16.0 ## m: grid of the trees' lookup for sightlines (_sight_clear)
+const CATCH_FENCE_TOP := 3.2 ## m over the road: the top of an armco barrier's catch fence
+## A sightline closer to a catch fence's line than this (cosine of the angle) sees the wire mesh, not through it,
+## where the fence is near enough the camera to fill the picture (further off, the mesh is a faint veil)
+const FENCE_GRAZE := 0.97
+const FENCE_NEAR := 25.0
 ## What the director cuts to, in turn
 const TV_SEQUENCE := [TvKind.GROUND, TvKind.TOWER, TvKind.LONG, TvKind.GROUND, TvKind.LONG, TvKind.TOWER]
 const CAMERA_NAMES := ["CHASE", "FAR CHASE", "ROOF CAM", "TRACKSIDE TV", "BIRD'S-EYE", "FULL TRACK"]
@@ -142,6 +161,17 @@ var _tv_road := PackedVector2Array() ## the point on the centreline each camera 
 var _tv_keepout := {} ## Vector2i cell of TV_KEEPOUT_CELL m -> the cameras whose clear zone reaches it (_near_tv_camera)
 var _tv_index := -1
 var _tv_shot := 0
+var _tv_end := 0.0 ## the shot ends once the car is less than this far ahead of the camera (m along the track)
+var _tv_reach := 0.0 ## ... and the car is hidden from it while further ahead than this
+var _tv_tried_s := 0.0 ## where the car was when the director last looked for a camera
+var _tv_heli := false ## no trackside camera sees the car: the helicopter has the shot
+var _tv_views := {} ## camera index -> Vector2(end, reach) from _tv_sight, worked out on first use
+## What can hide a car from a TV camera: trees, [x, z, radius, top, ...] (add_occluder), and buildings,
+## [[footprint (world x, z), top], ...] (add_block_occluder); and their lookup by Vector2i cell of OCCLUDER_CELL m
+## (a tree's index, or -1 - a building's), built when a camera first needs it
+var _occluders := PackedFloat32Array()
+var _block_occluders: Array = []
+var _occluder_cells := {}
 var _tv_look := Vector3.ZERO
 var _tv_prev_pos := Vector3.ZERO
 
@@ -260,6 +290,10 @@ func set_track(value: Track) -> void:
 	tv_camera_kind.clear()
 	_tv_road.clear()
 	_tv_keepout.clear()
+	_tv_views.clear()
+	_occluders.clear()
+	_block_occluders.clear()
+	_occluder_cells.clear()
 	_wet_materials.clear()
 	_night_materials.clear()
 	_lamp_pos.clear()
@@ -313,6 +347,7 @@ func set_race(value: Race) -> void:
 	camera_snap = true
 	_tv_index = -1
 	_tv_shot = 0
+	_tv_heli = false
 	_lights_lit = -1
 
 func _process(delta: float) -> void:
@@ -372,14 +407,25 @@ func _process(delta: float) -> void:
 
 	_update_start_lights()
 	_update_camera(delta)
+	_place_rain()
 	_update_beams()
 	_update_lamp_lights()
+
+## Keeps the shower round the camera. A streak just in front of the lens would cross much of the picture,
+## and through a TV camera's long lens one several metres off still would, so the drops fade out nearer
+## than where they span RAIN_FULL_SPAN of the picture, and for a long lens the shower moves out ahead.
+func _place_rain() -> void:
+	if not rain_particles or not rain_particles.emitting:
+		return
+	var height_per_m := 2.0 * tan(deg_to_rad(camera.fov) * 0.5) # picture height (m) one metre away
+	var full := RAIN_DROP / (RAIN_FULL_SPAN * height_per_m)
+	_rain_material.distance_fade_min_distance = RAIN_DROP / (RAIN_GONE_SPAN * height_per_m)
+	_rain_material.distance_fade_max_distance = full
+	rain_particles.global_position = camera.global_position - camera.global_basis.z * clampf(full - 10.0, 0.0, 40.0)
 
 func _update_atmosphere(hour: float, wet: float, rain: float) -> void:
 	if not world_environment or not sky_material or not sun:
 		return
-	if rain_particles and camera:
-		rain_particles.global_position = camera.global_position
 	# the sky only needs repainting when the hour or the weather has visibly moved on
 	var key := Vector3(hour, wet, rain)
 	if absf(key.x - _atmos_key.x) < 0.002 and absf(key.y - _atmos_key.y) < 0.002 and absf(key.z - _atmos_key.z) < 0.002:
@@ -430,7 +476,7 @@ func _update_atmosphere(hour: float, wet: float, rain: float) -> void:
 	sun.light_color = SUN_NIGHT.lerp(SUN_DAY, day_t).lerp(DUSK_GLOW, glow * 0.45)
 	sun.shadow_opacity = lerpf(0.55, 1.0, day_t) * (1.0 - overcast * 0.45)
 	# haze thickens in the rain and takes on the horizon colour, so the distance melts into the sky
-	world_environment.fog_light_color = FOG_NIGHT.lerp(horizon, day_t).lerp(FOG_RAIN * lerpf(0.15, 1.0, day_t), overcast * 0.6)
+	world_environment.fog_light_color = FOG_NIGHT.lerp(horizon, day_t).lerp(FOG_RAIN * lerpf(0.04, 1.0, day_t), overcast * 0.6)
 	world_environment.fog_density = 0.00032 + 0.00045 * overcast + 0.0024 * rain
 	world_environment.fog_sun_scatter = 0.18 * glow + 0.05 * (1.0 - overcast) * day_t
 	world_environment.glow_hdr_threshold = lerpf(1.0, 0.75, night)
@@ -438,8 +484,8 @@ func _update_atmosphere(hour: float, wet: float, rain: float) -> void:
 	var volumetric := quality >= 2 and (rain > 0.08 or night > 0.45)
 	if world_environment.volumetric_fog_enabled != volumetric:
 		world_environment.volumetric_fog_enabled = volumetric
-	world_environment.volumetric_fog_density = 0.002 + 0.008 * rain + 0.002 * night
-	world_environment.volumetric_fog_albedo = Color(0.9, 0.92, 0.95).lerp(Color(0.62, 0.66, 0.72), night)
+	world_environment.volumetric_fog_density = 0.0012 + 0.0035 * rain + 0.0005 * night
+	world_environment.volumetric_fog_albedo = Color(0.9, 0.92, 0.95).lerp(Color(0.3, 0.32, 0.36), night)
 	if far_land:
 		far_land.match_sky(sky_material, world_environment)
 	for m in _wet_materials:
@@ -611,12 +657,14 @@ func _update_camera(delta: float) -> void:
 		3: # trackside TV: a camera ahead of the car picks it up, follows it past, then cuts to the next
 			if tv_cameras.is_empty():
 				return
-			var cut := snap or _tv_index < 0 or tv_cameras[_tv_index].distance_to(p) > 450.0
-			if not cut:
-				var along := track.rel(tv_camera_s[_tv_index] - _focus_s)
-				cut = along < TV_END_AHEAD[tv_camera_kind[_tv_index]]
-			if cut:
-				_tv_index = _pick_tv_camera()
+			var cut := _tv_direct(p, snap)
+			if _tv_heli:
+				# the helicopter: high behind the car, looking down on it over the trees
+				var want := p - fwd * TV_HELI_BACK + Vector3.UP * TV_HELI_UP
+				camera.global_position = want if cut else camera.global_position.lerp(want, _ease(2.5, delta, false))
+				camera.look_at(p + fwd * 6.0, Vector3.UP)
+				camera.fov = 34.0 if cut else camera.fov + (34.0 - camera.fov) * _ease(3.0, delta, false)
+				return
 			var kind := tv_camera_kind[_tv_index]
 			camera.global_position = tv_cameras[_tv_index]
 			# an operator's pan: lead the car by its velocity so it stays framed, but smooth the aim and the zoom
@@ -637,30 +685,232 @@ func _update_camera(delta: float) -> void:
 			fov = 55.0
 	camera.fov += (fov - camera.fov) * _ease(4.0, delta, snap)
 
+## The trackside director: keeps the camera on air while it has the car (at p, _focus_s along the track) in
+## view and cuts to the next one when the shot is over. Returns whether it cut.
+func _tv_direct(p: Vector3, snap: bool) -> bool:
+	if _tv_heli and not snap:
+		# the helicopter stays on the car until a camera on the ground has it in view
+		if absf(track.rel(_focus_s - _tv_tried_s)) < TV_SIGHT_STEP:
+			return false
+		var cam := _pick_tv_camera(true)
+		if cam < 0:
+			return false
+		_tv_index = cam
+		_tv_heli = false
+		return true
+	var cut := snap or _tv_index < 0 or tv_cameras[_tv_index].distance_to(p) > 450.0
+	var along := 0.0 if cut else track.rel(tv_camera_s[_tv_index] - _focus_s)
+	if cut or along < _tv_end:
+		_tv_index = _pick_tv_camera()
+		return true
+	if along > _tv_reach and absf(track.rel(_focus_s - _tv_tried_s)) >= TV_SIGHT_STEP:
+		# the car is still hidden from this camera: cut away as soon as another one has it in view
+		var other := _pick_tv_camera(true)
+		if other >= 0:
+			_tv_index = other
+			return true
+	return false
+
 ## The director's next cut: the nearest camera of the next kind in the sequence that is far enough ahead of
-## the car, or of any kind if that one has nothing in reach.
-func _pick_tv_camera() -> int:
+## the car and sees it all the way through the shot, or of any kind if that one has nothing in reach; failing
+## that, the camera with the longest clear view of the car left, and when none sees it (a dense wood), the one
+## it comes into view of within TV_HELI_WAIT, else the helicopter (_tv_heli; the camera stays as it was).
+## in_view_only: only a camera that has the car in view now, else -1. Sets where the shot is in view
+## (_tv_reach to _tv_end).
+func _pick_tv_camera(in_view_only := false) -> int:
 	var want: int = TV_SEQUENCE[_tv_shot % TV_SEQUENCE.size()]
-	_tv_shot += 1
-	var best := -1
-	var best_ahead := INF
-	for pass_kind in 2:
+	_tv_tried_s = _focus_s
+	if not in_view_only:
+		_tv_heli = false
+	for pass_kind in (3 if in_view_only else 4):
+		var best := -1
+		var best_score := INF
 		for i in tv_camera_s.size():
-			var kind := tv_camera_kind[i]
-			if pass_kind == 0 and kind != want:
-				continue
 			var ahead_m := fposmod(tv_camera_s[i] - _focus_s, track.L)
-			if ahead_m >= TV_MIN_AHEAD[kind] and ahead_m < best_ahead:
-				best_ahead = ahead_m
+			if ahead_m > TV_SIGHT_MAX or (pass_kind == 0 and tv_camera_kind[i] != want):
+				continue
+			var score := _tv_score(i, ahead_m, pass_kind)
+			if score < best_score:
+				best_score = score
 				best = i
 		if best >= 0:
+			_tv_shot += 1
+			_tv_end = _tv_views[best].x
+			_tv_reach = _tv_views[best].y
 			return best
-	return maxi(0, best)
+	if in_view_only:
+		return -1
+	_tv_heli = true
+	return maxi(0, _tv_index)
+
+## How good a cut to camera i is with the car ahead_m before it, on the director's pass (lower is better, INF:
+## not on this pass): 0 and 1, far enough ahead and in clear view to the end of the shot (the nearest); 2, in
+## view for at least TV_MIN_SHOT (the most still to come); 3, in view within TV_HELI_WAIT (the soonest).
+func _tv_score(i: int, ahead_m: float, pass_kind: int) -> float:
+	var view := _tv_sight(i)
+	var to_come := ahead_m - view.x
+	var in_view := ahead_m <= view.y and to_come > 0.0
+	match pass_kind:
+		0, 1:
+			return ahead_m if in_view and ahead_m >= TV_MIN_AHEAD[tv_camera_kind[i]] else INF
+		2:
+			return -to_come if in_view and to_come >= TV_MIN_SHOT else INF
+	var wait := ahead_m - view.y
+	return wait if wait > 0.0 and wait <= TV_HELI_WAIT and view.y >= view.x else INF
+
+## How much of the circuit TV camera i sees: Vector2(end, reach), the car being in clear view from reach m ahead
+## of the camera (along the track) all the way to end (negative: past it). From where the shot would end (or,
+## when the car is hidden there, say under the edge of the roof the camera stands on, from the first place up
+## the track it shows), the view is followed up the track until the first tree, building or rise in the way, and
+## a tower's past it as far as the shot goes. reach < end: the camera never has the car in view.
+func _tv_sight(i: int) -> Vector2:
+	if _tv_views.has(i):
+		return _tv_views[i]
+	var eye := tv_cameras[i]
+	var s0 := tv_camera_s[i]
+	var kind := tv_camera_kind[i]
+	var start := maxf(0.0, TV_END_AHEAD[kind])
+	var first := start
+	while first <= TV_SIGHT_MAX and not _tv_sees(eye, s0 - first):
+		first += TV_SIGHT_STEP
+	var view := Vector2(start, start - 1.0)
+	if first <= TV_SIGHT_MAX:
+		view = Vector2(first, first)
+		while view.y + TV_SIGHT_STEP <= TV_SIGHT_MAX and _tv_sees(eye, s0 - view.y - TV_SIGHT_STEP):
+			view.y += TV_SIGHT_STEP
+		while first == start and view.x - TV_SIGHT_STEP >= TV_END_AHEAD[kind] and _tv_sees(eye, s0 - view.x + TV_SIGHT_STEP):
+			view.x -= TV_SIGHT_STEP
+	_tv_views[i] = view
+	return view
+
+## Whether a camera at eye has a clear view of a car on the racing line at s.
+func _tv_sees(eye: Vector3, s: float) -> bool:
+	var d := track.sample(track.RLD, s)
+	var p := track.pos(s, d)
+	return _sight_clear(eye, Vector3(p[0] - world_center.x, _road_y(s) + track.bank_rise(s, d) + 1.0, p[1] - world_center.y))
+
+## A tree that can hide the car from a TV camera: a column of radius (m) round x, z (world) up to height top.
+func add_occluder(x: float, z: float, radius: float, top: float) -> void:
+	_occluders.append_array(PackedFloat32Array([x, z, radius, top]))
+
+## A structure that can hide the car from a TV camera: the rectangle (local x, z) of a piece placed at xf
+## (world), up to height (local) over its origin.
+func _block_from(xf: Transform3D, rect: Rect2, height: float) -> void:
+	var foot := PackedVector2Array()
+	for c in [rect.position, Vector2(rect.end.x, rect.position.y), rect.end, Vector2(rect.position.x, rect.end.y)]:
+		var w := xf * Vector3(c.x, 0.0, c.y)
+		foot.append(Vector2(w.x, w.z))
+	add_block_occluder(foot, xf.origin.y + height)
+
+## A building that can hide the car from a TV camera: its footprint (world x, z) up to height top.
+func add_block_occluder(footprint: PackedVector2Array, top: float) -> void:
+	_block_occluders.append([footprint, top])
+
+## Whether the straight line between world points a and b passes clear of the trees, the buildings and the ground.
+func _sight_clear(a: Vector3, b: Vector3) -> bool:
+	if _occluder_cells.is_empty() and not (_occluders.is_empty() and _block_occluders.is_empty()):
+		_index_occluders()
+	var a2 := Vector2(a.x, a.z)
+	var seg := Vector2(b.x, b.z) - a2
+	var length := seg.length()
+	if length < 1.0:
+		return true
+	var len2 := length * length
+	# the cells under the line, at most half a cell apart: the point where the line passes closest to a tree
+	# is within a quarter cell of one of them, and _index_occluders files each tree that far round its crown
+	var steps := ceili(length / (OCCLUDER_CELL * 0.5))
+	var last := Vector2i(1 << 30, 0)
+	for k in steps + 1:
+		var q := a2 + seg * (float(k) / steps)
+		var cell := Vector2i(floori(q.x / OCCLUDER_CELL), floori(q.y / OCCLUDER_CELL))
+		if cell == last:
+			continue
+		last = cell
+		var list = _occluder_cells.get(cell)
+		if list == null:
+			continue
+		for j in list:
+			if j < 0:
+				if _crosses_block(a, b, -1 - j):
+					return false
+				continue
+			var c := Vector2(_occluders[j], _occluders[j + 1])
+			var t := clampf((c - a2).dot(seg) / len2, 0.0, 1.0)
+			var r := _occluders[j + 2]
+			if (a2 + seg * t).distance_squared_to(c) < r * r and lerpf(a.y, b.y, t) < _occluders[j + 3]:
+				return false
+	# a crest of the road or a bank of earth between them (not right by either end, which stand on them), and a
+	# catch fence by the camera that the line runs along rather than through
+	if surroundings:
+		var edge := track.half + track.cfg.runoff + 1.0
+		var fence_line := track.half + track.cfg.runoff + 0.3
+		var fenced := track.cfg.barrier == "armco+fence"
+		var dir := seg / length
+		var d := 2.0
+		while d < length - 2.0:
+			var q := a2 + seg * (d / length) + world_center
+			var y := lerpf(a.y, b.y, d / length)
+			var near: Vector2 = surroundings.track_distance(q.x, q.y)
+			if d >= 8.0 and d <= length - 8.0:
+				var ground: float = surroundings.ground_height(q.x, q.y)
+				if near.y < edge: # over the road, which may stand on an embankment above the ground
+					ground = maxf(ground, _road_y(near.x * track.step))
+				if y < ground - 0.3:
+					return false
+			if fenced and d < FENCE_NEAR and near.x >= 0.0:
+				var i := int(near.x)
+				var off := absf((q.x - track.X[i]) * track.NX[i] + (q.y - track.Y[i]) * track.NY[i]) # across the road
+				var s := i * track.step
+				if off > fence_line and off < fence_line + 3.0 and y < _road_y(s) + CATCH_FENCE_TOP \
+						and absf(dir.dot(Vector2(cos(track.heading(s)), sin(track.heading(s))))) > FENCE_GRAZE:
+					return false
+			d += 4.0
+	return true
+
+func _index_occluders() -> void:
+	var reach := Vector2(OCCLUDER_CELL * 0.25, OCCLUDER_CELL * 0.25)
+	for j in range(0, _occluders.size(), 4):
+		var r := Vector2(_occluders[j + 2], _occluders[j + 2]) + reach
+		var c := Vector2(_occluders[j], _occluders[j + 1])
+		_file_occluder(j, c - r, c + r)
+	for k in _block_occluders.size():
+		var box := Rect2()
+		var ring: PackedVector2Array = _block_occluders[k][0]
+		for n in ring.size():
+			box = Rect2(ring[n], Vector2.ZERO) if n == 0 else box.expand(ring[n])
+		_file_occluder(-1 - k, box.position - reach, box.end + reach)
+
+func _file_occluder(id: int, lo: Vector2, hi: Vector2) -> void:
+	for cz in range(floori(lo.y / OCCLUDER_CELL), floori(hi.y / OCCLUDER_CELL) + 1):
+		for cx in range(floori(lo.x / OCCLUDER_CELL), floori(hi.x / OCCLUDER_CELL) + 1):
+			var cell := Vector2i(cx, cz)
+			if not _occluder_cells.has(cell):
+				_occluder_cells[cell] = []
+			_occluder_cells[cell].append(id)
+
+## Whether the line from a to b runs through building k below its roof. Within the footprint the line is lowest
+## where it enters or leaves, so those points (or an end standing inside) decide.
+func _crosses_block(a: Vector3, b: Vector3, k: int) -> bool:
+	var top: float = _block_occluders[k][1]
+	if a.y >= top and b.y >= top:
+		return false
+	var ring: PackedVector2Array = _block_occluders[k][0]
+	var a2 := Vector2(a.x, a.z)
+	var b2 := Vector2(b.x, b.z)
+	if (a.y < top and Geometry2D.is_point_in_polygon(a2, ring)) or (b.y < top and Geometry2D.is_point_in_polygon(b2, ring)):
+		return true
+	var length := a2.distance_to(b2)
+	for n in ring.size():
+		var hit = Geometry2D.segment_intersects_segment(a2, b2, ring[n], ring[(n + 1) % ring.size()])
+		if hit != null and lerpf(a.y, b.y, a2.distance_to(hit) / length) < top:
+			return true
+	return false
 
 func cycle_camera() -> String:
 	camera_mode = (camera_mode + 1) % 5
 	if camera_mode == 3:
 		_tv_index = -1 # pick the camera afresh: the car has moved on since the TV view was last used
+		_tv_heli = false
 	return CAMERA_NAMES[camera_mode]
 
 func _build_beams() -> void:
@@ -672,6 +922,7 @@ func _build_beams() -> void:
 		beam.spot_angle = 26.0
 		beam.spot_angle_attenuation = 1.8
 		beam.shadow_enabled = false
+		beam.light_volumetric_fog_energy = 0.45
 		beam.visible = false
 		add_child(beam)
 		beams.append(beam)
@@ -794,13 +1045,15 @@ func _build_environment() -> void:
 	add_child(sun)
 
 	var rain_mesh := QuadMesh.new()
-	rain_mesh.size = Vector2(0.035, 0.7)
+	rain_mesh.size = Vector2(0.035, RAIN_DROP)
 	var rain_material := StandardMaterial3D.new()
 	rain_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	rain_material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	rain_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	rain_material.albedo_color = Color(0.72, 0.82, 0.94, 0.42)
+	rain_material.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_PIXEL_ALPHA # see _place_rain
 	rain_mesh.material = rain_material
+	_rain_material = rain_material
 	var rain_process := ParticleProcessMaterial.new()
 	rain_process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
 	rain_process.emission_box_extents = Vector3(34.0, 24.0, 34.0)
@@ -884,6 +1137,7 @@ func _build_track() -> void:
 	_add_ribbon(ro_width, 0.01, runoff_material, "Runoff")
 	_add_ribbon(track.width, 0.04, asphalt_material, "Asphalt")
 	_add_edge_lines()
+	_build_road_supports()
 
 	# 3. Alternating Red & White Kerbs on corner apexes
 	_build_kerbs()
@@ -981,22 +1235,30 @@ func _build_terrain(ground: MeshInstance3D) -> void:
 				var ddx := x0 + grid_x * fine - sx
 				var distance_squared := ddx * ddx + ddz2
 				var cell := grid_z * row + grid_x
-				height_cap[cell] = minf(height_cap[cell], cap_base + maxf(0.0, sqrt(distance_squared) - road_clearance) * 0.45)
+				# a road keeps terrain from rising over it, but only just beside it: further out a road far below
+				# (a hairpin's other leg, the harbour road) would drag the ground under this one down with it
+				var distance_to_sample := sqrt(distance_squared)
+				if distance_to_sample <= road_clearance:
+					height_cap[cell] = minf(height_cap[cell], cap_base + maxf(0.0, distance_to_sample - road_clearance) * 0.45)
 				if distance_squared < nearest_distance[cell]:
 					nearest_distance[cell] = distance_squared
 					nearest_index[cell] = sample_index
+	# beyond that, the ground still rises only gently from the road nearest it, else a hillside just past the
+	# clearance would lean over the run-off between two terrain points; only the nearest road, so a leg further
+	# off and far below does not pull this one's ground down
+	for cell in grid_size:
+		var nearest := nearest_index[cell]
+		if nearest >= 0:
+			height_cap[cell] = minf(height_cap[cell], track_h[nearest] - elevation_base - 0.35 + maxf(0.0, sqrt(nearest_distance[cell]) - road_clearance) * 0.45)
 
-	var base_color := Color("#52684a")
-	if track.cfg.theme == "city":
-		base_color = Color("#777466")
-	elif track.cfg.theme == "oval":
-		base_color = Color("#607a43")
+	var base_color := _terrain_base_color()
 	var terrain_material := _surface_material(GROUND_SHADER, "grass" if track.cfg.theme != "city" else "")
 	terrain_material.set_shader_parameter("use_vertex_color", true)
 	terrain_material.set_shader_parameter("tex_color_mix", 0.1)
 	terrain_material.set_shader_parameter("slope_rock", 0.4 if track.cfg.theme == "city" else 1.0)
 	if surroundings:
 		surroundings.apply_land_map(terrain_material)
+	_terrain_material = terrain_material
 	var band_squared := band * band
 	var terrain_vertices := PackedVector3Array()
 	var terrain_colors := PackedColorArray()
@@ -1126,6 +1388,14 @@ func _sample_dem(grid: Dictionary, x: float, z: float) -> float:
 	var h11 := float(heights[(iz + 1) * nx + ix + 1])
 	return h00 * (1.0 - u) * (1.0 - v) + h10 * u * (1.0 - v) + h01 * (1.0 - u) * v + h11 * u * v
 
+func _terrain_base_color() -> Color:
+	match track.cfg.theme:
+		"city":
+			return Color("#777466")
+		"oval":
+			return Color("#607a43")
+	return Color("#52684a")
+
 func _terrain_color(x: float, z: float, base: Color) -> Color:
 	var broad := sin(x * 0.013 + z * 0.009) * cos(z * 0.011 - x * 0.004)
 	var detail := sin((x + z) * 0.083) * cos((z - x) * 0.071)
@@ -1147,6 +1417,100 @@ func _paved_reach(i: int) -> Vector2:
 	# the outside is the side the bend turns away from (negative d for a positive curvature, as for the barriers)
 	var left_outside := kc > 0.0
 	return Vector2(outer if left_outside else inner, inner if left_outside else outer) if absf(kc) > 1.0 / 2000.0 else Vector2(straight, straight)
+
+## Ground height at a track point (x, z in track coordinates).
+func _ground_at(x: float, z: float) -> float:
+	if surroundings:
+		return surroundings.ground_height(x, z)
+	return (_sample_dem(track.grid, x, z) - elevation_base - 1.2) * ALTITUDE_SCALE
+
+## Where the ground falls away from the edge of the road (a hillside, a viaduct, a hairpin above its lower leg) the
+## tarmac would hang in the air with nothing under it. Each side gets a wall down to the ground, concrete in the
+## city and a steep bank of the ground's own material elsewhere.
+func _build_road_supports() -> void:
+	if typeof(track.grid) != TYPE_DICTIONARY:
+		return
+	var city := track.cfg.theme == "city"
+	var po := track.cfg.pit_offset
+	var pit_side := signf(po) if absf(po) > 1.0 else 0.0
+	var edge := track.half + track.cfg.runoff + 0.3
+	var base_color := _terrain_base_color()
+	var scan_step := 1.5
+	var scan_count := 4 if city else 9 # how far out the ground is searched for its lowest point
+	var overpasses: Array[float] = [] # where the road crosses over itself, the bridge and the road below take its place
+	for crossing in _crossings():
+		overpasses.append(crossing.x)
+	var vertices := PackedVector3Array()
+	var colors := PackedColorArray()
+	var indices := PackedInt32Array()
+	for side in [-1.0, 1.0]:
+		var first := vertices.size()
+		var has_wall := PackedByteArray()
+		for i in track.n:
+			var s := i * track.step
+			var d := edge
+			if side == pit_side: # the lane lies beside the track here, and the wall stands behind it
+				d = lerpf(edge, absf(po) + PIT_FENCE_D, track.pit_blend(s))
+			var offset: float = side * d
+			var top_xz := track.pos(s, offset)
+			var top_y := (track.H[i] - elevation_base) * ALTITUDE_SCALE + track.bank_rise(s, offset)
+			var low := top_y
+			# straight out along this sample's normal (what track.pos gives at a sample, without its allocation)
+			var out_x: float = track.NX[i] * side
+			var out_y: float = track.NY[i] * side
+			for k in scan_count:
+				var reach: float = d + k * scan_step
+				var qx: float = track.X[i] + out_x * reach
+				var qz: float = track.Y[i] + out_y * reach
+				low = minf(low, surroundings.ground_height(qx, qz) if surroundings else _ground_at(qx, qz))
+			var drop := top_y - low
+			var bottom_y := top_y
+			var run := 0.0
+			for upper in overpasses:
+				if absf(track.rel(s - upper)) < 45.0:
+					drop = 0.0
+			if drop > 0.6:
+				bottom_y = top_y - minf(drop + 0.4, 80.0)
+				run = 0.0 if city else minf(drop * 1.3, 9.0)
+			var bottom_xz := track.pos(s, side * (d + run))
+			vertices.append(Vector3(top_xz[0] - world_center.x, top_y, top_xz[1] - world_center.y))
+			vertices.append(Vector3(bottom_xz[0] - world_center.x, bottom_y, bottom_xz[1] - world_center.y))
+			colors.append(_terrain_color(top_xz[0], top_xz[1], base_color))
+			colors.append(_terrain_color(bottom_xz[0], bottom_xz[1], base_color))
+			has_wall.append(1 if bottom_y < top_y else 0)
+		for i in track.n:
+			var nxt := (i + 1) % track.n
+			if has_wall[i] == 0 and has_wall[nxt] == 0:
+				continue
+			var a := first + i * 2
+			var c := first + nxt * 2
+			# the front face is the clockwise one: the quad's normal points back into the hill
+			var outward: Vector3 = Vector3(track.NX[i], 0.0, track.NY[i]) * float(side)
+			var n: Vector3 = (vertices[c] - vertices[a]).cross(vertices[a + 1] - vertices[a])
+			if n.dot(outward) > 0.0:
+				indices.append_array(PackedInt32Array([a, a + 1, c, a + 1, c + 1, c]))
+			else:
+				indices.append_array(PackedInt32Array([a, c, a + 1, a + 1, c, c + 1]))
+	if indices.is_empty():
+		return
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_COLOR] = colors
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var st := SurfaceTool.new()
+	st.create_from_arrays(arrays)
+	st.generate_normals()
+	var instance := MeshInstance3D.new()
+	instance.name = "RoadSupports"
+	instance.mesh = st.commit()
+	if city:
+		var concrete := _material(Color("#9d998d"), 0.95)
+		concrete.cull_mode = BaseMaterial3D.CULL_DISABLED
+		instance.material_override = concrete
+	else:
+		instance.material_override = _terrain_material
+	track_root.add_child(instance)
 
 func _add_ribbon(width: float, lift: float, material: Material, label: String) -> void:
 	var vertices := PackedVector3Array()
@@ -1560,6 +1924,9 @@ func _build_pit_garages() -> void:
 		boxes.append(i)
 	if bays.is_empty():
 		return
+	var bay_top: float = (parts.PitBay as Mesh).get_aabb().end.y
+	for xf in bays:
+		_block_from(xf, Rect2(-PIT_BAY * 0.5, -PIT_DEPTH, PIT_BAY, PIT_DEPTH), bay_top)
 	var root := Node3D.new()
 	root.name = "PitGarages"
 	track_root.add_child(root)
@@ -1591,6 +1958,8 @@ func _build_pit_garages() -> void:
 		var p := track.pos(s, front)
 		if _footprint_clear(lookup, p, xf.basis.get_euler().y, Rect2(-7.4, -PIT_DEPTH - 0.5, 14.8, PIT_DEPTH + 2.5), clear):
 			_add_part(root, parts, "RaceControl", xf)
+			if parts.has("RaceControl"):
+				_block_from(xf, Rect2(-7.4, -PIT_DEPTH - 0.5, 14.8, PIT_DEPTH + 0.5), (parts.RaceControl as Mesh).get_aabb().end.y)
 			race_control_s = s
 			break
 
@@ -1657,12 +2026,13 @@ func _build_barriers() -> void:
 	var bd := track.half + cfg.runoff + 0.3
 	var po := cfg.pit_offset
 	var sg := signf(po)
+	var garages := _garage_span()
 	var kind := cfg.barrier
 	tyre_cells = FURNITURE.tyre_cells(self)
 	var is_armco := kind != "safer" # tyre tracks have armco between their tyre walls
 	var wall_bottom := 0.3 if is_armco else 0.0
 	var wall_top := 1.0 if is_armco else (1.2 if kind == "safer" else 0.9)
-	var fence_top := 5.0 if kind == "safer" else 3.2
+	var fence_top := 5.0 if kind == "safer" else CATCH_FENCE_TOP
 	var barrier_color := Color("#7d848a") if is_armco else Color("#89877f")
 	if cfg.barrier_color.a > 0.0:
 		barrier_color = cfg.barrier_color
@@ -1703,19 +2073,24 @@ func _build_barriers() -> void:
 		for i in track.n:
 			var s := i * track.step
 			var p_rel := track.rel(s)
+			# on the pit side the garages are the wall; either side of them the barrier and its fence stand behind
+			# the lane, swinging out along the entry and exit ramps
+			var side_bd := bd
 			if skip and (p_rel > cfg.pit_entry - 20.0 and p_rel < cfg.pit_exit + 20.0):
-				continue
+				if garages != Vector2.ZERO and p_rel > garages.x and p_rel < garages.y:
+					continue
+				side_bd = lerpf(bd, absf(po) + PIT_FENCE_D, track.pit_blend(s))
 			if tyre_cells.has(FURNITURE._cell_key(i, side)):
 				continue
 
 			var nxt := (i + 1) % track.n
-			var rise0 := track.bank_rise(s, side * bd)
-			var rise1 := track.bank_rise(nxt * track.step, side * bd)
+			var rise0 := track.bank_rise(s, side * side_bd)
+			var rise1 := track.bank_rise(nxt * track.step, side * side_bd)
 			var y0 := (track.H[i] - elevation_base) * ALTITUDE_SCALE + rise0
 			var y1 := (track.H[nxt] - elevation_base) * ALTITUDE_SCALE + rise1
 
-			var p0 := track.pos(s, side * bd)
-			var p1 := track.pos(nxt * track.step, side * bd)
+			var p0 := track.pos(s, side * side_bd)
+			var p1 := track.pos(nxt * track.step, side * side_bd)
 
 			# on a banked turn the solid wall carries on down to the ground behind the raised road
 			var drop0 := rise0 + 0.4 if rise0 > 0.0 and not is_armco else 0.0
@@ -2034,29 +2409,29 @@ func _build_racing_line() -> void:
 	var colors := PackedColorArray()
 	var indices := PackedInt32Array()
 
-	# Braking red, cornering amber, flat-out green. The sim's offsets and speed profile are sampled per
-	# metre-ish step and jitter, so smooth them circularly before drawing.
+	# Braking red, held at the cornering limit amber, flat-out green, read off the strategy's reference
+	# lap in this car rather than the grip-limit profile: that one is capped at 216 km/h and brakes from
+	# speeds a Seicento never reaches, which painted most of every lap red. The sim's offsets and speeds
+	# are sampled per metre-ish step and jitter, so smooth them circularly before drawing.
 	var n: int = track.n
 	var win := maxi(2, int(round(6.0 / track.step)))
 	var d_s := _smooth_loop(track.RLD, win)
+	var vs: PackedFloat64Array = track.cal.get("vs", track.PROF)
 	var y_s := PackedFloat64Array()
 	y_s.resize(n)
 	var brake := PackedFloat64Array()
 	brake.resize(n)
-	var slow := PackedFloat64Array()
-	slow.resize(n)
-	var vtop := 0.0
-	for v in track.PROF:
-		vtop = maxf(vtop, v)
+	var held := PackedFloat64Array()
+	held.resize(n)
 	for i in n:
 		y_s[i] = (track.H[i] - elevation_base) * ALTITUDE_SCALE + 0.055
 		var j := (i + 1) % n
-		var decel := (track.PROF[i] * track.PROF[i] - track.PROF[j] * track.PROF[j]) / (2.0 * maxf(track.RDS[i], 0.01))
+		var decel := (vs[i] * vs[i] - vs[j] * vs[j]) / (2.0 * maxf(track.RDS[i], 0.01))
 		brake[i] = clampf(decel / (0.35 * 9.81), 0.0, 1.0)
-		slow[i] = clampf((0.9 * vtop - track.PROF[i]) / (0.3 * vtop), 0.0, 1.0)
+		held[i] = 1.0 if vs[j] >= track.PROF[j] - 0.05 else 0.0
 	y_s = _smooth_loop(y_s, win)
 	brake = _smooth_loop(brake, win)
-	slow = _smooth_loop(slow, win * 2)
+	held = _smooth_loop(held, win * 2)
 
 	var green := Color("#38df75")
 	var amber := Color("#ffc233")
@@ -2071,7 +2446,7 @@ func _build_racing_line() -> void:
 		verts.append(Vector3(p_left[0] - world_center.x, y_s[i] + track.bank_rise(s, d - 0.24), p_left[1] - world_center.y))
 		verts.append(Vector3(p_right[0] - world_center.x, y_s[i] + track.bank_rise(s, d + 0.24), p_right[1] - world_center.y))
 
-		var c := green.lerp(amber, slow[i]).lerp(brake_red, minf(brake[i] * 2.0, 1.0))
+		var c := green.lerp(amber, held[i]).lerp(brake_red, minf(brake[i] * 2.0, 1.0))
 		colors.append(c)
 		colors.append(c)
 
@@ -2167,6 +2542,9 @@ func _build_trees(_extent: float) -> void:
 		var basis := Basis(Vector3.UP, rng.next() * TAU).scaled(Vector3(size, size * (0.85 + rng.next() * 0.3), size))
 		var y := _ground_y(p[0], p[1], s, dist) - 0.3
 		transforms[kind].append(Transform3D(basis, Vector3(p[0] - world_center.x, y, p[1] - world_center.y)))
+		# roughly what it hides: the models are 1 m tall, the spruce and broadleaf about 9 m with a 2-3 m crown
+		add_occluder(p[0] - world_center.x, p[1] - world_center.y, size * (0.25 if not models.is_empty() else 2.0),
+			y + size * (1.0 if not models.is_empty() else 9.0))
 		var tint := 0.8 + rng.next() * 0.35
 		tints[kind].append(Color(tint * (0.94 + rng.next() * 0.12), tint, tint * (0.88 + rng.next() * 0.16)))
 		placed += 1
@@ -2473,6 +2851,7 @@ func _build_lighting() -> void:
 		light.name = "LampLight%d" % i
 		light.shadow_enabled = false
 		light.light_specular = 0.6
+		light.light_volumetric_fog_energy = 0.3 # the lamps' haze would grey the whole picture in rain
 		light.visible = false
 		root.add_child(light)
 		_lamp_pool.append(light)
@@ -2615,6 +2994,9 @@ func add_stand(parent: Node3D, label: String, xf: Transform3D, bays: int, tiers:
 			_append_xf(xfs, "StandRow", row)
 			_append_xf(xfs, "StandCrowd", row)
 	var half := (bays - 1) * 0.5 * STAND_BAY
+	var reach := (half + STAND_BAY * 0.5) * width_scale
+	var back := tiers * STAND_TREAD + STAND_CONCOURSE
+	_block_from(xf, Rect2(-reach, -back, 2.0 * reach, back), z_top + STAND_ROOF_FRONT) # (the parents stand at the origin)
 	_append_xf(xfs, "StandEndL_T%02d" % tiers, Transform3D(Basis.IDENTITY, Vector3(-half, 0, 0)))
 	_append_xf(xfs, "StandEndR_T%02d" % tiers, Transform3D(Basis.IDENTITY, Vector3(half, 0, 0)))
 	var crowd := _stand_crowd_material()
@@ -2985,6 +3367,8 @@ func _setup_tv_cameras() -> void:
 	tv_camera_kind.clear()
 	# a camera every ~110 m: a tower, a ground camera, a telephoto, a ground camera, and so on
 	var num_cams := maxi(6, int(track.L / 110.0))
+	var garages := _garage_span() if trackside_meshes().has("PitBay") else Vector2.ZERO
+	var pit_roof: float = (trackside_meshes().PitBay as Mesh).get_aabb().end.y if garages != Vector2.ZERO else 0.0
 	for i in num_cams:
 		var s := float(i) * (track.L / float(num_cams))
 		var k := track.sample(track.KC, s)
@@ -3001,9 +3385,18 @@ func _setup_tv_cameras() -> void:
 		else:
 			edge += 2.5
 		var lateral := side * edge
+		# a tower there would stand in the pit building (or race control by it): up on the front of its roof instead
+		var on_roof := kind == TvKind.TOWER and garages != Vector2.ZERO and side == signf(track.cfg.pit_offset) \
+				and _in_span(s, garages, 30.0)
+		if on_roof:
+			lateral = track.cfg.pit_offset + side * (5.4 + 1.5)
+		elif kind == TvKind.TOWER:
+			lateral = _tower_lateral(s, lateral, garages)
 		var p := track.pos(s, lateral)
 		var y := _road_y(s) + track.bank_rise(s, lateral)
-		if kind == TvKind.TOWER:
+		if on_roof:
+			y = _road_y(s) - 0.09 + pit_roof + 2.5
+		elif kind == TvKind.TOWER:
 			y += 6.4
 		else:
 			y = maxf(_ground_y(p[0], p[1], s, absf(lateral)) + 1.5, y + 1.8)
@@ -3026,6 +3419,21 @@ func _setup_tv_cameras() -> void:
 				if not _tv_keepout.has(cell):
 					_tv_keepout[cell] = []
 				_tv_keepout[cell].append(i)
+
+## How far from the centreline at s a TV tower meant for `lateral` stands: there, further out, or across the road
+## (not into the pit building), wherever no other stretch of the circuit (the way back from a hairpin, a loop)
+## runs within its run-off of it.
+func _tower_lateral(s: float, lateral: float, garages: Vector2) -> float:
+	var clear := track.half + track.cfg.runoff + 4.0
+	for l in [lateral, lateral * 1.5, -lateral, -lateral * 1.5]:
+		if signf(l) != signf(lateral) and garages != Vector2.ZERO and signf(l) == signf(track.cfg.pit_offset) \
+				and _in_span(s, garages, 30.0):
+			continue
+		var p := track.pos(s, l)
+		var near: float = surroundings.track_distance(p[0], p[1]).y if surroundings else track.project(p[0], p[1])[2]
+		if near >= clear:
+			return l
+	return lateral
 
 ## A scaffold tower under each trackside TV camera, its camera turned towards the road.
 func _build_tv_towers() -> void:

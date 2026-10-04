@@ -1,7 +1,7 @@
 ## Scenery check (dev tool): builds a circuit and saves screenshots of its scenery.
 ## Env: TRACK (default gp), HOUR, OUT (directory), VIEWS (comma list):
 ##   pos:<x>;<y>[;<dist>;<height>] (a track point from the south-west), lm:<Name> (a landmark from its front), wall<S> (the first tyre wall after S metres), kerb (the kerb of the tightest bend), obj:<Name> (the first, or INDEX-th, of a furniture MultiMesh, from in front), stands, stands_near, stands_back, pits, pits_near, gantry, aerial, high, city, casino,
-##   top<S> (from above the road at S metres), lap<N> (driver's-eye view N/8 of the way round the lap, e.g. lap3), at<S> (driver's eye at S metres)
+##   top<S> (from above the road at S metres), down<S> (straight down from 60 m), lap<N> (driver's-eye view N/8 of the way round the lap, e.g. lap3), at<S> (driver's eye at S metres)
 ##   godot --path godot -s tests/_scenery_shot.gd
 extends SceneTree
 
@@ -16,7 +16,9 @@ func _initialize() -> void:
 	await process_frame
 	var rs := RaceSettings.new()
 	rs.track = key
-	rs.opponents = 7
+	rs.opponents = int(env.call("OPP")) if env.call("OPP") != "" else 7
+	if env.call("WEATHER") != "":
+		rs.weather = env.call("WEATHER")
 	rs.start_hour = float(env.call("HOUR")) if env.call("HOUR") != "" else 14.0
 	var race := Race.new(rs)
 	world.set_race(race)
@@ -90,6 +92,16 @@ func _initialize() -> void:
 			var kd := signf(tr.KC[ki])
 			eye = _pt(world, ks - 12.0, kd * (tr.half - 3.0), 1.8)
 			at = _pt(world, ks + 6.0, kd * tr.half, 0.0)
+		elif v.begins_with("side"): # from beside the road at S metres, level with the road surface (SIDE d, default 40 m to the right)
+			var s := float(v.substr(4))
+			var sd := float(OS.get_environment("SIDE")) if OS.get_environment("SIDE") != "" else 40.0
+			eye = _pt(world, s - 20.0, sd, -2.0)
+			at = _pt(world, s, 0.0, 0.0)
+		elif v.begins_with("down"): # straight down on the road at S metres from the bird's-eye camera's height
+			var s := float(v.substr(4))
+			eye = _pt(world, s, 0.0, 60.0)
+			at = _pt(world, s, 0.0, 0.0)
+			cam.fov = 55.0
 		elif v.begins_with("top"): # from above and to the side of the road at S metres
 			var s := float(v.substr(3))
 			eye = _pt(world, s - 70.0, 60.0, 45.0)
@@ -135,8 +147,9 @@ func _initialize() -> void:
 					eye = _pt(world, c.s - 45.0, -c.side * 2.0, 2.0)
 					at = _pt(world, c.s, c.side * 15.0, 8.0)
 		cam.position = eye
-		cam.look_at(at, Vector3.UP)
+		cam.look_at(at, Vector3.UP if absf((at - eye).normalized().y) < 0.99 else Vector3.FORWARD)
 		world._update_lamp_lights() # the lamps' lights go to the ones nearest the camera (the world's _process is off)
+		world._update_beams() # likewise the headlight beams after dark
 		for f in 4:
 			await process_frame
 		await RenderingServer.frame_post_draw

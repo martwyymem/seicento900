@@ -16,8 +16,8 @@ extends RefCounted
 
 const G := 9.81
 const SECTOR_LEN := 200.0 ## roughly one marshal post per 200 m
-const DMG_FLOOR := 1.8 ## m/s of impact a car shrugs off
-const DMG_SPAN := 11.0 ## further m/s that wreck it in one hit
+const DMG_FLOOR := 1.2 ## m/s of impact a car shrugs off
+const DMG_SPAN := 8.5 ## further m/s that wreck it in one hit
 const REPAIR_TIME := 24.0 ## s of pit work to straighten a car on the verge of being wrecked
 const REPAIR_AT := 0.3 ## damage at which a team calls the car in for repairs
 const YELLOW_PACE := [1.0, 0.9, 0.72] ## bots' pace in a clear / yellow / double-yellow sector
@@ -25,6 +25,9 @@ const PLAYER_SLOW := 0.86 ## share of the racing line's limit you may do under d
 const HAZARD_PACE := 0.9 ## bots elsewhere on the lap while a double yellow is out
 const CATCHUP_PACE := 0.95 ## anyone more than CATCHUP_GAP off the car ahead under the safety car
 const CATCHUP_GAP := 25.0
+const LIMITER_DECEL := 3.0 ## m/s² the V limiter plans to brake at, for corners and for the car ahead
+const LIMITER_LOOK := 160.0 ## m of track the limiter looks ahead for slower stretches
+const LIMITER_GAP := 6.0 ## m the limiter keeps to the car ahead under the safety car
 const DELTA_PACE := 0.8 ## the fastest anyone may go under the safety car while catching the queue
 const RED_PACE := 0.6 ## ... and under a red flag on the way back to the pits
 const SC_PACE := 0.7
@@ -35,6 +38,11 @@ const RECOVER_OFF := 35.0 ## s for the marshals to clear a car beached off the r
 const RECOVER_ON := 50.0 ## ... and one stopped on the track (they work under the safety car)
 const RED_IMPACT := 19.0 ## m/s square into a barrier: the barrier needs repairing, red flag
 const RED_SUSPEND := 30.0 ## s the race stays suspended once everybody is in the pit lane
+const PILEUP_CARS := 2 ## cars out of control at once that bring yellow flags round the whole circuit
+const PILEUP_SC_CARS := 3 ## ... and cars lying across the track that bring out the safety car
+const PILEUP_SC_AFTER := 4.0 ## s that many must stay there before the safety car comes out
+const PILEUP_HOLD := 15.0 ## s the whole-circuit yellow stays out after the last car was in trouble
+const YELLOW_BEHIND := 2 ## sectors upstream of a double yellow that carry a yellow, so drivers see it coming
 const GIVE_BACK := 12.0 ## s to hand back a place taken under yellow / safety car before a penalty
 
 var race: Race
@@ -62,6 +70,10 @@ var _wrecks: Array = [] ## [clock] of recent crashes, for pile-up red flags
 var _red_reason := ""
 var _tick := 0.0
 var _fcy := false
+var _fcy_until := -100.0 ## race clock until which a pile-up keeps the whole circuit under yellow
+var _trouble := 0 ## cars spun, stopped or stranded right now
+var _blocking := 0 ## of those, the ones lying across the racing surface
+var _pileup_since := -100.0 ## last clock time fewer than PILEUP_SC_CARS cars lay across the track
 var hazard := false ## a car is stopped on the racing surface somewhere: everybody eases off
 
 func _init(race_: Race) -> void:
@@ -330,19 +342,24 @@ func _slide(c: RaceCar, dt: float) -> void:
 
 func _update_yellows(dt: float) -> void:
 	_cause.fill(0)
+	_trouble = 0
+	_blocking = 0
 	var settle := race.phase == "racing" and race.race_time > 8.0
 	for c in race.cars:
 		if c.finished or c.mode == "pit" or c.recovered or (c.dnf and not c.stranded):
 			continue
 		var on_track := absf(c.d) < track.half + 0.6
 		var lvl := 0
+		var trouble := false
 		if c.stranded:
 			lvl = 2 if on_track else 1
+			trouble = true
 		elif settle:
 			var off := absf(SimUtil.wrap_angle(c.heading - track.heading(c.s)))
 			var v := _speed(c)
 			if off > 1.0 or (v < 4.0 and not neutral):
 				lvl = 2 if on_track else 1
+				trouble = off > 1.0 or v < 2.0 # a crawl is a queue, not a wreck
 			elif absf(c.d) > track.half + 1.5:
 				lvl = 1
 			if lvl > 0:
@@ -351,14 +368,30 @@ func _update_yellows(dt: float) -> void:
 			continue
 		var k := sector_of(c.s)
 		_cause[k] = maxi(_cause[k], lvl)
-		var k0 := posmod(k - 1, n_sec)
-		_cause[k0] = maxi(_cause[k0], 1)
+		# the yellow starts upstream of the car, further back for one on the racing surface
+		for j in range(1, (YELLOW_BEHIND if lvl == 2 else 1) + 1):
+			var kb := posmod(k - j, n_sec)
+			_cause[kb] = maxi(_cause[kb], 1)
+		if lvl == 2:
+			var ka := (k + 1) % n_sec
+			_cause[ka] = maxi(_cause[ka], 1)
+		if trouble:
+			_trouble += 1
+			if on_track:
+				_blocking += 1
+	if _blocking < PILEUP_SC_CARS:
+		_pileup_since = race.clock
 	hazard = false
 	for k in n_sec:
 		if _cause[k] == 2:
 			hazard = true
 	# a car stranded anywhere: yellow flags all round the circuit, double where it lies
-	var fcy := _stranded() > 0
+	if _trouble >= PILEUP_CARS and race.phase == "racing":
+		if race.clock >= _fcy_until and not _fcy:
+			log_rc("Several cars in trouble — yellow flags around the whole circuit", "warn")
+			_fcy = true
+		_fcy_until = race.clock + PILEUP_HOLD
+	var fcy := _stranded() > 0 or race.clock < _fcy_until
 	if fcy:
 		for k in n_sec:
 			_cause[k] = maxi(_cause[k], 1)
@@ -431,6 +464,8 @@ func _escalate() -> void:
 		var on_track := _stranded_on_track()
 		if on_track > 0:
 			deploy_sc("car stopped on the track")
+		elif _blocking >= PILEUP_SC_CARS and race.clock - _pileup_since >= PILEUP_SC_AFTER:
+			deploy_sc("multi-car incident")
 		elif _stranded() >= 2:
 			deploy_sc("several cars stranded")
 
@@ -765,21 +800,51 @@ func _blocked_ahead(s: float) -> bool:
 				return true
 	return false
 
+## Share of the racing line's speed limit the player may use right now, or 0 when nothing limits them.
+func _cap_frac(p: RaceCar) -> float:
+	if flag == "red":
+		return RED_PACE + 0.1
+	if neutral:
+		if _queue_ahead(p)[0] > SC_GAP + 0.5 * _speed(p) + CATCHUP_GAP + 20.0:
+			return CATCHUP_PACE + 0.05 # catching the queue
+		return DELTA_PACE + 0.08
+	if yellow_at(p.s) == 2:
+		return PLAYER_SLOW
+	return 0.0
+
 ## The fastest the player may go right now (m/s), or 0 when nothing limits them.
 func speed_cap(p: RaceCar) -> float:
-	var cap := 0.0
-	if flag == "red":
-		cap = RED_PACE + 0.1
-	elif neutral:
-		cap = DELTA_PACE + 0.08
-		if _queue_ahead(p)[0] > SC_GAP + 0.5 * _speed(p) + CATCHUP_GAP + 20.0:
-			cap = CATCHUP_PACE + 0.05 # catching the queue
-	elif yellow_at(p.s) == 2:
-		cap = PLAYER_SLOW
-	if cap <= 0.0:
+	var frac := _cap_frac(p)
+	if frac <= 0.0:
 		return 0.0
 	var mu: float = race.tyres.tyre_grip(p.tyre, race.weather.wet)
-	return track.sample(track.PROF, p.s) * sqrt(mu) * cap
+	return track.sample(track.PROF, p.s) * sqrt(mu) * frac
+
+## What the V limiter holds the car to: the flag speed cap, brought down early enough for the slower
+## stretches ahead, and under a neutralisation never faster than lets the car stop short of the one in front
+## (so full throttle behind the safety car closes up to the queue instead of through it).
+func limiter_cap(p: RaceCar) -> float:
+	var frac := _cap_frac(p)
+	if frac <= 0.0:
+		return 0.0
+	var mu: float = race.tyres.tyre_grip(p.tyre, race.weather.wet)
+	var root := sqrt(mu) * frac
+	var cap := track.sample(track.PROF, p.s) * root
+	var x := 10.0
+	while x <= LIMITER_LOOK:
+		var va: float = track.sample(track.PROF, p.s + x) * root
+		cap = minf(cap, sqrt(va * va + 2.0 * LIMITER_DECEL * x))
+		x += 10.0
+	if neutral:
+		var ahead := _queue_ahead(p)
+		var gap: float = ahead[0]
+		if gap < INF:
+			var v_ahead: float = ahead[1]
+			if gap > LIMITER_GAP:
+				cap = minf(cap, sqrt(v_ahead * v_ahead + 2.0 * LIMITER_DECEL * (gap - LIMITER_GAP)))
+			else:
+				cap = minf(cap, maxf(0.0, v_ahead - (LIMITER_GAP - gap) * 0.5))
+	return cap
 
 func _player_rules(dt: float) -> void:
 	var p := race.player
@@ -830,13 +895,14 @@ func _player_rules(dt: float) -> void:
 			penalise(p, 5, "overtaking %s %s" % [_short(gb.car), gb.why])
 	# slow down under double yellows, and keep to the safety-car delta
 	var lim := speed_cap(p)
-	if lim <= 0.0:
+	# picking a way past a wreck gets some leeway
+	if lim <= 0.0 or _speed(p) <= (lim * 1.25 if _blocked_ahead(p.s) else lim) + 1.0:
+		# back under the limit: the time over it drains away, so a moment over the delta at each braking
+		# zone of a long safety-car period does not add up to a penalty
 		_over_t = maxf(0.0, _over_t - dt * 0.5)
 		if _over_t == 0.0:
 			_over_warned = false
-		return
-	# picking a way past a wreck gets some leeway
-	if _speed(p) > (lim * 1.25 if _blocked_ahead(p.s) else lim) + 1.0:
+	else:
 		_over_t += dt
 		if _over_t > 1.5 and not _over_warned:
 			_over_warned = true

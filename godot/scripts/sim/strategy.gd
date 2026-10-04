@@ -35,10 +35,11 @@ static func service_time(crew: String, parallel: bool, with_tyres: bool, litres:
 		return c.fixed * 0.5
 	return c.fixed + (maxf(tt, ft) if parallel else tt + ft)
 
-## Returns {time, fuel, dts, vs} (dts/vs per sample, only when record is set).
-func sim_lap(track: Track, mu: float, mass: float, record := false) -> Dictionary:
+## Returns {time, fuel, dts, vs} (dts/vs per sample, only when record is set). pace scales the
+## cornering speed the way a driver's skill does on the rail model (1 = at the grip limit).
+func sim_lap(track: Track, mu: float, mass: float, record := false, pace := 1.0) -> Dictionary:
 	var n := track.n
-	var sq := sqrt(mu)
+	var sq := sqrt(mu) * pace
 	var v := 20.0
 	var t := 0.0
 	var fuel := 0.0
@@ -112,7 +113,7 @@ func pit_lane_loss(track: Track, ref: Dictionary, mass: float) -> float:
 	return t - t_race
 
 ## Per-track calibration, cached on the track: {m_ref, mu_grid [[mu, time]], mass_exp, T0, fuel_per_lap,
-## pit_drive_loss, top_speed}.
+## pit_drive_loss, top_speed, vs (the reference lap's speed at each sample)}.
 func calibrate(track: Track) -> Dictionary:
 	if not track.cal.is_empty():
 		return track.cal
@@ -136,6 +137,7 @@ func calibrate(track: Track) -> Dictionary:
 		"fuel_per_lap": ref.fuel,
 		"pit_drive_loss": pit_lane_loss(track, ref, m_ref),
 		"top_speed": top,
+		"vs": ref.vs,
 	}
 	return track.cal
 

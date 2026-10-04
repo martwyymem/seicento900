@@ -19,6 +19,8 @@ extends Resource
 @export_enum("on", "off") var ai_learning := "on"
 @export_enum("on", "off", "near") var bot_physics := "on" ## near: only bots close to the player run the physics (saves battery)
 @export var demo := false ## menu background race: bots on rails, nothing learned
+@export var qualifying := false ## a single-car qualifying session instead of a race (see Qualifying.configure)
+@export var quali_grid := {} ## {order: car ids fastest first, skills, quali} from a championship round's qualifying; empty = use `grid`
 
 @export_group("Conditions")
 @export_enum("dry", "wet", "variable") var weather := "dry"

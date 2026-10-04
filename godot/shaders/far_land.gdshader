@@ -45,6 +45,7 @@ const float CURVE = 6.8e-8; // the Earth's curvature with refraction: drop = d^2
 const float FOG_SEEN_AT = 90.0; // the furthest the volumetric fog sees the far land: its own reach, in metres
 
 varying vec3 world_pos;
+varying vec3 world_normal;
 varying float dist;
 
 void vertex() {
@@ -52,6 +53,7 @@ void vertex() {
 	vec2 across = w.xz - CAMERA_POSITION_WORLD.xz;
 	w.y -= dot(across, across) * CURVE;
 	world_pos = w;
+	world_normal = (MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz;
 	dist = length(w - CAMERA_POSITION_WORLD);
 	vec4 clip = PROJECTION_MATRIX * VIEW_MATRIX * vec4(w, 1.0);
 	clip.z = clip.w * DEPTH_SCALE / max(dist, 1.0);
@@ -102,7 +104,19 @@ void fragment() {
 	// towns light up at night: points of street and window light, merging into a glow too far to pick out
 	float park = smoothstep(0.62, 0.72, blocks);
 	float lamps = smoothstep(0.66, 0.74, texture(grain, p * 0.21 + 0.13).r);
-	float lit = UV.y * (1.0 - park) * mix(lamps, 0.12, smoothstep(2500.0, 9000.0, dist)) * night;
+	// far off the single lamps merge into clusters of light (a district, a main road) rather than one even glow
+	float clusters = smoothstep(0.55, 0.75, texture(grain, p * 0.0031 + 0.52).r) * 0.35;
+	float lit = UV.y * (1.0 - park) * mix(lamps, clusters, smoothstep(2500.0, 9000.0, dist)) * night;
+	// the walls of the skyline's blocks (far_land.gd): rows of windows, some lit, too small far off to pick out
+	if (abs(world_normal.y) < 0.5) {
+		float along = dot(world_pos.xz, normalize(vec2(-world_normal.z, world_normal.x)));
+		vec2 pane = vec2(along / 3.2, world_pos.y / 3.5);
+		float on = step(0.6, texture(grain, floor(pane) * 0.137 + 0.29).r);
+		float glass = step(0.35, fract(pane.x)) * step(0.4, fract(pane.y));
+		col *= mix(1.0, 0.7, glass);
+		float floors = step(0.62, texture(grain, floor(pane / vec2(4.0, 3.0)) * 0.113 + 0.71).r) * 0.45; // lit floors, far off
+		lit = UV.y * mix(on * glass, floors, smoothstep(1200.0, 5000.0, dist)) * night;
+	}
 	EMISSION = vec3(1.0, 0.72, 0.42) * lit * 2.4;
 	ALBEDO = col * mix(1.0, 0.78, wet);
 	// UV.x is 1 on the open sea: a smooth surface that catches the sky

@@ -56,6 +56,7 @@ func run_scenario(sc: Dictionary) -> void:
 	var models := {"car_model": preload("res://tests/test_physics.gd").js_car_model()}
 	var race := Race.new(settings_for(sc), null, int(sc.seed), models)
 	race.bot_uturn = false # the reference puts a spun bot back on the line
+	race.bot_smooth_line = false
 	var grid := []
 	for c in race.cars:
 		grid.append(c.name)

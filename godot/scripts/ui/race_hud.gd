@@ -62,6 +62,7 @@ var _clock := 0.0
 var _event_seen := 0
 var _last_flag := ""
 var _fitted := {} ## name -> name shortened to fit the tower column
+var _sheet: Array = [] ## qualifying: the live time sheet the tower shows
 var _map_track: Track
 var _map_size := Vector2.ZERO
 var _map_points := PackedVector2Array()
@@ -146,6 +147,8 @@ func start(race_: Race, world_: Node3D, audio_: RaceAudio) -> void:
 	_refresh_t = 0.0
 	_map_track = null
 	_fitted.clear()
+	_sheet = Qualifying.sheet(race) if race.s.qualifying else []
+	pitwall.visible = not race.s.qualifying # nobody pits in qualifying
 	help.visible = true
 	show()
 	update(0.0)
@@ -167,7 +170,9 @@ func update(dt: float) -> void:
 	if _refresh_t > 0.0:
 		return
 	_refresh_t = REFRESH
-	tower.size.y = race.order.size() * (ROW_H + 2.0)
+	if race.s.qualifying:
+		_sheet = Qualifying.sheet(race)
+	tower.size.y = (_sheet.size() if race.s.qualifying else race.order.size()) * (ROW_H + 2.0)
 	var pw_h := _pitwall_height()
 	pitwall.offset_top = -14.0 - pw_h
 	tower.queue_redraw()
@@ -282,8 +287,31 @@ func _gap_text(car: RaceCar, leader: RaceCar, i: int) -> String:
 		return "+%dL" % down
 	return "+%.1f" % maxf(0.0, car.gap)
 
+## Qualifying: the time sheet instead of the running order, pole on top.
+func _draw_sheet() -> void:
+	for i in _sheet.size():
+		var r: Dictionary = _sheet[i]
+		var y := i * (ROW_H + 2.0)
+		if r.is_player:
+			_gbar(tower, Rect2(0, y, TOWER_W, ROW_H), YELLOW, Color(YELLOW, 0.55))
+		else:
+			_gbar(tower, Rect2(0, y, TOWER_W, ROW_H), BAR_HI, BAR_LO)
+		var base := y + 15.5
+		_text(tower, Vector2(4, base), str(i + 1), 13, INK, true, HORIZONTAL_ALIGNMENT_RIGHT, 24)
+		tower.draw_rect(Rect2(36, y + 3, 4, 15), r.color)
+		_text(tower, Vector2(44, base), str(r.number), 11, CmrStyle.INK_SOFT, true, HORIZONTAL_ALIGNMENT_RIGHT, 26)
+		var nm: String = str(r.name).to_upper() if r.is_player else str(r.name).split(" ")[-1].to_upper()
+		_text(tower, Vector2(78, base), _fit(nm, 12, 64), 12, INK, true)
+		var t := "—"
+		if r.time != null:
+			t = Race.fmt_time(r.time) if i == 0 else "+%.3f" % r.gap
+		_text(tower, Vector2(136, base), t, 12, INK, true, HORIZONTAL_ALIGNMENT_RIGHT, 100)
+
 func _draw_tower() -> void:
 	if not race:
+		return
+	if race.s.qualifying:
+		_draw_sheet()
 		return
 	var order := race.order
 	var leader: RaceCar = order[0]
@@ -331,7 +359,10 @@ func _draw_clock() -> void:
 		clock.draw_rect(r, Color(1, 1, 1, 0.35), false, 1.0)
 	# the clock
 	var time_text: String
-	if race.timed:
+	var quali := race.s.qualifying
+	if quali:
+		time_text = Race.fmt_time(maxf(0.0, race.race_time - p.lap_start)) if race.phase == "racing" else "0:00.00"
+	elif race.timed:
 		if race.phase == "countdown":
 			time_text = _clock_text(race.duration)
 		else:
@@ -343,7 +374,10 @@ func _draw_clock() -> void:
 	box_style.border_color = Color(1, 1, 1, 0.9)
 	box_style.border_width_top = 2
 	box_style.draw(clock.get_canvas_item(), box)
-	_text(clock, Vector2(x0 + 14, 34), "TIME LEFT" if race.timed else "RACE", 11, CmrStyle.INK_SOFT, true)
+	var clock_label := "TIME LEFT" if race.timed else "RACE"
+	if quali:
+		clock_label = "OUT LAP" if p.lap == 0 else "TIMED LAP %d / %d" % [mini(p.lap, race.R - 1), race.R - 1]
+	_text(clock, Vector2(x0 + 14, 34), clock_label, 11, CmrStyle.INK_SOFT, true)
 	clock.draw_string(_digits, Vector2(x0, 68), time_text, HORIZONTAL_ALIGNMENT_RIGHT, W - 18, 38, INK)
 	# rows
 	var lap := str(p.lap + 1) if race.timed else "%d / %d" % [mini(p.lap + 1, race.R), race.R]
@@ -351,6 +385,16 @@ func _draw_clock() -> void:
 	var current := Race.fmt_time(race.race_time - p.lap_start) if race.phase == "racing" else "—"
 	var rows := [["LAP", lap, INK], ["POS", "%d / %d" % [p.pos, race.cars.size()], INK],
 		["THIS LAP", current, INK], ["LAST", Race.fmt_time(p.last_lap), INK], ["BEST", Race.fmt_time(p.best_lap), best_col]]
+	if quali:
+		var pole = _sheet[0].time if not _sheet.is_empty() else null
+		var mine := 0
+		for k in _sheet.size():
+			if _sheet[k].is_player:
+				mine = k + 1
+		rows = [["LAP", "OUT" if p.lap == 0 else "%d / %d" % [mini(p.lap, race.R - 1), race.R - 1], INK],
+			["GRID", "P%d / %d" % [mine, _sheet.size()] if p.best_lap != null else "—", INK],
+			["LAST", Race.fmt_time(p.last_lap) if p.lap > 1 else "—", INK], ["BEST", Race.fmt_time(p.best_lap), PURPLE if mine == 1 and p.best_lap != null else INK],
+			["POLE", Race.fmt_time(pole), INK]]
 	var y := 82.0
 	for row in rows:
 		_gbar(clock, Rect2(x0 + 40, y, W - 40, 20), BAR_HI, Color(BAR_HI, 0.55), true)
@@ -403,7 +447,7 @@ func _draw_pacenote() -> void:
 		_text(pacenote, Vector2(r.position.x, r.position.y + 16), sector.to_upper(), 13, TEXT, true, HORIZONTAL_ALIGNMENT_CENTER, tw)
 
 func _draw_lights() -> void:
-	if not race or (race.phase != "countdown" and race.race_time >= 1.2):
+	if not race or race.s.qualifying or (race.phase != "countdown" and race.race_time >= 1.2):
 		return
 	var lit := clampi(int(floorf(race.clock)), 0, 5) if race.phase == "countdown" else 0
 	var w := 5.0 * 40.0 + 4.0 * 14.0 + 40.0
@@ -449,11 +493,22 @@ func _update_banner() -> void:
 		big = "Simulating the rest of the race…"
 		small = skip_note
 	elif race.phase == "countdown":
-		if race.clock < 1.0:
+		if race.s.qualifying:
+			big = "QUALIFYING"
+			small = "An out lap to warm the tyres, then %d timed lap%s — the fastest sets your grid slot" % [race.R - 1, "s" if race.R > 2 else ""]
+		elif race.clock < 1.0:
 			big = "Grid P%d" % p.grid
 			small = "Hold the throttle for a good launch — wait for lights out"
 	elif race.race_time < 1.5:
 		big = "GO!"
+	elif race.s.qualifying and p.finished:
+		big = "QUALIFYING COMPLETE"
+	elif race.s.qualifying and p.lap == 0 and race.race_time < 5.0:
+		big = "OUT LAP"
+		small = "Warm the tyres — the timed laps start at the line"
+	elif race.s.qualifying and p.lap >= 1 and race.race_time - p.lap_start < 3.0 and not p.dnf:
+		big = "TIMED LAP %d / %d" % [mini(p.lap, race.R - 1), race.R - 1]
+		small = "Last lap %s" % Race.fmt_time(p.last_lap) if p.lap > 1 else "Push!"
 	elif p.dnf and p.wrecked:
 		big = "CRASHED OUT"
 		small = "Enter — skip to results"
@@ -474,6 +529,8 @@ func _update_banner() -> void:
 		big = "WRONG WAY"
 	elif p.autopilot:
 		small = "CO-DRIVER · TIME ×%d ( , . )" % warp if warp > 1 else "AUTOPILOT (O)"
+	if race.s.qualifying and p.lap >= 1 and p.invalid_lap and small == "" and not p.finished:
+		small = "LAP INVALID — you left the track"
 	banner.text = big
 	banner_small.text = small
 	banner.add_theme_color_override("font_color", YELLOW if box else TEXT)
