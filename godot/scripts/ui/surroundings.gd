@@ -737,6 +737,7 @@ func _build_stands(root: Node3D) -> void:
 	var clear := track.half + track.cfg.runoff + 1.0
 	var c: Vector2 = world.world_center
 	var n := 0
+	var batch := {} # every stand's parts in one MultiMesh each (RaceWorld.flush_stands)
 	for flat in env.get("stands", []):
 		var pts := PackedVector2Array()
 		for k in range(0, flat.size() - 1, 2):
@@ -778,8 +779,9 @@ func _build_stands(root: Node3D) -> void:
 			var bays := maxi(1, roundi(length / world.STAND_BAY))
 			var front: Vector2 = placed.front
 			var xf := Transform3D(basis, Vector3(front.x - c.x, placed.ground, front.y - c.y))
-			world.add_stand(node, "Stand_%02d" % n, xf, bays, placed.tiers, n + 7, length / (bays * world.STAND_BAY), 700.0)
+			world.add_stand(node, "Stand_%02d" % n, xf, bays, placed.tiers, n + 7, length / (bays * world.STAND_BAY), 700.0, batch)
 			n += 1
+	world.flush_stands(node, batch)
 
 ## The straight stands an outline bending round a corner becomes: pieces of about STAND_SECTION m along the road,
 ## each parallel to it, from the outline's inner edge to its outer edge (their medians over the piece), found by

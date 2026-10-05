@@ -33,6 +33,8 @@ const STAND_CONCOURSE := 1.6 ## walkway behind the top tier
 const STAND_ROOF_FRONT := 4.3 ## roof front edge above the top tier ...
 const STAND_ROOF_OVERHANG := 1.6 ## ... and how far it overhangs the first tier
 const STAND_BOARDS := 8 ## sponsor boards StandBoard_0..7
+const CROWD_NEAR := 150.0 ## metres: past this a stand's spectators are the flat StandCrowdFar (a fifth of the triangles)
+const CROWD_CHUNK := 4 ## bays of crowd per MultiMesh, so a long stand swaps near and far crowd piece by piece
 const PIT_BAY := 12.0 ## a garage's width as built (stretched to the box spacing) and the building's depth
 const PIT_DEPTH := 15.0
 const GANTRY_BEAM_Y := 7.2 ## start gantry beam height over the road (build_trackside.py)
@@ -3005,6 +3007,7 @@ func _build_grandstands() -> void:
 	var front := _stands_front()
 	var depth := _stands_depth()
 	var lookup := _track_lookup(24.0)
+	var batch := {}
 	for piece in pieces:
 		var s := start_s + (float(piece) + 0.5) * span / float(pieces)
 		var center := track.pos(s, side * front)
@@ -3019,12 +3022,14 @@ func _build_grandstands() -> void:
 		if bays < 2:
 			continue
 		var xf := Transform3D(Basis(Vector3.UP, rot), Vector3(center[0] - world_center.x, y, center[1] - world_center.y))
-		add_stand(track_root, "Grandstand_%02d" % piece, xf, bays, tiers, piece)
+		add_stand(track_root, "Grandstand_%02d" % piece, xf, bays, tiers, piece, 1.0, 0.0, batch)
+	flush_stands(track_root, batch)
 
 ## One covered grandstand from the Blender pieces: bays of STAND_BAY metres (stretched along by width_scale)
 ## and tiers rows, its origin at the front of the first tier in the middle, local -z up the tiers. With a
-## crowd_range the spectators are only drawn that close.
-func add_stand(parent: Node3D, label: String, xf: Transform3D, bays: int, tiers: int, piece: int, width_scale := 1.0, crowd_range := 0.0) -> Node3D:
+## crowd_range the spectators are only drawn that close. With a batch the frame, ends and boards are
+## gathered there for flush_stands instead of getting MultiMeshes of their own.
+func add_stand(parent: Node3D, label: String, xf: Transform3D, bays: int, tiers: int, piece: int, width_scale := 1.0, crowd_range := 0.0, batch = null) -> Node3D:
 	var parts := trackside_meshes()
 	var frame_name := "StandFrame_T%02d" % tiers
 	if not parts.has(frame_name):
@@ -3045,32 +3050,62 @@ func add_stand(parent: Node3D, label: String, xf: Transform3D, bays: int, tiers:
 		for k in tiers:
 			var row := Transform3D(Basis.IDENTITY, at + Vector3(0.0, STAND_FIRST_Z + k * STAND_RISE, -k * STAND_TREAD))
 			_append_xf(xfs, "StandRow", row)
-			_append_xf(xfs, "StandCrowd", row)
+			_append_xf(xfs, "StandCrowd#%d" % (b / CROWD_CHUNK), row)
+			_append_xf(xfs, "StandCrowdFar#%d" % (b / CROWD_CHUNK), row)
 	var half := (bays - 1) * 0.5 * STAND_BAY
 	var reach := (half + STAND_BAY * 0.5) * width_scale
 	var back := tiers * STAND_TREAD + STAND_CONCOURSE
 	_block_from(xf, Rect2(-reach, -back, 2.0 * reach, back), z_top + STAND_ROOF_FRONT) # (the parents stand at the origin)
 	_append_xf(xfs, "StandEndL_T%02d" % tiers, Transform3D(Basis.IDENTITY, Vector3(-half, 0, 0)))
 	_append_xf(xfs, "StandEndR_T%02d" % tiers, Transform3D(Basis.IDENTITY, Vector3(half, 0, 0)))
-	var crowd := _stand_crowd_material()
-	for part in xfs:
+	var far_crowd := parts.has("StandCrowdFar")
+	for key in xfs:
+		var part: String = key.get_slice("#", 0) # crowd chunks are "StandCrowd#<chunk>"
 		if not parts.has(part):
 			continue
+		# the crowd and seat rows (most of a stand's triangles) stay with their stand, so they are culled and
+		# simplified with distance stand by stand
+		if batch != null and part != "StandCrowd" and part != "StandCrowdFar" and part != "StandRow":
+			if not batch.has(part):
+				batch[part] = []
+			for t in xfs[key]:
+				batch[part].append(root.transform * t)
+			continue
 		var list: Array[Transform3D] = []
-		list.assign(xfs[part])
-		var inst := MultiMeshInstance3D.new()
-		inst.name = part
-		inst.multimesh = _multimesh(parts[part], list, [])
-		if part == "StandCrowd":
-			inst.material_override = crowd
-			if crowd_range > 0.0:
-				inst.visibility_range_end = crowd_range
-				inst.visibility_range_end_margin = 60.0
-				inst.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
-		if part == "StandCrowd" or part == "StandRow" or part.begins_with("StandBoard"):
-			inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		list.assign(xfs[key])
+		var inst := _stand_part(part, list)
+		inst.name = key.replace("#", "_")
+		if part == "StandCrowd" and far_crowd:
+			inst.visibility_range_end = CROWD_NEAR
+			inst.visibility_range_end_margin = 10.0
+		elif part == "StandCrowdFar":
+			inst.visibility_range_begin = CROWD_NEAR
+			inst.visibility_range_begin_margin = 10.0
+		if part.begins_with("StandCrowd") and crowd_range > 0.0 and (part == "StandCrowdFar" or not far_crowd):
+			inst.visibility_range_end = crowd_range
+			inst.visibility_range_end_margin = 60.0
+			inst.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 		root.add_child(inst)
 	return root
+
+## One MultiMesh per stand part for every stand add_stand gathered in batch, under parent. Built stand by
+## stand, a circuit's 20-odd stands came to some 750 surfaces, each drawn once per pass and shadow cascade.
+func flush_stands(parent: Node3D, batch: Dictionary) -> void:
+	for part in batch:
+		var list: Array[Transform3D] = []
+		list.assign(batch[part])
+		parent.add_child(_stand_part(part, list))
+	batch.clear()
+
+func _stand_part(part: String, list: Array[Transform3D]) -> MultiMeshInstance3D:
+	var inst := MultiMeshInstance3D.new()
+	inst.name = part
+	inst.multimesh = _multimesh(trackside_meshes()[part], list, [])
+	if part.begins_with("StandCrowd"):
+		inst.material_override = _stand_crowd_material()
+	if part.begins_with("StandCrowd") or part == "StandRow" or part.begins_with("StandBoard"):
+		inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return inst
 
 ## The crowd material shared by every grandstand, and the seats painted in one of the circuit's colours.
 func _stand_crowd_material() -> ShaderMaterial:

@@ -51,6 +51,7 @@ var feed: Control
 var pitwall: Control
 var dash: Control
 var minimap: Control
+var minimap_base: Control ## the map's backdrop, line and flags under minimap's dots, redrawn only when they change
 var tags: Control
 var help: PanelContainer
 var flagbar: Control
@@ -72,6 +73,21 @@ var _map_points := PackedVector2Array()
 var _map_start := PackedVector2Array()
 var _map_scale := 1.0
 var _map_origin := Vector2.ZERO
+var _map_key := "" ## what minimap_base last drew (track, size, flags)
+var _dash_key := [] ## what the dash last drew (size, lit segments, gear, speed)
+var _dash_points := PackedVector2Array() ## the rev band's segments and their outlines, built once per size
+var _dash_colors := PackedColorArray()
+var _dash_indices := PackedInt32Array()
+var _dash_size := Vector2.ZERO
+## Batching: every polygon, circle, arc and polyline drawn on its own is a separate draw call, and text
+## between them breaks the glyph batches too (the HUD came to over 500 draw calls a frame). The busy
+## panels gather their flat shapes into one triangle list (_tri_*), draw circles from small textures
+## (_round_tex) and queue their text (_q) to draw grouped by font and size once the shapes are down.
+var _tri_points := PackedVector2Array()
+var _tri_colors := PackedColorArray()
+var _tri_indices := PackedInt32Array()
+var _queued: Array = [] ## [outline size (0 plain), font, at, text, align, width, size, colour]
+var _round_textures := {}
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -98,6 +114,8 @@ func _ready() -> void:
 	flagbar = _canvas(_draw_flag)
 	_place(flagbar, 0.5, 0.0, 0.5, 0.0, -210, 132, 210, 186)
 	_place(lights, 0.0, 0.0, 1.0, 0.0, 0, 140, 0, 212)
+	minimap_base = _canvas(_draw_minimap_base)
+	_place(minimap_base, 1.0, 0.0, 1.0, 0.0, -14 - MAP_S, 224, -14, 224 + MAP_S)
 	minimap = _canvas(_draw_minimap)
 	_place(minimap, 1.0, 0.0, 1.0, 0.0, -14 - MAP_S, 224, -14, 224 + MAP_S)
 	feed = _canvas(_draw_feed)
@@ -149,6 +167,8 @@ func start(race_: Race, world_: Node3D, audio_: RaceAudio) -> void:
 	_last_flag = ""
 	_refresh_t = 0.0
 	_map_track = null
+	_map_key = ""
+	_dash_key = []
 	_fitted.clear()
 	_sheet = Qualifying.sheet(race) if race.s.qualifying else []
 	pitwall.visible = not race.s.qualifying # nobody pits in qualifying
@@ -164,9 +184,14 @@ func update(dt: float) -> void:
 	if not race:
 		return
 	_clock += dt
-	dash.queue_redraw()
+	var dash_key := _dash_state()
+	if dash_key != _dash_key:
+		_dash_key = dash_key
+		dash.queue_redraw()
 	pacenote.queue_redraw()
 	flagbar.queue_redraw()
+	if _minimap_key() != _map_key:
+		minimap_base.queue_redraw()
 	minimap.queue_redraw()
 	tags.queue_redraw()
 	_refresh_t -= dt
@@ -228,6 +253,113 @@ func _gbar(c: Control, rect: Rect2, hi := BAR_HI, lo := BAR_LO, flip := false) -
 	var b := lo if not flip else hi
 	var pts := PackedVector2Array([rect.position, Vector2(rect.end.x, rect.position.y), rect.end, Vector2(rect.position.x, rect.end.y)])
 	c.draw_polygon(pts, PackedColorArray([a, b, b, a]))
+
+## A quad into the panel's triangle list, corners clockwise from the top left with their own colours.
+func _tri_quad(a: Vector2, b: Vector2, c: Vector2, d: Vector2, ca: Color, cb: Color, cc: Color, cd: Color) -> void:
+	var i := _tri_points.size()
+	_tri_points.append(a)
+	_tri_points.append(b)
+	_tri_points.append(c)
+	_tri_points.append(d)
+	_tri_colors.append(ca)
+	_tri_colors.append(cb)
+	_tri_colors.append(cc)
+	_tri_colors.append(cd)
+	_tri_indices.append_array(PackedInt32Array([i, i + 1, i + 2, i, i + 2, i + 3]))
+
+func _tri_rect(rect: Rect2, col: Color) -> void:
+	_tri_quad(rect.position, Vector2(rect.end.x, rect.position.y), rect.end, Vector2(rect.position.x, rect.end.y), col, col, col, col)
+
+## _gbar into the triangle list.
+func _tri_gbar(rect: Rect2, hi := BAR_HI, lo := BAR_LO) -> void:
+	_tri_quad(rect.position, Vector2(rect.end.x, rect.position.y), rect.end, Vector2(rect.position.x, rect.end.y), hi, lo, lo, hi)
+
+## A polyline into the triangle list: width wide with a pixel of soft edge each side, like an
+## antialiased draw_polyline (which Godot splits into dozens of draw calls). closed when it ends where it starts.
+func _tri_strip(pts: PackedVector2Array, width: float, col: Color, closed := false) -> void:
+	var n := pts.size()
+	if n < 2:
+		return
+	var clear := Color(col, 0.0)
+	var half := width * 0.5
+	var base := _tri_points.size()
+	for i in n:
+		var prev := pts[i - 1] if i > 0 else (pts[n - 2] if closed else pts[0])
+		var next := pts[i + 1] if i < n - 1 else (pts[1] if closed else pts[n - 1])
+		var n1 := (pts[i] - prev).normalized().orthogonal() if pts[i] != prev else Vector2.ZERO
+		var n2 := (next - pts[i]).normalized().orthogonal() if next != pts[i] else Vector2.ZERO
+		var m := (n1 + n2).normalized() if n1 + n2 != Vector2.ZERO else (n1 if n1 != Vector2.ZERO else n2)
+		# mitre the corner, but not into a spike on a hairpin
+		var k := 1.0 / maxf(0.5, m.dot(n1 if n1 != Vector2.ZERO else n2))
+		for off in [half + 1.0, half, -half, -half - 1.0]:
+			_tri_points.append(pts[i] + m * off * k)
+		_tri_colors.append(clear)
+		_tri_colors.append(col)
+		_tri_colors.append(col)
+		_tri_colors.append(clear)
+	for i in n - 1:
+		var a := base + i * 4
+		var b := a + 4
+		for band in 3:
+			_tri_indices.append_array(PackedInt32Array([a + band, b + band, b + band + 1, a + band, b + band + 1, a + band + 1]))
+
+## Draws the triangle list in one call and empties it.
+func _tri_flush(c: Control) -> void:
+	if not _tri_indices.is_empty():
+		RenderingServer.canvas_item_add_triangle_array(c.get_canvas_item(), _tri_indices, _tri_points, _tri_colors)
+	_tri_points.clear()
+	_tri_colors.clear()
+	_tri_indices.clear()
+
+## Text for _q_flush (outlined like _text_o when outline).
+func _q(at: Vector2, s: String, size: int, color: Color, font: Font = null, align := HORIZONTAL_ALIGNMENT_LEFT, width := -1.0, outline := false) -> void:
+	var f := font if font else _bold
+	if outline:
+		_queued.append([maxi(2, size / 9), f, at, s, align, width, size, Color(0.08, 0.03, 0.12, 0.85 * color.a)])
+	_queued.append([0, f, at, s, align, width, size, color])
+
+## The queued text, outlines first, grouped by font and size so each group's glyphs batch together.
+func _q_flush(c: Control) -> void:
+	var groups := {}
+	var keys: Array = []
+	for t in _queued:
+		var key := Vector3i(-t[0], t[1].get_instance_id() % 1000003, t[6])
+		if not groups.has(key):
+			groups[key] = []
+			keys.append(key)
+		groups[key].append(t)
+	keys.sort()
+	for key in keys:
+		for t in groups[key]:
+			if t[0] > 0:
+				c.draw_string_outline(t[1], t[2], t[3], t[4], t[5], t[6], t[0], t[7])
+			else:
+				c.draw_string(t[1], t[2], t[3], t[4], t[5], t[6], t[7])
+	_queued.clear()
+
+## A white antialiased disc (inner 0) or ring (inner: hole radius over outer radius) px texels across,
+## tinted when drawn with _round.
+func _round_tex(px: int, inner: float) -> Texture2D:
+	var key := "%d:%.3f" % [px, inner]
+	if _round_textures.has(key):
+		return _round_textures[key]
+	var img := Image.create_empty(px, px, false, Image.FORMAT_RGBA8)
+	var half := px * 0.5
+	for y in px:
+		for x in px:
+			var d := Vector2(x + 0.5 - half, y + 0.5 - half).length()
+			var a := clampf(half - d + 0.5, 0.0, 1.0)
+			if inner > 0.0:
+				a = minf(a, clampf(d - inner * half + 0.5, 0.0, 1.0))
+			img.set_pixel(x, y, Color(1, 1, 1, a))
+	var tex := ImageTexture.create_from_image(img)
+	_round_textures[key] = tex
+	return tex
+
+## A disc or ring of outer radius r from _round_tex (drawn about two texels per HUD pixel).
+func _round(c: Control, center: Vector2, r: float, col: Color, inner := 0.0) -> void:
+	var tex := _round_tex(maxi(8, ceili(r) * 4), inner)
+	c.draw_texture_rect(tex, Rect2(center - Vector2(r, r), Vector2(r, r) * 2.0), false, col)
 
 func _text_w(s: String, size: int, bold := false) -> float:
 	return (_bold if bold else _font).get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
@@ -318,28 +450,40 @@ func _draw_tower() -> void:
 		return
 	var order := race.order
 	var leader: RaceCar = order[0]
+	# shapes first, then the badges' discs and rings, then all the text (see _tri_quad)
+	var badges: Array = [] ## [centre, colour]
 	for i in order.size():
 		var c: RaceCar = order[i]
 		var y := i * (ROW_H + 2.0)
 		var fade := 0.45 if c.dnf else 1.0
 		if c.is_player:
-			_gbar(tower, Rect2(0, y, TOWER_W, ROW_H), YELLOW, Color(YELLOW, 0.55))
+			_tri_gbar(Rect2(0, y, TOWER_W, ROW_H), YELLOW, Color(YELLOW, 0.55))
 		else:
-			_gbar(tower, Rect2(0, y, TOWER_W, ROW_H), Color(BAR_HI, BAR_HI.a * fade), Color(BAR_LO, BAR_LO.a * fade))
+			_tri_gbar(Rect2(0, y, TOWER_W, ROW_H), Color(BAR_HI, BAR_HI.a * fade), Color(BAR_LO, BAR_LO.a * fade))
 		var base := y + 15.5
-		_text(tower, Vector2(4, base), str(i + 1), 13, Color(INK, fade), true, HORIZONTAL_ALIGNMENT_RIGHT, 24)
-		tower.draw_rect(Rect2(36, y + 3, 4, 15), Color(c.color, fade))
+		_q(Vector2(4, base), str(i + 1), 13, Color(INK, fade), _bold, HORIZONTAL_ALIGNMENT_RIGHT, 24)
+		_tri_rect(Rect2(36, y + 3, 4, 15), Color(c.color, fade))
 		if c.damage > 0.05:
 			# damage gauge: a thin bar beside the team colour, orange then red as the car gets worse
 			var dh := 15.0 * clampf(c.damage, 0.15, 1.0)
-			tower.draw_rect(Rect2(41, y + 18 - dh, 2, dh), Color(RED if c.damage >= REPAIR_AT_HUD else CmrStyle.ORANGE_SOFT, fade))
-		_text(tower, Vector2(44, base), str(c.number), 11, Color(CmrStyle.INK_SOFT, fade), true, HORIZONTAL_ALIGNMENT_RIGHT, 26)
+			_tri_rect(Rect2(41, y + 18 - dh, 2, dh), Color(RED if c.damage >= REPAIR_AT_HUD else CmrStyle.ORANGE_SOFT, fade))
+		_q(Vector2(44, base), str(c.number), 11, Color(CmrStyle.INK_SOFT, fade), _bold, HORIZONTAL_ALIGNMENT_RIGHT, 26)
 		var nm := c.name.to_upper() if c.is_player else Brain.short(c).to_upper()
-		_text(tower, Vector2(78, base), _fit(nm, 12, 64), 12, Color(INK, fade), true)
+		_q(Vector2(78, base), _fit(nm, 12, 64), 12, Color(INK, fade))
 		var pit := c.mode == "pit"
-		_text(tower, Vector2(146, base), _gap_text(c, leader, i), 12, Color(Color("#a02000") if pit else INK, fade), true, HORIZONTAL_ALIGNMENT_RIGHT, 62)
-		_badge(tower, Vector2(223, y + 10.5), c.tyre.c)
-		_text(tower, Vector2(236, base), str(c.stops), 11, Color(INK, fade), true, HORIZONTAL_ALIGNMENT_RIGHT, 16)
+		_q(Vector2(146, base), _gap_text(c, leader, i), 12, Color(Color("#a02000") if pit else INK, fade), _bold, HORIZONTAL_ALIGNMENT_RIGHT, 62)
+		# _badge: the compound letter in a ring of the compound's colour on a dark disc
+		var key: String = c.tyre.c if c.tyre.c else "M"
+		var center := Vector2(223, y + 10.5)
+		badges.append([center, race.tyres.compounds[key].color])
+		_q(center + Vector2(-8.5, 9 * 0.36), key, 9, race.tyres.compounds[key].color, _bold, HORIZONTAL_ALIGNMENT_CENTER, 17.0)
+		_q(Vector2(236, base), str(c.stops), 11, Color(INK, fade), _bold, HORIZONTAL_ALIGNMENT_RIGHT, 16)
+	_tri_flush(tower)
+	for b in badges:
+		_round(tower, b[0], 8.5, Color("#111111"))
+	for b in badges:
+		_round(tower, b[0], 8.5, b[1], 6.0 / 8.5)
+	_q_flush(tower)
 
 # ---------------- clock stack (top right) ----------------
 ## Segmented lap progress, the big clock, then lap / position / lap-time rows fading to the left.
@@ -730,45 +874,89 @@ func _draw_pitwall() -> void:
 # ---------------- dash (bottom right) ----------------
 ## CMR 2.0 rev counter: slanted segments rising along a curve (cyan, amber near the top, red at the
 ## limiter), rpm figures underneath, the gear as one big digit and the speed beside it.
-func _draw_dash() -> void:
+const DASH_SEGMENTS := 26
+
+## What the dash shows: [size, segments lit, gear, km/h]. It is only redrawn when this changes.
+func _dash_state() -> Array:
 	if not race:
-		return
+		return []
 	var p := race.player
-	var W := dash.size.x
-	var H := dash.size.y
 	var kmh := roundi(absf(p.speed) * 3.6)
 	var gear := str(p.gear + 1)
 	if p.rev or p.speed < -0.3:
 		gear = "R"
 	elif kmh < 1 and p.control == "free" and p.throttle < 0.05:
 		gear = "N"
-	var limiter: float = race.spec.limiter
-	var frac := clampf(p.rpm / limiter, 0.0, 1.0)
-	var n := 26
+	var frac := clampf(p.rpm / race.spec.limiter, 0.0, 1.0)
+	# segment i is lit while (i + 0.78) / n <= frac + 0.03
+	var lit := clampi(floori((frac + 0.03) * DASH_SEGMENTS - 0.78) + 1, 0, DASH_SEGMENTS)
+	return [dash.size, lit, gear, kmh]
+
+## The rev band's segments (four points each, then their outlines as thin quads), for dash.size.
+func _build_dash(W: float, H: float) -> void:
+	_dash_size = Vector2(W, H)
+	var n := DASH_SEGMENTS
 	var arc_w := W - 96.0
 	var bottom := H - 26.0
-	# the band's lower edge curves up toward the redline and the band thickens as it goes, like CMR's
-	var edge := func(t: float) -> Vector2: return Vector2(arc_w * t, bottom - 96.0 * pow(t, 2.6))
-	var thick := func(t: float) -> float: return 10.0 + 22.0 * t
+	_dash_points = PackedVector2Array()
+	_dash_colors = PackedColorArray()
+	_dash_indices = PackedInt32Array()
+	var outline := Color(0.08, 0.03, 0.12, 0.5)
+	var corners: Array[PackedVector2Array] = []
 	for i in n:
 		var t0 := float(i) / n
 		var t1 := (i + 0.78) / n
-		var p0: Vector2 = edge.call(t0)
-		var p1: Vector2 = edge.call(t1)
+		# the band's lower edge curves up toward the redline and the band thickens as it goes, like CMR's
+		var p0 := Vector2(arc_w * t0, bottom - 96.0 * pow(t0, 2.6))
+		var p1 := Vector2(arc_w * t1, bottom - 96.0 * pow(t1, 2.6))
 		var d := (p1 - p0).normalized()
 		var up := Vector2(d.y, -d.x)
-		var poly := PackedVector2Array([p0, p1, p1 + up * thick.call(t1), p0 + up * thick.call(t0)])
+		var poly := PackedVector2Array([p0, p1, p1 + up * (10.0 + 22.0 * t1), p0 + up * (10.0 + 22.0 * t0)])
+		corners.append(poly)
+		var k := _dash_points.size()
+		_dash_points.append_array(poly)
+		for j in 4:
+			_dash_colors.append(Color.WHITE)
+		_dash_indices.append_array(PackedInt32Array([k, k + 1, k + 2, k, k + 2, k + 3]))
+	# the outlines after all the fills, so a lit segment never covers its neighbour's edge
+	for poly in corners:
+		for j in 4:
+			var a := poly[j]
+			var b := poly[(j + 1) % 4]
+			var off := (b - a).normalized().orthogonal() * 0.5
+			var k := _dash_points.size()
+			_dash_points.append_array(PackedVector2Array([a + off, b + off, b - off, a - off]))
+			for m in 4:
+				_dash_colors.append(outline)
+			_dash_indices.append_array(PackedInt32Array([k, k + 1, k + 2, k, k + 2, k + 3]))
+
+func _draw_dash() -> void:
+	if not race:
+		return
+	var W := dash.size.x
+	var H := dash.size.y
+	var state := _dash_state()
+	var lit: int = state[1]
+	if _dash_size != dash.size:
+		_build_dash(W, H)
+	var n := DASH_SEGMENTS
+	for i in n:
+		var t0 := float(i) / n
 		var col := Color(1, 1, 1, 0.16)
-		if t1 <= frac + 0.03:
+		if i < lit:
 			col = RED if t0 >= 0.9 else (YELLOW if t0 >= 0.78 else BLUE)
-		dash.draw_colored_polygon(poly, col)
-		dash.draw_polyline(poly + PackedVector2Array([poly[0]]), Color(0.08, 0.03, 0.12, 0.5), 1.0)
+		for j in 4:
+			_dash_colors[i * 4 + j] = col
+	RenderingServer.canvas_item_add_triangle_array(dash.get_canvas_item(), _dash_indices, _dash_points, _dash_colors)
+	var limiter: float = race.spec.limiter
+	var arc_w := W - 96.0
 	var thousands := int(limiter / 1000.0)
 	for k in range(1, thousands + 1):
 		var x := arc_w * (k * 1000.0 / limiter)
-		_text_o(dash, Vector2(x - 10, H - 6), str(k), 13, TEXT, _bold, HORIZONTAL_ALIGNMENT_CENTER, 20)
-	_text_o(dash, Vector2(W - 92, H - 58), gear, 92, TEXT, _bold, HORIZONTAL_ALIGNMENT_CENTER, 92)
-	_text_o(dash, Vector2(W - 92, H - 6), "KMH %d" % kmh, 16, TEXT, _bold, HORIZONTAL_ALIGNMENT_CENTER, 92)
+		_q(Vector2(x - 10, H - 6), str(k), 13, TEXT, _bold, HORIZONTAL_ALIGNMENT_CENTER, 20, true)
+	_q(Vector2(W - 92, H - 58), state[2], 92, TEXT, _bold, HORIZONTAL_ALIGNMENT_CENTER, 92, true)
+	_q(Vector2(W - 92, H - 6), "KMH %d" % state[3], 16, TEXT, _bold, HORIZONTAL_ALIGNMENT_CENTER, 92, true)
+	_q_flush(dash)
 
 func _build_map() -> void:
 	var tr := race.track
@@ -790,21 +978,42 @@ func _build_map() -> void:
 	var n := Vector2(n0[0], n0[1])
 	_map_start = PackedVector2Array([(2.0 * a - n) * _map_scale + _map_origin, n * _map_scale + _map_origin])
 
+## What minimap_base shows: the circuit, the map's size and the flags along it.
+func _minimap_key() -> String:
+	if not race:
+		return ""
+	var key := "%d:%s" % [race.track.get_instance_id(), minimap.size]
+	var rc := race.rc
+	if rc:
+		key += ":%s:%d" % [rc.flag, hash(rc.yellow)]
+	return key
+
+## The map's backdrop, the circuit and its flagged sectors; the cars go on minimap over it.
+func _draw_minimap_base() -> void:
+	if not race:
+		return
+	_map_key = _minimap_key()
+	var rect := Rect2(Vector2.ZERO, minimap_base.size)
+	minimap_base.draw_rect(rect, Color(0.03, 0.08, 0.17, 0.55))
+	minimap_base.draw_rect(Rect2(0, 0, rect.size.x, 2), Color(CmrStyle.VIOLET, 0.7))
+	if _map_track != race.track or _map_size != minimap.size:
+		_build_map()
+	_tri_strip(_map_points, 7.0, Color(0.01, 0.05, 0.12, 0.8), true)
+	_tri_strip(_map_points, 3.2, Color("#e8f2ff"), true)
+	_tri_strip(_map_start, 3.0, RED)
+	if race.rc:
+		_draw_map_flags(race.rc)
+	_tri_flush(minimap_base)
+
 func _draw_minimap() -> void:
 	if not race:
 		return
-	var rect := Rect2(Vector2.ZERO, minimap.size)
-	minimap.draw_rect(rect, Color(0.03, 0.08, 0.17, 0.55))
-	minimap.draw_rect(Rect2(0, 0, rect.size.x, 2), Color(CmrStyle.VIOLET, 0.7))
 	if _map_track != race.track or _map_size != minimap.size:
 		_build_map()
-	minimap.draw_polyline(_map_points, Color(0.01, 0.05, 0.12, 0.8), 7.0, true)
-	minimap.draw_polyline(_map_points, Color("#e8f2ff"), 3.2, true)
-	minimap.draw_line(_map_start[0], _map_start[1], RED, 3.0, true)
 	var rc := race.rc
-	if rc:
-		_draw_map_flags(rc)
 	var p := race.player
+	# all the dots, then all their rims: two batched draws instead of two per car
+	var dots: Array = [] ## [centre, colour]
 	for car in race.cars:
 		if car.stranded and not car.recovered:
 			var wp := Vector2(car.x, car.y) * _map_scale + _map_origin
@@ -812,13 +1021,15 @@ func _draw_minimap() -> void:
 			minimap.draw_line(wp + Vector2(-3.5, 3.5), wp + Vector2(3.5, -3.5), RED, 2.0, true)
 		if car.dnf or car == p:
 			continue
-		var at := Vector2(car.x, car.y) * _map_scale + _map_origin
-		minimap.draw_circle(at, 3.2, car.color)
-		minimap.draw_arc(at, 3.2, 0.0, TAU, 12, Color(0, 0, 0, 0.7), 1.0, true)
+		dots.append([Vector2(car.x, car.y) * _map_scale + _map_origin, car.color])
+	for d in dots:
+		_round(minimap, d[0], 3.2, d[1])
+	for d in dots:
+		_round(minimap, d[0], 3.7, Color(0, 0, 0, 0.7), 2.7 / 3.7)
 	if not p.dnf:
 		var pp := Vector2(p.x, p.y) * _map_scale + _map_origin
-		minimap.draw_circle(pp, 5.5, YELLOW)
-		minimap.draw_arc(pp, 5.5, 0.0, TAU, 16, Color.BLACK, 2.0, true)
+		_round(minimap, pp, 5.5, YELLOW)
+		_round(minimap, pp, 6.5, Color.BLACK, 4.5 / 6.5)
 	if rc and rc.sc_state in ["out", "in"]:
 		var sp := Vector2(rc.sc.x, rc.sc.y) * _map_scale + _map_origin
 		var on := fmod(_clock, 0.5) < 0.25
@@ -841,7 +1052,7 @@ func _draw_map_flags(rc: RaceControl) -> void:
 			pts.append(Vector2(q[0], q[1]) * _map_scale + _map_origin)
 			s += step
 		if pts.size() >= 2:
-			minimap.draw_polyline(pts, col, 4.0 if lvl == 2 else 3.2, true)
+			_tri_strip(pts, 4.0 if lvl == 2 else 3.2, col)
 
 func _draw_tags() -> void:
 	if not race or not is_instance_valid(world) or not world.camera:

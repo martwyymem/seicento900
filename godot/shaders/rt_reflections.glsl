@@ -14,6 +14,9 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(rgba16f, set = 0, binding = 0) uniform restrict image2D color_image;
 layout(set = 0, binding = 1) uniform sampler2D depth_texture;
 layout(set = 0, binding = 2) uniform sampler2D normal_roughness_texture;
+// one traced sample per 2x2 block: rgb what the reflection adds over the sky Godot reflected, a the
+// distance to the surface (negative: nothing traced there)
+layout(rgba16f, set = 0, binding = 4) uniform restrict image2D half_image;
 layout(set = 0, binding = 3, std140) uniform Params {
 	mat4 inv_projection; // depth-buffer NDC -> view space
 	mat4 cam_to_world;
@@ -26,6 +29,12 @@ layout(set = 0, binding = 3, std140) uniform Params {
 	ivec4 roots; // x static top-level root (-1 none), y dynamic root (-1 none), z first dynamic instance, w debug view
 	vec4 settings; // x strength, y roughness cut-off, z max ray length
 } params;
+
+// x: 0 trace every pixel, 1 trace the glossiest pixel of each 2x2 block into half_image, 2 composite every
+// pixel from half_image (tracing it itself only where no traced neighbour matches it)
+layout(push_constant, std430) uniform PassInfo {
+	ivec4 mode;
+} pass_info;
 
 // BVH nodes: vec4(min, first) vec4(max, count), see rt_bvh.gd
 layout(set = 1, binding = 0, std430) restrict readonly buffer BlasNodes {
@@ -238,27 +247,22 @@ vec3 depth_normal(vec2 uv, vec2 texel, vec3 p) {
 	return dot(n, p) > 0.0 ? -n : n;
 }
 
-void main() {
-	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-	ivec2 size = imageSize(color_image);
-	if (any(greaterThanEqual(pixel, size))) {
-		return;
-	}
+// What a pixel reflects: weight 0 where it shows nothing (sky, rough or too faint), else the ray to trace
+// and the distance to the surface.
+struct Surface {
+	float weight;
+	vec3 origin;
+	vec3 dir;
+	float dist;
+};
+
+Surface surface_at(ivec2 pixel, ivec2 size, vec3 cam_pos) {
+	Surface s;
+	s.weight = 0.0;
 	vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
-	vec3 cam_pos = params.cam_to_world[3].xyz;
-
-	if (params.roots.w == 1) {
-		// debug: primary rays, the traced scene should line up with the rendered one
-		vec4 vp = params.inv_projection * vec4(uv * 2.0 - 1.0, 0.5, 1.0);
-		vec3 dir = normalize(mat3(params.cam_to_world) * (vp.xyz / vp.w));
-		vec3 c = trace(cam_pos, dir, params.settings.z, false) ? shade_hit(cam_pos, dir) : sky(dir);
-		imageStore(color_image, pixel, vec4(c, 1.0));
-		return;
-	}
-
 	float depth = textureLod(depth_texture, uv, 0.0).r;
 	if (depth <= 0.0) {
-		return; // sky
+		return s; // sky
 	}
 	vec4 nr = textureLod(normal_roughness_texture, uv, 0.0);
 	// Godot's packing: roughness above 0.5 marks dynamic objects
@@ -273,10 +277,10 @@ void main() {
 	}
 	float cut_off = params.settings.y;
 	float weight = 1.0 - smoothstep(cut_off * 0.35, cut_off, roughness);
-	if (weight <= 0.001 && params.roots.w != 2) {
-		return;
+	bool debug = params.roots.w == 2;
+	if (weight <= 0.001 && !debug) {
+		return s;
 	}
-
 	vec3 view_pos = view_position(uv, depth);
 	vec3 world_pos = (params.cam_to_world * vec4(view_pos, 1.0)).xyz;
 	vec3 view_n = normalize(nr.xyz * 2.0 - 1.0);
@@ -293,16 +297,89 @@ void main() {
 	float cos_v = clamp(dot(-v, n), 0.0, 1.0);
 	float fresnel = 0.04 + 0.96 * pow(1.0 - cos_v, 5.0);
 	weight *= fresnel * params.settings.x * exp(-params.fog.w * dist);
+	if (weight < 0.02 && !debug) {
+		return s; // too faint to see (rough steel, matt paint face-on): skip the trace
+	}
+	s.weight = max(weight, 1e-6);
+	s.origin = world_pos + n * (0.02 + dist * 0.0015);
+	s.dir = r;
+	s.dist = dist;
+	return s;
+}
 
-	vec3 origin = world_pos + n * (0.02 + dist * 0.0015);
-	vec3 reflected = trace(origin, r, params.settings.z, false) ? shade_hit(origin, r) : sky(r);
+vec3 traced(Surface s) {
+	return trace(s.origin, s.dir, params.settings.z, false) ? shade_hit(s.origin, s.dir) : sky(s.dir);
+}
+
+void main() {
+	ivec2 size = imageSize(color_image);
+	vec3 cam_pos = params.cam_to_world[3].xyz;
+	int mode = pass_info.mode.x;
+
+	if (mode == 1) {
+		ivec2 block = ivec2(gl_GlobalInvocationID.xy);
+		if (any(greaterThanEqual(block, imageSize(half_image)))) {
+			return;
+		}
+		Surface best;
+		best.weight = 0.0;
+		for (int k = 0; k < 4; k++) {
+			ivec2 p = block * 2 + ivec2(k & 1, k >> 1);
+			if (all(lessThan(p, size))) {
+				Surface s = surface_at(p, size, cam_pos);
+				if (s.weight > best.weight) {
+					best = s;
+				}
+			}
+		}
+		imageStore(half_image, block, best.weight > 0.0 ? vec4(traced(best) - sky(best.dir), best.dist) : vec4(0.0, 0.0, 0.0, -1.0));
+		return;
+	}
+
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	if (any(greaterThanEqual(pixel, size))) {
+		return;
+	}
+	if (params.roots.w == 1) {
+		// debug: primary rays, the traced scene should line up with the rendered one
+		vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+		vec4 vp = params.inv_projection * vec4(uv * 2.0 - 1.0, 0.5, 1.0);
+		vec3 dir = normalize(mat3(params.cam_to_world) * (vp.xyz / vp.w));
+		vec3 c = trace(cam_pos, dir, params.settings.z, false) ? shade_hit(cam_pos, dir) : sky(dir);
+		imageStore(color_image, pixel, vec4(c, 1.0));
+		return;
+	}
+	Surface s = surface_at(pixel, size, cam_pos);
+	if (s.weight <= 0.0) {
+		return;
+	}
 	vec4 colour = imageLoad(color_image, pixel);
 	if (params.roots.w == 2) {
 		// debug: what the reflections see
-		imageStore(color_image, pixel, vec4(reflected, colour.a));
+		imageStore(color_image, pixel, vec4(traced(s), colour.a));
 		return;
 	}
+	vec3 added = vec3(0.0);
+	float found = 0.0;
+	if (mode == 2) {
+		// the traced samples of the blocks around, by distance and only from a surface at about the same depth
+		ivec2 half_size = imageSize(half_image);
+		vec2 at = (vec2(pixel) + 0.5) * 0.5 - 0.5;
+		ivec2 b0 = ivec2(floor(at));
+		for (int k = 0; k < 4; k++) {
+			ivec2 b = clamp(b0 + ivec2(k & 1, k >> 1), ivec2(0), half_size - 1);
+			vec4 smp = imageLoad(half_image, b);
+			if (smp.a < 0.0) {
+				continue;
+			}
+			vec2 f = max(vec2(0.0), 1.0 - abs(at - vec2(b)));
+			float w = (f.x * f.y + 0.01) * max(0.0, 1.0 - abs(smp.a - s.dist) / (0.04 * s.dist + 0.05));
+			added += smp.rgb * w;
+			found += w;
+		}
+	}
 	// Godot already reflected the sky here; swap it for what the ray found
-	colour.rgb = max(colour.rgb + weight * (reflected - sky(r)), colour.rgb * (1.0 - weight));
+	added = found > 1e-4 ? added / found : traced(s) - sky(s.dir);
+	colour.rgb = max(colour.rgb + s.weight * added, colour.rgb * (1.0 - s.weight));
 	imageStore(color_image, pixel, colour);
 }

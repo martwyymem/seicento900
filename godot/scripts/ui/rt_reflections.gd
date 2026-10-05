@@ -17,8 +17,16 @@ var _params := RID()
 var _buffers := {} ## name -> [RID, capacity in bytes]
 var _mutex := Mutex.new()
 var _geometry: Array = [] ## [blas node bytes, triangle bytes] waiting for upload
+var _static: Array = [] ## [instance bytes, top-level node bytes] of the circuit, waiting for upload
 var _frame := {} ## latest per-frame data from set_frame()
 var _has_geometry := false
+## The circuit's instances and top-level nodes sit at the start of their buffers and are uploaded once; each
+## frame only the cars' part after them is rewritten (render thread only)
+var _static_instances := PackedByteArray()
+var _static_top := PackedByteArray()
+var _static_pending := false
+var _half := RID() ## one traced sample per 2x2 block (see rt_reflections.glsl), for the internal size
+var _half_size := Vector2i.ZERO
 
 func _init() -> void:
 	effect_callback_type = EFFECT_CALLBACK_TYPE_POST_TRANSPARENT
@@ -29,7 +37,7 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_PREDELETE and _rd:
 		for entry in _buffers.values():
 			_rd.free_rid(entry[0])
-		for rid in [_params, _sampler, _shader]: # the pipeline goes with its shader
+		for rid in [_half, _params, _sampler, _shader]: # the pipeline goes with its shader
 			if rid.is_valid():
 				_rd.free_rid(rid)
 
@@ -39,7 +47,15 @@ func set_geometry(blas_nodes: PackedByteArray, triangles: PackedByteArray) -> vo
 	_geometry = [blas_nodes, triangles]
 	_mutex.unlock()
 
-## Per-frame data: instances, top-level trees, roots and lighting (see RayTracing._process).
+## The circuit's instances and top-level tree, replaced whenever the circuit is rebuilt. They go to the GPU
+## once; set_frame() only brings the cars'.
+func set_static(instances: PackedByteArray, top: PackedByteArray) -> void:
+	_mutex.lock()
+	_static = [instances, top]
+	_mutex.unlock()
+
+## Per-frame data: the cars' instances and top-level tree (stored after the circuit's), roots and lighting
+## (see RayTracing._process).
 func set_frame(frame: Dictionary) -> void:
 	_mutex.lock()
 	_frame = frame
@@ -77,6 +93,25 @@ func _upload(name: String, data: PackedByteArray) -> RID:
 		_rd.buffer_update(entry[0], 0, data.size(), data)
 	return entry[0]
 
+## A buffer holding head (uploaded only when fresh is true, or when the buffer has to grow) followed by
+## tail, which is written every time.
+func _upload_tail(name: String, head: PackedByteArray, tail: PackedByteArray, fresh: bool) -> RID:
+	var size := maxi(head.size() + tail.size(), 16)
+	var entry: Array = _buffers.get(name, [])
+	if entry.is_empty() or entry[1] < size:
+		if not entry.is_empty():
+			_rd.free_rid(entry[0])
+		# room for the cars to come and go without regrowing
+		var capacity := nearest_po2(size + tail.size() + 4096)
+		entry = [_rd.storage_buffer_create(capacity), capacity]
+		_buffers[name] = entry
+		fresh = true
+	if fresh and not head.is_empty():
+		_rd.buffer_update(entry[0], 0, head.size(), head)
+	if not tail.is_empty():
+		_rd.buffer_update(entry[0], head.size(), tail.size(), tail)
+	return entry[0]
+
 func _render_callback(_callback_type: int, render_data: RenderData) -> void:
 	if not _pipeline.is_valid():
 		return
@@ -87,6 +122,11 @@ func _render_callback(_callback_type: int, render_data: RenderData) -> void:
 	_mutex.lock()
 	var geometry := _geometry
 	_geometry = []
+	if not _static.is_empty():
+		_static_instances = _static[0]
+		_static_top = _static[1]
+		_static = []
+		_static_pending = true
 	var frame := _frame
 	_mutex.unlock()
 	if not geometry.is_empty():
@@ -95,12 +135,17 @@ func _render_callback(_callback_type: int, render_data: RenderData) -> void:
 		_has_geometry = not geometry[1].is_empty()
 	if not _has_geometry or frame.is_empty():
 		return
-	var instances := _upload("instances", frame.instances)
-	var top := _upload("top", frame.top)
+	var instances := _upload_tail("instances", _static_instances, frame.instances, _static_pending)
+	var top := _upload_tail("top", _static_top, frame.top, _static_pending)
+	_static_pending = false
 
 	var size := scene_buffers.get_internal_size()
 	if size.x <= 0 or size.y <= 0:
 		return
+	# a ray per 2x2 block, spread over the block's pixels by depth, costs a quarter of a ray per pixel
+	var roots: Vector4i = frame.roots
+	var half: bool = frame.get("half", true) and roots.w == 0
+	var half_tex := _half_texture(size)
 	var set1 := UniformSetCacheRD.get_cache(_shader, 1, [
 		_storage(0, _buffers.blas[0]), _storage(1, _buffers.triangles[0]),
 		_storage(2, instances), _storage(3, top)])
@@ -114,13 +159,37 @@ func _render_callback(_callback_type: int, render_data: RenderData) -> void:
 			_uniform(RenderingDevice.UNIFORM_TYPE_IMAGE, 0, [colour]),
 			_uniform(RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 1, [_sampler, depth]),
 			_uniform(RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 2, [_sampler, normal_roughness]),
-			_uniform(RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER, 3, [_params])])
+			_uniform(RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER, 3, [_params]),
+			_uniform(RenderingDevice.UNIFORM_TYPE_IMAGE, 4, [half_tex])])
 		var list := _rd.compute_list_begin()
 		_rd.compute_list_bind_compute_pipeline(list, _pipeline)
 		_rd.compute_list_bind_uniform_set(list, set0, 0)
 		_rd.compute_list_bind_uniform_set(list, set1, 1)
+		if half:
+			_rd.compute_list_set_push_constant(list, PackedInt32Array([1, 0, 0, 0]).to_byte_array(), 16)
+			_rd.compute_list_dispatch(list, (_half_size.x + 7) / 8, (_half_size.y + 7) / 8, 1)
+			_rd.compute_list_add_barrier(list)
+			_rd.compute_list_set_push_constant(list, PackedInt32Array([2, 0, 0, 0]).to_byte_array(), 16)
+		else:
+			_rd.compute_list_set_push_constant(list, PackedInt32Array([0, 0, 0, 0]).to_byte_array(), 16)
 		_rd.compute_list_dispatch(list, groups.x, groups.y, groups.z)
 		_rd.compute_list_end()
+
+## The half-resolution sample image for an internal size of size (made again when that changes).
+func _half_texture(size: Vector2i) -> RID:
+	var want := Vector2i((size.x + 1) / 2, (size.y + 1) / 2)
+	if _half.is_valid() and _half_size == want:
+		return _half
+	if _half.is_valid():
+		_rd.free_rid(_half)
+	var format := RDTextureFormat.new()
+	format.width = want.x
+	format.height = want.y
+	format.format = RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT
+	format.usage_bits = RenderingDevice.TEXTURE_USAGE_STORAGE_BIT
+	_half = _rd.texture_create(format, RDTextureView.new())
+	_half_size = want
+	return _half
 
 func _params_bytes(frame: Dictionary, scene_data: RenderSceneData, view: int) -> PackedByteArray:
 	# depth buffer NDC (Vulkan-style, reversed Z) back to view space

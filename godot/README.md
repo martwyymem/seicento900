@@ -142,7 +142,10 @@ triangle BVHs (`rt_bvh.gd`: one tree per mesh, a static top-level tree for the c
 for the cars). `rt_reflections.gd` is a CompositorEffect that runs `shaders/rt_reflections.glsl` after the
 transparent pass. For each glossy pixel it traces the mirror ray, lights the hit with the sun (traced shadow
 ray), the sky and emission, and puts it in place of the sky reflection Godot drew there, weighted by
-Fresnel and roughness. It costs well under a millisecond at 1600×900 on an M4 Pro. `tests/_rt_shot.gd`
+Fresnel and roughness. Below Ultra quality it traces one ray per 2×2 block, from the block's glossiest pixel,
+and shares it with the neighbouring pixels at the same depth. Pixels where the reflection would be too faint to
+see aren't traced. The circuit's part of the BVH goes to the GPU once, and only the cars' part each frame. It costs
+well under a millisecond at 1600×900 on an M4 Pro. `tests/_rt_shot.gd`
 renders comparison screenshots and debug views: `DEBUG=1` traces primary rays, which should line up with
 the rendered scene, and `DEBUG=2` shows only what the reflections see.
 

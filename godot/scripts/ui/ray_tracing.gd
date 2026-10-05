@@ -8,7 +8,7 @@ extends Node
 const STRENGTH := 1.0 ## reflection intensity multiplier
 const ROUGHNESS_CUT_OFF := 0.45 ## glossier than this reflects; wet tarmac is 0.16, puddles 0.03
 const MAX_DISTANCE := 1500.0 ## m a reflection ray travels before it gives up and shows the sky
-const SKIP_NODES := ["RacingLine"] ## overlays that are not part of the scene
+const SKIP_NODES := ["RacingLine", "StandCrowdFar"] ## overlays that are not part of the scene, and the far crowd (StandCrowd stands in for it)
 
 var effect := RtReflectionsEffect.new()
 var enabled := false:
@@ -54,10 +54,6 @@ func _process(_delta: float) -> void:
 	if _static_dirty or _dynamic_dirty:
 		_rebuild()
 	var dynamic := _pack_dynamic()
-	var top := _static_top.duplicate()
-	top.append_array(dynamic[1])
-	var instances := _static_instances.duplicate()
-	instances.append_array(dynamic[0])
 	var sun: DirectionalLight3D = _world.sun
 	var env: Environment = _world.world_environment
 	var zenith: Color = _world.sky_top_color.srgb_to_linear()
@@ -67,8 +63,8 @@ func _process(_delta: float) -> void:
 	var ambient := horizon.lerp(zenith, 0.5) * env.ambient_light_energy
 	var fog := env.fog_light_color.srgb_to_linear()
 	effect.set_frame({
-		"instances": instances,
-		"top": top,
+		"instances": dynamic[0], # after the circuit's (set_static)
+		"top": dynamic[1],
 		"roots": Vector4i(0 if not _static_top.is_empty() else -1,
 			_static_top.size() / RtBvh.NODE_BYTES if not dynamic[1].is_empty() else -1,
 			_static_instance_count, debug_view),
@@ -79,6 +75,7 @@ func _process(_delta: float) -> void:
 		"sky_horizon": Vector4(horizon.r, horizon.g, horizon.b, 0.0),
 		"fog": Vector4(fog.r, fog.g, fog.b, env.fog_density if env.fog_enabled else 0.0),
 		"settings": Vector4(STRENGTH, ROUGHNESS_CUT_OFF, MAX_DISTANCE, 0.0),
+		"half": _world.quality < 3, # a ray per 2x2 pixels; Ultra traces every pixel
 	})
 
 func _rebuild() -> void:
@@ -98,6 +95,7 @@ func _rebuild() -> void:
 		_static_instance_count = found.size()
 		_static_mark = [_node_count, _triangle_count, _blas_nodes.size(), _triangles.size()]
 		_static_dirty = false
+		effect.set_static(_static_instances, _static_top)
 		print("Ray tracing: circuit has %d instances, %d triangles (%d ms)" % [found.size(), _triangle_count, Time.get_ticks_msec() - t0])
 	# the cars' meshes go after the circuit's, which stay put
 	_node_count = _static_mark[0]
@@ -117,7 +115,7 @@ func _rebuild() -> void:
 ## Appends [node, world transform, BLAS record, tint] for every mesh (and MultiMesh instance) under root.
 func _collect(root: Node, out: Array, dynamic := false) -> void:
 	# cars that are hidden now may show later: their visibility is checked every frame instead
-	if root.name in SKIP_NODES or (not dynamic and root is Node3D and not root.visible):
+	if String(root.name).rstrip("0123456789_") in SKIP_NODES or (not dynamic and root is Node3D and not root.visible):
 		return
 	if root is MeshInstance3D and root.mesh:
 		var materials: Array = []

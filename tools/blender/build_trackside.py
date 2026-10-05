@@ -21,6 +21,8 @@ Objects:
   StandRow            one tier of a bay: riser, tread, aisle step and 18 seats (material Seat)
   StandCrowd          18 seated spectators for one tier (material Crowd; the vertex colour's red channel is the
                       body part, green the seat index, for the crowd shader)
+  StandCrowdFar       the same 18 for distant stands: a few flat faces each towards the track and up, with the
+                      same vertex codes (about a fifth of StandCrowd's triangles)
   StandFrame_T<n>     the rest of a bay for n tiers (3-14): front wall, glass railing, concourse, back wall,
                       column, roof girder and roof
   StandEndL_T<n>, StandEndR_T<n>  side walls with stairs closing a run of bays (R also carries the last column)
@@ -277,6 +279,26 @@ def build_crowd_row():
 			mb.poly([lo[a], lo[b], mid[b], mid[a]], "Crowd", lambda q: q - hc, col=c(face_part))
 			mb.poly([mid[a], mid[b], top[b], top[a]], "Crowd", lambda q: q - hc, col=c(HAIR if (a, b) != (0, 1) else SKIN))
 		mb.poly(top, "Crowd", (0, 0, 1), col=c(HAIR))
+	return mb
+
+
+def build_crowd_far_row():
+	"""StandCrowd as seen from afar: legs, torso (arms included), face, shoulders and hair as flat faces."""
+	mb = MB()
+	front = (0, -1, 0)
+	up = (0, 0, 1)
+	for i in range(SEATS):
+		x = seat_x(i)
+		g = (i + 0.5) / SEATS
+
+		def c(part):
+			return (part, g, 0.0)
+		mb.poly([(x - 0.17, 0.10, 0.02), (x + 0.17, 0.10, 0.02), (x + 0.17, 0.12, 0.58), (x - 0.17, 0.12, 0.58)], "Crowd", front, col=c(LEGS))
+		mb.poly([(x - 0.17, 0.12, 0.58), (x + 0.17, 0.12, 0.58), (x + 0.17, 0.50, 0.58), (x - 0.17, 0.50, 0.58)], "Crowd", up, col=c(LEGS))
+		mb.poly([(x - 0.28, 0.50, 0.58), (x + 0.28, 0.50, 0.58), (x + 0.26, 0.52, 1.02), (x - 0.26, 0.52, 1.02)], "Crowd", front, col=c(SHIRT))
+		mb.poly([(x - 0.26, 0.52, 1.02), (x + 0.26, 0.52, 1.02), (x + 0.21, 0.68, 1.02), (x - 0.21, 0.68, 1.02)], "Crowd", up, col=c(SHIRT))
+		mb.poly([(x - 0.095, 0.48, 1.08), (x + 0.095, 0.48, 1.08), (x + 0.095, 0.48, 1.30), (x - 0.095, 0.48, 1.30)], "Crowd", front, col=c(SKIN))
+		mb.poly([(x - 0.095, 0.48, 1.30), (x + 0.095, 0.48, 1.30), (x + 0.07, 0.68, 1.33), (x - 0.07, 0.68, 1.33)], "Crowd", up, col=c(HAIR))
 	return mb
 
 
@@ -756,7 +778,7 @@ def main():
 	for n in MATERIALS:
 		kit.material(n)
 	ads_material(img)
-	parts = {"StandRow": build_stand_row(), "StandCrowd": build_crowd_row()}
+	parts = {"StandRow": build_stand_row(), "StandCrowd": build_crowd_row(), "StandCrowdFar": build_crowd_far_row()}
 	for t in TIERS:
 		parts["StandFrame_T%02d" % t] = build_stand_frame(t)
 		parts["StandEndL_T%02d" % t] = build_stand_end(t, -1)
