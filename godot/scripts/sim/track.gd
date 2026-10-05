@@ -3,7 +3,7 @@
 class_name Track
 extends RefCounted
 
-const G := 9.81
+const G := 9.81 ## gravity, m/s²
 
 var cfg: TrackDef
 var key := ""

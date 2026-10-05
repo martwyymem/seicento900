@@ -35,6 +35,7 @@ kit.MATERIALS.update({"Foliage": ((1.0, 1.0, 1.0), 0.88, 0.0, {})})
 
 
 def rgba(hex_colour, alpha, shade=1.0):
+	"""An sRGB hex colour as a linear (r, g, b, a) vertex colour, darkened by shade."""
 	r, g, b = srgb(hex_colour)
 	return (r * shade, g * shade, b * shade, alpha)
 
@@ -106,6 +107,7 @@ def blob(mb, rng, centre, radii, colours, jitter=0.22, alpha=1.0):
 
 
 def spruce():
+	"""Spruce: a tall narrow cone of drooping tiers (17 m)."""
 	rng = random.Random(1)
 	mb = MB()
 	h = 17.0
@@ -136,6 +138,7 @@ def spruce():
 
 
 def pine():
+	"""Scots pine: a leaning bare trunk with a flat-topped crown (12.5 m)."""
 	rng = random.Random(2)
 	mb = MB()
 	lean = Vector((0.5, 0.2, 0))
@@ -155,6 +158,7 @@ def pine():
 
 
 def broadleaf():
+	"""Broadleaf (oak/beech): a short trunk under a round crown of foliage blobs."""
 	rng = random.Random(3)
 	mb = MB()
 	bark(mb, (0, 0, -0.5), (0.1, 0, 4.2), 0.42, 0.32, "#56432f")
@@ -175,6 +179,7 @@ def broadleaf():
 
 
 def birch():
+	"""Birch: a slim white trunk with black marks and a light crown."""
 	rng = random.Random(4)
 	mb = MB()
 	marks = [(t, "#1c1c1c" if i % 2 else "#e8e4da") for i, t in enumerate([0.08, 0.12, 0.3, 0.33, 0.52, 0.55, 0.7, 0.72])]
@@ -189,6 +194,7 @@ def birch():
 
 
 def poplar():
+	"""Lombardy poplar: a tall, narrow column of foliage."""
 	rng = random.Random(5)
 	mb = MB()
 	bark(mb, (0, 0, -0.5), (0, 0, 3.0), 0.35, 0.28, "#6a5a48")
@@ -201,6 +207,7 @@ def poplar():
 
 
 def cypress():
+	"""Italian cypress: a dark, slender spire."""
 	rng = random.Random(6)
 	mb = MB()
 	bark(mb, (0, 0, -0.5), (0, 0, 1.5), 0.25, 0.2, "#5a4a3a")
@@ -213,6 +220,7 @@ def cypress():
 
 
 def stone_pine():
+	"""Stone pine: a forked trunk under a flat umbrella crown."""
 	rng = random.Random(7)
 	mb = MB()
 	fork = Vector((0.3, 0, 6.0))
@@ -233,6 +241,7 @@ def stone_pine():
 
 
 def palm():
+	"""Palm: a curved trunk with a crown of fronds (Monaco)."""
 	rng = random.Random(8)
 	mb = MB()
 	pts = [Vector((0.35 * math.sin(t * 1.4), 0, -0.5 + t * 9.0)) for t in (0.0, 0.25, 0.5, 0.75, 1.0)]
@@ -274,6 +283,7 @@ TREES = {"Spruce": spruce, "Pine": pine, "Broadleaf": broadleaf, "Birch": birch,
 
 
 def main():
+	"""Builds every species in TREES and exports them to models/trees.glb (plus previews with --renders)."""
 	for ob in list(bpy.data.objects):
 		bpy.data.objects.remove(ob)
 	objs = {}

@@ -9,8 +9,8 @@ extends RefCounted
 const WORLD_ASSETS := preload("res://scripts/ui/world_assets.gd")
 const FURNITURE_PATH := "res://models/furniture.glb"
 const BRIDGE_DECK := 6.5 ## footbridge deck height over the road (build_furniture.py DECK)
-const POST_SPACING := 320.0
-const TRANSPORTER_LENGTH := 16.5
+const POST_SPACING := 320.0 ## m of track between marshal posts
+const TRANSPORTER_LENGTH := 16.5 ## m: a team transporter in the paddock
 const TYRE_SEGMENT := 4.0 ## the TyreWall piece's length, two track samples
 const TYRE_DEPTH := 1.36 ## how far it reaches behind the barrier line
 ## colours of the belt covers, by how many of every 20 stretches wear them
@@ -464,11 +464,21 @@ func _road_bridge(st: SurfaceTool, centre: Vector3, dir: Vector3, half_len: floa
 		world._quad(st, t[0], t[1], t[2], t[3])
 		world._quad(st, b[3], b[2], b[1], b[0])
 	box.call(centre, dir * half_len, side * 5.0, top - 1.3, top)
+	# the deck (parapets and all) hides the car from a TV camera looking through it, and so do the abutments
+	_occlude(centre, dir * half_len, side * 5.0, top - 1.3, top + 1.1)
 	for sgn in [-1.0, 1.0]:
 		box.call(centre + side * sgn * 4.8, dir * half_len, side * 0.2, top, top + 1.1)
 		var end: Vector3 = centre + dir * sgn * (half_len - 1.0)
 		var ground := _ground(end.x + world.world_center.x, end.z + world.world_center.y)
 		box.call(end, dir * 1.0, side * 5.4, minf(ground, road_y) - 1.0, top - 1.3)
+		_occlude(end, dir * 1.0, side * 5.4, -INF, top - 1.3)
+
+## A box round c spanning +-u and +-v, from height lo to hi, as a TV-camera occluder.
+func _occlude(c: Vector3, u: Vector3, v: Vector3, lo: float, hi: float) -> void:
+	var foot := PackedVector2Array()
+	for q in [c - u - v, c + u - v, c + u + v, c - u + v]:
+		foot.append(Vector2(q.x, q.z))
+	world.add_block_occluder(foot, hi, lo)
 
 # --------------------------------------------------------------------------------------------- paddock
 

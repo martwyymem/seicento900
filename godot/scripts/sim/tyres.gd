@@ -2,9 +2,9 @@
 class_name Tyres
 extends RefCounted
 
-const KEYS := ["S", "M", "H", "W"]
+const KEYS := ["S", "M", "H", "W"] ## soft, medium, hard, wet; each loads data/tyres/<key>.tres
 
-var compounds := {}
+var compounds := {} ## key -> TyreCompound
 
 func _init() -> void:
 	for k in KEYS:

@@ -14,7 +14,7 @@
 class_name RaceControl
 extends RefCounted
 
-const G := 9.81
+const G := 9.81 ## gravity, m/s²
 const SECTOR_LEN := 200.0 ## roughly one marshal post per 200 m
 const DMG_FLOOR := 1.2 ## m/s of impact a car shrugs off
 const DMG_SPAN := 8.5 ## further m/s that wreck it in one hit
@@ -24,13 +24,13 @@ const YELLOW_PACE := [1.0, 0.9, 0.72] ## bots' pace in a clear / yellow / double
 const PLAYER_SLOW := 0.86 ## share of the racing line's limit you may do under double yellow
 const HAZARD_PACE := 0.9 ## bots elsewhere on the lap while a double yellow is out
 const CATCHUP_PACE := 0.95 ## anyone more than CATCHUP_GAP off the car ahead under the safety car
-const CATCHUP_GAP := 25.0
+const CATCHUP_GAP := 25.0 ## m
 const LIMITER_DECEL := 3.0 ## m/s² the V limiter plans to brake at, for corners and for the car ahead
 const LIMITER_LOOK := 160.0 ## m of track the limiter looks ahead for slower stretches
 const LIMITER_GAP := 6.0 ## m the limiter keeps to the car ahead under the safety car
 const DELTA_PACE := 0.8 ## the fastest anyone may go under the safety car while catching the queue
 const RED_PACE := 0.6 ## ... and under a red flag on the way back to the pits
-const SC_PACE := 0.7
+const SC_PACE := 0.7 ## share of the racing line's speed the safety car itself drives at (capped by SC_VMAX)
 const SC_VMAX := 31.0 ## 112 km/h: plenty for a queue of Seicentos
 const SC_GAP := 12.0 ## metres each car keeps to the one ahead in the queue
 const SC_MIN_TIME := 75.0 ## the safety car stays out at least this long
@@ -639,7 +639,9 @@ func _update_sc(dt: float) -> void:
 
 ## A car crossed the line: the first one across after the safety car has pulled in restarts the race.
 func on_line(car: RaceCar) -> void:
-	if flag == "sc_in" and (sc_state == "in" or sc_state == "garage") and not car.dnf and car.mode == "race":
+	# a car crossing the line in the pit lane counts too: when the whole field boxes at the end of the
+	# safety car's lap, waiting for one on the track left the race neutralised for a whole extra lap
+	if flag == "sc_in" and (sc_state == "in" or sc_state == "garage") and not car.dnf:
 		flag = "green"
 		green_t = race.clock
 		_announced.fill(0)

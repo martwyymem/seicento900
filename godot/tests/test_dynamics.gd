@@ -95,5 +95,71 @@ func run() -> Array:
 	for k in 120 * 5:
 		rc._player_rules(dt)
 	check("staying over the delta is penalised", p.penalties.size() == 1, str(p.penalties))
+
+	# a race where every car retires before anyone takes the flag still ends (it used to run forever)
+	var sto := RaceSettings.new()
+	sto.track = "monaco"
+	sto.laps = 2
+	sto.opponents = 2
+	var out := Race.new(sto, null, 3)
+	var idle := Race.PlayerInput.new()
+	while out.phase != "racing":
+		out.step(1.0 / 120.0, idle)
+	for c in out.cars:
+		c.dnf = true
+		c.dnf_reason = "Out of fuel"
+	out.step(1.0 / 120.0, idle)
+	check("a race with every car out is over", out.phase == "finished", out.phase)
+	check("...and classifies every car", out.results().size() == 3)
+
+	# retiring on the grid, before the lights go out, projects a finish with real times (it gave NaN)
+	var grid := Race.new(sto, null, 4)
+	for k in 60:
+		grid.step(1.0 / 120.0, idle)
+	grid.player.dnf = true
+	grid.approximate_finish()
+	check("a race called off on the grid has a finite clock", is_finite(grid.race_time) and grid.race_time >= 0.0, str(grid.race_time))
+	var finite_totals := true
+	for r in grid.results():
+		if r.total != null and not is_finite(float(r.total)):
+			finite_totals = false
+	check("...and finite finishing times", finite_totals and grid.phase == "finished")
+
+	# a bot wedged facing the wrong way under the safety car is put back (two of them nose to nose against
+	# the wall at Sainte Dévote used to hold the whole field there for good)
+	var stw := RaceSettings.new()
+	stw.track = "monaco"
+	stw.laps = 3
+	stw.opponents = 2
+	var wed := Race.new(stw, null, 5)
+	while wed.race_time < 8.0:
+		wed.step(1.0 / 120.0, idle)
+	var b: RaceCar = wed.cars[0] if not wed.cars[0].is_player else wed.cars[1]
+	var at := wed.track.pos(216.0, 4.3)
+	b.s = 216.0
+	b.d = 4.3
+	b.x = at[0]
+	b.y = at[1]
+	b.heading = wed.track.heading(216.0) + 2.56
+	b.vx = 0.0
+	b.vy = 0.0
+	b.yaw_rate = 0.0
+	b.v = 0.0
+	b.phys = null
+	wed.rc.deploy_sc("test")
+	var turned_back := false
+	for k in 120 * 14:
+		wed.step(1.0 / 120.0, idle)
+		if absf(SimUtil.wrap_angle(b.heading - wed.track.heading(b.s))) < 1.0:
+			turned_back = true
+			break
+	check("a bot wedged facing the wrong way under the safety car is put back", turned_back,
+		"(heading off %.2f, s %.0f)" % [absf(SimUtil.wrap_angle(b.heading - wed.track.heading(b.s))), b.s])
+
+	race.dispose()
+	scr.dispose()
+	out.dispose()
+	grid.dispose()
+	wed.dispose()
 	completed = true
 	return errors

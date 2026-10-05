@@ -36,6 +36,7 @@ def bbox(key):
 
 
 def query(key):
+    """The Overpass QL query for everything the scenery uses inside the circuit's box."""
     s, w, n, e = bbox(key)
     b = f'({s:.6f},{w:.6f},{n:.6f},{e:.6f})'
     parts = [
@@ -62,6 +63,7 @@ def query(key):
 
 
 def fetch(key):
+    """Runs the query against Overpass, retrying when the server is busy."""
     body = urllib.parse.urlencode({'data': query(key)}).encode()
     for attempt in range(6):
         try:
@@ -74,6 +76,7 @@ def fetch(key):
 
 
 def main():
+    """Saves osm_env/<key>.json for each track not yet fetched (or those named on the command line, refetched)."""
     os.makedirs(OUT_DIR, exist_ok=True)
     only = sys.argv[1:]
     for key in bt.TRACKS:

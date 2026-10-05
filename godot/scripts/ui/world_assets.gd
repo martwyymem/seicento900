@@ -4,12 +4,12 @@
 ## to its procedural look for anything that is missing. See godot/ASSETS.md for what to put where.
 extends RefCounted
 
-const ROOTS := ["res://assets", "user://assets"]
-const SKY_CACHE := "user://sky_cache.cfg"
-const SKY_EXTS := ["hdr", "exr", "png", "jpg", "webp"]
-const IMAGE_EXTS := ["png", "jpg", "jpeg", "webp"]
-const MODEL_EXTS := ["glb", "gltf"]
-const TEXTURE_CACHE_SIZE := 4
+const ROOTS := ["res://assets", "user://assets"] ## folders searched for assets, in order
+const SKY_CACHE := "user://sky_cache.cfg" ## each HDRI's sun position and brightness, so they are scanned once
+const SKY_EXTS := ["hdr", "exr", "png", "jpg", "webp"] ## file types accepted as skies (assets/sky/)
+const IMAGE_EXTS := ["png", "jpg", "jpeg", "webp"] ## ... as textures
+const MODEL_EXTS := ["glb", "gltf"] ## ... as models
+const TEXTURE_CACHE_SIZE := 4 ## texture sets kept loaded at once
 
 ## Material folders under assets/textures/ and the file-name hints for each map.
 const MAP_HINTS := {

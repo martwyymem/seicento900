@@ -21,24 +21,24 @@ const FAR_LAND := preload("res://scripts/ui/far_land.gd")
 const FURNITURE := preload("res://scripts/ui/trackside_furniture.gd")
 const ALTITUDE_SCALE := 1.0 ## heights at their real scale (the physics ignores elevation)
 const BEAM_COUNT := 4 ## headlight spotlights handed to the cars nearest the camera after dark
-const BEAM_REACH := 180.0
-const SKID_CAPACITY := 1600
+const BEAM_REACH := 180.0 ## m: cars further from the camera than this get no headlight beam
+const SKID_CAPACITY := 1600 ## skid-mark quads kept; the oldest is reused once they run out
 ## Trackside structures built in Blender (tools/blender/build_trackside.py); the layout numbers below match it.
 const TRACKSIDE_PATH := "res://models/trackside.glb"
 const STAND_BAY := 10.0 ## grandstand bay width along the road
 const STAND_RISE := 0.4 ## height and depth of a tier
-const STAND_TREAD := 0.85
+const STAND_TREAD := 0.85 ## depth of a tier (step back per row)
 const STAND_FIRST_Z := 1.6 ## the first tier's top above the ground
 const STAND_CONCOURSE := 1.6 ## walkway behind the top tier
-const STAND_ROOF_FRONT := 4.3 ## roof front edge above the top tier, and how far it overhangs the first
-const STAND_ROOF_OVERHANG := 1.6
+const STAND_ROOF_FRONT := 4.3 ## roof front edge above the top tier ...
+const STAND_ROOF_OVERHANG := 1.6 ## ... and how far it overhangs the first tier
 const STAND_BOARDS := 8 ## sponsor boards StandBoard_0..7
 const PIT_BAY := 12.0 ## a garage's width as built (stretched to the box spacing) and the building's depth
 const PIT_DEPTH := 15.0
-const GANTRY_BEAM_Y := 7.2
+const GANTRY_BEAM_Y := 7.2 ## start gantry beam height over the road (build_trackside.py)
 const PIT_FENCE_D := 4.4 ## the pit-side barrier's offset past the lane's centre line (the lane is 6.4 m wide, centred 1 m outside pit_offset)
 const LAMP_POOL := [4, 8, 12, 16] ## real lights hopping between the lamps nearest the camera, by quality
-const LAMP_REACH := 150.0
+const LAMP_REACH := 150.0 ## m: lamps further from the camera than this never get a real light
 const RAIN_DROP := 0.7 ## m: a rain streak's length
 ## Share of the picture's height a streak may span before it starts to fade, and at which it is gone
 const RAIN_FULL_SPAN := 0.06
@@ -71,7 +71,7 @@ const FOG_RAIN := Color("#8d969f")
 
 ## Graphics quality presets (apply_graphics): 0 Low, 1 Medium, 2 High, 3 Ultra.
 const QUALITY_NAMES := ["LOW", "MEDIUM", "HIGH", "ULTRA"]
-const TREE_SCALE := [0.45, 0.75, 1.0, 1.5]
+const TREE_SCALE := [0.45, 0.75, 1.0, 1.5] ## tree count multiplier per quality preset
 
 var race: Race
 var track: Track
@@ -129,6 +129,9 @@ const TV_FOV_MIN := [16.0, 20.0, 5.0]
 const TV_FOV_MAX := [55.0, 50.0, 22.0]
 const TV_KEEPOUT_CELL := 32.0 ## m: grid of _near_tv_camera's lookup
 const TV_SIGHT_STEP := 5.0 ## m of track between the car positions a camera's view is checked at (_tv_sight)
+const TV_SPACING := 110.0 ## m of track between trackside TV cameras
+const TV_SPACING_STREET := 55.0 ## ... on a street circuit
+const TV_WARM_USEC := 2000 ## time a frame spends getting the TV sightlines ready (_tv_warm_up)
 const TV_SIGHT_MAX := 320.0 ## m up the track a camera's view is followed
 const TV_MIN_SHOT := 35.0 ## m of clear view a camera needs to be worth cutting to when none is far enough ahead
 const TV_HELI_WAIT := 30.0 ## m the car may still have to go before the camera cut to sees it; further, and the helicopter takes the shot
@@ -139,9 +142,10 @@ const CATCH_FENCE_TOP := 3.2 ## m over the road: the top of an armco barrier's c
 ## A sightline closer to a catch fence's line than this (cosine of the angle) sees the wire mesh, not through it,
 ## where the fence is near enough the camera to fill the picture (further off, the mesh is a faint veil)
 const FENCE_GRAZE := 0.97
-const FENCE_NEAR := 25.0
+const FENCE_NEAR := 25.0 ## m from the camera within which a grazed catch fence blocks the view
 ## What the director cuts to, in turn
 const TV_SEQUENCE := [TvKind.GROUND, TvKind.TOWER, TvKind.LONG, TvKind.GROUND, TvKind.LONG, TvKind.TOWER]
+## Shown when the camera changes (C key); index = camera_mode
 const CAMERA_NAMES := ["CHASE", "FAR CHASE", "ROOF CAM", "TRACKSIDE TV", "BIRD'S-EYE", "FULL TRACK"]
 ## Fraction of a simulation tick elapsed since the last step (set by the game loop each frame).
 var render_alpha := 1.0
@@ -163,15 +167,23 @@ var _tv_index := -1
 var _tv_shot := 0
 var _tv_end := 0.0 ## the shot ends once the car is less than this far ahead of the camera (m along the track)
 var _tv_reach := 0.0 ## ... and the car is hidden from it while further ahead than this
+var _tower_mm: MultiMesh ## the scaffold towers under the TOWER cameras
+var _tower_slot := {} ## TV camera index -> its tower's instance in _tower_mm
+var _tower_hidden := -1 ## the camera whose tower is folded away while it is on air (its own rig would fill the shot)
+var _tower_hidden_xf := Transform3D()
 var _tv_tried_s := 0.0 ## where the car was when the director last looked for a camera
 var _tv_heli := false ## no trackside camera sees the car: the helicopter has the shot
 var _tv_views := {} ## camera index -> Vector2(end, reach) from _tv_sight, worked out on first use
 ## What can hide a car from a TV camera: trees, [x, z, radius, top, ...] (add_occluder), and buildings,
 ## [[footprint (world x, z), top], ...] (add_block_occluder); and their lookup by Vector2i cell of OCCLUDER_CELL m
-## (a tree's index, or -1 - a building's), built when a camera first needs it
+## (a tree's index, or -1 - a building's), built a slice a frame once the race is under way (_tv_warm_up), or
+## all at once when a camera needs it first
 var _occluders := PackedFloat32Array()
 var _block_occluders: Array = []
 var _occluder_cells := {}
+var _occluders_filed := 0 ## trees, then buildings, filed in _occluder_cells so far
+var _occluders_ready := false
+var _tv_warm_next := 0 ## the next camera whose view _tv_warm_up works out
 var _tv_look := Vector3.ZERO
 var _tv_prev_pos := Vector3.ZERO
 
@@ -221,7 +233,7 @@ var night := 0.0
 
 func _ready() -> void:
 	var cfg := ConfigFile.new()
-	if cfg.load("user://graphics.cfg") == OK:
+	if cfg.load(SaveData.read_path("graphics.cfg")) == OK:
 		quality = clampi(int(cfg.get_value("graphics", "quality", quality)), 0, QUALITY_NAMES.size() - 1)
 	_build_environment()
 	_build_beams()
@@ -294,6 +306,9 @@ func set_track(value: Track) -> void:
 	_occluders.clear()
 	_block_occluders.clear()
 	_occluder_cells.clear()
+	_occluders_filed = 0
+	_occluders_ready = false
+	_tv_warm_next = 0
 	_wet_materials.clear()
 	_night_materials.clear()
 	_lamp_pos.clear()
@@ -358,6 +373,7 @@ func _process(delta: float) -> void:
 		_update_atmosphere(14.0, 0.0, 0.0)
 		_hide_beams()
 		_hide_lamp_lights()
+		_hide_own_tower(-1)
 		camera.global_position = camera.global_position.lerp(overview_target, 1.0 - exp(-2.4 * delta))
 		camera.look_at(Vector3(overview_target.x, 0, overview_target.z), Vector3.FORWARD)
 		return
@@ -407,6 +423,7 @@ func _process(delta: float) -> void:
 
 	_update_start_lights()
 	_update_camera(delta)
+	_tv_warm_up()
 	_place_rain()
 	_update_beams()
 	_update_lamp_lights()
@@ -619,6 +636,7 @@ static func _ease(rate: float, delta: float, snap: bool) -> float:
 	return 1.0 if snap else 1.0 - exp(-delta * rate)
 
 func _update_camera(delta: float) -> void:
+	_hide_own_tower(_tv_index if camera_mode == 3 and not _tv_heli else -1)
 	var player := race.player
 	var p := _focus_pos
 	var snap := camera_snap
@@ -659,12 +677,14 @@ func _update_camera(delta: float) -> void:
 				return
 			var cut := _tv_direct(p, snap)
 			if _tv_heli:
+				_hide_own_tower(-1)
 				# the helicopter: high behind the car, looking down on it over the trees
 				var want := p - fwd * TV_HELI_BACK + Vector3.UP * TV_HELI_UP
 				camera.global_position = want if cut else camera.global_position.lerp(want, _ease(2.5, delta, false))
 				camera.look_at(p + fwd * 6.0, Vector3.UP)
 				camera.fov = 34.0 if cut else camera.fov + (34.0 - camera.fov) * _ease(3.0, delta, false)
 				return
+			_hide_own_tower(-1 if _tv_heli else _tv_index)
 			var kind := tv_camera_kind[_tv_index]
 			camera.global_position = tv_cameras[_tv_index]
 			# an operator's pan: lead the car by its velocity so it stays framed, but smooth the aim and the zoom
@@ -802,13 +822,14 @@ func _block_from(xf: Transform3D, rect: Rect2, height: float) -> void:
 		foot.append(Vector2(w.x, w.z))
 	add_block_occluder(foot, xf.origin.y + height)
 
-## A building that can hide the car from a TV camera: its footprint (world x, z) up to height top.
-func add_block_occluder(footprint: PackedVector2Array, top: float) -> void:
-	_block_occluders.append([footprint, top])
+## A building that can hide the car from a TV camera: its footprint (world x, z) up to height top; a bridge
+## deck from height bottom (a view passes under it).
+func add_block_occluder(footprint: PackedVector2Array, top: float, bottom := -INF) -> void:
+	_block_occluders.append([footprint, top, bottom])
 
 ## Whether the straight line between world points a and b passes clear of the trees, the buildings and the ground.
 func _sight_clear(a: Vector3, b: Vector3) -> bool:
-	if _occluder_cells.is_empty() and not (_occluders.is_empty() and _block_occluders.is_empty()):
+	if not _occluders_ready:
 		_index_occluders()
 	var a2 := Vector2(a.x, a.z)
 	var seg := Vector2(b.x, b.z) - a2
@@ -867,18 +888,42 @@ func _sight_clear(a: Vector3, b: Vector3) -> bool:
 			d += 4.0
 	return true
 
-func _index_occluders() -> void:
+## Files the occluders not yet filed in _occluder_cells, stopping at `deadline` (Time.get_ticks_usec(); 0: none).
+func _index_occluders(deadline := 0) -> void:
 	var reach := Vector2(OCCLUDER_CELL * 0.25, OCCLUDER_CELL * 0.25)
-	for j in range(0, _occluders.size(), 4):
-		var r := Vector2(_occluders[j + 2], _occluders[j + 2]) + reach
-		var c := Vector2(_occluders[j], _occluders[j + 1])
-		_file_occluder(j, c - r, c + r)
-	for k in _block_occluders.size():
+	var trees := _occluders.size() / 4
+	var total := trees + _block_occluders.size()
+	while _occluders_filed < total:
+		if deadline and _occluders_filed % 32 == 0 and Time.get_ticks_usec() > deadline:
+			return
+		var n := _occluders_filed
+		_occluders_filed += 1
+		if n < trees:
+			var j := n * 4
+			var r := Vector2(_occluders[j + 2], _occluders[j + 2]) + reach
+			var c := Vector2(_occluders[j], _occluders[j + 1])
+			_file_occluder(j, c - r, c + r)
+			continue
+		var k := n - trees
 		var box := Rect2()
 		var ring: PackedVector2Array = _block_occluders[k][0]
-		for n in ring.size():
-			box = Rect2(ring[n], Vector2.ZERO) if n == 0 else box.expand(ring[n])
+		for m in ring.size():
+			box = Rect2(ring[m], Vector2.ZERO) if m == 0 else box.expand(ring[m])
 		_file_occluder(-1 - k, box.position - reach, box.end + reach)
+	_occluders_ready = true
+
+## Gets the TV director's sightlines ready a little each frame (TV_WARM_USEC), so the first switch to the TV
+## view and each camera's first cut don't stall: the occluder index, then every camera's view.
+func _tv_warm_up() -> void:
+	if _tv_warm_next >= tv_cameras.size():
+		return
+	var deadline := Time.get_ticks_usec() + TV_WARM_USEC
+	if not _occluders_ready:
+		_index_occluders(deadline)
+		return
+	while _tv_warm_next < tv_cameras.size() and Time.get_ticks_usec() < deadline:
+		_tv_sight(_tv_warm_next)
+		_tv_warm_next += 1
 
 func _file_occluder(id: int, lo: Vector2, hi: Vector2) -> void:
 	for cz in range(floori(lo.y / OCCLUDER_CELL), floori(hi.y / OCCLUDER_CELL) + 1):
@@ -888,23 +933,31 @@ func _file_occluder(id: int, lo: Vector2, hi: Vector2) -> void:
 				_occluder_cells[cell] = []
 			_occluder_cells[cell].append(id)
 
-## Whether the line from a to b runs through building k below its roof. Within the footprint the line is lowest
-## where it enters or leaves, so those points (or an end standing inside) decide.
+## Whether the line from a to b runs through building k between its underside and its roof. Within the
+## footprint the line's height runs from where it enters to where it leaves (or an end standing inside), so
+## those points decide.
 func _crosses_block(a: Vector3, b: Vector3, k: int) -> bool:
 	var top: float = _block_occluders[k][1]
 	if a.y >= top and b.y >= top:
 		return false
+	var bottom: float = _block_occluders[k][2]
 	var ring: PackedVector2Array = _block_occluders[k][0]
 	var a2 := Vector2(a.x, a.z)
 	var b2 := Vector2(b.x, b.z)
-	if (a.y < top and Geometry2D.is_point_in_polygon(a2, ring)) or (b.y < top and Geometry2D.is_point_in_polygon(b2, ring)):
-		return true
+	var lo := INF
+	var hi := -INF
+	for e in [[a2, a.y], [b2, b.y]]:
+		if Geometry2D.is_point_in_polygon(e[0], ring):
+			lo = minf(lo, e[1])
+			hi = maxf(hi, e[1])
 	var length := a2.distance_to(b2)
 	for n in ring.size():
 		var hit = Geometry2D.segment_intersects_segment(a2, b2, ring[n], ring[(n + 1) % ring.size()])
-		if hit != null and lerpf(a.y, b.y, a2.distance_to(hit) / length) < top:
-			return true
-	return false
+		if hit != null:
+			var h := lerpf(a.y, b.y, a2.distance_to(hit) / length)
+			lo = minf(lo, h)
+			hi = maxf(hi, h)
+	return lo < top and hi >= bottom
 
 func cycle_camera() -> String:
 	camera_mode = (camera_mode + 1) % 5
@@ -3365,8 +3418,9 @@ func _setup_tv_cameras() -> void:
 	tv_cameras.clear()
 	tv_camera_s.clear()
 	tv_camera_kind.clear()
-	# a camera every ~110 m: a tower, a ground camera, a telephoto, a ground camera, and so on
-	var num_cams := maxi(6, int(track.L / 110.0))
+	# a camera every ~110 m (closer on a street circuit, whose walls and buildings cut each view short): a tower,
+	# a ground camera, a telephoto, a ground camera, and so on
+	var num_cams := maxi(6, int(track.L / (TV_SPACING_STREET if track.cfg.runoff < 1.5 else TV_SPACING)))
 	var garages := _garage_span() if trackside_meshes().has("PitBay") else Vector2.ZERO
 	var pit_roof: float = (trackside_meshes().PitBay as Mesh).get_aabb().end.y if garages != Vector2.ZERO else 0.0
 	for i in num_cams:
@@ -3441,9 +3495,13 @@ func _build_tv_towers() -> void:
 	if not parts.has("TvTower"):
 		return
 	var xfs: Array[Transform3D] = []
+	_tower_slot.clear()
+	_tower_hidden = -1
+	_tower_mm = null
 	for i in tv_cameras.size():
 		if tv_camera_kind[i] != TvKind.TOWER:
 			continue
+		_tower_slot[i] = xfs.size()
 		var eye := tv_cameras[i]
 		var p := track.pos(tv_camera_s[i], 0.0)
 		var to_road := Vector3(p[0] - world_center.x, 0.0, p[1] - world_center.y) - Vector3(eye.x, 0.0, eye.z)
@@ -3452,7 +3510,20 @@ func _build_tv_towers() -> void:
 	var root := Node3D.new()
 	root.name = "TvTowers"
 	track_root.add_child(root)
-	_add_multimesh(root, "Towers", _multimesh(parts.TvTower, xfs, []), null)
+	_tower_mm = _multimesh(parts.TvTower, xfs, [])
+	_add_multimesh(root, "Towers", _tower_mm, null)
+
+## Folds away the tower under TV camera `cam` (-1: none), putting back the one folded before.
+func _hide_own_tower(cam: int) -> void:
+	if cam == _tower_hidden or _tower_mm == null:
+		return
+	if _tower_hidden >= 0:
+		_tower_mm.set_instance_transform(_tower_slot[_tower_hidden], _tower_hidden_xf)
+	_tower_hidden = cam if _tower_slot.has(cam) else -1
+	if _tower_hidden >= 0:
+		var k: int = _tower_slot[_tower_hidden]
+		_tower_hidden_xf = _tower_mm.get_instance_transform(k)
+		_tower_mm.set_instance_transform(k, Transform3D(Basis().scaled(Vector3.ZERO), _tower_hidden_xf.origin))
 
 func _reset_skids() -> void:
 	_skid_last.clear()

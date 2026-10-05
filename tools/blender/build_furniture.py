@@ -59,6 +59,7 @@ kit.MATERIALS.update({
 
 
 def marshal_post():
+	"""Marshal post: a raised platform with railings, a ladder, a roofed cabin and a post number board."""
 	mb = MB()
 	# platform on four legs, 1.1 m up, a ladder at the back
 	mb.colour = srgb("#8d8a84")
@@ -121,6 +122,7 @@ DIGITS = {"100": "100", "200": "200", "300": "300"}
 
 
 def brake_board(label):
+	"""Braking board on two posts, showing label (e.g. "100")."""
 	mb = MB()
 	w, h, z0 = 1.3, 1.3, 0.9
 	mb.colour = srgb("#3a3f45")
@@ -139,6 +141,7 @@ def brake_board(label):
 
 
 def bridge_span():
+	"""Footbridge deck section over the track (10 m long)."""
 	mb = MB()
 	L = 10.0
 	w = 1.6
@@ -165,6 +168,7 @@ def bridge_span():
 
 
 def bridge_tower():
+	"""Stair tower at each end of a footbridge, its landing at deck level."""
 	mb = MB()
 	# a stair tower of four flights round a concrete core, the landing at deck level at its +Y side
 	s = 2.2
@@ -193,6 +197,7 @@ def bridge_tower():
 
 
 def transporter():
+	"""Team transporter: tractor unit and trailer for the paddock."""
 	mb = MB()
 	L = 16.5
 	# tractor unit at -X: cab, grille, wheels; trailer behind
@@ -222,6 +227,7 @@ def transporter():
 
 
 def transporter_livery():
+	"""The transporter's trailer side panels, white so they can be tinted per team."""
 	mb = MB()
 	L = 16.5
 	tx0 = -L / 2 + 2.8
@@ -241,6 +247,7 @@ FRONT_LAYERS, REAR_LAYERS = 3, 4
 
 
 def tyre_wall():
+	"""A WALL_L stretch of stacked tyres in front of a barrier."""
 	mb = MB()
 	rnd = random.Random(11)
 	n = 6
@@ -263,6 +270,7 @@ def tyre_wall():
 
 
 def tyre_wall_belt():
+	"""The conveyor-belt cover strapped over the face of a tyre wall."""
 	mb = MB()
 	mb.colour = (1, 1, 1)
 	h1, h2 = FRONT_LAYERS * TYRE_H, REAR_LAYERS * TYRE_H
@@ -288,6 +296,7 @@ PIECES = {"MarshalPost": marshal_post, "BrakeBoard_100": lambda: brake_board("10
 
 
 def main():
+	"""Builds every piece in PIECES and exports them to models/furniture.glb (plus previews with --renders)."""
 	for ob in list(bpy.data.objects):
 		bpy.data.objects.remove(ob)
 	objs = {}

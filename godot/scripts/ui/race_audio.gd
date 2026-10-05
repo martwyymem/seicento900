@@ -3,7 +3,7 @@
 class_name RaceAudio
 extends Node
 
-const SAMPLE_RATE := 22050.0
+const SAMPLE_RATE := 22050.0 ## Hz of the synthesised stream; higher costs more CPU
 const TWO_PI := TAU
 
 var player: AudioStreamPlayer
@@ -11,7 +11,7 @@ var generator: AudioStreamGenerator
 var playback: AudioStreamGeneratorPlayback
 
 var muted := false
-var master_volume := 0.45
+var master_volume := 0.45 ## overall loudness, 0..1
 var current_master := 0.45
 
 # Engine state

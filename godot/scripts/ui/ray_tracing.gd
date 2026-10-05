@@ -5,9 +5,9 @@
 class_name RayTracing
 extends Node
 
-const STRENGTH := 1.0
+const STRENGTH := 1.0 ## reflection intensity multiplier
 const ROUGHNESS_CUT_OFF := 0.45 ## glossier than this reflects; wet tarmac is 0.16, puddles 0.03
-const MAX_DISTANCE := 1500.0
+const MAX_DISTANCE := 1500.0 ## m a reflection ray travels before it gives up and shows the sky
 const SKIP_NODES := ["RacingLine"] ## overlays that are not part of the scene
 
 var effect := RtReflectionsEffect.new()

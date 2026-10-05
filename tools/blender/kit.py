@@ -18,10 +18,12 @@ ARGS = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 
 
 def arg(name):
+	"""The value after a `-- --name value` command-line flag, or None."""
 	return ARGS[ARGS.index(name) + 1] if name in ARGS and ARGS.index(name) + 1 < len(ARGS) else None
 
 
 def lerp(a, b, t):
+	"""Linear interpolation from a to b."""
 	return a + (b - a) * t
 
 
@@ -41,6 +43,7 @@ def srgb(hex_colour):
 
 
 def material(name):
+	"""The named material from MATERIALS, created on first use and then shared."""
 	m = bpy.data.materials.get(name)
 	if m:
 		return m
@@ -347,6 +350,7 @@ def export_glb(path, objects):
 
 
 def setup_preview(size=(1400, 900), ground=200.0, ground_colour=(0.18, 0.2, 0.17)):
+	"""Sets up an EEVEE scene with sun, sky and a ground plane for preview renders."""
 	scene = bpy.context.scene
 	for eng in ("BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"):
 		try:
@@ -382,6 +386,7 @@ def setup_preview(size=(1400, 900), ground=200.0, ground_colour=(0.18, 0.2, 0.17
 
 
 def render(cam, path, eye, target, fov_deg=50.0):
+	"""Points the camera from eye at target and renders a PNG to path."""
 	cam.location = eye
 	cam.rotation_euler = (Vector(target) - Vector(eye)).to_track_quat("-Z", "Y").to_euler()
 	cam.data.type = "PERSP"

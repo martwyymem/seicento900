@@ -6,8 +6,7 @@
 class_name Brain
 extends RefCounted
 
-const STORE_PATH := "user://brain.json"
-const VER := 1
+const VER := 1 ## version of the saved brain.json layout; a mismatch discards the stored data
 const BIN := 30 ## metres per learned section
 const COVER_HOLD := 2.5 ## s a defending bot sticks to the side it chose to cover
 
@@ -20,8 +19,8 @@ static func load_store() -> Dictionary:
 	if _store != null:
 		return _store
 	var s = null
-	if use_disk and FileAccess.file_exists(STORE_PATH):
-		s = JSON.parse_string(FileAccess.get_file_as_string(STORE_PATH))
+	if use_disk and FileAccess.file_exists(SaveData.path("brain.json")):
+		s = JSON.parse_string(FileAccess.get_file_as_string(SaveData.path("brain.json")))
 	if not (s is Dictionary) or s.get("v") != float(VER):
 		s = {"v": VER, "tracks": {}}
 	_store = s
@@ -30,7 +29,7 @@ static func load_store() -> Dictionary:
 static func save_store() -> void:
 	if not use_disk:
 		return
-	var f := FileAccess.open(STORE_PATH, FileAccess.WRITE)
+	var f := FileAccess.open(SaveData.path("brain.json"), FileAccess.WRITE)
 	if f:
 		f.store_string(JSON.stringify(_store))
 

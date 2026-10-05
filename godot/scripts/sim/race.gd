@@ -3,8 +3,9 @@
 class_name Race
 extends RefCounted
 
-const G := 9.81
+const G := 9.81 ## gravity, m/s²
 
+## The opponents: [name, paint colour]. The field takes the first `RaceSettings.opponents` of them.
 const BOTS := [
 	["Giancarlo Bianchi", "#1d4fa3"], ["Marek Kowalski", "#f2c318"], ["Luca Ferraro", "#f4f4f4"],
 	["Zbigniew Nowak", "#2e8b57"], ["Paolo Esposito", "#ff7f11"], ["Krzysztof Wiśniewski", "#7b2cbf"],
@@ -166,6 +167,16 @@ static func get_track(key: String) -> Track:
 
 ## models: {car_model, tyres, strategy} to share them between races (optional).
 ## seed_: PRNG seed; -1 picks a random one.
+## Breaks the race's reference cycles (its learning AI and race control point back at it, the surface lookup
+## captures it) so it is freed once dropped. Call when a race is discarded.
+func dispose() -> void:
+	_surface_fn = Callable()
+	_env.surface = Callable()
+	if brain:
+		brain.race = null
+	if rc:
+		rc.race = null
+
 func _init(settings: RaceSettings, player_plan = null, seed_ := -1, models := {}) -> void:
 	car_model = models.get("car_model", CarModel.new())
 	tyres = models.get("tyres", Tyres.new())
@@ -263,6 +274,10 @@ func apply_plan(car: RaceCar, p: Dictionary) -> void:
 	car.history = [c0]
 	var f: float = p.stints[0].get("fuel", 0.0)
 	car.fuel = minf(spec.tank, f if f else Strategy.fuel_need(R, fpl))
+	if timed and not rules.refuel:
+		# R is an estimate and the leader finishes the lap the clock runs out on, so a timed race can run a lap
+		# or two longer than planned; without refuelling, fuel short then is a retirement for the whole field
+		car.fuel = minf(spec.tank, car.fuel + fpl * (1.0 + ceilf(R * 0.04)))
 
 ## Wear multiplier of one set of tyres: no two sets last exactly as long.
 func _tyre_quality() -> float:
@@ -439,6 +454,17 @@ func step(dt: float, input: PlayerInput) -> void:
 			phase = "finished"
 			if brain:
 				brain.commit(true)
+	elif phase == "racing" and not winner and not _anyone_running():
+		# every car is out before anyone took the flag: nobody is left to finish, so the race is over
+		phase = "finished"
+		if brain:
+			brain.commit(true)
+
+func _anyone_running() -> bool:
+	for c in cars:
+		if not c.dnf and not c.finished:
+			return true
+	return false
 
 ## Share of the race still to run: 1 at the start, 0 once the chequered flag is out.
 func remaining_fraction() -> float:
@@ -459,6 +485,11 @@ func remaining_fraction() -> float:
 func approximate_finish() -> void:
 	if phase == "finished":
 		return
+	if not is_finite(green_at):
+		# called off before the lights went out (the player retired on the grid): the field starts now, so the
+		# projected times are measured from here instead of from a green light that never came (INF - INF)
+		green_at = clock
+		phase = "racing"
 	projected = true
 	var runs := {} # car -> {t0, lt, p0, stops: [[lap, cost, compound]]}
 	var paces := []
@@ -711,6 +742,16 @@ func _observe_rates(car: RaceCar) -> void:
 			car.fuel_lap = f if car.fuel_lap <= 0.0 else lerpf(car.fuel_lap, f, 0.6 if f > car.fuel_lap else 0.3)
 	car.rate_mark = {"lap": car.lap, "stops": car.stops, "wear": car.tyre.wear, "fuel": car.fuel}
 
+## Laps a car in a timed race still has to drive after the one it is on, by the clock: R is only re-estimated
+## as the leader crosses the line, after this lap's pit call, so on a long lap it can be a whole lap short
+## (a 15-minute Nordschleife race estimated at 1 lap runs 2, and nobody stops for the fuel). The clock still
+## running when the car reaches the line means at least one more lap.
+func _timed_laps_after(car: RaceCar) -> int:
+	var lap_t: float = car.last_lap if car.last_lap != null and car.last_lap > 0.0 else cal.T0 * 1.05
+	var to_line := lap_t * (1.0 - track.wrap_s(car.s) / track.L)
+	var left := time_left - to_line
+	return ceili(left / lap_t) if left > 0.0 else 0
+
 func decide(car: RaceCar) -> void:
 	if s.qualifying:
 		return # nobody pits in a qualifying run
@@ -718,6 +759,8 @@ func decide(car: RaceCar) -> void:
 	if dyn:
 		_observe_rates(car)
 	var rem_after := R - (car.lap + 1)
+	if timed and not winner:
+		rem_after = maxi(rem_after, _timed_laps_after(car))
 	if rem_after <= 0 or winner:
 		return
 	var wet := weather.wet
@@ -825,11 +868,23 @@ func _replace_plan(car: RaceCar, best: Dictionary, laps_in_stint: int) -> void:
 ## Fuel and tyres for the car's next stop, from its plan.
 func default_service(car: RaceCar) -> Dictionary:
 	var rem_after := maxi(1, R - (car.lap + 1))
-	var next = car.plan[car.stint_idx + 1] if car.stint_idx + 1 < car.plan.size() else {"c": car.tyre.c, "laps": rem_after}
+	if timed and not winner:
+		rem_after = maxi(rem_after, _timed_laps_after(car))
+	var next = car.plan[car.stint_idx + 1] if car.stint_idx + 1 < car.plan.size() else {"c": _weather_tyre(car), "laps": rem_after}
 	var is_last := car.stint_idx + 1 >= car.plan.size() - 1
 	var laps: int = rem_after if is_last else mini(next.laps, rem_after)
 	var fuel_target := minf(spec.tank, Strategy.fuel_need(laps, car_fpl(car)))
 	return make_service(car, next.c, fuel_target)
+
+## Tyres for an unplanned stop: wets once the car's own rain call says so, slicks once the track has dried
+## (the same thresholds as the strategist's weather_shift), else the compound it is on.
+func _weather_tyre(car: RaceCar) -> String:
+	var cur: String = car.tyre.c
+	if cur != "W" and weather.wet > car.wet_threshold:
+		return "W"
+	if cur == "W" and weather.wet < 0.18:
+		return "M"
+	return cur
 
 func make_service(car: RaceCar, c, fuel_target: float) -> Dictionary:
 	var arrival := maxf(0.0, car.fuel - car_fpl(car) * 0.1)
@@ -1497,6 +1552,19 @@ func brake_assist(car: RaceCar) -> float:
 ## (bot_control), so one slide into the gravel doesn't end the race. A car that has merely spun to face
 ## the wrong way is never moved: the player turns it round themselves (reverse and lock), so this only
 ## counts time spent stopped while pointing along the track.
+## Whether a car has another one (or the safety car) close in front of it, in its lane: it is held up.
+func _held_up(car: RaceCar) -> bool:
+	var others: Array = cars
+	if rc and rc.sc_on_track:
+		others = cars + [rc.sc]
+	for o in others:
+		if o == car or o.mode != "race":
+			continue
+		var ahead := track.rel(o.s - car.s)
+		if ahead > 0.0 and ahead < 14.0 and absf(o.d - car.d) < spec.width + 0.8:
+			return true
+	return false
+
 func player_rejoin(car: RaceCar, dt: float) -> void:
 	if phase != "racing" or race_time < 3.0 or car.mode != "race" or car.finished or car.out_of_fuel:
 		car.stuck_t = 0.0
@@ -1504,8 +1572,15 @@ func player_rejoin(car: RaceCar, dt: float) -> void:
 	var tr := track
 	var off := absf(SimUtil.wrap_angle(car.heading - tr.heading(car.s)))
 	var v := sqrt(car.vx * car.vx + car.vy * car.vy)
-	car.stuck_t = car.stuck_t + dt if off <= 1.4 and v < 2.5 else 0.0
-	if car.stuck_t < 3.0:
+	# stopped facing the right way off the road (in the gravel, against the barrier): back on after a moment.
+	# On the road it can just drive on, and in a queue (behind a pile-up, the safety car) it is waiting, not
+	# stuck: putting it "back" every few seconds kept it standing there. Facing the wrong way the driver may be
+	# turning round, so only a car that has stayed wedged (sideways in the gravel, nose in a wall) is put back.
+	var stuck := false
+	if v < 2.5 and not _held_up(car):
+		stuck = off > 1.4 or (absf(car.d) > tr.half - 0.5 and not (rc and rc.neutral))
+	car.stuck_t = car.stuck_t + dt if stuck else 0.0
+	if car.stuck_t < (3.0 if off <= 1.4 else 10.0):
 		return
 	car.stuck_t = 0.0
 	var lim := tr.half - 1.5
@@ -1600,7 +1675,11 @@ func bot_control(car: RaceCar, dt: float) -> void:
 			car.uturn = false
 	# without the U-turn a car facing the wrong way counts as stuck at any speed and is put back quickly
 	var wrong_way := off > 1.4 and not bot_uturn
-	car.stuck_t = car.stuck_t + dt if wrong_way or (v < 2.5 and not car.out_of_fuel and not (rc and rc.neutral)) else 0.0
+	# under a flag a stopped car may just be queueing, but one stopped facing the wrong way, or with nobody in
+	# front of it, is wedged (two bots nose to nose against the wall at Sainte Dévote stopped the whole field
+	# for good: the safety car stayed out for them and they were never put back while it was out)
+	car.stuck_t = car.stuck_t + dt if wrong_way or (v < 2.5 and not car.out_of_fuel \
+			and (off > 1.4 or not (rc and rc.neutral) or not _held_up(car))) else 0.0
 	if car.stuck_t > ((10.0 if bot_uturn else 1.2) if off > 1.4 else 2.5):
 		car.stuck_t = 0.0
 		car.uturn = false
@@ -1969,6 +2048,8 @@ func player_replan() -> void:
 	p.plan_stale = true
 	p.service_edited = false
 	var rem := R - (p.lap + 1)
+	if timed and not winner:
+		rem = maxi(rem, _timed_laps_after(p))
 	if rem <= 0:
 		return
 	var opts := strategy.plan(plan_opts({

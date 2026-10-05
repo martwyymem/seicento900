@@ -50,6 +50,7 @@ static func coach_scale(r: Race) -> float:
 	var scale := 1.0
 	if best != null:
 		scale = best / bot_time(cr, lap_time(cr, CO_DRIVER), CO_DRIVER, lap_time(cr, 1.0), 1.0)
+	cr.dispose()
 	r.track.cal["quali_scale"] = scale * FIELD_EASE
 	return r.track.cal.quali_scale
 

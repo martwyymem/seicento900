@@ -7,13 +7,14 @@
 class_name Strategy
 extends RefCounted
 
-const G := 9.81
-const PIT_SPEED := 60.0 / 3.6
-const FUEL_MARGIN := 1.04
+const G := 9.81 ## gravity, m/s²
+const PIT_SPEED := 60.0 / 3.6 ## pit-lane speed limit (60 km/h) in m/s
+const FUEL_MARGIN := 1.04 ## fuel carried over the calculated need, as a factor (4 % spare)
 const RESERVE := 0.4 ## litres left in the tank at the end of a stint
 const LONG_RACE := 60 ## laps; longer races are planned over a rolling horizon
-const NO_LIMIT := 1 << 30
+const NO_LIMIT := 1 << 30 ## "no cap" sentinel for stint lengths and stop counts
 
+## Pit crews (RaceSettings.crew): `fixed` s of overhead per stop, `tyres` s to change all four, refuel `rate` in L/s.
 const CREWS := {
 	"pro": {"name": "Pro crew", "fixed": 2.0, "tyres": 6.5, "rate": 2.4},
 	"club": {"name": "Club crew", "fixed": 3.0, "tyres": 14.0, "rate": 1.2},
@@ -306,13 +307,17 @@ func plan(opts: Dictionary) -> Array:
 				stints.push_front(q.st)
 			q = q.prev
 		out.append({"stints": stints, "time": node.t, "stops": node.j, "horizon": R if R < opts.laps else 0, "_i": out.size()})
-	# stable sort by time, like JS Array.sort
-	out.sort_custom(func(p, q): return p.time < q.time or (p.time == q.time and p._i < q._i))
+	# stable sort by time, like JS Array.sort. Mirrored plans (S-H vs H-S) tie exactly in JS but can differ
+	# by an ulp here (libm vs V8), so times are compared to the microsecond and ties keep their build order.
+	for p in out:
+		p._t = snappedf(p.time, 1e-6)
+	out.sort_custom(func(p, q): return p._t < q._t or (p._t == q._t and p._i < q._i))
 	# one entry per distinct compound sequence/stop count, best first
 	var seen := {}
 	var res := []
 	for p in out:
 		p.erase("_i")
+		p.erase("_t")
 		var k := ""
 		for s in p.stints:
 			k += s.c

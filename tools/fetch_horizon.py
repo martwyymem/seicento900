@@ -30,6 +30,7 @@ GROWTH = 1.13  # each spacing outwards this much wider than the last
 _tiles = {}
 
 def tile(tx, ty):
+    """Returns the decoded Terrarium height tile (tx, ty) at ZOOM, downloading it into TILES on first use."""
     key = (tx, ty)
     if key not in _tiles:
         path = os.path.join(TILES, f'{ZOOM}_{tx}_{ty}.png')
@@ -103,6 +104,7 @@ def open_sea(h, nx, nz):
     return sea
 
 def build(key, dem):
+    """Builds <key>_far.json: a height grid, fine near the circuit and widening outwards, out to REACH."""
     g = dem['grid']
     P = bt.proj_for(key)
     x0, z0 = g['x0'], g['y0']
@@ -120,6 +122,7 @@ def build(key, dem):
     json.dump(out, open(os.path.join(GODOT_TRACKS, key + '_far.json'), 'w'), separators=(',', ':'))
 
 def main():
+    """Builds the distant terrain for every track (or those named on the command line)."""
     elevation = json.load(open(os.path.join(HERE, 'elevation.json')))
     only = sys.argv[1:]
     for key in bt.TRACKS:

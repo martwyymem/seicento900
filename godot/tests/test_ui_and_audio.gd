@@ -74,5 +74,9 @@ func run() -> Array:
 	if results.size() != 5:
 		errors.append("Expected 5 cars in results, got %d" % results.size())
 
+	# neither node joined the tree, so nothing frees them but us
+	race.dispose()
+	audio.free()
+	world.free()
 	completed = true
 	return errors

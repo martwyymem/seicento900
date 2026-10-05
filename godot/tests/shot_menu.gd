@@ -1,6 +1,6 @@
 extends SceneTree
 # Renders front-end pages (and optionally the race HUD) to /tmp/cmr at a given window size.
-# SIZE=3840x2160 PAGES=home,setup,information,repair,options,loading,race godot --path godot -s tests/shot_menu.gd
+# SIZE=3840x2160 PAGES=home,setup,information,repair,options,loading,race,qualisheet godot --path godot -s tests/shot_menu.gd
 var game
 var frame := 0
 var pages: PackedStringArray
@@ -36,6 +36,14 @@ func _process(_dt) -> bool:
 				game.loading_screen.set_progress(0.6)
 			"pause": game._set_paused(true)
 			"results": game._show_results()
+			"qualisheet": # a simulated qualifying's time sheet, OPP opponents (default 7)
+				var rs := RaceSettings.new()
+				rs.track = "monaco"
+				rs.opponents = int(OS.get_environment("OPP")) if OS.get_environment("OPP") else 7
+				Qualifying.configure(rs)
+				var qr := Race.new(rs)
+				game._show_quali_sheet(qr, Qualifying.sheet(qr, Qualifying.simulated_player_time(qr)), true)
+				qr.dispose()
 			"drive": # let the co-driver run a stretch so the HUD shows live values
 				game.race.set_autopilot(true)
 				hold = int(OS.get_environment("HOLD")) if OS.get_environment("HOLD") else 900

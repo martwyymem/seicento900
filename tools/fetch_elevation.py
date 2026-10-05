@@ -13,6 +13,7 @@ API = 'https://api.opentopodata.org/v1/'
 import build_tracks as bt  # noqa: E402  (reuses the chain definitions + projection)
 
 def query(latlons, dataset):
+    """Looks up the heights of (lat, lon) points in an OpenTopoData dataset, 100 per request, with retries."""
     out = []
     for i in range(0, len(latlons), 100):
         chunk = latlons[i:i + 100]
@@ -34,6 +35,7 @@ def query(latlons, dataset):
     return out
 
 def main():
+    """Fetches elevation for every track in build_tracks.TRACKS (or those named on the command line) not yet in elevation.json."""
     cache = json.load(open(OUT)) if os.path.exists(OUT) else {}
     only = sys.argv[1:]
     for key, t in bt.TRACKS.items():

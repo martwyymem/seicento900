@@ -71,6 +71,7 @@ var land_rect := Rect2() ## track metres
 var _res := 2.0 ## land map metres per texel
 static var _tree_meshes := {} ## Blender tree meshes by species
 static var _tree_sizes := {} ## species -> Vector2(crown radius, height) of its mesh, for the TV cameras' sightlines
+static var _tree_reaches := {} ## species -> how far its mesh reaches from the trunk at scale 1, turned any way
 var _bank_cells := {} ## 16 m cells (Vector2i) within reach of the banking, kept clear of trees
 static var _landmark_meshes := {} ## Blender landmark meshes (and yachts) by name
 
@@ -351,6 +352,20 @@ static func _tree_size(species: String) -> Vector2:
 		_tree_sizes[species] = Vector2(0.75 * 0.5 * maxf(box.size.x, box.size.z), box.end.y)
 	return _tree_sizes[species]
 
+## How far a species' tree reaches out from its trunk at scale 1 (its farthest vertex), whichever way it is
+## turned: what has to stay out of the run-off.
+static func _tree_reach(species: String) -> float:
+	if not _tree_reaches.has(species):
+		var mesh: Mesh = tree_meshes().get(species)
+		var r := 3.0
+		if mesh:
+			r = 0.0
+			for k in mesh.get_surface_count():
+				for v in mesh.surface_get_arrays(k)[Mesh.ARRAY_VERTEX]:
+					r = maxf(r, Vector2(v.x, v.z).length())
+		_tree_reaches[species] = r
+	return _tree_reaches[species]
+
 ## A species for a tree in a wood at (x, z): conifers stand together in plantations (as much of the wood as
 ## the circuit's tree_conifer says), broadleaves elsewhere, in the country's mix.
 func _wood_species(x: float, z: float) -> String:
@@ -376,17 +391,32 @@ static func _pick(weights: Dictionary, r: float) -> String:
 	return weights.keys()[0]
 
 func _add_tree(chunks: Dictionary, species: String, x: float, z: float, scale: float) -> void:
+	var size := (0.72 + _rand(x, z, 5.0) * 0.5) * scale
+	var tall := size * (0.9 + _rand(x, z, 7.0) * 0.25)
+	var dims := _tree_size(species)
+	# the trunk stands clear of the run-off; keep the crown (its full spread) out of it too. track_distance is
+	# a coarse lookup, a couple of metres out, so a crown near the edge is measured from the centreline itself.
+	var near: Vector2 = track_distance(x, z)
+	if near.x >= 0:
+		var edge: float = track.half + track.cfg.runoff
+		var crown := _tree_reach(species)
+		var room: float = near.y - edge
+		if crown * size > room - 4.0:
+			room = minf(room, track.project(x, z, near.x * track.step)[2] - edge)
+		if crown * size > room:
+			var fit := maxf(0.0, room) / (crown * size)
+			if fit * size < 0.45 * scale:
+				return # too small to look like a tree there
+			size *= fit
+			tall *= fit
 	var c := _chunk(x, z)
 	if not chunks.has(c):
 		chunks[c] = {}
 	if not chunks[c].has(species):
 		chunks[c][species] = [[], []]
-	var size := (0.72 + _rand(x, z, 5.0) * 0.5) * scale
-	var tall := size * (0.9 + _rand(x, z, 7.0) * 0.25)
 	var basis := Basis(Vector3.UP, _rand(x, z, 6.0) * TAU).scaled(Vector3(size, tall, size))
 	var y: float = ground_height(x, z) - 0.3
 	chunks[c][species][0].append(Transform3D(basis, Vector3(x - world.world_center.x, y, z - world.world_center.y)))
-	var dims := _tree_size(species)
 	world.add_occluder(x - world.world_center.x, z - world.world_center.y, dims.x * size, y + dims.y * tall)
 	var tint := 0.8 + _rand(x, z, 8.0) * 0.32
 	chunks[c][species][1].append(Color(tint * (0.94 + _rand(x, z, 9.0) * 0.12), tint, tint * (0.88 + _rand(x, z, 10.0) * 0.16)))

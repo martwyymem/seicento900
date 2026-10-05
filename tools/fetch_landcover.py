@@ -32,6 +32,7 @@ WEIGHT = {'t': 2.2}
 
 
 def fetch(url, start=None, length=None):
+    """Downloads a URL, or a byte range of it, with retries; None when the file does not exist (open ocean)."""
     headers = {'User-Agent': 'seicento-game/1.0'}
     if start is not None:
         headers['Range'] = f'bytes={start}-{start + length - 1}'
@@ -116,6 +117,7 @@ _sheets = {}
 
 
 def cover_at(lat, lon):
+    """The land-cover class letter at (lat, lon), from the 3-degree WorldCover sheet that holds it."""
     lat0 = math.floor(lat / 3.0) * 3
     lon0 = math.floor(lon / 3.0) * 3
     key = (lat0, lon0)
@@ -133,6 +135,7 @@ def footprint(axis, i):
 
 
 def build(key):
+    """Samples the land cover over each grid point of <key>_far.json and writes it back."""
     path = os.path.join(GODOT_TRACKS, key + '_far.json')
     far = json.load(open(path))
     P = bt.proj_for(key)
@@ -160,6 +163,7 @@ def build(key):
 
 
 def main():
+    """Adds land cover for every track (or those named on the command line)."""
     only = sys.argv[1:]
     for key in bt.TRACKS:
         if only and key not in only:

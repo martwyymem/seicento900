@@ -90,6 +90,24 @@ back), and needing the car ahead to be moving faster than about 8 m/s. The tow b
 and is lost within 0.4 s of pulling out, so speed is gained and shed gradually. The same model tows bots and
 the player; `Race.wake_strength` and `Race.tow_drag` hold it.
 
+## Lap records and ghost car
+
+A Godot-only addition. `scripts/sim/lap_records.gd` keeps your best lap on each circuit, one for the dry and
+one for the wet (a lap counts as wet when the track averages 25 % wetness or more over it), and records every
+flying lap you drive yourself: from one crossing of the line to the next, with no autopilot, no pit stop and
+the car on the tarmac all the way round (qualifying's track-limits rule). The lap from the grid and the
+qualifying out lap never count. A faster lap replaces the record. The feed and the results announce it, and its
+ghost (the car's path sampled every 0.05 s) is saved with it. Records are in `user://lap_records.json`, ghosts
+in `user://ghosts/<track>_<dry|wet>.ghost`.
+
+From then on a translucent copy of your car (`scripts/ui/lap_ghost.gd`) drives the record lap beside you on
+every flying lap, fading further when it's on top of you. The clock box shows the live gap to the record at
+your point on the lap (red behind, purple ahead), or the record itself before a flying lap starts. **G** shows
+or hides the ghost. That setting is remembered separately for driving alone (qualifying, or a race without
+opponents; shown by default) and for racing (hidden by default). The set-up page lists the circuit's records,
+with a Forget button, and so does the Information page. `tests/_ghost_shot.gd` (run it in a window) records a
+ghost on Fiat Track and screenshots the race, results and menus to `/tmp/ghost/`.
+
 The UI is laid out on a 1600×900 canvas and scaled to the window (`canvas_items` stretch, `expand`
 aspect), so it keeps its proportions at any resolution; the 3D views render at the window's full pixel
 size. Options → Interface size makes the UI smaller or larger on top of that.
@@ -184,7 +202,7 @@ Coordinates: the JS/2D x (east) and y (south) map to Godot X and Z; Y is up.
 
 Keyboard: W/↑ throttle, S/↓/Space brake, A/D or ←/→ steer, E/Q shift (manual gearbox), P box this lap,
 [ / ] tyre choice for the next stop, − / = fuel for the next stop, R re-plan, O autopilot, C camera,
-L racing line, H help, M mute, , / . time warp, Esc pause, Enter skip to results once retired or finished.
+L racing line, G ghost car, H help, M mute, , / . time warp, Esc pause, Enter skip to results once retired or finished.
 Gamepad: left stick steers, triggers for throttle/brake, Start pauses.
 
 ## Tests
@@ -193,3 +211,6 @@ Gamepad: left stick steers, triggers for throttle/brake, Start pauses.
 node tools/parity/car_ref.js                           # refresh JS reference values (from repo root)
 godot --headless --path godot -s tests/run_tests.gd    # compare
 ```
+
+Anything started with `-s` (tests, probes, screenshot tools) saves to `user://dev_sandbox/` instead of the
+player's championship, set-up, graphics settings and AI memory (`scripts/sim/save_data.gd`).

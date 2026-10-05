@@ -63,6 +63,7 @@ func run_scenario(sc: Dictionary) -> void:
 	checked += 1
 	if grid != sc.grid:
 		errors.append("%s: grid %s, want %s" % [name, grid, sc.grid])
+		race.dispose()
 		return
 	if sc.autopilot:
 		race.set_autopilot(true)
@@ -124,6 +125,7 @@ func run_scenario(sc: Dictionary) -> void:
 			errors.append("%s %s: best lap %.3f, want %.3f" % [name, w.name, g.car.best_lap, w.best])
 		if sc.phase == "finished" and absf(g.total - w.total) > TOTAL_REL * w.total:
 			errors.append("%s %s: total %.3f, want %.3f" % [name, w.name, g.total, w.total])
+	race.dispose()
 
 func run() -> Array:
 	Brain.use_disk = false

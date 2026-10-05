@@ -5,12 +5,17 @@ extends Control
 
 const RaceHud = preload("res://scripts/ui/race_hud.gd")
 
+## Circuits offered in the menus, in menu order; each key needs data/tracks/<key>.tres and .json.
+## TRACK_NAMES is the display name for the key at the same index.
 const TRACK_KEYS := ["gp", "nordschleife", "monaco", "indy", "lemans", "monza", "silverstone", "spa", "suzuka", "zandvoort", "fiat"]
 const TRACK_NAMES := ["Nürburgring GP", "Nordschleife", "Monaco", "Indianapolis", "Le Mans", "Monza", "Silverstone", "Spa-Francorchamps", "Suzuka", "Zandvoort", "Fiat Track"]
 
+## Championship rounds in order (track keys)
 const CHAMPIONSHIP_CALENDAR := ["monza", "silverstone", "spa", "gp", "monaco", "indy", "lemans", "nordschleife"]
+## Points for 1st, 2nd, ... (F1 scoring); positions past the end score nothing
 const CHAMPIONSHIP_POINTS := [25, 18, 15, 12, 10, 8, 6, 4, 2, 1]
 const PROJECT_FINISH_ABOVE := 0.05 ## share of the race left beyond which a DNF projects the finish instead of simulating it
+## Tabs across the top of the race front end (set-up, repair, ...)
 const TOP_MENU_TABS := ["Information", "Set Up", "Repair", "Race", "Save", "Quit"]
 const MENU_TRACK_ART := preload("res://scripts/ui/menu_track_art.gd")
 const MENU_WEATHER_ICON := preload("res://scripts/ui/menu_weather_icon.gd")
@@ -19,6 +24,7 @@ const MENU_REPAIR_ART := preload("res://scripts/ui/menu_repair_art.gd")
 const MENU_REPAIR_STATUS := preload("res://scripts/ui/menu_repair_status.gd")
 const MENU_CAR_SCENE := preload("res://scripts/ui/race_car_visual.tscn")
 const LOADING_SCREEN := preload("res://scripts/ui/loading_screen.gd")
+## Main menu entries: `id` picks the action, `word` is the big sliding word, `desc` the line under it
 const FRONT_MENU := [
 	{"id": "quick_race", "word": "quick race", "desc": "One race on any circuit. Pick the track, laps and weather."},
 	{"id": "endurance", "word": "endurance", "desc": "Race for hours instead of laps, with pit stops and the light changing."},
@@ -26,6 +32,7 @@ const FRONT_MENU := [
 	{"id": "options", "word": "options", "desc": "Display, frame rate and graphics settings."},
 	{"id": "quit", "word": "quit", "desc": "Close the game."},
 ]
+## Per-circuit defaults applied when the track is picked: race laps and tyre wear multiplier
 const TRACK_DEFAULTS := {
 	"gp": {"laps": 6, "wear": 2.0},
 	"nordschleife": {"laps": 2, "wear": 1.0},
@@ -40,8 +47,8 @@ const TRACK_DEFAULTS := {
 	"fiat": {"laps": 8, "wear": 2.0},
 }
 
-const WARP_VALUES := [1, 2, 5, 10, 30, 60]
-const UI_SCALES := [0.85, 1.0, 1.15, 1.3]
+const WARP_VALUES := [1, 2, 5, 10, 30, 60] ## time-warp steps (, and . keys)
+const UI_SCALES := [0.85, 1.0, 1.15, 1.3] ## Options → Interface size, on top of the window scaling
 ## 3D upscalers offered in the options (MetalFX only where the GPU driver supports it).
 const UPSCALERS := [
 	{"name": "Off (native resolution)", "mode": Viewport.SCALING_3D_MODE_BILINEAR},
@@ -77,17 +84,21 @@ const STILL_FPS := 30 ## cap while the 3D view holds a still image (pause, resul
 const BACKGROUND_FPS := 10 ## cap while the window is not in front
 const STILL_FRAMES := 3 ## frames the 3D view keeps drawing after it stops changing, so its last image is the current one
 
-const TICK := 1.0 / 120.0
+const TICK := 1.0 / 120.0 ## fixed simulation step (120 Hz); the parity tests and replays depend on it
 const WARP_TICKS := {2: 2, 5: 4, 10: 4, 30: 4, 60: 6} ## ticks the rail model steps at once at each time warp
 const WARP_SIM_SHARE := 0.6 ## at most this much of each frame goes on the simulation under time warp
+# Shorthands for the CmrStyle palette
 const INK := CmrStyle.TEXT
 const MUTED := CmrStyle.MUTED
 const ACCENT := CmrStyle.ORANGE
 const DANGER := CmrStyle.RED
 
 var race: Race
+var lap_records: LapRecords ## the player's lap records on this circuit, and the lap being recorded
+var lap_ghost: LapGhost ## the car that drives the record lap
 var accumulator := 0.0
 var paused := false
+var _starting := false ## a race is being set up (_start_race)
 var _player_input := Race.PlayerInput.new() ## reused every frame instead of allocating one per _process call
 
 # Audio
@@ -217,6 +228,8 @@ var custom_box: VBoxContainer
 var custom_rows: VBoxContainer
 var custom_eval: Label
 var ai_memory_label: Label
+var record_label: Label ## the player's lap records on the selected circuit
+var record_forget_button: Button
 var ai_forget_button: Button
 
 # Pit strategy chosen on the set-up page (the reference's strategy panel)
@@ -292,6 +305,8 @@ func _sync_rendering() -> void:
 
 func _process(delta: float) -> void:
 	_sync_rendering()
+	if _starting:
+		return
 	if not race:
 		# the showroom turntable keeps turning, as on the CMR car screens
 		if is_instance_valid(menu_preview_car) and menu_car_preview.visible:
@@ -331,6 +346,8 @@ func _process(delta: float) -> void:
 	var t0 := Time.get_ticks_usec()
 	while accumulator >= tick and steps < cap and race.phase != "finished":
 		race.step(tick, input)
+		if lap_records:
+			lap_records.tick()
 		accumulator -= tick
 		steps += 1
 		if (steps & 3) == 0 and Time.get_ticks_usec() - t0 > budget:
@@ -445,6 +462,8 @@ func _build_viewport() -> void:
 	world_view = load("res://ui/race_world.tscn").instantiate()
 	viewport.add_child(world_view)
 	world_view.set_track(Race.get_track(TRACK_KEYS[0]))
+	lap_ghost = LapGhost.new()
+	world_view.add_child(lap_ghost)
 	_apply_world_graphics_settings()
 
 func _viewport_view(viewport: SubViewport) -> TextureRect:
@@ -702,6 +721,17 @@ func _build_setup() -> void:
 	ai_forget_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	ai_forget_button.pressed.connect(_forget_ai_memory)
 	memory_row.add_child(ai_forget_button)
+	var record_row := HBoxContainer.new()
+	record_row.add_theme_constant_override("separation", 10)
+	col.add_child(record_row)
+	record_label = _label("", 13, CmrStyle.TEXT)
+	record_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	record_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	record_row.add_child(record_label)
+	record_forget_button = _button("FORGET", DANGER)
+	record_forget_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	record_forget_button.pressed.connect(_forget_lap_records)
+	record_row.add_child(record_forget_button)
 	_build_strategy_section(col)
 
 	status_label = _label("", 13, ACCENT)
@@ -839,6 +869,8 @@ func _refresh_strategy() -> void:
 		var why := "No plan satisfies these rules."
 		if all_short:
 			why = "No tyre survives a single lap — lower the tyre wear."
+		elif laps < 2 and (mandatory_stop_toggle.button_pressed or two_compounds_toggle.button_pressed):
+			why = "A %s needs a race of at least 2 laps." % ("mandatory pit stop" if mandatory_stop_toggle.button_pressed else "second tyre compound")
 		elif not refuel_toggle.button_pressed and Strategy.fuel_need(laps, fpl) > tank:
 			why = "Without refuelling the race needs %.1f L — more than the %d L tank." % [Strategy.fuel_need(laps, fpl), int(tank)]
 		info += "\n⚠ " + why
@@ -847,8 +879,8 @@ func _refresh_strategy() -> void:
 			strategy_options[0].horizon, roundi(float(laps) / strategy_options[0].horizon * strategy_options[0].stops)]
 	strategy_info.text = info
 	if format_picker.selected == 1:
-		race_length_label.text = "%s race ≈ %d laps · %d km — the winner is whoever leads when the clock runs out" % [
-			_fmt_hours(hours_picker.value), laps, roundi(laps * track.L / 1000.0)]
+		race_length_label.text = "%s race ≈ %d lap%s · %d km — the winner is whoever leads when the clock runs out" % [
+			_fmt_hours(hours_picker.value), laps, "" if laps == 1 else "s", roundi(laps * track.L / 1000.0)]
 	else:
 		var mins := laps * lap * 1.02 / 60.0
 		race_length_label.text = "≈ %s · %.1f km" % ["%d min" % roundi(mins) if mins < 90.0 else "%.1f h" % (mins / 60.0), laps * track.L / 1000.0]
@@ -1041,6 +1073,39 @@ func _update_ai_memory() -> void:
 		text += "). You block %d %% of attacks%s." % [roundi(float(m.get("block") if m.get("block") != null else 0.0) * 100.0), " and race rough" if rough != null and rough > 0.3 else ""]
 		ai_memory_label.text = text
 		ai_forget_button.visible = true
+	_update_lap_records(key, name)
+
+## The player's lap records on the selected circuit, whose ghosts race them there.
+func _update_lap_records(key: String, name: String) -> void:
+	if not is_instance_valid(record_label):
+		return
+	var parts: Array[String] = []
+	for cond in LapRecords.CONDITIONS:
+		var r := LapRecords.record(key, cond)
+		if r.has("t"):
+			parts.append("%s %s (%s)" % [Race.fmt_time(float(r.t)), cond, r.get("date", "")])
+	record_forget_button.visible = not parts.is_empty()
+	if parts.is_empty():
+		record_label.text = "No lap record at %s yet. Your best flying lap sets one, and its ghost races you from then on." % name
+	else:
+		record_label.text = "Your lap record at %s: %s. G shows or hides its ghost in the race." % [name, " · ".join(parts)]
+
+func _forget_lap_records() -> void:
+	var key: String = CHAMPIONSHIP_CALENDAR[_champ_round()] if is_championship_mode else TRACK_KEYS[track_picker.selected]
+	var dialog := ConfirmationDialog.new()
+	dialog.title = "Forget lap records"
+	dialog.dialog_text = "Delete your lap records and their ghosts at %s?" % Race.get_track(key).name
+	dialog.confirmed.connect(func() -> void:
+		LapRecords.forget(key)
+		_update_ai_memory()
+		_update_information_page()
+	)
+	dialog.visibility_changed.connect(func() -> void:
+		if not dialog.visible:
+			dialog.queue_free()
+	)
+	add_child(dialog)
+	dialog.popup_centered()
 
 func _forget_ai_memory() -> void:
 	var key: String = CHAMPIONSHIP_CALENDAR[_champ_round()] if is_championship_mode else TRACK_KEYS[track_picker.selected]
@@ -1058,8 +1123,6 @@ func _forget_ai_memory() -> void:
 	add_child(dialog)
 	dialog.popup_centered()
 
-const RACE_SETTINGS_PATH := "user://race_settings.cfg"
-
 ## The set-up page survives restarts, like the reference's saved settings.
 func _race_setting_controls() -> Dictionary:
 	return {
@@ -1076,7 +1139,7 @@ func _race_setting_controls() -> Dictionary:
 
 func _load_race_settings() -> void:
 	var cfg := ConfigFile.new()
-	if cfg.load(RACE_SETTINGS_PATH) != OK:
+	if cfg.load(SaveData.path("race_settings.cfg")) != OK:
 		return
 	_loading_settings = true
 	var controls := _race_setting_controls()
@@ -1121,7 +1184,7 @@ func _save_race_settings() -> void:
 		elif control is ColorPickerButton:
 			v = (control as ColorPickerButton).color
 		cfg.set_value("race", key, v)
-	cfg.save(RACE_SETTINGS_PATH)
+	cfg.save(SaveData.path("race_settings.cfg"))
 
 func _build_menu_car_preview() -> void:
 	var viewport := SubViewport.new()
@@ -1824,7 +1887,7 @@ func _apply_world_graphics_settings() -> void:
 
 func _load_graphics_settings() -> void:
 	var config := ConfigFile.new()
-	if config.load("user://graphics.cfg") == OK:
+	if config.load(SaveData.read_path("graphics.cfg")) == OK:
 		graphics_display_mode = clampi(int(config.get_value("graphics", "display_mode", 0)), 0, 1)
 		graphics_antialiasing = clampi(int(config.get_value("graphics", "antialiasing", 0)), 0, 2)
 		graphics_vsync = bool(config.get_value("graphics", "vsync", true))
@@ -1857,7 +1920,7 @@ func _load_graphics_settings() -> void:
 
 func _save_graphics_settings() -> void:
 	var config := ConfigFile.new()
-	config.load("user://graphics.cfg")
+	config.load(SaveData.read_path("graphics.cfg"))
 	if config.has_section_key("graphics", "render_scale"):
 		config.erase_section_key("graphics", "render_scale")
 	config.set_value("graphics", "upscaler", graphics_upscaler)
@@ -1871,7 +1934,7 @@ func _save_graphics_settings() -> void:
 	config.set_value("graphics", "ssao", graphics_ssao)
 	config.set_value("graphics", "shadows", graphics_shadows)
 	config.set_value("graphics", "ui_scale", graphics_ui_scale)
-	config.save("user://graphics.cfg")
+	config.save(SaveData.path("graphics.cfg"))
 
 func _layout_home_strip() -> void:
 	_home_select(home_menu_index, false)
@@ -2019,7 +2082,7 @@ func _update_information_page() -> void:
 	elif format_picker.selected == 1:
 		race_length = "Timed race · %s" % _fmt_hours(hours_picker.value)
 	else:
-		race_length = "%d laps" % int(laps_picker.value)
+		race_length = "%d lap%s" % [int(laps_picker.value), "" if int(laps_picker.value) == 1 else "s"]
 	var current_track: Track = Race.get_track(track_key)
 	information_title.text = current_track.name
 	var weather_options: Array[String] = ["Dry", "Wet", "Variable"]
@@ -2031,10 +2094,34 @@ func _update_information_page() -> void:
 		weather_name,
 		int(opponents_picker.value)
 	]
+	information_facts.text += _records_text(track_key)
 	if information_map.has_method("set_track"):
 		information_map.set_track(current_track, true)
 	if is_instance_valid(menu_home_art) and not is_championship_mode:
 		menu_home_art.set_track(current_track)
+
+## The player's lap records on a circuit, for the Information page.
+func _records_text(track_key: String) -> String:
+	var parts: Array[String] = []
+	for cond in LapRecords.CONDITIONS:
+		var r := LapRecords.record(track_key, cond)
+		if r.has("t"):
+			parts.append("%s %s" % [Race.fmt_time(float(r.t)), cond])
+	return "\nLap record   %s" % (" · ".join(parts) if parts.size() else "none yet")
+
+## A line under a results heading for the lap records the player set in this session.
+func _add_record_note(col: VBoxContainer, session: Race) -> void:
+	if not lap_records or lap_records.race != session or lap_records.new_records.is_empty():
+		return
+	var best := {}
+	for r in lap_records.new_records: # each one beats the last, so the latest per conditions is the record
+		best[r.conditions] = r.t
+	var parts := []
+	for cond in best:
+		parts.append("%s (%s)" % [Race.fmt_time(best[cond]), cond])
+	var note := _label("New lap record at %s: %s. Its ghost will chase you next time." % [session.track.name, ", ".join(parts)], 13, CmrStyle.ORANGE_SOFT)
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(note)
 
 func _format_start_time(hour: float) -> String:
 	var hours := int(floorf(hour))
@@ -2135,7 +2222,20 @@ func _build_results() -> void:
 	result_panel.add_child(result_scroll)
 	result_panel.hide()
 
+## Sets up and shows a race from the set-up page (or restarts the one running). While it is being set up
+## nothing steps (neither the race on screen nor the new one) and further presses are ignored; the race
+## shown until now is disposed once the world and the HUD have the new one.
 func _start_race() -> void:
+	if _starting:
+		return
+	_starting = true
+	var shown: Race = world_view.race
+	await _set_up_race()
+	_starting = false
+	if shown and shown != world_view.race:
+		shown.dispose()
+
+func _set_up_race() -> void:
 	status_label.text = "Configuring car and optimizing race strategy..."
 	status_label.modulate = ACCENT
 	await get_tree().process_frame
@@ -2223,9 +2323,12 @@ func _start_race() -> void:
 		status_label.text = ""
 		loading_screen.hide()
 		_show_quali_sheet(sim_race, Qualifying.sheet(sim_race, Qualifying.simulated_player_time(sim_race)), true)
+		sim_race.dispose()
 		return
 	await _loading_progress(0.6)
 	world_view.set_race(race)
+	lap_records = LapRecords.new(race)
+	lap_ghost.start(world_view, lap_records)
 	await _loading_progress(1.0)
 
 	accumulator = 0.0
@@ -2246,6 +2349,7 @@ func _start_race() -> void:
 	pause_panel.hide()
 	get_viewport().gui_release_focus()
 	hud.start(race, world_view, audio)
+	hud.records = lap_records
 	status_label.text = ""
 	loading_screen.hide()
 
@@ -2268,7 +2372,7 @@ func _hide_front_end() -> void:
 ## Cover the front end with the stage loading screen and let it draw before the race is built on this thread.
 func _open_loading_screen(settings: RaceSettings, qualifying := false) -> void:
 	var track := Race.get_track(settings.track)
-	var race_length := "%d laps" % settings.laps if settings.format == "laps" else "%s hours" % String.num(settings.hours, 1).trim_suffix(".0")
+	var race_length := ("%d lap%s" % [settings.laps, "" if settings.laps == 1 else "s"]) if settings.format == "laps" else _fmt_hours(settings.hours)
 	if qualifying:
 		race_length = "qualifying"
 	var segments: Array = [track.name, race_length]
@@ -2305,7 +2409,8 @@ func _show_results() -> void:
 	var fast = race.fastest
 	var title := "DNF — %s" % me.car.dnf_reason if me.car.dnf else "P%d OF %d" % [me.pos, rows.size()]
 	var laps: int = race.winner.finish_lap if race.winner else race.R
-	var sub := "%s · %s%d laps · %s" % [race.track.name, ("%s · " % _fmt_hours(race.duration / 3600.0)) if race.timed else "", laps,
+	var sub := "%s · %s%d lap%s · %s" % [race.track.name, ("%s · " % _fmt_hours(race.duration / 3600.0)) if race.timed else "", laps,
+		"" if laps == 1 else "s",
 		{"dry": "Dry", "wet": "Wet", "variable": "Variable weather"}.get(race.s.weather, "Dry")]
 	if race.projected:
 		sub += " · Finish projected from the field's pace"
@@ -2315,6 +2420,7 @@ func _show_results() -> void:
 	var sub_label := _label(sub, 13, MUTED)
 	sub_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	col.add_child(sub_label)
+	_add_record_note(col, race)
 	if race.brain:
 		var learned := race.brain.progress().filter(func(x): return x.gain > 0.05)
 		if not learned.is_empty():
@@ -2386,6 +2492,7 @@ func _show_results() -> void:
 	buttons.add_child(back)
 	col.add_child(buttons)
 	primary.grab_focus()
+	_fit_result_panel(col)
 
 ## This round's saved qualifying ({round, grid, pos, rows, simulated}), or {} when it hasn't been run.
 func _round_quali() -> Dictionary:
@@ -2430,6 +2537,7 @@ func _show_quali_sheet(qrace: Race, rows: Array, simulated: bool) -> void:
 	var sub_label := _label(sub, 13, MUTED)
 	sub_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	col.add_child(sub_label)
+	_add_record_note(col, qrace)
 
 	var widths := [46, 44, 250, 130, 110, 130]
 	var table := VBoxContainer.new()
@@ -2457,6 +2565,23 @@ func _show_quali_sheet(qrace: Race, rows: Array, simulated: bool) -> void:
 	buttons.add_child(back)
 	col.add_child(buttons)
 	primary.grab_focus()
+	_fit_result_panel(col)
+
+## Sizes the results sheet to its content (a short field leaves no empty band at the bottom), up to its
+## full height, beyond which it scrolls; kept centred on screen.
+func _fit_result_panel(col: Control) -> void:
+	# until the column is laid out its wrapped lines measure as if it had no width
+	for k in 5:
+		await get_tree().process_frame
+		if not is_instance_valid(col) or not result_panel.visible:
+			return
+		if col.size.x > 0.0:
+			break
+	var pad := result_panel.get_theme_stylebox("panel").get_minimum_size().y
+	var h := minf(820.0, ceilf(col.get_combined_minimum_size().y + pad))
+	result_panel.custom_minimum_size.y = h
+	result_panel.offset_top = -h * 0.5
+	result_panel.offset_bottom = h * 0.5
 
 ## One classification line: fixed-width cells in a slanted bar, with an optional car-colour swatch
 ## before the driver's name (cell 2).
@@ -2558,7 +2683,13 @@ func _champ_round() -> int:
 
 func _return_to_setup() -> void:
 	_commit_brain()
+	var shown: Race = world_view.race
+	if race and race != shown:
+		race.dispose()
 	race = null
+	lap_records = null
+	lap_ghost.start(world_view, null)
+	hud.records = null
 	paused = false
 	skipping = false
 	hud.hide()
@@ -2575,6 +2706,8 @@ func _return_to_setup() -> void:
 
 	var t_key: String = CHAMPIONSHIP_CALENDAR[_champ_round()] if is_championship_mode else TRACK_KEYS[track_picker.selected]
 	world_view.set_track(Race.get_track(t_key))
+	if shown:
+		shown.dispose() # (after the world has let go of it)
 
 func _select_track(index: int) -> void:
 	var key: String = TRACK_KEYS[index]
@@ -2682,9 +2815,9 @@ func _reset_championship() -> void:
 
 func _load_championship() -> void:
 	champ_data = {"round": 0, "scored": false, "table": {}}
-	if not FileAccess.file_exists("user://championship.json"):
+	if not FileAccess.file_exists(SaveData.path("championship.json")):
 		return
-	var f := FileAccess.open("user://championship.json", FileAccess.READ)
+	var f := FileAccess.open(SaveData.path("championship.json"), FileAccess.READ)
 	var parsed = JSON.parse_string(f.get_as_text())
 	if not (parsed is Dictionary) or not (parsed.get("table", {}) is Dictionary):
 		return
@@ -2696,7 +2829,7 @@ func _load_championship() -> void:
 	champ_data["scored"] = bool(parsed.get("scored", false))
 
 func _save_championship() -> void:
-	var f := FileAccess.open("user://championship.json", FileAccess.WRITE)
+	var f := FileAccess.open(SaveData.path("championship.json"), FileAccess.WRITE)
 	if f:
 		f.store_string(JSON.stringify(champ_data))
 
@@ -2795,6 +2928,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		KEY_O: _toggle_autopilot()
 		KEY_C: _cycle_camera()
 		KEY_L: _toggle_racing_line()
+		KEY_G: _toggle_ghost()
 		KEY_V: race.limiter = not race.limiter
 		KEY_H: hud.toggle_help()
 		KEY_M: _toggle_mute()
@@ -2859,6 +2993,11 @@ func _cycle_camera() -> void:
 func _toggle_racing_line() -> void:
 	if world_view and world_view.has_method("toggle_racing_line"):
 		world_view.toggle_racing_line()
+
+func _toggle_ghost() -> void:
+	var note := lap_ghost.toggle()
+	if race and note != "":
+		race.log_event(note, "info")
 
 func _toggle_mute() -> void:
 	if is_instance_valid(audio):

@@ -15,23 +15,26 @@ const YELLOW := CmrStyle.ORANGE
 const GOOD := CmrStyle.VIOLET
 const PURPLE := CmrStyle.PLUM
 const BLUE := CmrStyle.VIOLET
+# Colours: shorthands for the CmrStyle palette plus a few HUD-only tints
 const METER_BG := Color(0, 0, 0, 0.35)
 const CHIP_BG := Color(0.13, 0.08, 0.2, 0.85)
 const BAR_HI := Color(0.97, 0.95, 1.0, 0.9) ## opaque end of the CMR gradient bars
 const BAR_LO := Color(0.55, 0.36, 0.85, 0.35) ## faded end, violet where CMR has blue
-const REFRESH := 0.12
-const ROW_H := 21.0
-const TOWER_W := 262.0
-const PITWALL_W := 330.0
-const FEED_W := 330.0
-const CLOCK_W := 300.0
-const MAP_S := 190.0
+# Layout, in pixels on the 1600×900 design canvas
+const REFRESH := 0.12 ## s between redraws of the text panels (about 8 Hz, like the reference)
+const ROW_H := 21.0 ## height of one timing-tower row
+const TOWER_W := 262.0 ## timing tower (standings) width
+const PITWALL_W := 330.0 ## pit-wall panel width
+const FEED_W := 330.0 ## event feed width
+const CLOCK_W := 300.0 ## lap / clock panel width
+const MAP_S := 190.0 ## minimap size (square)
 const REPAIR_AT_HUD := 0.3 ## the damage at which the gauge turns red (RaceControl.REPAIR_AT)
 const FEED_BORDER := {"good": GOOD, "bad": RED, "warn": CmrStyle.ORANGE_SOFT, "box": YELLOW, "pit": Color("#8a8f99"),
 	"purple": PURPLE, "ai": Color("#2ec4b6"), "rc": Color("#ffcc00")}
-const HELP_TEXT := "↑/W throttle · ↓/S/Space brake · ←→/AD steer · E/Q gear (manual)\nP box request · [ ] next tyre · − = fuel · R ask strategist\nV flag speed limiter · C camera · L racing line · O autopilot / co-driver · M mute · H hide · Esc pause · , . time warp"
+const HELP_TEXT := "↑/W throttle · ↓/S/Space brake · ←→/AD steer · E/Q gear (manual)\nP box request · [ ] next tyre · − = fuel · R ask strategist\nV flag speed limiter · C camera · L racing line · G ghost car · O autopilot / co-driver · M mute · H hide · Esc pause · , . time warp"
 
 var race: Race
+var records: LapRecords ## the player's lap record here, for the gap to it (null: no record row)
 var world: Node3D
 var audio: RaceAudio
 var warp := 1
@@ -90,7 +93,7 @@ func _ready() -> void:
 	pacenote = _canvas(_draw_pacenote)
 	_place(pacenote, 0.5, 0.0, 0.5, 0.0, -150, 14, 150, 124)
 	clock = _canvas(_draw_clock)
-	_place(clock, 1.0, 0.0, 1.0, 0.0, -14 - CLOCK_W - 20, 14, -14, 214)
+	_place(clock, 1.0, 0.0, 1.0, 0.0, -14 - CLOCK_W - 20, 14, -14, 222)
 	lights = _canvas(_draw_lights)
 	flagbar = _canvas(_draw_flag)
 	_place(flagbar, 0.5, 0.0, 0.5, 0.0, -210, 132, 210, 186)
@@ -378,6 +381,14 @@ func _draw_clock() -> void:
 	if quali:
 		clock_label = "OUT LAP" if p.lap == 0 else "TIMED LAP %d / %d" % [mini(p.lap, race.R - 1), race.R - 1]
 	_text(clock, Vector2(x0 + 14, 34), clock_label, 11, CmrStyle.INK_SOFT, true)
+	if records and records.ghost_time != null:
+		# under the label: how far behind (+) or ahead (−) of the lap record this lap is, or the record itself
+		var gap = records.gap()
+		_text(clock, Vector2(x0 + 14, 50), "VS RECORD" if gap != null else "RECORD", 10, CmrStyle.INK_SOFT, true)
+		if gap != null:
+			_text(clock, Vector2(x0 + 14, 70), "%s%.2f" % ["+" if gap >= 0.0 else "−", absf(gap)], 18, RED if gap >= 0.0 else PURPLE, true)
+		else:
+			_text(clock, Vector2(x0 + 14, 67), Race.fmt_time(records.ghost_time), 13, CmrStyle.INK_SOFT, true)
 	clock.draw_string(_digits, Vector2(x0, 68), time_text, HORIZONTAL_ALIGNMENT_RIGHT, W - 18, 38, INK)
 	# rows
 	var lap := str(p.lap + 1) if race.timed else "%d / %d" % [mini(p.lap + 1, race.R), race.R]
@@ -401,14 +412,17 @@ func _draw_clock() -> void:
 		_text(clock, Vector2(x0 + 56, y + 15), row[0], 11, CmrStyle.INK_SOFT, true)
 		_text(clock, Vector2(x0 + 60, y + 15.5), row[1], 14, row[2], true, HORIZONTAL_ALIGNMENT_RIGHT, W - 72)
 		y += 22.0
-	# weather and local time, small, over the scene
+	# weather and local time, on a dark plate so it reads over a bright sky or a busy background
 	var tod := race.time_of_day
 	var clock_text := "%02d:%02d" % [int(tod), int(fmod(tod, 1.0) * 60.0)]
 	if warp > 1:
 		clock_text += "  ×%d" % warp
 	var w := race.weather
 	var sky := "RAIN" if w.rain > 0.05 else ("DAMP" if w.wet > 0.05 else "DRY")
-	_text_o(clock, Vector2(x0, y + 12), "%s %d%% · %s · %s" % [sky, roundi(w.wet * 100.0), w.forecast(maxf(0.0, race.race_time)), clock_text], 11, TEXT, _font, HORIZONTAL_ALIGNMENT_RIGHT, W)
+	var weather_text := "%s %d%% · %s · %s" % [sky, roundi(w.wet * 100.0), w.forecast(maxf(0.0, race.race_time)), clock_text]
+	var tw := minf(W, _text_w(weather_text, 12) + 16.0)
+	clock.draw_rect(Rect2(x0 + W - tw, y + 1, tw, 17), Color(0.08, 0.03, 0.12, 0.62))
+	_text_o(clock, Vector2(x0, y + 14), weather_text, 12, TEXT, _font, HORIZONTAL_ALIGNMENT_RIGHT, W - 8)
 
 # ---------------- pace note (top centre) ----------------
 ## The co-driver's call for the next corner: CMR's lime box with a black arrow bent by how far the
@@ -696,8 +710,9 @@ func _draw_pitwall() -> void:
 	if sv:
 		pitwall.draw_line(Vector2(x, y), Vector2(W - 12, y), Color(CmrStyle.VIOLET, 0.3), 1.0)
 		var sx := x
-		_text(pitwall, Vector2(sx, y + 17), "Next stop:", 12, MUTED)
-		sx += _text_w("Next stop: ", 12)
+		var head := "Next stop:" if next_stop > 0 or p.pit_request or p.mode == "pit" else "If you box:"
+		_text(pitwall, Vector2(sx, y + 17), head, 12, MUTED)
+		sx += _text_w(head + " ", 12)
 		var tyre_txt := "keep tyres"
 		if sv.c:
 			_badge(pitwall, Vector2(sx + 8, y + 13), sv.c)

@@ -77,6 +77,7 @@ func run() -> Array:
 			break
 	# a driver missing from the order starts behind everyone
 	rs.quali_grid = {"order": [3, 2], "skills": {}, "quali": {}}
+	race.dispose()
 	race = Race.new(rs, null, 77)
 	if race.cars[0].id != 3 or race.cars[1].id != 2 or race.cars.size() != 16:
 		errors.append("a partial grid should keep the listed order first")
@@ -112,5 +113,7 @@ func run() -> Array:
 		errors.append("the session should be underway after 12 s (phase %s, speed %.1f)" % [q.phase, q.player.speed])
 	if q.player.best_lap != null:
 		errors.append("the out lap should not count as a lap time")
+	race.dispose()
+	q.dispose()
 	completed = true
 	return errors

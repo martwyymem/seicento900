@@ -77,6 +77,7 @@ def mullions(mb, x0, x1, y0, y1, z0, z1, every, mat="White", w=0.18):
 
 
 def indy_pagoda():
+	"""Indianapolis Pagoda: a glass-banded tower on a wider two-storey base."""
 	mb = MB()
 	L, W = 57.5, 33.4
 	# the base: two storeys, glass between white bands, wider than the tower
@@ -132,6 +133,7 @@ def indy_pagoda():
 
 
 def scoring_pylon():
+	"""Indianapolis scoring pylon: a tall slim tower of position numbers."""
 	mb = MB()
 	W, D, H = 4.4, 2.0, 46.0
 	mb.colour = srgb("#2a2d31")
@@ -167,6 +169,7 @@ def scoring_pylon():
 # --------------------------------------------------------------------------- Suzuka
 
 def ferris_wheel():
+	"""Suzuka's Ferris wheel: rim, spokes and gondolas on an A-frame."""
 	mb = MB()
 	R, hub, gap = 24.0, 27.0, 1.6
 	n = 48
@@ -223,6 +226,7 @@ def tyre_section():
 
 
 def tyre_bridge():
+	"""Le Mans' Dunlop tyre-shaped footbridge arching over the track."""
 	mb = MB()
 	Rc = 13.5  # the middle of the tyre's section; inner edge at 11.5, outer at 15.5
 	n = 64
@@ -298,6 +302,7 @@ def tyre_bridge():
 # --------------------------------------------------------------------------- Monza
 
 def monza_podio():
+	"""Monza's podium platform that overhangs the main straight."""
 	mb = MB()
 	Z = 8.5  # platform level over the track
 	S = 10.8
@@ -346,6 +351,7 @@ def stone_shaded(mb, r, k):
 
 
 def round_tower(r, radius, height, ragged, segs=16, windows=3):
+	"""A ragged round stone tower (ruined castle), radius x height, with windows."""
 	mb = MB()
 	rows = 6
 	for i in range(rows):
@@ -383,14 +389,17 @@ def round_tower(r, radius, height, ragged, segs=16, windows=3):
 
 
 def castle_keep():
+	"""Nürburg castle's keep (Bergfried)."""
 	return round_tower(rnd(11), 4.75, 20.0, 0.6, segs=20, windows=4)
 
 
 def castle_tower():
+	"""A smaller ruined tower of Nürburg castle."""
 	return round_tower(rnd(12), 3.0, 9.0, 2.2, segs=14, windows=2)
 
 
 def castle_wall():
+	"""A stretch of ruined castle wall."""
 	mb = MB()
 	r = rnd(13)
 	H, T = 7.0, 1.8
@@ -512,6 +521,7 @@ def casino():
 
 
 def yacht(L):
+	"""A motor yacht L metres long for Monaco harbour."""
 	mb = MB()
 	B = L * 0.2  # beam
 	F = 0.11 * L ** 0.75  # freeboard above the waterline
@@ -581,6 +591,7 @@ def yacht(L):
 # --------------------------------------------------------------------------- Silverstone
 
 def silverstone_wing():
+	"""Silverstone's Wing pit and paddock building (374 m long)."""
 	mb = MB()
 	L, W = 374.0, 32.6
 	front = -W / 2
@@ -656,6 +667,7 @@ PIECES = {
 
 
 def main():
+	"""Builds the landmarks (or only --only NAME) and exports them to models/landmarks.glb."""
 	for ob in list(bpy.data.objects):
 		bpy.data.objects.remove(ob)
 	only = kit.arg("--only")

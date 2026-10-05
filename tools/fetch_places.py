@@ -21,6 +21,7 @@ MIN_POPULATION = 15000  # smaller towns have no centre to see from 10 km
 
 
 def fetch(key, south, west, north, east):
+    """Queries Overpass for the cities and towns in a lat/lon box, cached under CACHE."""
     path = os.path.join(CACHE, key + '.json')
     if os.path.exists(path):
         return json.load(open(path))
@@ -40,11 +41,13 @@ def fetch(key, south, west, north, east):
 
 
 def population(tags):
+    """The population tag as a number (tolerating separators and notes), 0 if missing."""
     m = re.match(r'[\d.,\s]+', tags.get('population', ''))
     return int(re.sub(r'[^\d]', '', m.group(0)) or 0) if m else 0
 
 
 def build(key):
+    """Adds the towns over MIN_POPULATION inside the far terrain to <key>_far.json."""
     path = os.path.join(GODOT_TRACKS, key + '_far.json')
     far = json.load(open(path))
     P = bt.proj_for(key)
@@ -68,6 +71,7 @@ def build(key):
 
 
 def main():
+    """Adds the places for every track (or those named on the command line)."""
     only = sys.argv[1:]
     for key in bt.TRACKS:
         if only and key not in only:

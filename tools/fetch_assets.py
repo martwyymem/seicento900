@@ -63,12 +63,14 @@ MAPS = {"Diffuse": "diff", "nor_gl": "nor_gl", "Rough": "rough"}
 
 
 def api(asset_id):
+    """Fetches the Poly Haven file list for one asset."""
     req = urllib.request.Request(API + asset_id, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.load(r)
 
 
 def download(url, md5, dest, dry):
+    """Downloads url to dest unless a file with the same md5 is already there; with dry, only prints what it would get."""
     if dest.exists() and hashlib.md5(dest.read_bytes()).hexdigest() == md5:
         print(f"  ok       {dest.relative_to(ROOT) if dest.is_relative_to(ROOT) else dest}")
         return 0
@@ -98,6 +100,7 @@ def pick(files, res):
 
 
 def main():
+    """Parses the command line and downloads the chosen skies and textures."""
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--set", choices=["full", "minimal"], default="full")
     ap.add_argument("--sky-res", choices=["1k", "2k", "4k"], default="2k",

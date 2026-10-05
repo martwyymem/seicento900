@@ -87,6 +87,7 @@ TRACKS = {
 _cache = {}
 
 def load(src):
+    """Loads (and caches) an OSM JSON file under tools/, indexing its ways by id."""
     if src not in _cache:
         data = json.load(open(os.path.join(HERE, src)))
         ways = {}
@@ -119,6 +120,7 @@ class Proj:
         return (self.lat0 - y / self.ky, self.lon0 + x / self.kx)
 
 def proj_for(key):
+    """The local metric projection centred on a track's origin."""
     return Proj(*TRACKS[key]['origin'])
 
 def relation_chain(ways, P, skip=()):
@@ -152,6 +154,7 @@ def relation_chain(ways, P, skip=()):
     return order
 
 def chain(key):
+    """The track's centreline as one ordered loop of points, with OSM section names and tunnel/bridge flags."""
     t = TRACKS[key]
     ways = load(t['src'])
     P = proj_for(key)
@@ -192,6 +195,7 @@ def chain(key):
     return pts, names, tunnel, bridge
 
 def resample(pts, names, step):
+    """Resamples a closed polyline to an even spacing of about step metres, carrying names along."""
     n = len(pts)
     seg = [math.dist(pts[i], pts[(i + 1) % n]) for i in range(n)]
     total = sum(seg)
@@ -210,6 +214,7 @@ def resample(pts, names, step):
     return out, onames, total
 
 def smooth(pts, passes):
+    """Smooths a closed polyline with a [1 2 1] filter, passes times."""
     n = len(pts)
     for _ in range(passes):
         pts = [((pts[i-1][0] + 2*pts[i][0] + pts[(i+1) % n][0]) / 4,
@@ -230,9 +235,11 @@ def smooth_loop(vals, sigma_samples):
     return vals
 
 def nearest_index(pts, q):
+    """Index of the point in pts closest to q."""
     return min(range(len(pts)), key=lambda i: (pts[i][0] - q[0]) ** 2 + (pts[i][1] - q[1]) ** 2)
 
 def rotate(seq, k):
+    """The list rotated so it starts at index k."""
     return seq[k:] + seq[:k]
 
 def ideal_oval(pts, straight, chute, turn, ease, ds=0.25):
@@ -399,6 +406,7 @@ def cut_underpasses(elev, pairs, step, clearance=0, ramp=0, **_):
               + (f' (underpass cut {need:.1f} m)' if need > 0 else ''))
 
 def build(key, step=2.0):
+    """One track's data (centreline points, length, section names, elevation, tunnels); __main__ writes it out."""
     t = TRACKS[key]
     pts, names, tunnel, bridge = centreline(key)
     # resample the tunnel / bridge flags alongside the names

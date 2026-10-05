@@ -8,7 +8,7 @@
 class_name Physics
 extends RefCounted
 
-const G := 9.81
+const G := 9.81 ## gravity, m/s²
 
 # surface ids returned by Env.surface: grip multiplier and extra rolling drag (fraction of the wheel load)
 enum { SURF_TRACK, SURF_ASPHALT, SURF_GRASS, SURF_GRAVEL }

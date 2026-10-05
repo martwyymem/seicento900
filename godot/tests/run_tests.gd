@@ -10,10 +10,16 @@ const SUITES := [
 	"res://tests/test_strategy.gd",
 	"res://tests/test_dynamics.gd",
 	"res://tests/test_ui_and_audio.gd",
-	"res://tests/test_qualifying.gd"
+	"res://tests/test_qualifying.gd",
+	"res://tests/test_lap_records.gd"
 ]
 
-func _init() -> void:
+const SURROUNDINGS := preload("res://scripts/ui/surroundings.gd")
+const FURNITURE := preload("res://scripts/ui/trackside_furniture.gd")
+const CAR_VISUAL := preload("res://scripts/ui/race_car_visual.gd")
+const WORLD := preload("res://scripts/ui/race_world.gd")
+
+func _initialize() -> void:
 	var failed := 0
 	for path in SUITES:
 		var script = load(path)
@@ -29,4 +35,22 @@ func _init() -> void:
 			print("    ", e)
 		failed += errors.size()
 	print("%d failure(s)" % failed)
+	await release(self)
 	quit(1 if failed else 0)
+
+## Frees what the suites leave behind (nodes, and the meshes, noise and fonts the game caches in static
+## variables) so the run ends without leak warnings.
+static func release(tree: SceneTree) -> void:
+	for n in tree.root.get_children():
+		n.free()
+	SURROUNDINGS._tree_meshes.clear()
+	SURROUNDINGS._landmark_meshes.clear()
+	FURNITURE._meshes.clear()
+	CAR_VISUAL._shared.clear()
+	WORLD._noise.clear()
+	WORLD._trackside.clear()
+	CmrStyle._fonts.clear()
+	Race._track_cache.clear()
+	Brain._store = null
+	await tree.process_frame
+	await tree.process_frame

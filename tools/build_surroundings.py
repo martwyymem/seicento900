@@ -74,6 +74,7 @@ WATER_AREAS = {('natural', 'water'), ('landuse', 'reservoir'), ('landuse', 'basi
 
 
 def match(tags, table):
+    """The weight of the first (key, value) in table that tags has, or None."""
     for (k, v), w in (table.items() if isinstance(table, dict) else ((t, 1.0) for t in table)):
         if tags.get(k) == v:
             return w
@@ -122,6 +123,7 @@ def join_rings(segs):
 
 
 def close(a, b):
+    """Whether two points are within 5 cm (the ends of joining ways)."""
     return abs(a[0] - b[0]) < 0.05 and abs(a[1] - b[1]) < 0.05
 
 
@@ -145,10 +147,12 @@ def simplify(pts, tol):
 
 
 def area(ring):
+    """Area of a closed ring (shoelace formula)."""
     return abs(sum(ring[i][0] * ring[i + 1][1] - ring[i + 1][0] * ring[i][1] for i in range(len(ring) - 1))) / 2
 
 
 def number(text):
+    """Parses an OSM number tag such as '12 m' or '7,5'; None if it is not a number."""
     try:
         return float(str(text).split(';')[0].replace('m', '').replace(',', '.').strip())
     except ValueError:
@@ -156,6 +160,7 @@ def number(text):
 
 
 def building_kind(tags, footprint):
+    """(style, default height in m) for a building from its tags and footprint area."""
     b = tags.get('building', 'yes')
     if tags.get('building:part') and b == 'yes':
         b = tags['building:part']
@@ -185,6 +190,7 @@ def building_kind(tags, footprint):
 
 
 def landmark_of(key, el):
+    """The landmark mesh name for an OSM element (by id in LANDMARKS, or by tags), or None."""
     tags = el.get('tags', {})
     name = LANDMARKS.get(key, {}).get((el['type'], el['id']))
     if name:
@@ -197,6 +203,7 @@ def landmark_of(key, el):
 
 
 def hull(pts):
+    """Convex hull of points (monotone chain)."""
     pts = sorted(set(pts))
     if len(pts) < 3:
         return pts
@@ -265,6 +272,7 @@ def castle_walls(towers):
 
 
 def build(key):
+    """Turns tools/osm_env/<key>.json into godot/data/tracks/<key>_env.json and its land map."""
     src = os.path.join(ENV_DIR, key + '.json')
     if not os.path.exists(src):
         print(key, ': no', src, '(run fetch_surroundings.py)')
@@ -511,6 +519,7 @@ def cross_point(a, b, c, d):
 
 
 def flat(ring):
+    """A ring as a flat [x0, y0, x1, y1, ...] list rounded to 10 cm, for the JSON."""
     return [round(v, 1) for p in ring for v in p]
 
 
