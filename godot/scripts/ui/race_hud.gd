@@ -83,6 +83,7 @@ var _map_scale := 1.0
 var _map_origin := Vector2.ZERO
 var _map_key := "" ## what minimap_base last drew (track, size, flags)
 var _dash_key := [] ## what the dash last drew (size, lit segments, gear, speed)
+var _note_key := [] ## what the pace note last drew (race, the notes up, the sector between notes)
 var _dash_points := PackedVector2Array() ## the rev band's segments and their outlines, built once per size
 var _dash_colors := PackedColorArray()
 var _dash_indices := PackedInt32Array()
@@ -210,7 +211,10 @@ func update(dt: float) -> void:
 		co_driver.voice_on = voice_on
 		co_driver.update(audio != null and audio.muted, warp)
 	_update_splits()
-	pacenote.queue_redraw()
+	var note_key := _pacenote_key()
+	if note_key != _note_key:
+		_note_key = note_key
+		pacenote.queue_redraw()
 	flagbar.queue_redraw()
 	if _minimap_key() != _map_key:
 		minimap_base.queue_redraw()
@@ -609,28 +613,40 @@ func _draw_pacenote() -> void:
 	var live: Array = co_driver.current() if co_driver else []
 	var caption := ""
 	if not live.is_empty():
-		_draw_note_box(pacenote, Rect2(cx - S * 0.5, 0, S, S), live[0], 1.0)
+		_draw_note_box(Rect2(cx - S * 0.5, 0, S, S), live[0], 1.0)
 		if live.size() > 1:
 			# the next one already called, smaller beside it
 			var s2 := S * 0.62
-			_draw_note_box(pacenote, Rect2(cx + S * 0.5 + 8.0, 0, s2, s2), live[1], 0.8)
+			_draw_note_box(Rect2(cx + S * 0.5 + 8.0, 0, s2, s2), live[1], 0.8)
 		caption = PaceNotes.label(live[0])
 	else:
 		caption = race.track.sector_name(race.player.s).to_upper()
 	if caption != "":
 		var tw := minf(pacenote.size.x, _text_w(caption, 13, true) + 28.0)
 		var r := Rect2(cx - tw * 0.5, S + 8, tw, 22)
-		_gbar(pacenote, r, Color(0.03, 0.08, 0.17, 0.8), Color(0.03, 0.08, 0.17, 0.8))
-		_text(pacenote, Vector2(r.position.x, r.position.y + 16), caption, 13, TEXT, true, HORIZONTAL_ALIGNMENT_CENTER, tw)
+		_tri_gbar(r, Color(0.03, 0.08, 0.17, 0.8), Color(0.03, 0.08, 0.17, 0.8))
+		_q(Vector2(r.position.x, r.position.y + 16), caption, 13, TEXT, _bold, HORIZONTAL_ALIGNMENT_CENTER, tw)
+	_tri_flush(pacenote)
+	_q_flush(pacenote)
+
+## What the pace note shows: it redraws only when this changes (the notes come and go a few times a lap).
+func _pacenote_key() -> Array:
+	if not race:
+		return []
+	var live: Array = co_driver.live if co_driver else []
+	if live.is_empty():
+		return [race.get_instance_id(), race.track.sector_name(race.player.s)]
+	return [race.get_instance_id(), live[0], live[1] if live.size() > 1 else -1]
 
 ## How far each grade's arrow turns (degrees) and the radius of its bend (share of the box).
 const NOTE_ARROW := {"flat": [22.0, 0.9], "fast": [38.0, 0.6], "easy": [58.0, 0.42], "medium": [80.0, 0.3],
 	"tight": [110.0, 0.2], "square": [90.0, 0.06], "hairpin": [180.0, 0.17]}
 
-## One pace-note box: the arrow for the note's grade and direction inside an orange square.
-func _draw_note_box(c: Control, box: Rect2, note: Dictionary, alpha: float) -> void:
-	c.draw_rect(box, Color(YELLOW, alpha))
-	c.draw_rect(box, Color(0, 0, 0, 0.9 * alpha), false, 3.0 if box.size.x > 60.0 else 2.0)
+## One pace-note box: the arrow for the note's grade and direction inside an orange square, into the
+## triangle list.
+func _draw_note_box(box: Rect2, note: Dictionary, alpha: float) -> void:
+	_tri_rect(box, Color(YELLOW, alpha))
+	_tri_frame(box, Color(0, 0, 0, 0.9 * alpha), 3.0 if box.size.x > 60.0 else 2.0)
 	var ink := Color(0, 0, 0, alpha)
 	var S := box.size.x
 	var width := S * 0.08
@@ -640,9 +656,9 @@ func _draw_note_box(c: Control, box: Rect2, note: Dictionary, alpha: float) -> v
 		for k in 13:
 			var t := k / 12.0
 			pts.append(Vector2(lerpf(-0.36, 0.36, t), 0.12 - 0.24 * sin(PI * t)))
-		_note_line(c, box, pts, width * 0.8, ink, false)
+		_note_line(box, pts, width * 0.8, ink, false)
 		pts = PackedVector2Array([Vector2(0, 0.36), Vector2(0, -0.3)])
-		_note_line(c, box, pts, width, ink, true)
+		_note_line(box, pts, width, ink, true)
 	else:
 		var spec: Array = NOTE_ARROW.get(note.grade, [60.0, 0.4])
 		var turn := deg_to_rad(spec[0])
@@ -661,20 +677,20 @@ func _draw_note_box(c: Control, box: Rect2, note: Dictionary, alpha: float) -> v
 			pts.append(centre + Vector2(-side * r * cos(a), -r * sin(a)))
 		var heading := Vector2(side * sin(turn), -cos(turn))
 		pts.append(pts[-1] + heading * (0.16 if note.grade != "hairpin" else 0.1))
-		_note_line(c, box, pts, width, ink, true)
+		_note_line(box, pts, width, ink, true)
 	if note.caution:
 		# a red tab with a white "!" on the box's outer top corner
 		var tab := Rect2(box.position + Vector2(-S * 0.26, 0), Vector2(S * 0.22, S * 0.46))
-		c.draw_rect(tab, Color(RED, alpha))
-		c.draw_rect(tab, Color(0, 0, 0, 0.9 * alpha), false, 2.0)
+		_tri_rect(tab, Color(RED, alpha))
+		_tri_frame(tab, Color(0, 0, 0, 0.9 * alpha), 2.0)
 		var bang := Color(1, 1, 1, alpha)
 		var bx := tab.get_center().x - S * 0.035
-		c.draw_rect(Rect2(bx, tab.position.y + S * 0.07, S * 0.07, S * 0.2), bang)
-		c.draw_rect(Rect2(bx, tab.position.y + S * 0.31, S * 0.07, S * 0.07), bang)
+		_tri_rect(Rect2(bx, tab.position.y + S * 0.07, S * 0.07, S * 0.2), bang)
+		_tri_rect(Rect2(bx, tab.position.y + S * 0.31, S * 0.07, S * 0.07), bang)
 
-## Draws a note shape given in box-relative units (centred on the box, fitted inside its margin), with an
-## arrowhead on the last point when head.
-func _note_line(c: Control, box: Rect2, pts: PackedVector2Array, width: float, ink: Color, head: bool) -> void:
+## A note shape given in box-relative units (centred on the box, fitted inside its margin) into the triangle
+## list, with an arrowhead on the last point when head.
+func _note_line(box: Rect2, pts: PackedVector2Array, width: float, ink: Color, head: bool) -> void:
 	var lo := Vector2(INF, INF)
 	var hi := Vector2(-INF, -INF)
 	for q in pts:
@@ -693,12 +709,13 @@ func _note_line(c: Control, box: Rect2, pts: PackedVector2Array, width: float, i
 		var tip := out[-1]
 		var dir := (tip - out[-2]).normalized()
 		out[-1] = tip - dir * width * 0.8
-		c.draw_polyline(out, ink, width, true)
+		_tri_strip(out, width, ink)
 		var nrm := Vector2(-dir.y, dir.x)
 		var hs := width * 1.7
-		c.draw_colored_polygon(PackedVector2Array([tip + dir * hs * 0.6, tip - dir * hs * 0.9 + nrm * hs, tip - dir * hs * 0.9 - nrm * hs]), ink)
+		var point := tip + dir * hs * 0.6
+		_tri_quad(point, tip - dir * hs * 0.9 + nrm * hs, tip - dir * hs * 0.9 - nrm * hs, point, ink, ink, ink, ink)
 	else:
-		c.draw_polyline(out, ink, width, true)
+		_tri_strip(out, width, ink)
 
 # ---------------- split times (beside the clock) ----------------
 const SPLITS := 3 ## splits per lap, the last at the line
