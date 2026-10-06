@@ -148,7 +148,9 @@ const FENCE_NEAR := 25.0 ## m from the camera within which a grazed catch fence 
 ## What the director cuts to, in turn
 const TV_SEQUENCE := [TvKind.GROUND, TvKind.TOWER, TvKind.LONG, TvKind.GROUND, TvKind.LONG, TvKind.TOWER]
 ## Shown when the camera changes (C key); index = camera_mode
-const CAMERA_NAMES := ["CHASE", "FAR CHASE", "ROOF CAM", "TRACKSIDE TV", "BIRD'S-EYE", "FULL TRACK"]
+const CAMERA_NAMES := ["CHASE", "FAR CHASE", "ROOF CAM", "TRACKSIDE TV", "BIRD'S-EYE", "FULL TRACK", "BUMPER CAM", "BONNET CAM"]
+## The order C steps through them: CMR 2.0's bumper and bonnet views after the two chase cameras
+const CAMERA_CYCLE := [0, 1, 6, 7, 2, 3, 4]
 ## Fraction of a simulation tick elapsed since the last step (set by the game loop each frame).
 var render_alpha := 1.0
 ## The next camera update jumps straight to its target (race start).
@@ -653,7 +655,7 @@ func _update_camera(delta: float) -> void:
 	camera.projection = Camera3D.PROJECTION_PERSPECTIVE
 
 	# the camera swings round after the car rather than being bolted to it
-	_cam_head += wrapf(_focus_heading - _cam_head, -PI, PI) * _ease(30.0 if camera_mode == 2 else 5.0, delta, snap)
+	_cam_head += wrapf(_focus_heading - _cam_head, -PI, PI) * _ease(30.0 if camera_mode in [2, 6, 7] else 5.0, delta, snap)
 	var fwd := Vector3(cos(_cam_head), 0.0, sin(_cam_head))
 	var v := Vector2(player.vx, player.vy).length()
 	var fov := 60.0 + minf(14.0, v * 0.35)
@@ -674,6 +676,15 @@ func _update_camera(delta: float) -> void:
 			ahead.y = _road_y(_focus_s + 30.0) + 1.0
 			camera.look_at(ahead, Vector3.UP)
 			fov += 6.0
+		6, 7: # bumper cam just ahead of the front bumper, bonnet cam low on the bonnet in front of the screen
+			var bumper := camera_mode == 6
+			var along := 1.78 if bumper else 0.62
+			var up := 0.42 if bumper else 1.08
+			camera.global_position = p + fwd * along + Vector3.UP * up
+			var ahead := p + fwd * 40.0
+			ahead.y = _road_y(_focus_s + 40.0) + up * 0.75
+			camera.look_at(ahead, Vector3.UP)
+			fov += 4.0 if bumper else 2.0
 		3: # trackside TV: a camera ahead of the car picks it up, follows it past, then cuts to the next
 			if tv_cameras.is_empty():
 				return
@@ -962,7 +973,7 @@ func _crosses_block(a: Vector3, b: Vector3, k: int) -> bool:
 	return lo < top and hi >= bottom
 
 func cycle_camera() -> String:
-	camera_mode = (camera_mode + 1) % 5
+	camera_mode = CAMERA_CYCLE[(CAMERA_CYCLE.find(camera_mode) + 1) % CAMERA_CYCLE.size()]
 	if camera_mode == 3:
 		_tv_index = -1 # pick the camera afresh: the car has moved on since the TV view was last used
 		_tv_heli = false

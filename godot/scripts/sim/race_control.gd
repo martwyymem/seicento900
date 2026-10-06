@@ -129,14 +129,17 @@ func _leader() -> RaceCar:
 	return null
 
 # ---------------- damage ----------------
-## An impact of dv m/s (velocity change / speed into a barrier). Returns true if it wrecked the car.
-func hurt(car: RaceCar, dv: float, into_barrier := false) -> bool:
+## An impact of dv m/s (velocity change / speed into a barrier). f is the cosine between the car's heading
+## and the direction it was hit from (1 head-on, 0 side, -1 from behind), for which parts take the damage.
+## Returns true if it wrecked the car.
+func hurt(car: RaceCar, dv: float, into_barrier := false, f := 0.0) -> bool:
 	if car.is_safety_car or car.dnf or dv <= DMG_FLOOR:
 		return false
 	var x := (dv - DMG_FLOOR) / DMG_SPAN
 	var add := x * x
 	var before := car.damage
 	car.damage = minf(1.0, car.damage + add)
+	Service.spread(car, car.damage - before, f)
 	if add > 0.02:
 		car.dmg_pull = clampf(car.dmg_pull + (race.rng.next() - 0.5) * 0.12 * add, -0.05, 0.05)
 	if car.damage >= 1.0:
@@ -178,6 +181,7 @@ func repair_time(car: RaceCar) -> float:
 func repaired(car: RaceCar) -> void:
 	car.damage = 0.0
 	car.dmg_pull = 0.0
+	car.parts = {}
 	car.repair_asked = false
 
 # ---------------- stewards ----------------
@@ -211,8 +215,9 @@ func report_contact(a: RaceCar, b: RaceCar, nx: float, ny: float, dv_a: float, d
 			"victim": victim, "under": no_pass(a) or no_pass(b), "vic_dmg": victim.damage if victim else 0.0,
 			"announced": false}
 		incidents[key] = inc
-	hurt(a, dv_a)
-	hurt(b, dv_b)
+	# where each car was hit: b lies along n from a, a along -n from b
+	hurt(a, dv_a, false, cos(a.heading) * nx + sin(a.heading) * ny)
+	hurt(b, dv_b, false, -(cos(b.heading) * nx + sin(b.heading) * ny))
 	if inc == null:
 		return
 	inc.last = race.clock
@@ -221,8 +226,9 @@ func report_contact(a: RaceCar, b: RaceCar, nx: float, ny: float, dv_a: float, d
 		inc.announced = true
 		log_rc("Incident between #%d %s and #%d %s — under investigation" % [a.number, _short(a), b.number, _short(b)], "rc")
 
-func report_barrier(car: RaceCar, vn: float) -> void:
-	hurt(car, vn, true)
+## A barrier hit at vn m/s; f as in hurt (the wall's direction from the car against its heading).
+func report_barrier(car: RaceCar, vn: float, f := 0.0) -> void:
+	hurt(car, vn, true, f)
 
 func _decide(inc: Dictionary) -> void:
 	var a: RaceCar = inc.a

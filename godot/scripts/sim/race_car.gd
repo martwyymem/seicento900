@@ -124,6 +124,7 @@ var line_off := 0.0 ## a physics bot's smoothed lateral target, relative to the 
 # ---- race control (see RaceControl)
 var damage := 0.0 ## 0 = straight, 1 = wrecked; costs power, drag and pace until repaired in the pits
 var dmg_pull := 0.0 ## steering pull from bent suspension (steer units, + = right)
+var parts := {} ## where the damage is: part -> 0..1 severity (Service.PARTS), for the service area
 var wrecked := false ## crashed out: the car stays where it stopped until the marshals recover it
 var stranded := false ## a retired car still sitting on the circuit (an obstacle, flagged yellow)
 var recovered := false ## cleared away by the marshals

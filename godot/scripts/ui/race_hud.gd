@@ -55,6 +55,14 @@ var minimap_base: Control ## the map's backdrop, line and flags under minimap's 
 var tags: Control
 var help: PanelContainer
 var flagbar: Control
+var splitbox: Control ## the split time that comes up beside the clock at each third of the lap
+var co_driver: CoDriver ## calls the pace notes (the pace-note boxes show what it called)
+var voice_on := true ## the co-driver reads the notes aloud (Options → Co-driver voice)
+var _split_lap := -1 ## the lap the split marks below belong to
+var _split_prev_s := 0.0
+var _split_marks: Array = [] ## times into this lap at the splits passed so far
+var _split_ref: Array = [] ## the splits of the player's best lap this session
+var _split_show := {} ## {k, t, delta (null: no reference), until}
 
 var _font: Font
 var _bold: Font
@@ -93,6 +101,7 @@ var _round_textures := {}
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	visibility_changed.connect(func(): if not visible: CoDriver.silence())
 	_font = CmrStyle.font(400)
 	_bold = CmrStyle.font(600)
 	_digits = CmrStyle.digits()
@@ -108,6 +117,8 @@ func _ready() -> void:
 	tower.position = Vector2(14, 14)
 	tower.size = Vector2(TOWER_W + 20, 40)
 	pacenote = _canvas(_draw_pacenote)
+	splitbox = _canvas(_draw_splits)
+	_place(splitbox, 1.0, 0.0, 1.0, 0.0, -14 - CLOCK_W - 20 - 250, 32, -14 - CLOCK_W - 20 - 12, 90)
 	_place(pacenote, 0.5, 0.0, 0.5, 0.0, -150, 14, 150, 124)
 	clock = _canvas(_draw_clock)
 	_place(clock, 1.0, 0.0, 1.0, 0.0, -14 - CLOCK_W - 20, 14, -14, 222)
@@ -172,6 +183,12 @@ func start(race_: Race, world_: Node3D, audio_: RaceAudio) -> void:
 	_dash_key = []
 	_fitted.clear()
 	_sheet = Qualifying.sheet(race) if race.s.qualifying else []
+	co_driver = CoDriver.new(race)
+	CoDriver.silence()
+	_split_lap = -1
+	_split_ref = []
+	_split_marks = []
+	_split_show = {}
 	pitwall.visible = not race.s.qualifying # nobody pits in qualifying
 	help.visible = true
 	show()
@@ -189,6 +206,10 @@ func update(dt: float) -> void:
 	if dash_key != _dash_key:
 		_dash_key = dash_key
 		dash.queue_redraw()
+	if co_driver:
+		co_driver.voice_on = voice_on
+		co_driver.update(audio != null and audio.muted, warp)
+	_update_splits()
 	pacenote.queue_redraw()
 	flagbar.queue_redraw()
 	if _minimap_key() != _map_key:
@@ -206,6 +227,7 @@ func update(dt: float) -> void:
 	pitwall.offset_top = -14.0 - pw_h
 	tower.queue_redraw()
 	clock.queue_redraw()
+	splitbox.queue_redraw()
 	lights.queue_redraw()
 	feed.queue_redraw()
 	pitwall.queue_redraw()
@@ -576,40 +598,157 @@ func _draw_clock() -> void:
 	_q_flush(clock)
 
 # ---------------- pace note (top centre) ----------------
-## The co-driver's call for the next corner: CMR's lime box with a black arrow bent by how far the
-## road turns over the next stretch, and the corner's name underneath.
+## The co-driver's calls, as CMR 2.0 shows them: an orange box per note called and not yet driven, its
+## black arrow drawn for the grade (a gentle bend for flat, an elbow for square, a U for a hairpin, a hump
+## for a crest) with a red "!" for a caution; the call written underneath, or the corner's name between notes.
 func _draw_pacenote() -> void:
 	if not race:
 		return
-	var p := race.player
-	var tr := race.track
-	var turn := SimUtil.wrap_angle(tr.heading(p.s + 170.0) - tr.heading(p.s + 25.0))
-	var side := clampf(turn / 1.6, -1.0, 1.0)
 	var S := 74.0
 	var cx := pacenote.size.x * 0.5
-	var box := Rect2(cx - S * 0.5, 0, S, S)
-	pacenote.draw_rect(box, YELLOW)
-	pacenote.draw_rect(box, Color(0, 0, 0, 0.9), false, 3.0)
-	# arrow: straight up, then bending toward the corner
-	var base := Vector2(cx - side * 10.0, S - 12.0)
-	var pts := PackedVector2Array()
-	for k in 9:
-		var t := k / 8.0
-		var up := base + Vector2(0, -t * 46.0)
-		up.x += side * 30.0 * t * t
-		up.y += absf(side) * 14.0 * t * t * t
-		pts.append(up)
-	pacenote.draw_polyline(pts, Color.BLACK, 6.0, true)
-	var tip := pts[pts.size() - 1]
-	var dir := (tip - pts[pts.size() - 2]).normalized()
-	var nrm := Vector2(-dir.y, dir.x)
-	pacenote.draw_colored_polygon(PackedVector2Array([tip + dir * 11.0, tip + nrm * 9.0, tip - nrm * 9.0]), Color.BLACK)
-	var sector := tr.sector_name(p.s)
-	if sector != "":
-		var tw := _text_w(sector.to_upper(), 13, true) + 28.0
+	var live: Array = co_driver.current() if co_driver else []
+	var caption := ""
+	if not live.is_empty():
+		_draw_note_box(pacenote, Rect2(cx - S * 0.5, 0, S, S), live[0], 1.0)
+		if live.size() > 1:
+			# the next one already called, smaller beside it
+			var s2 := S * 0.62
+			_draw_note_box(pacenote, Rect2(cx + S * 0.5 + 8.0, 0, s2, s2), live[1], 0.8)
+		caption = PaceNotes.label(live[0])
+	else:
+		caption = race.track.sector_name(race.player.s).to_upper()
+	if caption != "":
+		var tw := minf(pacenote.size.x, _text_w(caption, 13, true) + 28.0)
 		var r := Rect2(cx - tw * 0.5, S + 8, tw, 22)
 		_gbar(pacenote, r, Color(0.03, 0.08, 0.17, 0.8), Color(0.03, 0.08, 0.17, 0.8))
-		_text(pacenote, Vector2(r.position.x, r.position.y + 16), sector.to_upper(), 13, TEXT, true, HORIZONTAL_ALIGNMENT_CENTER, tw)
+		_text(pacenote, Vector2(r.position.x, r.position.y + 16), caption, 13, TEXT, true, HORIZONTAL_ALIGNMENT_CENTER, tw)
+
+## How far each grade's arrow turns (degrees) and the radius of its bend (share of the box).
+const NOTE_ARROW := {"flat": [22.0, 0.9], "fast": [38.0, 0.6], "easy": [58.0, 0.42], "medium": [80.0, 0.3],
+	"tight": [110.0, 0.2], "square": [90.0, 0.06], "hairpin": [180.0, 0.17]}
+
+## One pace-note box: the arrow for the note's grade and direction inside an orange square.
+func _draw_note_box(c: Control, box: Rect2, note: Dictionary, alpha: float) -> void:
+	c.draw_rect(box, Color(YELLOW, alpha))
+	c.draw_rect(box, Color(0, 0, 0, 0.9 * alpha), false, 3.0 if box.size.x > 60.0 else 2.0)
+	var ink := Color(0, 0, 0, alpha)
+	var S := box.size.x
+	var width := S * 0.08
+	var pts := PackedVector2Array()
+	if note.dir == 0:
+		# crest: a hump with the road running straight over it
+		for k in 13:
+			var t := k / 12.0
+			pts.append(Vector2(lerpf(-0.36, 0.36, t), 0.12 - 0.24 * sin(PI * t)))
+		_note_line(c, box, pts, width * 0.8, ink, false)
+		pts = PackedVector2Array([Vector2(0, 0.36), Vector2(0, -0.3)])
+		_note_line(c, box, pts, width, ink, true)
+	else:
+		var spec: Array = NOTE_ARROW.get(note.grade, [60.0, 0.4])
+		var turn := deg_to_rad(spec[0])
+		var r: float = spec[1]
+		var side := float(note.dir)
+		# a stem up from the bottom, the bend, then a short run out of it to the head
+		var stem := 0.34 if note.grade != "hairpin" else 0.42
+		var p := Vector2(0, 0)
+		pts.append(p)
+		p += Vector2(0, -stem)
+		pts.append(p)
+		var centre := p + Vector2(side * r, 0)
+		var segs := maxi(2, int(spec[0] / 12.0))
+		for k in range(1, segs + 1):
+			var a := turn * k / segs
+			pts.append(centre + Vector2(-side * r * cos(a), -r * sin(a)))
+		var heading := Vector2(side * sin(turn), -cos(turn))
+		pts.append(pts[-1] + heading * (0.16 if note.grade != "hairpin" else 0.1))
+		_note_line(c, box, pts, width, ink, true)
+	if note.caution:
+		# a red tab with a white "!" on the box's outer top corner
+		var tab := Rect2(box.position + Vector2(-S * 0.26, 0), Vector2(S * 0.22, S * 0.46))
+		c.draw_rect(tab, Color(RED, alpha))
+		c.draw_rect(tab, Color(0, 0, 0, 0.9 * alpha), false, 2.0)
+		var bang := Color(1, 1, 1, alpha)
+		var bx := tab.get_center().x - S * 0.035
+		c.draw_rect(Rect2(bx, tab.position.y + S * 0.07, S * 0.07, S * 0.2), bang)
+		c.draw_rect(Rect2(bx, tab.position.y + S * 0.31, S * 0.07, S * 0.07), bang)
+
+## Draws a note shape given in box-relative units (centred on the box, fitted inside its margin), with an
+## arrowhead on the last point when head.
+func _note_line(c: Control, box: Rect2, pts: PackedVector2Array, width: float, ink: Color, head: bool) -> void:
+	var lo := Vector2(INF, INF)
+	var hi := Vector2(-INF, -INF)
+	for q in pts:
+		lo = Vector2(minf(lo.x, q.x), minf(lo.y, q.y))
+		hi = Vector2(maxf(hi.x, q.x), maxf(hi.y, q.y))
+	var S := box.size.x
+	var room := S * 0.6
+	var scale := room / maxf(0.3, maxf(hi.x - lo.x, hi.y - lo.y))
+	scale = minf(scale, S * 1.25)
+	var mid := (lo + hi) * 0.5
+	var out := PackedVector2Array()
+	for q in pts:
+		out.append(box.get_center() + (q - mid) * scale)
+	if head:
+		# leave room for the head so the line doesn't poke through its tip
+		var tip := out[-1]
+		var dir := (tip - out[-2]).normalized()
+		out[-1] = tip - dir * width * 0.8
+		c.draw_polyline(out, ink, width, true)
+		var nrm := Vector2(-dir.y, dir.x)
+		var hs := width * 1.7
+		c.draw_colored_polygon(PackedVector2Array([tip + dir * hs * 0.6, tip - dir * hs * 0.9 + nrm * hs, tip - dir * hs * 0.9 - nrm * hs]), ink)
+	else:
+		c.draw_polyline(out, ink, width, true)
+
+# ---------------- split times (beside the clock) ----------------
+const SPLITS := 3 ## splits per lap, the last at the line
+const SPLIT_SHOW := 4.0 ## s a split stays up
+
+## Marks the player's time at each third of the lap (and the lap at the line) and puts it up against the
+## same split on the best lap of the session, like CMR's stage splits.
+func _update_splits() -> void:
+	var p := race.player
+	var L := race.track.L
+	if race.phase != "racing" or p.mode == "pit":
+		_split_prev_s = p.s
+		_split_lap = p.lap
+		_split_marks = []
+		return
+	if p.lap != _split_lap:
+		if _split_lap >= 0 and p.lap == _split_lap + 1 and p.last_lap != null and _split_marks.size() == SPLITS - 1:
+			var t: float = p.last_lap
+			_show_split(SPLITS - 1, t)
+			if p.best_lap != null and is_equal_approx(float(p.best_lap), t):
+				_split_ref = _split_marks + [t]
+		_split_lap = p.lap
+		_split_marks = []
+	for k in range(_split_marks.size(), SPLITS - 1):
+		var at := L * (k + 1) / SPLITS
+		var moved := race.track.rel(p.s - _split_prev_s)
+		if moved > 0.0 and moved < 80.0 and _split_prev_s < at and p.s >= at:
+			var speed := maxf(1.0, absf(p.speed) if p.control == "free" else p.v)
+			var t := race.race_time - p.lap_start - (p.s - at) / speed
+			_split_marks.append(t)
+			_show_split(k, t)
+		break
+	_split_prev_s = p.s
+
+func _show_split(k: int, t: float) -> void:
+	var delta = t - float(_split_ref[k]) if _split_ref.size() == SPLITS else null
+	_split_show = {"k": k, "t": t, "delta": delta, "until": race.race_time + SPLIT_SHOW}
+
+func _draw_splits() -> void:
+	if not race or _split_show.is_empty() or race.race_time > _split_show.until or warp > 1:
+		return
+	var W := splitbox.size.x
+	var fade := clampf((_split_show.until - race.race_time) / 0.4, 0.0, 1.0)
+	_gbar(splitbox, Rect2(0, 0, W, 44), Color(BAR_HI, BAR_HI.a * fade), Color(BAR_LO, BAR_LO.a * fade))
+	var label := "LAP" if _split_show.k == SPLITS - 1 else "SPLIT %d" % (_split_show.k + 1)
+	_text(splitbox, Vector2(12, 17), label, 11, Color(CmrStyle.INK_SOFT, fade), true)
+	_text(splitbox, Vector2(12, 37), Race.fmt_time(_split_show.t), 18, Color(INK, fade), true)
+	if _split_show.delta != null:
+		var d: float = _split_show.delta
+		_text(splitbox, Vector2(0, 37), "%s%.2f" % ["+" if d >= 0.0 else "−", absf(d)], 18, Color(RED if d >= 0.0 else PURPLE, fade), true, HORIZONTAL_ALIGNMENT_RIGHT, W - 12)
 
 func _draw_lights() -> void:
 	if not race or race.s.qualifying or (race.phase != "countdown" and race.race_time >= 1.2):

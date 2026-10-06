@@ -1754,6 +1754,7 @@ func barrier_contact(car: RaceCar, mass: float) -> void:
 	var ch := cos(car.heading)
 	var sh := sin(car.heading)
 	var hit := 0.0
+	var hit_f := 0.0 ## where the hardest hit came from (cosine against the heading), for the damaged parts
 	for side in [1.0, -1.0]:
 		var wall: float = lim[1] + hw if side > 0.0 else lim[0] - hw
 		var pen := 0.0
@@ -1772,9 +1773,12 @@ func barrier_contact(car: RaceCar, mass: float) -> void:
 		car.x -= nx * pen * side
 		car.y -= ny * pen * side
 		car.d -= pen * side
-		hit = maxf(hit, phys.barrier_hit(car, nx * side, ny * side, rx, ry, mass))
+		var h := phys.barrier_hit(car, nx * side, ny * side, rx, ry, mass)
+		if h > hit:
+			hit = h
+			hit_f = (ch * nx + sh * ny) * side
 	if rc and hit > 0.0:
-		rc.report_barrier(car, hit)
+		rc.report_barrier(car, hit, hit_f)
 	if hit > 5.0 and clock - car.last_hit > 1.5 and (car.is_player or not rc):
 		car.last_hit = clock
 		log_event("Ouch — that was the barrier!", "bad")

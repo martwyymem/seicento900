@@ -11,7 +11,8 @@ const SUITES := [
 	"res://tests/test_dynamics.gd",
 	"res://tests/test_ui_and_audio.gd",
 	"res://tests/test_qualifying.gd",
-	"res://tests/test_lap_records.gd"
+	"res://tests/test_lap_records.gd",
+	"res://tests/test_pace_notes.gd"
 ]
 
 const SURROUNDINGS := preload("res://scripts/ui/surroundings.gd")

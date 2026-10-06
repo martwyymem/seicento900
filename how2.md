@@ -86,6 +86,15 @@ yellow-flag pace (`YELLOW_PACE`, `PLAYER_SLOW`), safety car (`SC_*`), marshal re
 ### `scripts/sim/qualifying.gd` — qualifying
 - `LONG_LAP`, `CO_DRIVER`, `FIELD_EASE` — session length and how fast the field's quali laps are.
 
+### `scripts/sim/pace_notes.gd`, `scripts/ui/co_driver.gd` — pace notes and the co-driver
+- `GRADES`, `HAIRPIN_TURN`, `SQUARE_TURN` — corner radii (m) for each grade; `INTO_GAP`, `AND_GAP`,
+  `DIST_MIN`, `DIST_MAX` — linking words and distance calls; `CREST_K` — how sharp a crest gets called.
+- `LEAD_TIME`, `LEAD_MIN`, `LEAD_MAX` (co_driver.gd) — how early each call comes; `RATE`, `VOLUME` — the voice.
+
+### `scripts/sim/service.gd` — damaged parts and the service area
+- `PARTS` — each part's share of the damage, repair minutes and description; `ZONES` — which parts a
+  front, side or rear hit reaches; `ALLOCATION` — service minutes between championship rounds.
+
 ### `scripts/sim/physics.gd` — vehicle dynamics
 - `SURF_GRIP`, `SURF_DRAG` — grip and drag on track / asphalt run-off / grass / gravel.
 - `TX_*`, `TY_*` — Pacejka Magic Formula tyre curve shapes.
@@ -110,8 +119,8 @@ Saved under Godot's `user://` folder (on macOS:
 `scripts/sim/save_data.gd`; tests and tools run with `-s` write to `user://dev_sandbox/` instead.
 
 - `race_settings.cfg` — last set-up page values.
-- `graphics.cfg` — Options page (`[graphics] quality` 0 Low … 3 Ultra, upscaler, FPS limit, …).
-- `championship.json` — championship progress and standings.
+- `graphics.cfg` — Options page (`[graphics] quality` 0 Low … 3 Ultra, upscaler, FPS limit, …; `[audio] co_driver_voice`).
+- `championship.json` — championship progress and standings, and the player's car between rounds (`car`: damaged parts, steering pull, service minutes used).
 - `brain.json` — what the learning AI knows about you (set-up page → Forget clears it).
 - `sky_cache.cfg` — cached HDRI sky analysis (`scripts/ui/world_assets.gd`).
 

@@ -140,7 +140,13 @@ var repair_part_name: Label
 var repair_time_label: Label
 var repair_copy: Label
 var repair_damage_marker: ColorRect
-var repair_selected := 1
+var repair_selected := 0
+var repair_marks: Array = [] ## the condition mark beside each part
+var repair_clock: Label ## service time left
+var repair_note: Label ## under the clock: what the allocation is for
+var repair_button: Button
+var repair_art: Control
+var last_race_parts := {} ## the player's parts at the end of the last single race, for the Repair page
 var menu_scroll: ScrollContainer
 var display_mode_picker: OptionButton
 var rules_section: Control
@@ -150,6 +156,7 @@ var fps_limit_picker: OptionButton
 var reflections_picker: OptionButton
 var ssao_toggle: CheckButton
 var shadows_toggle: CheckButton
+var codriver_voice_toggle: CheckButton
 var graphics_display_mode := 0
 var graphics_fps_limit := 1 ## index into FPS_LIMITS
 var graphics_antialiasing := 0
@@ -160,6 +167,7 @@ var graphics_sharpening := 2 ## index into SHARPENING
 var graphics_reflections := 0 ## 0 off, 1 screen-space, 2 ray-traced
 var graphics_ssao := true
 var graphics_shadows := true
+var codriver_voice := true ## Options → Co-driver voice: the pace notes are read aloud
 var graphics_ui_scale := 1 ## index into UI_SCALES
 var ui_scale_picker: OptionButton
 var menu_tab_buttons: Dictionary = {}
@@ -1434,14 +1442,16 @@ func _build_repair_page() -> void:
 	repair_panel.add_child(column)
 	var title := _label("TIME REMAINING", 26, CmrStyle.TEXT)
 	column.add_child(title)
-	column.add_child(_label("60 minute time allocation", 18, MUTED))
+	repair_note = _label("%d minute time allocation" % Service.ALLOCATION, 18, MUTED)
+	column.add_child(repair_note)
 	var time_row := HBoxContainer.new()
 	time_row.alignment = BoxContainer.ALIGNMENT_BEGIN
 	time_row.add_theme_constant_override("separation", 8)
 	column.add_child(time_row)
-	var time_left := _label("00:00", 70, CmrStyle.TEXT)
+	var time_left := _label("60:00", 70, CmrStyle.TEXT)
 	time_left.add_theme_font_override("font", CmrStyle.digits())
 	time_row.add_child(time_left)
+	repair_clock = time_left
 	var minutes := _label("(mins)", 21, MUTED)
 	minutes.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	time_row.add_child(minutes)
@@ -1450,8 +1460,7 @@ func _build_repair_page() -> void:
 	column.add_child(pre_list_gap)
 	_menu_rule(column)
 
-	var parts := ["Gearbox", "Turbo", "Suspension", "Differential", "Brakes", "Body", "Steering", "Electrics", "Exhaust", "Drive Shaft", "Axles"]
-	var states := ["ok", "none", "ok", "ok", "ok", "warning", "ok", "none", "none", "ok", "ok"]
+	var parts: Array = Service.PARTS.keys()
 	for i in parts.size():
 		var row := HBoxContainer.new()
 		row.custom_minimum_size.y = 40
@@ -1462,13 +1471,13 @@ func _build_repair_page() -> void:
 		part_button.focus_mode = Control.FOCUS_NONE
 		part_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		part_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		part_button.custom_minimum_size.y = 36
+		part_button.custom_minimum_size.y = 40
 		part_button.add_theme_font_size_override("font_size", 20)
-		part_button.pressed.connect(_select_repair_part.bind(i))
+		part_button.pressed.connect(_repair_row_pressed.bind(i))
 		row.add_child(part_button)
 		var status: Control = MENU_REPAIR_STATUS.new()
-		status.state = states[i]
 		row.add_child(status)
+		repair_marks.append(status)
 		repair_rows.append(part_button)
 		var rule := ColorRect.new()
 		rule.custom_minimum_size.y = 2
@@ -1494,8 +1503,9 @@ func _build_repair_page() -> void:
 	var art: Control = MENU_REPAIR_ART.new()
 	art.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	art_frame.add_child(art)
+	repair_art = art
 
-	repair_part_name = _label("TURBO", 17, MUTED)
+	repair_part_name = _label("BODY", 17, MUTED)
 	repair_part_name.anchor_left = 0.38
 	repair_part_name.anchor_top = 0.54
 	repair_part_name.anchor_right = 0.56
@@ -1514,6 +1524,13 @@ func _build_repair_page() -> void:
 	repair_time_label.anchor_right = 0.57
 	repair_time_label.anchor_bottom = 0.72
 	repair_details.add_child(repair_time_label)
+	repair_button = _button("REPAIR  ▸", ACCENT)
+	repair_button.anchor_left = 0.57
+	repair_button.anchor_top = 0.64
+	repair_button.anchor_right = 0.66
+	repair_button.anchor_bottom = 0.7
+	repair_button.pressed.connect(_repair_selected)
+	repair_details.add_child(repair_button)
 
 	var damage_bar := TextureRect.new()
 	damage_bar.anchor_left = 0.045
@@ -1569,36 +1586,81 @@ func _build_repair_page() -> void:
 	_select_repair_part(repair_selected)
 	repair_details.hide()
 
+## The car the Repair page shows: the championship car between rounds ({parts, pull, used}), otherwise the
+## state the last single race left it in (nothing carries over from one).
+func _service_car() -> Dictionary:
+	if is_championship_mode:
+		var car = champ_data.get("car", {})
+		return car if car is Dictionary else {}
+	return {"parts": last_race_parts}
+
+func _service_left() -> int:
+	return Service.ALLOCATION - int(_service_car().get("used", 0))
+
+func _part_severity(part: String) -> float:
+	var parts = _service_car().get("parts", {})
+	return clampf(float(parts.get(part, 0.0)), 0.0, 1.0) if parts is Dictionary else 0.0
+
+## Clicking a part selects it; clicking the selected part again repairs it, as in CMR.
+func _repair_row_pressed(index: int) -> void:
+	if index == repair_selected and repair_button.visible and not repair_button.disabled:
+		_repair_selected()
+	else:
+		_select_repair_part(index)
+
+## The crew fixes the selected part if the time left covers it.
+func _repair_selected() -> void:
+	if not is_championship_mode:
+		return
+	var part: String = Service.PARTS.keys()[repair_selected]
+	var need := Service.minutes(part, _part_severity(part))
+	var car: Dictionary = _service_car()
+	if need <= 0 or need > _service_left() or car.is_empty():
+		return
+	car.parts.erase(part)
+	car["used"] = int(car.get("used", 0)) + need
+	champ_data["car"] = car
+	_save_championship()
+	_select_repair_part(repair_selected)
+
 func _select_repair_part(index: int) -> void:
 	repair_selected = clampi(index, 0, repair_rows.size() - 1)
-	var names := ["Gearbox", "Turbo", "Suspension", "Differential", "Brakes", "Body", "Steering", "Electrics", "Exhaust", "Drive Shaft", "Axles"]
-	var times := ["00:00", "08:00", "04:00", "05:00", "03:00", "12:00", "04:00", "02:00", "03:00", "05:00", "06:00"]
-	var damage := [0.0, 8.0, 0.0, 0.0, 0.0, 64.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-	var descriptions := [
-		"The gearbox is ready for the next event.",
-		"Damage to the turbo reduces effective engine power and acceleration.",
-		"The suspension is working within its normal range.",
-		"The differential is ready for the next event.",
-		"The braking system is ready for the next event.",
-		"Body damage can affect the car's stability and aerodynamic balance.",
-		"The steering system is ready for the next event.",
-		"The electrical system is ready for the next event.",
-		"The exhaust system is ready for the next event.",
-		"The drive shaft is ready for the next event.",
-		"The axles are ready for the next event."
-	]
+	var names: Array = Service.PARTS.keys()
+	var left := _service_left()
 	for i in repair_rows.size():
 		var style := CmrStyle.box(ACCENT if i == repair_selected else CmrStyle.FIELD_DIM, Color.TRANSPARENT, 14, 4)
 		repair_rows[i].add_theme_stylebox_override("normal", style)
 		repair_rows[i].add_theme_stylebox_override("hover", style if i == repair_selected else CmrStyle.box(CmrStyle.FIELD, Color.TRANSPARENT, 14, 4))
 		repair_row_rules[i].color = Color(0, 0, 0, 0)
-	if is_instance_valid(repair_part_name):
-		repair_part_name.text = names[repair_selected].to_upper()
-		repair_time_label.text = times[repair_selected]
-		repair_copy.text = descriptions[repair_selected]
-		var marker := lerpf(0.045, 0.56, damage[repair_selected] / 100.0)
-		repair_damage_marker.anchor_left = marker
-		repair_damage_marker.anchor_right = marker + 0.005
+		var sev_i := _part_severity(names[i])
+		repair_marks[i].state = "ok" if sev_i < 0.01 else ("bad" if sev_i >= 0.5 else "warning")
+	if not is_instance_valid(repair_part_name):
+		return
+	var part: String = names[repair_selected]
+	var sev := _part_severity(part)
+	var need := Service.minutes(part, sev)
+	repair_part_name.text = part.to_upper()
+	repair_time_label.text = "%02d:00" % need
+	repair_clock.text = "%02d:00" % left
+	repair_art.part = part
+	var copy: String = Service.PARTS[part][2]
+	if not is_championship_mode:
+		repair_note.text = "Single race: the car is rebuilt for every race"
+		copy += " Damage from your last race is shown; in a championship it carries over to the next round, and the crew gets %d minutes to fix what they can." % Service.ALLOCATION
+	else:
+		repair_note.text = "%d minute time allocation" % Service.ALLOCATION
+		if need == 0:
+			copy += " In working order."
+		elif need > left:
+			copy += " Not enough service time left: it starts the next round as it is."
+		else:
+			copy += " %d%% damaged. Repair it for %d minute%s of the time left (click it again or press Repair); unrepaired damage costs power, adds drag and pulls the car to one side in the next round." % [roundi(sev * 100.0), need, "" if need == 1 else "s"]
+	repair_copy.text = copy
+	repair_button.visible = is_championship_mode
+	repair_button.disabled = need == 0 or need > left
+	var marker := lerpf(0.045, 0.56, sev)
+	repair_damage_marker.anchor_left = marker
+	repair_damage_marker.anchor_right = marker + 0.005
 
 ## CMR 2.0-style title screen: a column of slanted bars running in from the left edge, the lit one in
 ## lime, with the car turning on its showroom stand to the right.
@@ -1697,7 +1759,7 @@ func _build_options_page() -> void:
 	options_panel.add_child(scroll)
 	var column := _column(scroll, 12)
 	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_title(column, "OPTIONS", "DISPLAY & GRAPHICS")
+	_title(column, "OPTIONS", "DISPLAY, GRAPHICS & CO-DRIVER")
 	_menu_rule(column)
 	_field_label(column, "DISPLAY")
 	var display_row := HBoxContainer.new()
@@ -1765,6 +1827,18 @@ func _build_options_page() -> void:
 	var lighting_note := _label("Ray-traced reflections trace the whole circuit and every car on the GPU, so wet tarmac, puddles and paintwork also mirror what's off screen. Godot doesn't expose Metal's ray-tracing hardware yet, so they run in compute shaders. Screen-space reflections are cheaper but only show what's already on screen.", 14, MUTED)
 	lighting_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	column.add_child(lighting_note)
+	_menu_rule(column)
+	_field_label(column, "CO-DRIVER")
+	var codriver_row := HBoxContainer.new()
+	codriver_row.add_theme_constant_override("separation", 22)
+	column.add_child(codriver_row)
+	codriver_voice_toggle = _check_field(codriver_row, "Read the pace notes aloud", codriver_voice)
+	codriver_voice_toggle.toggled.connect(_on_codriver_voice_toggled)
+	var codriver_note := _label("As in Colin McRae Rally 2.0, the co-driver calls each corner before you reach it: how tight it is (flat, fast, easy, medium, tight, square, hairpin), long, tightens or opens, over crest, caution, and \"into\", \"and\" or the distance to the next one. The calls also come up as arrows at the top of the screen. The voice is your system's text-to-speech (a British English one if installed); M mutes it with the engine.", 14, MUTED)
+	codriver_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	codriver_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	codriver_note.size_flags_stretch_ratio = 2.0
+	codriver_row.add_child(codriver_note)
 	var back := _button("BACK TO MENU", ACCENT)
 	back.pressed.connect(_show_home)
 	column.add_child(back)
@@ -1780,6 +1854,12 @@ func _build_options_page() -> void:
 	shadows_toggle.button_pressed = graphics_shadows
 	reflections_picker.select(graphics_reflections)
 	_apply_upscaling()
+
+func _on_codriver_voice_toggled(enabled: bool) -> void:
+	codriver_voice = enabled
+	if is_instance_valid(hud):
+		hud.voice_on = enabled
+	_save_graphics_settings()
 
 func _upscaler_available(index: int) -> bool:
 	if not UPSCALERS[index].has("feature"):
@@ -1908,6 +1988,7 @@ func _load_graphics_settings() -> void:
 			graphics_upscaler = 2 if scale_index > 0 else 0
 			graphics_upscale_preset = maxi(scale_index, 1)
 		graphics_ui_scale = clampi(int(config.get_value("graphics", "ui_scale", 1)), 0, UI_SCALES.size() - 1)
+		codriver_voice = bool(config.get_value("audio", "co_driver_voice", true))
 	if not _upscaler_available(graphics_upscaler):
 		graphics_upscaler = 0
 	get_window().content_scale_factor = UI_SCALES[graphics_ui_scale]
@@ -1934,6 +2015,7 @@ func _save_graphics_settings() -> void:
 	config.set_value("graphics", "ssao", graphics_ssao)
 	config.set_value("graphics", "shadows", graphics_shadows)
 	config.set_value("graphics", "ui_scale", graphics_ui_scale)
+	config.set_value("audio", "co_driver_voice", codriver_voice)
 	config.save(SaveData.path("graphics.cfg"))
 
 func _layout_home_strip() -> void:
@@ -2059,6 +2141,7 @@ func _show_repair_page() -> void:
 	menu_header.show()
 	menu_tint.color = CmrStyle.TINT_REPAIR
 	_select_menu_tab("Repair")
+	_select_repair_part(repair_selected)
 
 func _set_championship_mode(value: bool) -> void:
 	if is_championship_mode != value:
@@ -2167,6 +2250,7 @@ func _set_paused(on: bool) -> void:
 	pause_buttons[1].text = "RESTART QUALIFYING" if quali_session else "RESTART RACE"
 	pause_buttons[2].text = "END SESSION" if quali_session else "RETIRE & SEE RESULTS"
 	if on:
+		CoDriver.silence()
 		if is_instance_valid(audio):
 			audio.update_car(race.player, false)
 		pause_buttons[0].grab_focus()
@@ -2314,6 +2398,10 @@ func _set_up_race() -> void:
 	await _loading_progress(0.35)
 	race = Race.new(settings, (plan as Dictionary).duplicate(true), -1, {"car_model": car_model, "tyres": tyre_model, "strategy": strategy})
 	quali_session = quali_run
+	var carried = champ_data.get("car", {}) if is_championship_mode and settings.race_control else {}
+	if carried is Dictionary and carried.get("parts", {}) is Dictionary and not carried.get("parts", {}).is_empty():
+		# what the service crew didn't get to is still bent
+		Service.fit(race.player, carried.parts, float(carried.get("pull", 0.0)))
 	if quali_run and quali_picker.selected == 1:
 		# the co-driver runs the laps: no session to drive, straight to the sheet
 		var sim_race := race
@@ -2348,6 +2436,7 @@ func _set_up_race() -> void:
 	result_panel.hide()
 	pause_panel.hide()
 	get_viewport().gui_release_focus()
+	hud.voice_on = codriver_voice
 	hud.start(race, world_view, audio)
 	hud.records = lap_records
 	status_label.text = ""
@@ -2433,8 +2522,14 @@ func _show_results() -> void:
 			col.add_child(ai)
 
 	var is_champ := is_championship_mode
+	last_race_parts = Service.snapshot(race.player)
 	if is_champ:
 		_score_championship_round(rows)
+		var damaged := Service.total(last_race_parts)
+		if damaged >= 0.01 and int(champ_data.get("round", 0)) < CHAMPIONSHIP_CALENDAR.size() - 1:
+			var svc := _label("Your car is %d%% damaged. The crew has %d minutes in the service area before the next round; whatever they don't fix starts the race bent." % [roundi(damaged * 100.0), Service.ALLOCATION], 13, CmrStyle.ORANGE_SOFT)
+			svc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			col.add_child(svc)
 	var headers := ["POS", "NO.", "DRIVER", "LAPS", "TIME / GAP", "BEST LAP", "STOPS", "TYRES"]
 	var widths := [46, 44, 250, 50, 210, 100, 56, 120]
 	if is_champ:
@@ -2486,6 +2581,11 @@ func _show_results() -> void:
 		primary.pressed.connect(_start_race)
 	primary.custom_minimum_size.y = 44
 	buttons.add_child(primary)
+	if is_champ and Service.total(last_race_parts) >= 0.01 and int(champ_data.get("round", 0)) < CHAMPIONSHIP_CALENDAR.size() - 1:
+		var service := _button("SERVICE AREA ▸", CmrStyle.FIELD)
+		service.custom_minimum_size.y = 44
+		service.pressed.connect(_go_to_service)
+		buttons.add_child(service)
 	var back := _button("BACK TO MENU", CmrStyle.FIELD)
 	back.custom_minimum_size.y = 44
 	back.pressed.connect(_return_to_setup)
@@ -2670,6 +2770,9 @@ func _score_championship_round(results: Array) -> void:
 		if row.pos == 1 and not car.dnf:
 			entry.wins = int(entry.wins) + 1
 		table[cid] = entry
+		if car.is_player:
+			# the car goes to the service area as it finished, with a fresh time allocation
+			champ_data["car"] = {"parts": Service.snapshot(car), "pull": Service.pull_rate(car), "used": 0}
 	_save_championship()
 
 ## The championship round to drive next: a round whose results were already seen is done.
@@ -2708,6 +2811,11 @@ func _return_to_setup() -> void:
 	world_view.set_track(Race.get_track(t_key))
 	if shown:
 		shown.dispose() # (after the world has let go of it)
+
+## From the results to the Repair page, to spend the service time before the next round.
+func _go_to_service() -> void:
+	_return_to_setup()
+	_show_repair_page()
 
 func _select_track(index: int) -> void:
 	var key: String = TRACK_KEYS[index]
