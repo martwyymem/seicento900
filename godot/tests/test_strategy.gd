@@ -103,8 +103,54 @@ func run() -> Array:
 			near("%s.evaluate.errors" % key, got.errors, e.v.errors)
 		for e in want.est:
 			near("%s.estimate_laps%s" % [key, e.args], strat.estimate_laps(tr, e.args[0], e.args[1]), e.v)
+	_fuel_mixes(strat)
 	print("    %d values checked" % checked)
 	if checked < 1000:
 		errors.append("only %d values checked" % checked)
 	completed = true
 	return errors
+
+func expect(what: String, ok: bool, detail := "") -> void:
+	checked += 1
+	if not ok:
+		errors.append("%s %s" % [what, detail])
+
+## Fuel mixes (not in the JS): what they cost and save, and the Indianapolis fuel race they make.
+func _fuel_mixes(strat: Strategy) -> void:
+	var indy := Track.new(Track.load_def("indy"))
+	var cal := strat.calibrate(indy)
+	var save: Dictionary = cal.mix.save
+	expect("save is slower", save.time > 1.01 and save.time < 1.05, str(save))
+	expect("save burns less", save.fuel < 0.9 and save.fuel > 0.8, str(save))
+	var o := {"track": indy, "laps": 12, "wet": 0.0, "wear_mult": 1.0, "fuel_mult": 15.0,
+		"rules": {"mandatory_stop": true, "two_compounds": false, "refuel": true}, "crew": "club", "parallel": false}
+	var plans := strat.plan(o)
+	var best: Dictionary = plans[0]
+	var flat_out = null
+	for p in plans:
+		if p.stints.all(func(st): return st.mix == "normal"):
+			flat_out = p
+			break
+	expect("Indy fuel race: one stop on the save mix beats flat out", best.stops == 1 and best.stints.all(func(st): return st.mix == "save"), Strategy.label(best))
+	expect("Indy fuel race: flat out needs two stops", flat_out != null and flat_out.stops == 2, Strategy.label(flat_out) if flat_out else "none")
+	expect("Indy fuel race: and it is close", flat_out != null and flat_out.time < best.time * 1.03, "%s vs %s" % [best.time, flat_out.time if flat_out else 0.0])
+	expect("the label shows the mix", Strategy.label(best).contains("save"), Strategy.label(best))
+	# a pro crew's quicker stops make flat out the closer call
+	o.crew = "pro"
+	var pro := strat.plan(o)
+	var pro_gap := 0.0
+	for p in pro:
+		if p.stops == 2:
+			pro_gap = p.time - pro[0].time
+			break
+	var club_gap: float = flat_out.time - best.time if flat_out else 0.0
+	expect("a faster crew narrows the gap to flat out", pro_gap < club_gap, "%f vs %f" % [pro_gap, club_gap])
+	# without refuelling the race shares one tank, so every stint runs the normal mix
+	var no_refuel := strat.plan({"track": indy, "laps": 12, "wet": 0.0, "wear_mult": 1.0, "fuel_mult": 1.0,
+		"rules": {"mandatory_stop": true, "two_compounds": false, "refuel": false}, "crew": "club", "parallel": false})
+	expect("no refuelling plans only the normal mix", no_refuel.size() > 0 and no_refuel.all(func(p): return p.stints.all(func(st): return st.mix == "normal")))
+	# a hand-built save stint is timed and fuelled on that mix
+	var ev := strat.evaluate(o, [{"c": "M", "laps": 6, "mix": "save"}, {"c": "M", "laps": 6, "mix": "save"}])
+	var ev_flat := strat.evaluate(o, [{"c": "M", "laps": 6}, {"c": "M", "laps": 6}])
+	expect("six save laps fit the tank", ev.errors.is_empty(), str(ev.errors))
+	expect("six flat-out laps don't", not ev_flat.errors.is_empty())

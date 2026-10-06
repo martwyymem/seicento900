@@ -94,9 +94,10 @@ func resistance(v: float, mass: float, drag_mul := 1.0) -> float:
 	return 0.5 * 1.2 * spec.cd_a * drag_mul * v * v + spec.crr * mass * G
 
 ## Full-throttle longitudinal acceleration in the best gear (used by AI and the lap simulator).
-func max_accel(v: float, mass: float, mu: float, drag_mul := 1.0) -> float:
+## power scales the engine's output (the fuel mix, Strategy.MIXES).
+func max_accel(v: float, mass: float, mu: float, drag_mul := 1.0, power := 1.0) -> float:
 	_best_gear(v)
-	var drive := minf(_bg_force, spec.front_weight * mu * G * mass)
+	var drive := minf(_bg_force * power, spec.front_weight * mu * G * mass)
 	return (drive - resistance(v, mass, drag_mul)) / (mass * 1.05)
 
 ## Deceleration from tyre scrub while cornering on curvature k: slip angles tilt the lateral force

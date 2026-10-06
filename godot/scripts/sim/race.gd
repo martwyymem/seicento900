@@ -216,6 +216,30 @@ func _init(settings: RaceSettings, player_plan = null, seed_ := -1, models := {}
 	for i in cars.size():
 		_order_idx[cars[i]] = i
 
+## The plans a bot that gambles picks from: the best four, with the best plan of another shape (stop count
+## and fuel mixes) in the last place when it is close, so at a fuel race some of the field runs flat out
+## and stops more while the rest save.
+func _wild_pool(options: Array) -> Array:
+	var pool := options.slice(0, 4)
+	if pool.size() < 2:
+		return pool
+	var shape := func(o: Dictionary) -> String:
+		var k := str(o.stops)
+		for st in o.stints:
+			k += st.get("mix", "normal")
+		return k
+	var first: String = shape.call(options[0])
+	for o in pool:
+		if shape.call(o) != first:
+			return pool
+	for o in options.slice(4):
+		if o.time > options[0].time * 1.03:
+			break
+		if shape.call(o) != first:
+			pool[-1] = o
+			break
+	return pool
+
 func _est_settings() -> Dictionary:
 	return {"fuel_mult": s.fuel_mult, "weather": s.weather, "wear_mult": s.wear_mult, "crew": s.crew,
 		"parallel": s.parallel, "refuel": s.refuel}
@@ -264,8 +288,10 @@ func make_car(id: int, name: String, color: Color, number: int, is_player: bool)
 func apply_plan(car: RaceCar, p: Dictionary) -> void:
 	car.plan = []
 	for st in p.stints:
-		car.plan.append({"c": st.c, "laps": st.laps})
+		car.plan.append({"c": st.c, "laps": st.laps, "mix": st.get("mix", "normal")})
 	car.stint_idx = 0
+	set_mix(car, stint_mix(car))
+	car.mix_set = false
 	var c0: String = p.stints[0].c
 	car.tyre = {"c": c0, "wear": 1.0, "temp": 0.6}
 	if s.dynamic_running:
@@ -286,6 +312,7 @@ func _tyre_quality() -> float:
 func build_field(player_plan) -> void:
 	var diff: Dictionary = DIFFICULTY[s.difficulty]
 	var options := strategy.plan(plan_opts({"diverse": true}))
+	var wild := _wild_pool(options)
 	var fallback := {"stops": 0, "stints": [{"c": "W" if weather.wet > 0.4 else "M", "laps": R, "fuel": minf(spec.tank, Strategy.fuel_need(R, fpl))}]}
 	var bots: Array[RaceCar] = []
 	var numbers := [3, 5, 8, 11, 14, 17, 21, 23, 27, 33, 44, 55, 63, 77, 88]
@@ -306,7 +333,7 @@ func build_field(player_plan) -> void:
 		if options.size() > 1:
 			var pool := options.filter(func(o): return o.time < options[0].time * 1.012)
 			if rng.next() < 0.2:
-				pick = options[int(floorf(rng.next() * mini(4, options.size())))]
+				pick = wild[int(floorf(rng.next() * wild.size()))]
 			else:
 				pick = pool[int(floorf(pow(rng.next(), 1.5) * pool.size()))]
 		apply_plan(car, pick)
@@ -424,6 +451,7 @@ func step(dt: float, input: PlayerInput) -> void:
 		var prev_p := track.rel(car.s)
 		if not car.is_player:
 			bot_control(car, dt)
+		update_mix(car)
 		if car.control == "free":
 			if car.is_player:
 				if s.auto_rejoin:
@@ -580,7 +608,7 @@ func _projection(c: RaceCar) -> Dictionary:
 	while idx + 1 < c.plan.size():
 		start = maxi(start + int(c.plan[idx].laps), c.lap + 1)
 		var nxt: Dictionary = c.plan[idx + 1]
-		var litres := minf(spec.tank, Strategy.fuel_need(int(nxt.laps), car_fpl(c))) if rules.refuel else 0.0
+		var litres := minf(spec.tank, Strategy.fuel_need(int(nxt.laps), car_fpl(c) * Strategy.mix_fuel(cal, nxt.get("mix", "normal")))) if rules.refuel else 0.0
 		var cost: float = cal.pit_drive_loss + Strategy.service_time(s.crew, s.parallel, true, litres)
 		if stops.is_empty() and rc:
 			cost += rc.repair_time(c)
@@ -720,9 +748,85 @@ func after_move(car: RaceCar, prev_p: float) -> void:
 		log_event("%s retires — out of fuel" % car.name, "bad")
 
 # ---------------- strategy decisions ----------------
-## Litres a lap costs this car: what it has really burned lately, else the calibrated figure.
+## Litres a lap costs this car on the normal mix: what it has really burned lately, else the calibrated figure.
 func car_fpl(car: RaceCar) -> float:
 	return car.fuel_lap if s.dynamic_running and car.fuel_lap > 0.0 else fpl
+
+## The fuel mix the car's plan has for the stint it is on.
+func stint_mix(car: RaceCar) -> String:
+	return car.plan[car.stint_idx].get("mix", "normal") if car.stint_idx < car.plan.size() else "normal"
+
+## Burn fuel, keeping the normal-mix equivalent the strategist measures consumption by.
+func burn_fuel(car: RaceCar, litres: float) -> void:
+	car.fuel = maxf(0.0, car.fuel - litres)
+	car.fuel_burn += litres / car.mix_fuel
+
+## Laps (fractional) the car still has to drive before its next planned stop, or to the flag.
+func laps_to_stop(car: RaceCar) -> float:
+	var target := R
+	if car.stint_idx < car.plan.size() - 1:
+		target = car.stint_start_lap + int(car.plan[car.stint_idx].laps)
+	return maxf(0.0, target - car.lap - car.s / track.L) # s runs from the line (negative on the grid)
+
+## Litres in hand over what the car needs to reach its next stop (or the flag) on its planned mix:
+## negative means it has to save.
+func fuel_margin(car: RaceCar) -> float:
+	var need := laps_to_stop(car) * car_fpl(car) * Strategy.mix_fuel(cal, stint_mix(car))
+	return car.fuel - need - Strategy.RESERVE * 0.5
+
+## Switch a car's fuel mix, caching its figures on the car.
+func set_mix(car: RaceCar, mix: String) -> void:
+	var mx: Dictionary = Strategy.MIXES[mix]
+	car.mix = mix
+	car.mix_power = mx.power
+	car.mix_burn = mx.burn
+	car.mix_fuel = Strategy.mix_fuel(cal, mix)
+
+const MIX_EVERY := 0.25 ## s between a bot's fuel-mix decisions: its fuel margin moves by millilitres a tick
+
+## The mix the car runs this tick: the player's own pick, else the plan's; bots (and the autopilot) manage it,
+## a few times a second (staggered by car), and at once on a new lap or stint.
+func update_mix(car: RaceCar) -> void:
+	if car.is_player and not car.autopilot:
+		if not car.mix_set and car.mix != stint_mix(car):
+			set_mix(car, stint_mix(car))
+			if phase == "racing":
+				log_event("Strategist: fuel mix %s" % Strategy.MIXES[car.mix].name, "box")
+		return
+	var key := car.lap * 64 + car.stint_idx
+	if clock < car.mix_next and key == car.mix_key:
+		return
+	car.mix_key = key
+	car.mix_next = clock + MIX_EVERY * (1.0 + float(car.id % 8) / 8.0) if car.mix_next == 0.0 else clock + MIX_EVERY
+	var mix := _bot_mix(car)
+	if mix != car.mix:
+		set_mix(car, mix)
+
+## F: the player switches between save and normal; the pick holds until the next stop.
+func player_cycle_mix() -> void:
+	var p := player
+	if not p or p.finished or p.dnf:
+		return
+	if p.autopilot:
+		log_event("Fuel mix: the co-driver manages it while it drives", "info")
+		return
+	set_mix(p, "normal" if p.mix == "save" else "save")
+	p.mix_set = true
+	log_event("Fuel mix: %s" % Strategy.MIXES[p.mix].name, "info")
+
+## A bot's mix: its plan's, saving when it is short of its fuel target, and off a planned save to attack or
+## defend when it has the fuel in hand to cover the extra burn to its stop.
+func _bot_mix(car: RaceCar) -> String:
+	var base := stint_mix(car)
+	var margin := fuel_margin(car)
+	var lap_fuel := car_fpl(car) * Strategy.mix_fuel(cal, base)
+	if margin < 0.05 * lap_fuel:
+		return "save"
+	if base == "save" and car.brain and (car.brain.mind == "attack" or car.brain.mind == "defend"):
+		var extra := laps_to_stop(car) * car_fpl(car) * (1.0 - Strategy.mix_fuel(cal, "save"))
+		if margin > extra + 0.2:
+			return "normal"
+	return base
 
 ## Nominal tread fraction a lap costs these tyres at this car's aggression.
 func nominal_lap_wear(car: RaceCar, c: String) -> float:
@@ -734,13 +838,13 @@ func _observe_rates(car: RaceCar) -> void:
 	var m = car.rate_mark
 	if m != null and m.stops == car.stops and m.lap == car.lap - 1:
 		var dw: float = m.wear - car.tyre.wear
-		var df: float = m.fuel - car.fuel
+		var df: float = car.fuel_burn - m.burn
 		if dw > 0.0:
 			car.obs_wear = dw if car.obs_wear <= 0.0 else lerpf(car.obs_wear, dw, 0.6 if dw > car.obs_wear else 0.3)
 		if df > 0.0:
 			var f := clampf(df, fpl * 0.7, fpl * 1.6)
 			car.fuel_lap = f if car.fuel_lap <= 0.0 else lerpf(car.fuel_lap, f, 0.6 if f > car.fuel_lap else 0.3)
-	car.rate_mark = {"lap": car.lap, "stops": car.stops, "wear": car.tyre.wear, "fuel": car.fuel}
+	car.rate_mark = {"lap": car.lap, "stops": car.stops, "wear": car.tyre.wear, "burn": car.fuel_burn}
 
 ## Laps a car in a timed race still has to drive after the one it is on, by the clock: R is only re-estimated
 ## as the leader crosses the line, after this lap's pit call, so on a long lap it can be a whole lap short
@@ -767,7 +871,7 @@ func decide(car: RaceCar) -> void:
 	var cur: String = car.tyre.c
 	var nominal_wear := nominal_lap_wear(car, cur)
 	var per_lap_wear := nominal_wear
-	var lap_fuel := fpl
+	var lap_fuel := fpl * Strategy.mix_fuel(cal, stint_mix(car))
 	var wear_ratio := 1.0
 	var fuel_ratio := 1.0
 	if dyn:
@@ -777,7 +881,7 @@ func decide(car: RaceCar) -> void:
 			per_lap_wear = car.obs_wear * 1.05
 		if car.fuel_lap > 0.0:
 			fuel_ratio = car.fuel_lap / fpl
-			lap_fuel = car.fuel_lap * 1.03
+			lap_fuel = car.fuel_lap * 1.03 * Strategy.mix_fuel(cal, stint_mix(car))
 	var laps_in_stint := car.lap + 1 - car.stint_start_lap
 	var wear_end: float = car.tyre.wear - per_lap_wear * 0.15
 	var fuel_end := car.fuel - lap_fuel * 0.15
@@ -835,6 +939,11 @@ func decide(car: RaceCar) -> void:
 			reason = ""
 	if not car.is_player or not car.service_edited:
 		car.service = default_service(car)
+	if car.is_player and not reason and not car.autopilot:
+		var short := -fuel_margin(car)
+		if short > 0.05:
+			log_event("Strategist: %.1f L short of %s — save fuel, lift or tuck in behind a car" % [
+				short, "the flag" if car.stint_idx >= car.plan.size() - 1 else "lap %d" % player_next_stop_lap()], "warn")
 	if not reason:
 		return
 	if car.is_player:
@@ -856,13 +965,13 @@ func _replace_plan(car: RaceCar, best: Dictionary, laps_in_stint: int) -> void:
 	var first = best.stints[0] if best.stints.size() else null
 	var rest := []
 	if first and first.get("cont", false):
-		done.append({"c": car.tyre.c, "laps": laps_in_stint + first.laps})
+		done.append({"c": car.tyre.c, "laps": laps_in_stint + first.laps, "mix": first.get("mix", "normal")})
 		rest = best.stints.slice(1)
 	else:
-		done.append({"c": car.tyre.c, "laps": laps_in_stint})
+		done.append({"c": car.tyre.c, "laps": laps_in_stint, "mix": stint_mix(car)})
 		rest = best.stints
 	for x in rest:
-		done.append({"c": x.c, "laps": x.laps})
+		done.append({"c": x.c, "laps": x.laps, "mix": x.get("mix", "normal")})
 	car.plan = done
 
 ## Fuel and tyres for the car's next stop, from its plan.
@@ -873,7 +982,7 @@ func default_service(car: RaceCar) -> Dictionary:
 	var next = car.plan[car.stint_idx + 1] if car.stint_idx + 1 < car.plan.size() else {"c": _weather_tyre(car), "laps": rem_after}
 	var is_last := car.stint_idx + 1 >= car.plan.size() - 1
 	var laps: int = rem_after if is_last else mini(next.laps, rem_after)
-	var fuel_target := minf(spec.tank, Strategy.fuel_need(laps, car_fpl(car)))
+	var fuel_target := minf(spec.tank, Strategy.fuel_need(laps, car_fpl(car) * Strategy.mix_fuel(cal, next.get("mix", "normal"))))
 	return make_service(car, next.c, fuel_target)
 
 ## Tyres for an unplanned stop: wets once the car's own rain call says so, slicks once the track has dried
@@ -887,7 +996,7 @@ func _weather_tyre(car: RaceCar) -> String:
 	return cur
 
 func make_service(car: RaceCar, c, fuel_target: float) -> Dictionary:
-	var arrival := maxf(0.0, car.fuel - car_fpl(car) * 0.1)
+	var arrival := maxf(0.0, car.fuel - car_fpl(car) * car.mix_fuel * 0.1)
 	var litres := clampf(fuel_target - arrival, 0.0, spec.tank - arrival) if rules.refuel else 0.0
 	var sv := {"c": c, "fuel_target": fuel_target, "litres": litres, "time": Strategy.service_time(s.crew, s.parallel, c != null, litres)}
 	if rc:
@@ -936,11 +1045,13 @@ func finish_service(car: RaceCar) -> void:
 	var planned = car.plan[car.stint_idx] if car.stint_idx < car.plan.size() else null
 	if not planned or planned.c != car.tyre.c:
 		car.plan = car.plan.slice(0, car.stint_idx)
-		car.plan.append({"c": car.tyre.c, "laps": maxi(1, R - car.stint_start_lap)})
+		car.plan.append({"c": car.tyre.c, "laps": maxi(1, R - car.stint_start_lap), "mix": "normal"})
 		car.plan_stale = true
 	elif car.stint_idx >= car.plan.size() - 1 and R - car.stint_start_lap > planned.laps + 1:
 		# long races are planned a few stints ahead: extend the plan once its horizon is reached
 		car.plan_stale = true
+	car.mix_set = false
+	set_mix(car, stint_mix(car))
 	var tyre_txt := "%s→%s" % [old, sv.c] if sv.c else "no tyres"
 	var fuel_txt := ", +%.1f L" % sv.litres if sv.litres > 0.05 else ""
 	if sv.get("repair", 0.0) > 0.0:
@@ -1306,7 +1417,7 @@ func step_rail(car: RaceCar, dt: float) -> void:
 
 	var a := 0.0
 	var climb := G * tr.sample(tr.GRADE, car.s) + (0.0 if car.mode == "pit" else car_model.scrub(car.v, tr.sample(tr.RK, car.s), mu))
-	var a_max := car_model.max_accel(car.v, mass, mu, drag) * (1.0 - 0.3 * car.damage) - climb
+	var a_max := car_model.max_accel(car.v, mass, mu, drag, car.mix_power) * (1.0 - 0.3 * car.damage) - climb
 	if car.v < vT and car.fuel > 0.0 and a_max > 0.0:
 		a = minf(a_max, (vT - car.v) / dt)
 	elif car.v > vT:
@@ -1317,10 +1428,10 @@ func step_rail(car: RaceCar, dt: float) -> void:
 	car.v = maxf(0.0, car.v + a * dt)
 	var force := mass * 1.05 * a + car_model.resistance(car.v, mass, drag) + mass * climb if a >= -climb else 0.0
 	car.gear = car_model.best_gear(car.v)
-	var f_max := maxf(1.0, car_model.wheel_force(car.v, car.gear, 1.0))
+	var f_max := maxf(1.0, car_model.wheel_force(car.v, car.gear, 1.0) * car.mix_power)
 	car.throttle = clampf(force / f_max, 0.0, 1.0)
 	car.rpm = car_model.engine_rpm(car.v, car.gear, car.throttle)
-	car.fuel = maxf(0.0, car.fuel - car_model.fuel_rate(force * car.v / spec.efficiency) * dt * s.fuel_mult)
+	burn_fuel(car, car_model.fuel_rate(force * car.v / spec.efficiency) * car.mix_burn * dt * s.fuel_mult)
 
 	var in_pit := car.mode == "pit"
 	var lat_max := 5.0 if in_pit else 1.2 + 0.1 * car.v
@@ -1463,6 +1574,8 @@ func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float,
 		thr *= 1.0 - 0.3 * car.damage
 		drag_mul *= 1.0 + 0.5 * car.damage
 		steer = clampf(steer + car.dmg_pull, -1.0, 1.0)
+	# the fuel mix: a lean map gives the engine less to work with
+	env.power = car.mix_power
 	env.drag_mul = drag_mul
 	env.abs_on = assists != "off"
 	env.tc_on = assists == "full"
@@ -1478,7 +1591,7 @@ func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float,
 	car.d = pr[1]
 	barrier_contact(car, mass)
 
-	car.fuel = maxf(0.0, car.fuel - car_model.fuel_rate(phys.engine_power) * dt * s.fuel_mult)
+	burn_fuel(car, car_model.fuel_rate(phys.engine_power) * car.mix_burn * dt * s.fuel_mult)
 	# wear follows the energy the tyres dissipate while sliding, on top of normal running
 	var mu_g := tyres.tyre_grip(car.tyre, weather.wet) * G
 	var acc := sqrt(car.phys.ax_f * car.phys.ax_f + car.phys.ay_f * car.phys.ay_f)

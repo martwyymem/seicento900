@@ -30,6 +30,7 @@ class Env:
 	var gx := 0.0 ## gravity along the road, world frame
 	var gy := 0.0
 	var drag_mul := 1.0
+	var power := 1.0 ## engine output factor (the fuel mix, Strategy.MIXES)
 	var abs_on := true
 	var tc_on := true
 	var esc_on := true
@@ -225,6 +226,7 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 	var gx := env.gx
 	var gy := env.gy
 	var drag_mul := env.drag_mul
+	var power := env.power
 	var shifting := car.shift_t > 0.0
 	# body and drivetrain state, written back after the substeps
 	var c_heading := car.heading
@@ -308,7 +310,7 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 		if rpm >= limiter:
 			thr = 0.0
 		var fr := 7.0 + 0.0022 * rpm
-		var te := thr * (car_model.torque_at(rpm) + fr) - fr
+		var te := thr * (car_model.torque_at(rpm) * power + fr) - fr
 
 		# ---- stability control: brake the outside front wheel when the car yaws faster than the steering asks
 		esc[0] = 0.0

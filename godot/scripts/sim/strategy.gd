@@ -14,6 +14,16 @@ const RESERVE := 0.4 ## litres left in the tank at the end of a stint
 const LONG_RACE := 60 ## laps; longer races are planned over a rolling horizon
 const NO_LIMIT := 1 << 30 ## "no cap" sentinel for stint lengths and stop counts
 
+## Engine fuel mixes: `power` scales the engine's output, `burn` the fuel each kWh of it costs. Save runs lean
+## and the driver lifts early: slower, but a tank goes further. The planner picks one per stint where the
+## car refuels; on the road a car saving can go back to normal with fuel in hand, to pass or defend.
+## (No richer mix: where fuel is cheap it would just be free speed.)
+const MIXES := {
+	"save": {"name": "Save", "power": 0.94, "burn": 0.9},
+	"normal": {"name": "Normal", "power": 1.0, "burn": 1.0},
+}
+const PLAN_MIXES := ["normal", "save"]
+
 ## Pit crews (RaceSettings.crew): `fixed` s of overhead per stop, `tyres` s to change all four, refuel `rate` in L/s.
 const CREWS := {
 	"pro": {"name": "Pro crew", "fixed": 2.0, "tyres": 6.5, "rate": 2.4},
@@ -38,7 +48,9 @@ static func service_time(crew: String, parallel: bool, with_tyres: bool, litres:
 
 ## Returns {time, fuel, dts, vs} (dts/vs per sample, only when record is set). pace scales the
 ## cornering speed the way a driver's skill does on the rail model (1 = at the grip limit).
-func sim_lap(track: Track, mu: float, mass: float, record := false, pace := 1.0) -> Dictionary:
+func sim_lap(track: Track, mu: float, mass: float, record := false, pace := 1.0, mix := "normal") -> Dictionary:
+	var pw: float = MIXES[mix].power
+	var burn: float = MIXES[mix].burn
 	var n := track.n
 	var sq := sqrt(mu) * pace
 	var v := 20.0
@@ -62,7 +74,7 @@ func sim_lap(track: Track, mu: float, mass: float, record := false, pace := 1.0)
 			var ds := RDS[i]
 			var v_allow := PROF[(i + 1) % n] * sq
 			var climb := G * GRADE[i] + car.scrub(v, RK[i], mu)
-			var a := car.max_accel(v, mass, mu) - climb
+			var a := car.max_accel(v, mass, mu, 1.0, pw) - climb
 			var v2 := sqrt(maxf(0.25, v * v + 2 * a * ds))
 			var power: float
 			if v2 >= v_allow:
@@ -71,10 +83,10 @@ func sim_lap(track: Track, mu: float, mass: float, record := false, pace := 1.0)
 				power = maxf(0.0, need) * v / eff
 			else:
 				var g := car.best_gear(v)
-				power = minf(car.wheel_force(v, g, 1.0), fw * mu * G * mass) * v / eff
+				power = minf(car.wheel_force(v, g, 1.0) * pw, fw * mu * G * mass) * v / eff
 			var dt := 2 * ds / (v + v2)
 			t += dt
-			fuel += car.fuel_rate(power) * dt
+			fuel += car.fuel_rate(power) * burn * dt
 			if record:
 				dts[i] = dt
 				vs[i] = v
@@ -114,7 +126,7 @@ func pit_lane_loss(track: Track, ref: Dictionary, mass: float) -> float:
 	return t - t_race
 
 ## Per-track calibration, cached on the track: {m_ref, mu_grid [[mu, time]], mass_exp, T0, fuel_per_lap,
-## pit_drive_loss, top_speed, vs (the reference lap's speed at each sample)}.
+## pit_drive_loss, top_speed, vs (the reference lap's speed at each sample), mix {mix: {time, fuel} factors}}.
 func calibrate(track: Track) -> Dictionary:
 	if not track.cal.is_empty():
 		return track.cal
@@ -130,6 +142,11 @@ func calibrate(track: Track) -> Dictionary:
 	var top := -INF
 	for x in ref.vs:
 		top = maxf(top, x)
+	# what each fuel mix does to a lap, relative to normal: {time, fuel} factors
+	var mix := {}
+	for m in MIXES:
+		var lap := ref if m == "normal" else sim_lap(track, 1.0, m_ref, false, 1.0, m)
+		mix[m] = {"time": lap.time / ref.time, "fuel": lap.fuel / ref.fuel}
 	track.cal = {
 		"m_ref": m_ref,
 		"mu_grid": mu_grid,
@@ -139,6 +156,7 @@ func calibrate(track: Track) -> Dictionary:
 		"pit_drive_loss": pit_lane_loss(track, ref, m_ref),
 		"top_speed": top,
 		"vs": ref.vs,
+		"mix": mix,
 	}
 	return track.cal
 
@@ -158,10 +176,15 @@ static func lap_time(cal: Dictionary, mu_eff: float, mass: float) -> float:
 static func fuel_need(laps: float, fpl: float) -> float:
 	return laps * fpl * FUEL_MARGIN + RESERVE
 
-## Time for `laps` laps on one set of tyres, starting from the given tyre/fuel state.
-func stint_time(ctx: Dictionary, c: String, laps: int, fuel_start: float, wear0: float, temp0: float) -> float:
+## Fuel per lap on a mix, as a factor of the normal mix's.
+static func mix_fuel(cal: Dictionary, mix: String) -> float:
+	return cal.mix[mix].fuel if cal.has("mix") else 1.0
+
+## Time for `laps` laps on one set of tyres on the given fuel mix, starting from the given tyre/fuel state.
+func stint_time(ctx: Dictionary, c: String, laps: int, fuel_start: float, wear0: float, temp0: float, mix := "normal") -> float:
 	var track: Track = ctx.track
-	var fpl: float = ctx.fpl
+	var fpl: float = ctx.fpl * mix_fuel(ctx.cal, mix)
+	var mix_t: float = ctx.cal.mix[mix].time
 	var per_lap: float = track.L * tyres.wear_per_metre(c, ctx.wet, ctx.wear_mult) * ctx.agg
 	var w := wear0
 	var fuel := fuel_start
@@ -172,7 +195,7 @@ func stint_time(ctx: Dictionary, c: String, laps: int, fuel_start: float, wear0:
 		var warm_frac := minf(1.0, (1.0 - temp) * 1500.0 / track.L)
 		var temp_f := 1.0 - warm_frac * (1.0 - Tyres.temp_grip((temp + 1.0) / 2))
 		var grip := base * Tyres.wear_grip(w - per_lap / 2) * temp_f
-		t += lap_time(ctx.cal, grip * ctx.skill2, car.mass_with_fuel(maxf(0.0, fuel - fpl / 2)))
+		t += lap_time(ctx.cal, grip * ctx.skill2, car.mass_with_fuel(maxf(0.0, fuel - fpl / 2))) * mix_t
 		w -= per_lap
 		fuel -= fpl
 		temp = 1.0
@@ -183,7 +206,7 @@ func stint_time(ctx: Dictionary, c: String, laps: int, fuel_start: float, wear0:
 ## opts: {track, laps, wet, wear_mult, fuel_mult, rules: {mandatory_stop, two_compounds, refuel},
 ##        crew, parallel, skill, agg, max_stops, current: {c, wear, fuel, mask, stops_done},
 ##        force_pit, diverse}
-## Returns plans sorted by estimated time: [{stints: [{c, laps, fuel, cont?}], time, stops, horizon}].
+## Returns plans sorted by estimated time: [{stints: [{c, laps, fuel, mix, cont?}], time, stops, horizon}].
 ## With `current`, the first stint is the continuation of the current tyres (fuel 0 = no stop).
 func plan(opts: Dictionary) -> Array:
 	var track: Track = opts.track
@@ -212,19 +235,24 @@ func plan(opts: Dictionary) -> Array:
 		return []
 	var diverse: bool = opts.get("diverse", false)
 	var two: bool = rules.two_compounds
+	# without refuelling one tank's worth is shared by every stint, so the whole race runs the normal mix. Where a
+	# tank lasts the rest of the race on the normal mix, a fresh stint has nothing to gain from saving (it can't
+	# save a stop, only lose time), so only the stint the car is on, stretching what is in its tank, tries both
+	var cont_mixes: Array = PLAN_MIXES if refuel else ["normal"]
+	var mixes: Array = cont_mixes if fuel_need(R, fpl) > tank else ["normal"]
 
 	var memo := {}
-	# cost of a fresh-tyre stint of n laps starting after r laps: [time, fuel]
-	var stint := func(c: String, n: int, r: int) -> Array:
-		var key := "%s%d" % [c, n] if refuel else "%s%d,%d" % [c, n, r]
+	# cost of a fresh-tyre stint of n laps on a mix starting after r laps: [time, fuel]
+	var stint := func(c: String, n: int, r: int, mix: String) -> Array:
+		var key := "%s%d%s" % [c, n, mix] if refuel else "%s%d,%d" % [c, n, r]
 		if memo.has(key):
 			return memo[key]
-		var fuel: float = fuel_need(n, fpl) if refuel else start_fuel - r * fpl
+		var fuel: float = fuel_need(n, fpl * mix_fuel(cal, mix)) if refuel else start_fuel - r * fpl
 		var res: Array
 		if fuel > tank + 1e-6:
 			res = [INF, fuel]
 		else:
-			res = [stint_time(ctx, c, n, fuel, 1.0, 0.3), fuel]
+			res = [stint_time(ctx, c, n, fuel, 1.0, 0.3, mix), fuel]
 		memo[key] = res
 		return res
 	var stop_cost := func(fuel_target: float) -> float:
@@ -249,21 +277,24 @@ func plan(opts: Dictionary) -> Array:
 	if not cur:
 		for ci in keys.size():
 			var c: String = keys[ci]
-			for n in range(1, R + 1):
-				var s: Array = stint.call(c, n, 0)
-				if not is_finite(s[0]):
-					break
-				relax.call({"r": n, "j": 0, "c": ci, "m": Tyres.compound_bit(c), "f": ci, "t": s[0], "prev": null,
-					"st": {"c": c, "laps": n, "fuel": s[1]}})
+			for mix in mixes:
+				for n in range(1, R + 1):
+					var s: Array = stint.call(c, n, 0, mix)
+					if not is_finite(s[0]):
+						break
+					relax.call({"r": n, "j": 0, "c": ci, "m": Tyres.compound_bit(c), "f": ci, "t": s[0], "prev": null,
+						"st": {"c": c, "laps": n, "fuel": s[1], "mix": mix}})
 	else:
 		var n_max: int = 0 if opts.get("force_pit", false) else R
 		var cci := keys.find(cur.c)
-		for n in n_max + 1:
-			var tt := 0.0 if n == 0 else stint_time(ctx, cur.c, n, cur.fuel, cur.wear, 1.0)
-			if not is_finite(tt):
-				break
-			relax.call({"r": n, "j": 0, "c": cci, "m": cur.mask, "f": cci, "t": tt, "prev": null,
-				"st": {"c": cur.c, "laps": n, "fuel": 0.0, "cont": true} if n else null})
+		relax.call({"r": 0, "j": 0, "c": cci, "m": cur.mask, "f": cci, "t": 0.0, "prev": null, "st": null})
+		for mix in cont_mixes:
+			for n in range(1, n_max + 1):
+				var tt := stint_time(ctx, cur.c, n, cur.fuel, cur.wear, 1.0, mix)
+				if not is_finite(tt):
+					break
+				relax.call({"r": n, "j": 0, "c": cci, "m": cur.mask, "f": cci, "t": tt, "prev": null,
+					"st": {"c": cur.c, "laps": n, "fuel": 0.0, "cont": true, "mix": mix}})
 
 	for r in R:
 		for node in buckets[r].values():
@@ -271,20 +302,21 @@ func plan(opts: Dictionary) -> Array:
 				continue
 			for ci in keys.size():
 				var c: String = keys[ci]
-				for n in range(1, R - r + 1):
-					var s: Array = stint.call(c, n, r)
-					if not is_finite(s[0]):
-						break
-					relax.call({
-						"r": r + n,
-						"j": node.j + 1,
-						"c": ci,
-						"m": node.m | Tyres.compound_bit(c),
-						"f": node.f,
-						"t": node.t + stop_cost.call(s[1]) + s[0],
-						"prev": node,
-						"st": {"c": c, "laps": n, "fuel": s[1] if refuel else 0.0},
-					})
+				for mix in mixes:
+					for n in range(1, R - r + 1):
+						var s: Array = stint.call(c, n, r, mix)
+						if not is_finite(s[0]):
+							break
+						relax.call({
+							"r": r + n,
+							"j": node.j + 1,
+							"c": ci,
+							"m": node.m | Tyres.compound_bit(c),
+							"f": node.f,
+							"t": node.t + stop_cost.call(s[1]) + s[0],
+							"prev": node,
+							"st": {"c": c, "laps": n, "fuel": s[1] if refuel else 0.0, "mix": mix},
+						})
 
 	var dry_mask := Tyres.compound_bit("S") | Tyres.compound_bit("M") | Tyres.compound_bit("H")
 	var out := []
@@ -320,7 +352,7 @@ func plan(opts: Dictionary) -> Array:
 		p.erase("_t")
 		var k := ""
 		for s in p.stints:
-			k += s.c
+			k += s.c + s.get("mix", "normal")
 		k += str(p.stops)
 		if seen.has(k):
 			continue
@@ -328,7 +360,7 @@ func plan(opts: Dictionary) -> Array:
 		res.append(p)
 	return res
 
-## Validate and time a hand-built plan. stints: [{c, laps}]. Returns {stints, time, stops, errors}.
+## Validate and time a hand-built plan. stints: [{c, laps, mix?}]. Returns {stints, time, stops, errors}.
 func evaluate(opts: Dictionary, stints: Array) -> Dictionary:
 	var cal := calibrate(opts.track)
 	var R: int = opts.laps
@@ -349,16 +381,17 @@ func evaluate(opts: Dictionary, stints: Array) -> Dictionary:
 	var start_fuel := 0.0 if rules.refuel else fuel_need(R, fpl)
 	for k in stints.size():
 		var st: Dictionary = stints[k]
-		var fuel: float = fuel_need(st.laps, fpl) if rules.refuel else start_fuel - r * fpl
+		var mix: String = st.get("mix", "normal") if rules.refuel else "normal"
+		var fuel: float = fuel_need(st.laps, fpl * mix_fuel(cal, mix)) if rules.refuel else start_fuel - r * fpl
 		if fuel > tank + 1e-6:
 			errors.append("Stint %d needs %.1f L — the tank holds %s L" % [k + 1, fuel, str(int(tank)) if tank == floorf(tank) else str(tank)])
-		var t := stint_time(ctx, st.c, st.laps, minf(fuel, tank), 1.0, 0.3)
+		var t := stint_time(ctx, st.c, st.laps, minf(fuel, tank), 1.0, 0.3, mix)
 		if not is_finite(t) and fuel <= tank:
 			errors.append("Stint %d: %ss won't last %d laps" % [k + 1, tyres.compounds[st.c].display_name, st.laps])
 		time += t
 		if k > 0:
 			time += cal.pit_drive_loss + service_time(opts.crew, opts.parallel, true, maxf(0.0, fuel - RESERVE) if rules.refuel else 0.0)
-		out.append({"c": st.c, "laps": st.laps, "fuel": minf(fuel, tank) if rules.refuel or k == 0 else 0.0})
+		out.append({"c": st.c, "laps": st.laps, "fuel": minf(fuel, tank) if rules.refuel or k == 0 else 0.0, "mix": mix})
 		r += st.laps
 	if rules.mandatory_stop and stints.size() < 2:
 		errors.append("A pit stop is mandatory")
@@ -392,5 +425,6 @@ static func label(p: Dictionary) -> String:
 	var stops := "No stop" if n_stops <= 0 else ("1 stop" if n_stops == 1 else "%d stops" % n_stops)
 	var parts := []
 	for s in p.get("stints", []):
-		parts.append("%s%d" % [s.c, s.laps])
+		var mix: String = s.get("mix", "normal")
+		parts.append("%s%d" % [s.c, s.laps] + ("" if mix == "normal" else " " + mix))
 	return stops + ": " + " → ".join(parts)

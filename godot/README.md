@@ -81,6 +81,29 @@ off). It is a Godot-only addition:
   the feed and you press **P**. Turn it on to have it box you on its own. A previously saved set-up keeps
   its old value.
 
+## Fuel mixes and the Indianapolis fuel race
+
+A Seicento never reaches the grip limit round Indianapolis (its turns would take ~210 km/h on the banking,
+its top speed is 140), so tyres and compounds barely change a lap there and a race used to be flat out with
+nothing to decide. Indy is now a fuel race, as the 500 is: its track defaults are 12 laps, tyre wear ×1 and
+fuel use ×15, so a tank lasts five laps flat out.
+
+- **Mixes** (`Strategy.MIXES`): *Normal*, and *Save*, a lean map at 94 % power that burns 10 % less per
+  kWh. At Indy, Save costs about 2.5 % of a lap and saves about 14 % of the fuel. The calibration measures
+  this per track (`cal.mix`).
+- **The planner** picks a mix per stint when refuelling is on (`PLAN_MIXES`); without refuelling one tank
+  serves the whole race, so it plans Normal. At Indy with a club crew, one stop on Save (6 + 6 laps) beats
+  two stops flat out by about 19 s; a pro crew's quicker stops bring that down to about 6 s, so the crew
+  can change the call. A fifth of the bots gamble and some of those start on the flat-out two-stopper.
+- **On the road** the drag saved in a tow is fuel saved, so a car sitting in the pack can run Normal and
+  still make a Save window. Bots save whenever they fall behind their fuel target and come off a planned
+  Save to attack or defend when they have the fuel in hand. Fuel use is measured as its Normal-mix
+  equivalent (`RaceCar.fuel_burn`), so changing mixes doesn't read to the strategist as a change in
+  consumption.
+- **The player**: the plan sets the mix at each stint and **F** (gamepad X) overrides it until the next
+  stop. The pit wall shows the mix, the laps left in the tank at that mix and the litres in hand or short
+  for the next stop or the flag. The strategist warns once a lap when you're short.
+
 ## Slipstream
 
 Set-up page → Slipstream (`RaceSettings.draft`, on by default; off in the parity tests). A car close behind
@@ -233,9 +256,9 @@ bit for bit. Rough costs on an M4 Pro: 57 µs per car-tick of full physics, ~0.5
 Coordinates: the JS/2D x (east) and y (south) map to Godot X and Z; Y is up.
 
 Keyboard: W/↑ throttle, S/↓/Space brake, A/D or ←/→ steer, E/Q shift (manual gearbox), P box this lap,
-[ / ] tyre choice for the next stop, − / = fuel for the next stop, R re-plan, O autopilot, C camera,
+[ / ] tyre choice for the next stop, − / = fuel for the next stop, F fuel mix (save / normal), R re-plan, O autopilot, C camera,
 L racing line, G ghost car, H help, M mute, , / . time warp, Esc pause, Enter skip to results once retired or finished.
-Gamepad: left stick steers, triggers for throttle/brake, Start pauses.
+Gamepad: left stick steers, triggers for throttle/brake, X fuel mix, Start pauses.
 
 ## Tests
 

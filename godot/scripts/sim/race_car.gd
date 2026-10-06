@@ -64,6 +64,14 @@ var body_pitch := 0.0
 # ---- tyres, fuel, strategy
 var tyre := {"c": "M", "wear": 1.0, "temp": 0.6}
 var fuel := 10.0
+var mix := "normal" ## fuel mix the engine runs (Strategy.MIXES); change it with Race.set_mix
+var mix_power := 1.0 ## the mix's figures, kept here so the per-tick physics reads floats, not dictionaries
+var mix_burn := 1.0
+var mix_fuel := 1.0 ## fuel per lap on this mix as a factor of the normal mix's (Strategy.mix_fuel)
+var mix_next := 0.0 ## race clock at which a bot next reconsiders its mix
+var mix_key := -1 ## lap and stint the mix was last decided on: a new one decides it again at once
+var mix_set := false ## the player picked the mix for this stint, so the plan no longer sets it
+var fuel_burn := 0.0 ## litres burned so far, each scaled to what the normal mix would have used for it
 var used_mask := 0
 var plan: Array = [] ## [{c, laps}]
 var stint_idx := 0

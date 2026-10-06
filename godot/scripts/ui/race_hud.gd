@@ -31,7 +31,7 @@ const MAP_S := 190.0 ## minimap size (square)
 const REPAIR_AT_HUD := 0.3 ## the damage at which the gauge turns red (RaceControl.REPAIR_AT)
 const FEED_BORDER := {"good": GOOD, "bad": RED, "warn": CmrStyle.ORANGE_SOFT, "box": YELLOW, "pit": Color("#8a8f99"),
 	"purple": PURPLE, "ai": Color("#2ec4b6"), "rc": Color("#ffcc00")}
-const HELP_TEXT := "↑/W throttle · ↓/S/Space brake · ←→/AD steer · E/Q gear (manual)\nP box request · [ ] next tyre · − = fuel · R ask strategist\nV flag speed limiter · C camera · L racing line · G ghost car · O autopilot / co-driver · M mute · H hide · Esc pause · , . time warp"
+const HELP_TEXT := "↑/W throttle · ↓/S/Space brake · ←→/AD steer · E/Q gear (manual)\nP box request · [ ] next tyre · − = fuel · F fuel mix · R ask strategist\nV flag speed limiter · C camera · L racing line · G ghost car · O autopilot / co-driver · M mute · H hide · Esc pause · , . time warp"
 
 var race: Race
 var records: LapRecords ## the player's lap record here, for the gap to it (null: no record row)
@@ -929,11 +929,18 @@ func _draw_pitwall() -> void:
 	var wear_col := RED if t.wear < 0.25 else (YELLOW if t.wear < 0.5 else GOOD)
 	_tri_meter(Rect2(tx, y + 22, W - 12 - tx, 7), t.wear, wear_col)
 	y += 40.0
-	# fuel
-	var fpl := race.fpl
+	# fuel: the mix, laps in the tank at it, and the litres in hand (or short) for the next stop or the flag
+	var fpl := race.car_fpl(p) * p.mix_fuel
 	_q(Vector2(x, y + 13), "FUEL", 11, MUTED)
 	_q(Vector2(x + 40, y + 13), "%.1f L" % p.fuel, 13, TEXT)
-	_q(Vector2(x + 40, y + 13), "≈ %.1f laps · %.2f L/lap" % [p.fuel / fpl if fpl > 0.0 else 0.0, fpl], 11, MUTED, _font, HORIZONTAL_ALIGNMENT_RIGHT, W - 12 - (x + 40))
+	var margin := race.fuel_margin(p)
+	var m_txt := "%+.1f L" % margin
+	var m_col := RED if margin < 0.0 else (YELLOW if margin < fpl * 0.3 else GOOD)
+	var right := W - 12 - (x + 40)
+	_q(Vector2(x + 40, y + 13), m_txt, 11, m_col, _font, HORIZONTAL_ALIGNMENT_RIGHT, right)
+	var mix_col := BLUE if p.mix == "save" else MUTED
+	_q(Vector2(x + 40, y + 13), "%s · ≈%.1f laps · " % [Strategy.MIXES[p.mix].name.to_upper(), p.fuel / fpl if fpl > 0.0 else 0.0],
+		11, mix_col, _font, HORIZONTAL_ALIGNMENT_RIGHT, right - _text_w(m_txt, 11))
 	_tri_meter(Rect2(x + 40, y + 21, W - 64, 7), p.fuel / race.spec.tank, BLUE)
 	y += 34.0
 	# damage and penalties
@@ -1014,7 +1021,7 @@ func _draw_pitwall() -> void:
 			rest += " · +%.1f L" % sv.litres
 		rest += " · ≈%.1f s" % sv.time
 		_q(Vector2(sx, y + 17), rest, 12, TEXT)
-		var keys := "[ ] tyre" + (" · − = fuel" if race.rules.refuel else "") + " · R ask strategist"
+		var keys := "[ ] tyre" + (" · − = fuel" if race.rules.refuel else "") + " · F mix · R ask strategist"
 		_q(Vector2(x, y + 35), keys, 10, MUTED, _font)
 	_tri_flush(pitwall)
 	_flush_badges(pitwall)

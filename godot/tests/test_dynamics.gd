@@ -49,13 +49,13 @@ func run() -> Array:
 	race._observe_rates(car)
 	car.lap = 4
 	car.tyre.wear -= 0.10
-	car.fuel -= race.fpl * 1.2
+	race.burn_fuel(car, race.fpl * 1.2)
 	race._observe_rates(car)
 	check("tread use measured", absf(car.obs_wear - 0.10) < 1e-9, str(car.obs_wear))
 	check("fuel use measured", absf(car.fuel_lap - race.fpl * 1.2) < 1e-9, str(car.fuel_lap))
 	car.lap = 5
 	car.tyre.wear -= 0.05
-	car.fuel -= race.fpl * 0.8
+	race.burn_fuel(car, race.fpl * 0.8)
 	race._observe_rates(car)
 	check("a lighter lap only nudges the tread estimate down", car.obs_wear < 0.10 and car.obs_wear > 0.08, str(car.obs_wear))
 	check("a lighter lap only nudges the fuel estimate down", car.fuel_lap < race.fpl * 1.2 and car.fuel_lap > race.fpl * 1.0, str(car.fuel_lap))
@@ -66,6 +66,18 @@ func run() -> Array:
 	race._observe_rates(car)
 	check("a lap that included a stop is not measured", car.obs_wear == before, str(car.obs_wear))
 	check("refuelling uses the measured fuel per lap", race.car_fpl(car) == car.fuel_lap)
+	# a lap on the save mix burns less, but is measured as what the normal mix would have used, so
+	# switching mixes doesn't read as the car's consumption changing
+	var measured := car.fuel_lap
+	car.lap = 7
+	car.rate_mark = null
+	race._observe_rates(car)
+	car.lap = 8
+	race.set_mix(car, "save")
+	race.burn_fuel(car, measured * Strategy.mix_fuel(race.cal, "save"))
+	race._observe_rates(car)
+	race.set_mix(car, "normal")
+	check("a save-mix lap is measured at its normal-mix equivalent", absf(car.fuel_lap - measured) < 1e-9, "%f vs %f" % [car.fuel_lap, measured])
 	st.dynamic_running = false
 	check("with live running off the calibrated fuel figure is used", race.car_fpl(car) == race.fpl)
 

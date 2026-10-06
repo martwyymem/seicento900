@@ -32,12 +32,14 @@ const FRONT_MENU := [
 	{"id": "options", "word": "options", "desc": "Display, frame rate and graphics settings."},
 	{"id": "quit", "word": "quit", "desc": "Close the game."},
 ]
-## Per-circuit defaults applied when the track is picked: race laps and tyre wear multiplier
+## Per-circuit defaults applied when the track is picked: race laps, tyre wear and fuel use multipliers.
+## Indianapolis is flat out all the way round, so tyres hardly matter there; it is a fuel race instead (a
+## tank lasts about five laps flat out, six on the save mix), as the 500 is.
 const TRACK_DEFAULTS := {
 	"gp": {"laps": 6, "wear": 2.0},
 	"nordschleife": {"laps": 2, "wear": 1.0},
 	"monaco": {"laps": 8, "wear": 2.0},
-	"indy": {"laps": 12, "wear": 2.0},
+	"indy": {"laps": 12, "wear": 1.0, "fuel": 15.0},
 	"lemans": {"laps": 2, "wear": 1.0},
 	"monza": {"laps": 6, "wear": 2.0},
 	"silverstone": {"laps": 6, "wear": 2.0},
@@ -687,7 +689,7 @@ func _build_setup() -> void:
 	row5.add_theme_constant_override("separation", 14)
 	col.add_child(row5)
 	wear_picker = _spin(row5, "TYRE WEAR ×", 0.5, 5, 2, 0.5)
-	fuel_picker = _spin(row5, "FUEL USE ×", 0.5, 10, 1, 0.5)
+	fuel_picker = _spin(row5, "FUEL USE ×", 0.5, 20, 1, 0.5)
 	var row6 := HBoxContainer.new()
 	row6.add_theme_constant_override("separation", 10)
 	col.add_child(row6)
@@ -2343,6 +2345,7 @@ func _set_up_race() -> void:
 		var defaults: Dictionary = TRACK_DEFAULTS.get(t_key, {"laps": 6, "wear": 2.0})
 		settings.laps = defaults.laps
 		settings.wear_mult = defaults.wear
+		settings.fuel_mult = defaults.get("fuel", 1.0)
 		settings.format = "laps"
 	else:
 		settings.track = TRACK_KEYS[track_picker.selected]
@@ -2355,8 +2358,11 @@ func _set_up_race() -> void:
 	if quali_run:
 		plan = {} # the session builds its own one-run plan
 	elif is_championship_mode:
-		# every round is planned by the strategist for that circuit's race length and tyre wear
-		var options := strategy.plan(_plan_opts(Race.get_track(settings.track), settings.laps, settings.wear_mult))
+		# every round is planned by the strategist for that circuit's race length, tyre wear and fuel use (the
+		# round's, not the menu's: a plan made at the menu's fuel use would start Indianapolis nearly dry)
+		var opts := _plan_opts(Race.get_track(settings.track), settings.laps, settings.wear_mult)
+		opts.fuel_mult = settings.fuel_mult
+		var options := strategy.plan(opts)
 		plan = options[0] if options.size() else null
 
 	settings.opponents = int(opponents_picker.value)
@@ -2373,7 +2379,7 @@ func _set_up_race() -> void:
 	settings.assists = ["full", "abs", "off"][assists_picker.selected]
 	if not is_championship_mode:
 		settings.wear_mult = wear_picker.value
-	settings.fuel_mult = fuel_picker.value
+		settings.fuel_mult = fuel_picker.value
 	settings.mandatory_stop = mandatory_stop_toggle.button_pressed
 	settings.two_compounds = two_compounds_toggle.button_pressed
 	settings.refuel = refuel_toggle.button_pressed
@@ -2826,6 +2832,7 @@ func _select_track(index: int) -> void:
 		_loading_settings = true
 		laps_picker.value = defaults.laps
 		wear_picker.value = defaults.wear
+		fuel_picker.value = defaults.get("fuel", 1.0)
 		_loading_settings = false
 	if world_view and not is_championship_mode:
 		world_view.set_track(Race.get_track(key))
@@ -2964,6 +2971,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			JOY_BUTTON_RIGHT_SHOULDER: shift_up = true
 			JOY_BUTTON_LEFT_SHOULDER: shift_down = true
 			JOY_BUTTON_Y: _pit()
+			JOY_BUTTON_X: _cycle_mix()
 			JOY_BUTTON_START: _set_paused(not paused)
 		return
 
@@ -3032,6 +3040,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		KEY_BRACKETRIGHT: _cycle_pit_tyre(1)
 		KEY_MINUS, KEY_KP_SUBTRACT: _adjust_pit_fuel(-1.0)
 		KEY_EQUAL, KEY_KP_ADD: _adjust_pit_fuel(1.0)
+		KEY_F: _cycle_mix()
 		KEY_R: _replan()
 		KEY_O: _toggle_autopilot()
 		KEY_C: _cycle_camera()
@@ -3055,6 +3064,12 @@ func _cycle_pit_tyre(direction: int) -> void:
 		race.player_cycle_compound(direction)
 		if is_instance_valid(audio):
 			audio.beep(780.0, 1)
+
+func _cycle_mix() -> void:
+	if race:
+		race.player_cycle_mix()
+		if is_instance_valid(audio):
+			audio.beep(560.0, 1)
 
 func _adjust_pit_fuel(delta_litres: float) -> void:
 	if race:
