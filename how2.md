@@ -67,7 +67,7 @@ Generated data (don't hand-edit; rebuild with the tools):
 - `ASSIST_PACE` — how fast the full-assist brake lets you take corners.
 - `TOW_MAX`, `wake_strength()`, `tow_drag()` — slipstream.
 - `ERR_RAMP` — how quickly a bot's driving error builds up.
-- `NEAR_PHYS_PICK_UP`, `NEAR_PHYS_DROP` — "Bot physics: nearby only" switching distances.
+- `NEAR_PHYS_PICK_UP`, `NEAR_PHYS_DROP` (ahead), `NEAR_PHYS_BEHIND`, `NEAR_PHYS_BEHIND_DROP` — "Bot physics: nearby only" switching distances.
 - `class Weather` — when showers start and how heavy they are.
 
 ### `scripts/sim/race_control.gd` — flags, safety car, damage, stewards

@@ -172,6 +172,7 @@ func wreck(car: RaceCar, dv: float, into_barrier: bool) -> void:
 
 func _strand(car: RaceCar) -> void:
 	car.stranded = true
+	race.any_stranded = true
 	car.recover_left = RECOVER_ON if absf(car.d) < track.half + 0.6 else RECOVER_OFF
 
 ## Seconds of extra pit work to repair this car's damage.

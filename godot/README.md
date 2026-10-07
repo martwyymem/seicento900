@@ -229,8 +229,9 @@ it draws a few more frames and then keeps its last image. In those states the ca
 top of SMAA and SSIL is Ultra-only; the sky's radiance cubemap refreshes only when the sky changes instead of
 every frame. `tests/_perf.gd` is a frame-cost benchmark (`OLD=1` restores the previous MSAA/SSIL/sky settings for comparison).
 The CPU floor is the 120 Hz simulation, about 2 ms per tick with 16 physics cars (mostly `Physics.step`), whatever the
-frame rate. Set-up → Bot physics → Nearby only runs the physics just for bots within about 250–350 m of the player
-(`Race.NEAR_PHYS_*`) and keeps the rest on the rail model; once the field spreads out that is about 0.75 ms per tick.
+frame rate. Set-up → Bot physics → Nearby only runs the physics just for bots within about 250–350 m ahead of the
+player or 60–110 m behind (`Race.NEAR_PHYS_*`: no forward view shows a car further back) and keeps the rest on the
+rail model; from pole that is about 0.8 ms per tick against 1.2 for the same window both ways.
 
 The race runs a fixed 120 Hz simulation with render interpolation and a spiral guard (at most 40 × warp
 steps and ~40 ms of simulation per frame). The per-tick hot paths (`Physics.step`, `Race.traffic`,

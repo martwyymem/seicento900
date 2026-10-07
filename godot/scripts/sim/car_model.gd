@@ -93,6 +93,11 @@ func _best_gear(v: float) -> void:
 func resistance(v: float, mass: float, drag_mul := 1.0) -> float:
 	return 0.5 * 1.2 * spec.cd_a * drag_mul * v * v + spec.crr * mass * G
 
+## The full-throttle wheel force in the gear the last best_gear() or max_accel() picked: wheel_force(v, gear, 1)
+## for that speed, already worked out.
+func full_force() -> float:
+	return _bg_force
+
 ## Full-throttle longitudinal acceleration in the best gear (used by AI and the lap simulator).
 ## power scales the engine's output (the fuel mix, Strategy.MIXES).
 func max_accel(v: float, mass: float, mu: float, drag_mul := 1.0, power := 1.0) -> float:

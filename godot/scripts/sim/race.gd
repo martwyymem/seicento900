@@ -132,6 +132,19 @@ var order: Array[RaceCar] = []
 var _order_idx := {} ## car -> its fixed index in `cars`, used to break order_key ties
 var _order_key_cache := {} ## car -> order_key, recomputed once per tick and reused during the sort
 var _collide_live: Array[RaceCar] = [] ## scratch for collide(), reused every tick
+## traffic() looks only at the cars near the one it drives: _ring holds every car sorted by where it was at
+## the start of the tick (an insertion sort, as the order barely changes from tick to tick), and the search
+## allows for how far any car can have moved since. A car that jumps further (a recovery, a rejoin) marks
+## the ring stale and traffic() goes back to the whole field until the next tick.
+var _ring: Array[RaceCar] = []
+var _ring_s := PackedFloat64Array() ## distance along the lap of each _ring car at the start of the tick
+var _ring_slack := 0.0 ## m a car may move in one tick before the ring is stale
+var _ring_stale := true
+var _near: Array[RaceCar] = [] ## scratch for traffic(): the cars near the one it drives
+const RING_V_MAX := 100.0 ## m/s: faster than any car goes, for the ring's slack
+## A car lies stranded somewhere: recounted every tick and set at once by RaceControl._strand, so
+## avoid_wrecks() can be skipped while nobody is.
+var any_stranded := false
 var player: RaceCar
 var phys_bots := true
 var quali_bots: Array[RaceCar] = [] ## qualifying session: the field that "ran" elsewhere, kept off the circuit
@@ -440,6 +453,7 @@ func step(dt: float, input: PlayerInput) -> void:
 		if before > 0.05 and weather.rain <= 0.05:
 			log_event("Rain has stopped — the track will dry", "info")
 
+	_sort_ring(dt)
 	for car in cars:
 		car.px = car.x
 		car.py = car.y
@@ -464,6 +478,8 @@ func step(dt: float, input: PlayerInput) -> void:
 		else:
 			step_rail(car, dt)
 		after_move(car, prev_p)
+		if not _ring_stale and absf(track.rel(car.s - _ring_s[car.ring_i])) > _ring_slack:
+			_ring_stale = true
 	if s.collisions:
 		collide()
 	update_order()
@@ -487,6 +503,77 @@ func step(dt: float, input: PlayerInput) -> void:
 		phase = "finished"
 		if brain:
 			brain.commit(true)
+
+## Sorts _ring by where the cars are along the lap and recounts the stranded cars, once a tick.
+func _sort_ring(dt: float) -> void:
+	var n := cars.size()
+	if _ring.size() != n:
+		_ring.assign(cars)
+		_ring_s.resize(n)
+	var tr := track
+	for i in n:
+		_ring_s[i] = tr.wrap_s(_ring[i].s)
+	for i in range(1, n):
+		var c: RaceCar = _ring[i]
+		var cs := _ring_s[i]
+		var j := i - 1
+		while j >= 0 and _ring_s[j] > cs:
+			_ring[j + 1] = _ring[j]
+			_ring_s[j + 1] = _ring_s[j]
+			j -= 1
+		_ring[j + 1] = c
+		_ring_s[j + 1] = cs
+	for i in n:
+		_ring[i].ring_i = i
+	_ring_slack = RING_V_MAX * dt + 0.25
+	_ring_stale = false
+	any_stranded = false
+	for c in cars:
+		if c.stranded:
+			any_stranded = true
+			break
+
+## The cars that can be from back m behind to fwd m ahead of car along the lap this tick, in no particular
+## order (more than that, never fewer: the callers still test each one), or the whole field while the ring
+## is stale. Reuses one array: read it before the next call.
+func _near_cars(car: RaceCar, back: float, fwd: float) -> Array[RaceCar]:
+	var near := _near
+	near.clear()
+	if _ring_stale:
+		near.append_array(cars)
+		return near
+	var n := _ring.size()
+	var i0 := car.ring_i
+	var s0 := _ring_s[i0]
+	var L := track.L
+	var m := 2.0 * _ring_slack
+	fwd += m
+	back += m
+	var j := i0
+	var taken := 0
+	for k in n - 1:
+		j += 1
+		if j == n:
+			j = 0
+		var g := _ring_s[j] - s0
+		if g < 0.0:
+			g += L
+		if g > fwd:
+			break
+		near.append(_ring[j])
+		taken += 1
+	j = i0
+	for k in n - 1 - taken:
+		j -= 1
+		if j < 0:
+			j = n - 1
+		var g := s0 - _ring_s[j]
+		if g < 0.0:
+			g += L
+		if g > back:
+			break
+		near.append(_ring[j])
+	return near
 
 func _anyone_running() -> bool:
 	for c in cars:
@@ -1093,30 +1180,33 @@ func traffic(car: RaceCar, vT: float, rl: float, dt: float) -> Dictionary:
 	var ahead: RaceCar = null
 	var ahead_gap := INF
 	var drag := 1.0
-	# nearest car up to 45 m ahead within 2 m sideways. Runs for every car every tick, so the cheap
-	# tests go first and track.rel() is inlined; all the tests are pure, so the pick is unchanged.
+	# nearest car up to 45 m ahead within 2 m sideways. Runs for every car every tick, so it looks only at
+	# the cars near this one along the lap (_near_cars, which also covers side_room() and the overtake
+	# check below), the cheap tests go first and track.rel() is inlined. A tie goes to the car earlier
+	# in `cars`, as when every car was scanned in that order.
+	var near := _near_cars(car, maxf(spec.length + 1.2, 8.0), 45.0)
 	var cs := car.s
 	var cd := car.d
 	var L := tr.L
 	var hL := L / 2
-	for o in cars:
+	for o in near:
 		if o == car or not absf(o.d - cd) < 2.0 or o.dnf or o.finished:
 			continue
 		var g := fmod(fmod(o.s - cs + hL, L) + L, L) - hL
-		if not (g > 0.0 and g < 45.0 and g < ahead_gap):
+		if not (g > 0.0 and g < 45.0 and (g < ahead_gap or (g == ahead_gap and _order_idx[o] < _order_idx[ahead]))):
 			continue
 		if o.mode == "pit" and tr.pit_blend(o.s) > 0.4:
 			continue
 		ahead = o
 		ahead_gap = g
-	var side := side_room(car)
+	var side := side_room(car, near)
 	if not ahead:
 		if car.overtake_t > 0.0:
 			car.overtake_t -= dt
 		if s.draft:
 			drag = tow_drag(car, 0.0, dt)
 		var t := {"vT": vT, "dT": car.overtake_d if car.overtake_t > 0.0 else rl, "drag": drag}
-		if rc:
+		if rc and any_stranded:
 			t = avoid_wrecks(car, t)
 		return apply_side_room(car, t, side)
 	var lat0 := ahead.d - car.d
@@ -1137,7 +1227,7 @@ func traffic(car: RaceCar, vT: float, rl: float, dt: float) -> Dictionary:
 			if absf(d) > lim:
 				continue
 			var blocked := false
-			for c in cars:
+			for c in near:
 				if c != car and c != ahead and not c.finished and not c.recovered and c.mode != "pit" and absf(c.d - d) < 2.0 and absf(tr.rel(c.s - car.s) - 3.0) < 11.0:
 					blocked = true
 					break
@@ -1158,7 +1248,7 @@ func traffic(car: RaceCar, vT: float, rl: float, dt: float) -> Dictionary:
 		if ahead_gap < 5.0:
 			vT = minf(vT, ahead_v - 0.6)
 	var tf := {"vT": vT, "dT": dT, "drag": drag}
-	if rc:
+	if rc and any_stranded:
 		tf = avoid_wrecks(car, tf)
 	return apply_side_room(car, tf, side)
 
@@ -1200,7 +1290,7 @@ func avoid_wrecks(car: RaceCar, t: Dictionary) -> Dictionary:
 
 ## Lateral space left by cars running alongside: {lo, hi} offsets this car may steer to without
 ## leaning on anyone, plus the speed of whoever is squeezing it (squeeze_v, NAN if nobody).
-func side_room(car: RaceCar) -> Dictionary:
+func side_room(car: RaceCar, near: Array[RaceCar]) -> Dictionary:
 	var tr := track
 	var gap_min := spec.width + 0.55
 	var lo := -INF
@@ -1210,7 +1300,7 @@ func side_room(car: RaceCar) -> Dictionary:
 	var cs := car.s
 	var L := tr.L
 	var hL := L / 2
-	for o in cars:
+	for o in near:
 		if o == car:
 			continue
 		# track.rel() inlined; the distance test rejects most cars before the flag reads
@@ -1428,7 +1518,7 @@ func step_rail(car: RaceCar, dt: float) -> void:
 	car.v = maxf(0.0, car.v + a * dt)
 	var force := mass * 1.05 * a + car_model.resistance(car.v, mass, drag) + mass * climb if a >= -climb else 0.0
 	car.gear = car_model.best_gear(car.v)
-	var f_max := maxf(1.0, car_model.wheel_force(car.v, car.gear, 1.0) * car.mix_power)
+	var f_max := maxf(1.0, car_model.full_force() * car.mix_power)
 	car.throttle = clampf(force / f_max, 0.0, 1.0)
 	car.rpm = car_model.engine_rpm(car.v, car.gear, car.throttle)
 	burn_fuel(car, car_model.fuel_rate(force * car.v / spec.efficiency) * car.mix_burn * dt * s.fuel_mult)
@@ -1436,7 +1526,7 @@ func step_rail(car: RaceCar, dt: float) -> void:
 	var in_pit := car.mode == "pit"
 	var lat_max := 5.0 if in_pit else 1.2 + 0.1 * car.v
 	# follow the line's own sideways drift, correct the error smoothly, and never jerk sideways
-	var ff := 0.0 if in_pit else (tr.sample(tr.RLD, car.s + 1.0) - tr.sample(tr.RLD, car.s)) * car.v
+	var ff := 0.0 if in_pit else (tr.sample(tr.RLD, car.s + 1.0) - rl) * car.v
 	var want := clampf(ff + (dT - car.d) * (5.0 if in_pit else 2.0), -lat_max, lat_max)
 	var a_lat := 14.0 if in_pit else 4.0 + 0.12 * car.v
 	car.lat_v = car.lat_v + clampf(want - car.lat_v, -a_lat * dt, a_lat * dt)
@@ -1754,8 +1844,12 @@ func slipstream(car: RaceCar, dt: float) -> float:
 			drag = minf(drag, 1.0 - 0.3 * (1.0 - g / 30.0))
 	return drag
 
-const NEAR_PHYS_PICK_UP := 250.0 ## m along the track: a rail bot this close to the player switches to the physics
-const NEAR_PHYS_DROP := 350.0 ## m: a physics bot this far away goes back on the rail model
+const NEAR_PHYS_PICK_UP := 250.0 ## m ahead of the player along the track: a rail bot this close switches to the physics
+const NEAR_PHYS_DROP := 350.0 ## m ahead: a physics bot this far away goes back on the rail model
+## m behind the player: the cars racing it. Further back no forward view (chase, in-car, bird's-eye) shows a car,
+## so it stays on the rail model; from pole that keeps most of the field off the physics.
+const NEAR_PHYS_BEHIND := 60.0
+const NEAR_PHYS_BEHIND_DROP := 110.0
 
 ## Bots drive the full car physics at normal speed. Under time warp, in the pits, after the flag, or
 ## while recovering from a spin they fall back to the rail model.
@@ -1765,9 +1859,11 @@ func bot_control(car: RaceCar, dt: float) -> void:
 		car.recover_t -= dt
 	var want := phys_bots and warp == 1 and car.mode == "race" and not car.finished and not (car.recover_t > 0.0)
 	if want and phys_near_only and player:
-		# battery saver: the physics only runs within sight of the player (with a margin so a car on the
-		# edge does not flip between models every tick)
-		want = absf(track.rel(car.s - player.s)) < (NEAR_PHYS_DROP if car.control == "free" else NEAR_PHYS_PICK_UP)
+		# battery saver: the physics only runs on the road the player can see ahead and for the cars just behind
+		# it (with a margin so a car on the edge does not flip between models every tick)
+		var g := track.rel(car.s - player.s)
+		var free := car.control == "free"
+		want = g < (NEAR_PHYS_DROP if free else NEAR_PHYS_PICK_UP) and g > -(NEAR_PHYS_BEHIND_DROP if free else NEAR_PHYS_BEHIND)
 	if not want:
 		if car.control == "free":
 			to_rail(car)

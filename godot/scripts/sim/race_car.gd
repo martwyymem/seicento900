@@ -113,6 +113,7 @@ var out_of_fuel := false
 var gap := 0.0
 var cp_idx := -1
 var pos := 0
+var ring_i := 0 ## this car's place in Race._ring (the cars by distance round the lap), for traffic()
 
 # ---- racecraft
 var overtake_d := 0.0
