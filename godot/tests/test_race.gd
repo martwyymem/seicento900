@@ -37,6 +37,7 @@ func settings_for(sc: Dictionary) -> RaceSettings:
 	st.brake_assist = false
 	st.auto_rejoin = false
 	st.race_control = false
+	st.real_drivers = false # the reference's field, on the stock car
 	st.player_name = "You"
 	return st
 

@@ -20,6 +20,10 @@ var mistake_rate := 0.0
 var wet_threshold := 0.4
 var quali := 0.0
 var brain: BotBrain = null ## learning-AI state (bots only, when learning is on)
+var wet_skill := 1.0 ## grip in the rain against the field (Drivers.ROSTER "wet")
+var setup := {} ## CarSetup notches the car runs
+var model: CarModel ## the car on its set-up (Race.fit_setup), shared by every car on the same one
+var physics: Physics
 
 # ---- track position and motion
 var s := 0.0 ## distance along the centreline

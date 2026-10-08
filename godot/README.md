@@ -139,6 +139,24 @@ Beyond the look, these work the way they do in CMR 2.0:
   Whatever isn't fixed starts the next round bent, with its power loss, drag and steering pull. A damaged
   car gets a Service Area button on the results. In a single race the car is rebuilt every time; the page
   only shows what the last race did to it.
+- **Car set-up.** The Set Up page has CMR's set-up sliders, five notches each with the stock car in the
+  middle: brake balance, springs, anti-roll balance, ride height and steering (`scripts/sim/car_setup.gd`).
+  Each circuit keeps its own set-up, as each stage did in CMR, and "Copy a driver's set-up" loads any of the
+  field's. More rear brake stops shorter but turns the car round; a stiffer rear turns in harder; a low car
+  carries less weight transfer and drag but digs into the grass; quick steering gives more lock at speed. A
+  stock set-up drives the reference car exactly, so the physics parity tests still hold. Set-ups act in the full
+  physics only; on the rail model every car runs stock. There are no gear ratios: the Seicento is geared to its
+  power peak, and ±10 % on the final drive changed 0–100 km/h by a tenth.
+- **A field of real drivers.** The opponents are Senna, Prost, Schumacher, Hamilton, Button, Verstappen, Alonso,
+  Räikkönen, Vettel, Mansell, Lauda, Leclerc, Häkkinen, Coulthard and Colin McRae (`scripts/sim/drivers.gd`),
+  each on the set-up they were known to like: Senna, Schumacher and Verstappen pointy and loose, Prost, Button
+  and Coulthard safe and understeering, Hamilton on lots of rear brake, Vettel low with a planted rear, McRae
+  on a soft, high rally set-up. Each also has their own race pace and one-lap pace against the difficulty
+  level, grip in the rain (Senna, Schumacher, Verstappen and Hamilton best), tyre wear (Prost and Button the
+  gentlest), mistake rate and how wet it has to get before they pit for wets. Alone on the GP circuit with
+  the same driver, the set-ups are worth between half a second faster and six tenths slower a lap;
+  `tests/_setup_laps.gd` times them, and `tests/_field_probe.gd` races the whole field on its set-ups against
+  a stock field.
 - **Bumper and bonnet cameras.** C now steps through chase, far chase, bumper, bonnet, roof, trackside TV
   and bird's-eye.
 

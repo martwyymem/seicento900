@@ -51,6 +51,8 @@ extends Resource
 @export var reverse_ratio := 3.55
 @export var steer_lock := 0.5 ## road-wheel angle at full lock (rad)
 @export var ackermann := 0.5 ## fraction of true Ackermann geometry
+@export var steer_gain := 1.0 ## the car set-up's steering: scales the speed-sensitive lock (CarSetup)
+@export var offroad_drag := 1.0 ## the set-up's ride height: scales the extra rolling drag off the circuit
 
 @export_group("Tyre model")
 @export var load_sensitivity := 0.1 ## grip lost per unit of extra load over static

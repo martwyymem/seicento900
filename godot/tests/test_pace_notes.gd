@@ -1,4 +1,5 @@
-## Pace notes and the co-driver (CMR 2.0's calls) and the service area's damaged parts.
+## Pace notes and the co-driver (CMR 2.0's calls), the service area's damaged parts, the split times and the
+## car set-up.
 extends RefCounted
 
 var completed := false
@@ -11,6 +12,7 @@ func run() -> Array:
 	_calls(errors, "monaco")
 	_service(errors)
 	_splits(errors)
+	_car_setup(errors)
 	completed = true
 	return errors
 
@@ -209,3 +211,91 @@ func _splits(errors: Array[String]) -> void:
 		errors.append("a slower lap should show a split behind the best: %s" % [hud._split_show])
 	hud.free()
 	race.dispose()
+
+## The car set-up: stock is the stock car exactly, only the player's car runs it, and the settings do what the
+## page says they do.
+func _car_setup(errors: Array[String]) -> void:
+	var base: CarSpec = load("res://data/seicento.tres")
+	if CarSetup.apply(base, {}) != base or CarSetup.apply(base, CarSetup.stock()) != base:
+		errors.append("a stock set-up should drive the stock spec itself")
+	var cleaned := CarSetup.clean({"springs": 7, "roll": -1.6, "turbo": 2})
+	if cleaned.springs != CarSetup.NOTCHES or cleaned.roll != -1 or cleaned.has("turbo") or cleaned.size() != CarSetup.SETTINGS.size():
+		errors.append("a saved set-up should come back clamped to whole notches: %s" % cleaned)
+	var st := RaceSettings.new()
+	st.track = "fiat"
+	st.opponents = 1
+	st.race_control = false
+	var race := Race.new(st, null, 5)
+	if race.player.model != race.car_model or race.player.physics != race.phys:
+		errors.append("with no set-up the player should drive the race's stock car")
+	race.dispose()
+	st.car_setup = {"brakes": 2}
+	race = Race.new(st, null, 5)
+	if race.player.physics == race.phys or race.player.model.spec.brake_rear <= base.brake_rear or race.spec != base:
+		errors.append("a set-up should give the player a car of its own and leave the race's stock car alone")
+	race.dispose()
+	# more rear brake stops shorter without ABS but turns the car; a low car digs into the grass
+	var stock_stop := _stop({}, Physics.SURF_TRACK)
+	var rear_stop := _stop({"brakes": 2}, Physics.SURF_TRACK)
+	if not (rear_stop[0] < stock_stop[0] and rear_stop[1] > stock_stop[1] + 2.0):
+		errors.append("rear brake bias should stop shorter and yaw more: %s against %s" % [rear_stop, stock_stop])
+	var low := _stop({"height": -2}, Physics.SURF_GRASS, 0.0)
+	var high := _stop({"height": 2}, Physics.SURF_GRASS, 0.0)
+	if not (low[0] < high[0] - 5.0):
+		errors.append("a low car should slow sooner rolling on grass: %.1f m against %.1f m" % [low[0], high[0]])
+	# every car runs a set-up: the field is the roster's drivers on theirs, cars on the same one share a model
+	st.car_setup = {}
+	st.opponents = 15
+	race = Race.new(st, null, 6)
+	var by_setup := {}
+	for car in race.cars:
+		if car.is_player:
+			continue
+		var who := Drivers.find(car.name)
+		if who.is_empty():
+			errors.append("%s is not on the roster" % car.name)
+			continue
+		if car.setup != CarSetup.clean(who.setup) or car.number != who.number or car.agg != who.wear:
+			errors.append("%s should run their own set-up, number and tyre wear" % car.name)
+		var key := str(car.setup)
+		if by_setup.has(key) and by_setup[key] != car.physics:
+			errors.append("cars on the same set-up should share one physics model")
+		by_setup[key] = car.physics
+	var senna := Drivers.find("Ayrton Senna")
+	var prost := Drivers.find("Alain Prost")
+	for car in race.cars:
+		if car.name == "Ayrton Senna" and not car.model.spec.roll_front < base.roll_front:
+			errors.append("Senna's car should be stiffer at the rear (looser) than stock")
+		if car.name == "Alain Prost" and not car.model.spec.roll_front > base.roll_front:
+			errors.append("Prost's car should be stiffer at the front (safer) than stock")
+	if senna.wet <= prost.wet:
+		errors.append("Senna should be the better of the two in the rain")
+	race.dispose()
+	var base_phys := Physics.new(CarModel.new(base))
+	var quick := Physics.new(CarModel.new(CarSetup.apply(base, {"steering": 2})))
+	if not quick.max_steer(30.0, 1.0) > base_phys.max_steer(30.0, 1.0) * 1.1:
+		errors.append("quick steering should give more lock at speed")
+
+## Metres a car covers from 100 km/h (brake: pedal) on one surface, and the most it yaws on the way.
+func _stop(setup: Dictionary, surface: int, brake := 1.0) -> Array:
+	var cm := CarModel.new(CarSetup.apply(load("res://data/seicento.tres"), setup))
+	var ph := Physics.new(cm)
+	var car := RaceCar.new()
+	car.vx = 100.0 / 3.6
+	car.gear = 3
+	var env := Physics.Env.new()
+	env.mass = cm.mass_with_fuel(20.0)
+	env.abs_on = false
+	env.tc_on = false
+	env.esc_on = false
+	env.surface = func(_x: float, _y: float) -> int: return surface
+	var c := Physics.Controls.new()
+	c.brake = brake
+	c.steer = 0.08 if brake > 0.0 else 0.0
+	var yaw := 0.0
+	var t := 0.0
+	while car.vx * cos(car.heading) + car.vy * sin(car.heading) > (0.5 if brake > 0.0 else 15.0) and t < 30.0:
+		ph.step(car, c, env, 1.0 / 120.0)
+		t += 1.0 / 120.0
+		yaw = maxf(yaw, absf(car.heading))
+	return [car.x, rad_to_deg(yaw)]

@@ -61,7 +61,8 @@ Generated data (don't hand-edit; rebuild with the tools):
 ## Gameplay tuning (constants in code)
 
 ### `scripts/sim/race.gd` — the race
-- `BOTS` — opponent names and paint colours.
+- `BOTS`, `BOT_NUMBERS` — the JS reference's field (names, paint colours, numbers), raced with
+  `RaceSettings.real_drivers` off; the game's opponents are `Drivers.ROSTER` (below).
 - `DIFFICULTY` — per-level bot `skill` (share of the limit), `spread` between bots, `mistakes` rate and
   rubber-band strength `band`.
 - `ASSIST_PACE` — how fast the full-assist brake lets you take corners.
@@ -96,6 +97,15 @@ yellow-flag pace (`YELLOW_PACE`, `PLAYER_SLOW`), safety car (`SC_*`), marshal re
 - `PARTS` — each part's share of the damage, repair minutes and description; `ZONES` — which parts a
   front, side or rear hit reaches; `ALLOCATION` — service minutes between championship rounds.
 
+### `scripts/sim/car_setup.gd`, `scripts/sim/drivers.gd` — car set-ups and the field's drivers
+- `SETTINGS` — the settings on the Set Up page (name, end labels, help text); `NOTCHES` — notches either side of
+  stock; `apply()` — what each notch changes in the `CarSpec` (brake split, spring rate, roll stiffness split,
+  ride height, steering gain).
+- `ROSTER` (drivers.gd) — the opponents in grid-filling order: name, number, colour, set-up, and their
+  character (`pace`, `quali`, `wet`, `wear`, `errors`, `wets`, explained at the top of the file).
+  `RaceSettings.real_drivers = false` swaps it for the JS reference's field (`Race.BOTS`, stock cars); the
+  parity race (`tests/test_race.gd`) runs that way.
+
 ### `scripts/sim/physics.gd` — vehicle dynamics
 - `SURF_GRIP`, `SURF_DRAG` — grip and drag on track / asphalt run-off / grass / gravel.
 - `TX_*`, `TY_*` — Pacejka Magic Formula tyre curve shapes.
@@ -119,7 +129,7 @@ Saved under Godot's `user://` folder (on macOS:
 `~/Library/Application Support/Godot/app_userdata/Seicento 900 Cup/`). Paths go through
 `scripts/sim/save_data.gd`; tests and tools run with `-s` write to `user://dev_sandbox/` instead.
 
-- `race_settings.cfg` — last set-up page values.
+- `race_settings.cfg` — last set-up page values, and `[car_setup]`: the car set-up kept for each circuit.
 - `graphics.cfg` — Options page (`[graphics] quality` 0 Low … 3 Ultra, upscaler, FPS limit, …; `[audio] co_driver_voice`).
 - `championship.json` — championship progress and standings, and the player's car between rounds (`car`: damaged parts, steering pull, service minutes used).
 - `brain.json` — what the learning AI knows about you (set-up page → Forget clears it).

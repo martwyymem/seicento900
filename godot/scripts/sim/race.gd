@@ -5,7 +5,9 @@ extends RefCounted
 
 const G := 9.81 ## gravity, m/s²
 
-## The opponents: [name, paint colour]. The field takes the first `RaceSettings.opponents` of them.
+## The opponents are real drivers, each with their set-up and character: see Drivers.ROSTER. With
+## RaceSettings.real_drivers off the field is the JS reference's instead: [name, paint colour], all on the
+## stock car, the first `RaceSettings.opponents` of them.
 const BOTS := [
 	["Giancarlo Bianchi", "#1d4fa3"], ["Marek Kowalski", "#f2c318"], ["Luca Ferraro", "#f4f4f4"],
 	["Zbigniew Nowak", "#2e8b57"], ["Paolo Esposito", "#ff7f11"], ["Krzysztof Wiśniewski", "#7b2cbf"],
@@ -13,6 +15,7 @@ const BOTS := [
 	["Jan Kamiński", "#9bd13b"], ["Sofia Greco", "#ff66b3"], ["Agnieszka Lewandowska", "#8d6e63"],
 	["Klaus Schmidt", "#1b998b"], ["Andrzej Zieliński", "#b5838d"], ["Francesca Ricci", "#6a994e"],
 ]
+const BOT_NUMBERS := [3, 5, 8, 11, 14, 17, 21, 23, 27, 33, 44, 55, 63, 77, 88]
 
 ## band: how hard the field is pulled back towards the player when a gap opens (rubber-band pace, ±).
 ## A single mistake shouldn't hand the win to someone three seconds a lap off your pace, so the bots
@@ -96,6 +99,8 @@ class Weather:
 
 # ---------------- models ----------------
 var car_model: CarModel
+## [CarModel, Physics] for each car set-up in the race, so cars on the same one share them (Race.fit_setup).
+var _setup_cars := {}
 var tyres: Tyres
 var strategy: Strategy
 var phys: Physics
@@ -202,6 +207,7 @@ func _init(settings: RaceSettings, player_plan = null, seed_ := -1, models := {}
 	strategy = models.get("strategy", Strategy.new(car_model, tyres))
 	spec = car_model.spec
 	phys = Physics.new(car_model)
+	_setup_cars[_setup_key(CarSetup.stock())] = [car_model, phys]
 	_surface_fn = func(x: float, y: float) -> int: return surface_at(_surf_car, x, y)
 	s = settings
 	track = get_track(settings.track)
@@ -300,6 +306,9 @@ func make_car(id: int, name: String, color: Color, number: int, is_player: bool)
 	c.number = number
 	c.is_player = is_player
 	c.control = "free" if is_player else "rail"
+	c.setup = CarSetup.stock()
+	c.model = car_model
+	c.physics = phys
 	c.plan_wet = weather.wet
 	c.rpm = spec.idle_rpm
 	return c
@@ -335,26 +344,59 @@ func apply_plan(car: RaceCar, p: Dictionary) -> void:
 func _tyre_quality() -> float:
 	return 0.92 + 0.16 * rng.next()
 
+## Puts a car on a set-up (CarSetup notches): its own CarModel and Physics, shared with any other car on the
+## same set-up. The stock set-up is the race's own car_model and phys.
+func fit_setup(car: RaceCar, setup: Dictionary) -> void:
+	car.setup = CarSetup.clean(setup)
+	var key := _setup_key(car.setup)
+	if not _setup_cars.has(key):
+		var cm := CarModel.new(CarSetup.apply(spec, car.setup))
+		_setup_cars[key] = [cm, Physics.new(cm)]
+	car.model = _setup_cars[key][0]
+	car.physics = _setup_cars[key][1]
+
+static func _setup_key(setup: Dictionary) -> String:
+	var k := ""
+	for name in CarSetup.SETTINGS:
+		k += str(setup.get(name, 0)) + ","
+	return k
+
+## The grip a car's tyres give it: the compound in the conditions, and in the wet how good the driver is in it.
+func grip(car: RaceCar) -> float:
+	return tyres.tyre_grip(car.tyre, weather.wet) * (1.0 + (car.wet_skill - 1.0) * minf(1.0, weather.wet * 2.0))
+
 func build_field(player_plan) -> void:
 	var diff: Dictionary = DIFFICULTY[s.difficulty]
 	var options := strategy.plan(plan_opts({"diverse": true}))
 	var wild := _wild_pool(options)
 	var fallback := {"stops": 0, "stints": [{"c": "W" if weather.wet > 0.4 else "M", "laps": R, "fuel": minf(spec.tank, Strategy.fuel_need(R, fpl))}]}
 	var bots: Array[RaceCar] = []
-	var numbers := [3, 5, 8, 11, 14, 17, 21, 23, 27, 33, 44, 55, 63, 77, 88]
 	for i in s.opponents:
-		var car := make_car(i + 1, BOTS[i][0], Color(BOTS[i][1]), numbers[i], false)
-		car.skill = diff.skill + (rng.next() - 0.6) * diff.spread
+		var who: Dictionary = Drivers.ROSTER[i] if s.real_drivers else {}
+		var car: RaceCar
+		if who:
+			car = make_car(i + 1, who.name, Color(who.color), who.number, false)
+			# the driver's own pace against the field, around the difficulty's level, and a little form on the day
+			car.skill = diff.skill + (who.pace - 0.6) * diff.spread * 0.9 + (rng.next() - 0.5) * diff.spread * 0.3
+		else:
+			car = make_car(i + 1, BOTS[i][0], Color(BOTS[i][1]), BOT_NUMBERS[i], false)
+			car.skill = diff.skill + (rng.next() - 0.6) * diff.spread
 		if s.quali_grid.has("skills") and s.quali_grid.skills.has(str(car.id)):
 			car.skill = float(s.quali_grid.skills[str(car.id)]) # the field races as it qualified
 		car.stripes = rng.next() < 0.3
-		car.agg = 0.9 + rng.next() * 0.2
-		car.mistake_rate = diff.mistakes
+		if who:
+			car.agg = who.wear
+			car.mistake_rate = diff.mistakes * who.errors
+			car.wet_skill = who.wet
+			fit_setup(car, who.setup)
+		else:
+			car.agg = 0.9 + rng.next() * 0.2
+			car.mistake_rate = diff.mistakes
 		if s.dynamic_running and rng.next() < 0.3:
 			car.pit_bias = 1
 		if brain:
 			brain.add_bot(car, diff.spread)
-		car.wet_threshold = 0.36 + rng.next() * 0.14
+		car.wet_threshold = who.wets if who else 0.36 + rng.next() * 0.14
 		var pick: Dictionary = options[0] if options.size() else fallback
 		if options.size() > 1:
 			var pool := options.filter(func(o): return o.time < options[0].time * 1.012)
@@ -364,7 +406,10 @@ func build_field(player_plan) -> void:
 				pick = pool[int(floorf(pow(rng.next(), 1.5) * pool.size()))]
 		apply_plan(car, pick)
 		car.strategy_label = Strategy.label(pick)
-		car.quali = car.skill + (rng.next() - 0.5) * 0.02
+		if who:
+			car.quali = car.skill + who.quali * diff.spread * 0.25 + (rng.next() - 0.5) * 0.012
+		else:
+			car.quali = car.skill + (rng.next() - 0.5) * 0.02
 		if s.quali_grid.has("quali") and s.quali_grid.quali.has(str(car.id)):
 			car.quali = float(s.quali_grid.quali[str(car.id)])
 		bots.append(car)
@@ -373,6 +418,7 @@ func build_field(player_plan) -> void:
 	var pl := make_car(0, s.player_name, s.player_color, s.player_number, true)
 	pl.stripes = s.stripes
 	pl.skill = 0.97 # used only while on autopilot
+	fit_setup(pl, s.car_setup)
 	var pp: Dictionary = player_plan if player_plan else (options[0] if options.size() else fallback)
 	if s.qualifying:
 		quali_fuel = minf(spec.tank, Strategy.fuel_need(R, fpl))
@@ -1487,7 +1533,7 @@ func step_rail(car: RaceCar, dt: float) -> void:
 		if car.pit.left <= 0.0 and pit_lane_clear(car):
 			finish_service(car)
 		return
-	var mu := tyres.tyre_grip(car.tyre, wet)
+	var mu := grip(car)
 	var mass := car_model.mass_with_fuel(car.fuel)
 	var rl := tr.sample(tr.RLD, car.s)
 	var vT: float
@@ -1603,7 +1649,9 @@ func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float,
 	var hold := phase != "racing"
 	if car.fuel <= 0.0:
 		thr = 0.0
-	var mass := car_model.mass_with_fuel(car.fuel)
+	var cm := car.model
+	var cp := car.physics
+	var mass := cm.mass_with_fuel(car.fuel)
 	var ch := cos(car.heading)
 	var sh := sin(car.heading)
 	var vF := car.vx * ch + car.vy * sh
@@ -1651,7 +1699,7 @@ func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float,
 	# bots run the same driving-aid setting the player chose — no free assist the player didn't pick
 	var assists := s.assists
 	var drag_mul := slipstream(car, dt) if car.is_player else car.slip_drag
-	var mu := tyres.tyre_grip(car.tyre, weather.wet)
+	var mu := grip(car)
 	var steer := steer_assist(car, steer_in, mu, assists) if car.is_player else steer_in
 	var env := _env
 	env.mu = mu
@@ -1686,7 +1734,7 @@ func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float,
 	_ctl.throttle = thr
 	_ctl.brake = brk
 	_ctl.steer = steer
-	phys.step(car, _ctl, env, dt)
+	cp.step(car, _ctl, env, dt)
 	car.shift_t = maxf(0.0, car.shift_t - dt)
 
 	var pr := tr.project(car.x, car.y, car.s)
@@ -1694,19 +1742,20 @@ func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float,
 	car.d = pr[1]
 	barrier_contact(car, mass)
 
-	burn_fuel(car, car_model.fuel_rate(phys.engine_power) * car.mix_burn * dt * s.fuel_mult)
+	burn_fuel(car, cm.fuel_rate(cp.engine_power) * car.mix_burn * dt * s.fuel_mult)
 	# wear follows the energy the tyres dissipate while sliding, on top of normal running
-	var mu_g := tyres.tyre_grip(car.tyre, weather.wet) * G
+	var mu_g := grip(car) * G
 	var acc := sqrt(car.phys.ax_f * car.phys.ax_f + car.phys.ay_f * car.phys.ay_f)
 	var u := minf(1.5, acc / mu_g)
-	var slide := minf(3.0, phys.slide_power / (mass * mu_g * 1.5))
+	var slide := minf(3.0, cp.slide_power / (mass * mu_g * 1.5))
 	var off_track := absf(car.d) > tr.half + 0.5
-	var factor := (0.45 + 1.1 * u * u + 0.5 * slide) * (1.4 if off_track else 1.0)
+	# (agg: how hard the driver is on tyres, Drivers.ROSTER "wear"; 1 for the player)
+	var factor := (0.45 + 1.1 * u * u + 0.5 * slide) * (1.4 if off_track else 1.0) * (car.agg if s.real_drivers else 1.0)
 	wear_tyres(car, absf(car.speed) * dt, factor)
 
 ## Automatic gearbox, shared by the player's auto option and every bot.
 func auto_shift(car: RaceCar, vF: float, thr: float, brk: float) -> void:
-	var cm := car_model
+	var cm := car.model
 	var vp := maxf(0.0, vF)
 	var top := spec.gears.size() - 1
 	var g := car.gear
@@ -1733,7 +1782,7 @@ func auto_shift(car: RaceCar, vF: float, thr: float, brk: float) -> void:
 func steer_assist(car: RaceCar, raw: float, mu: float, assists: String) -> float:
 	if assists != "full" or absf(raw) < 1e-3:
 		return raw
-	var ideal := Driver.line_steer(phys, track, car, mu)
+	var ideal := Driver.line_steer(car.physics, track, car, mu)
 	if signf(raw) != signf(ideal):
 		return raw
 	var cap := absf(ideal) * 1.35 + 0.05
@@ -1921,7 +1970,7 @@ func bot_input(car: RaceCar, dt: float) -> Physics.Controls:
 		_uturn_ctl.throttle = 0.45 if v < 6.0 else 0.0
 		_uturn_ctl.brake = 0.3 if v > 9.0 else 0.0
 		return _uturn_ctl
-	var mu := tyres.tyre_grip(car.tyre, weather.wet)
+	var mu := grip(car)
 	var tg := targets(car, dt, mu, true)
 	car.slip_drag = tg.drag
 	if bot_smooth_line and line_slew > 0.0:
@@ -1943,7 +1992,7 @@ func bot_input(car: RaceCar, dt: float) -> Physics.Controls:
 		car.err.t -= dt
 		if car.err.t <= 0.0:
 			car.err = null
-	return Driver.control(phys, track, car, tg, mu, _ctl)
+	return Driver.control(car.physics, track, car, tg, mu, _ctl)
 
 ## A driving error: on rails a sideways twitch, in the physics a braking point missed or a line run wide
 ## that the car then has to live with.

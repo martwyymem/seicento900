@@ -146,7 +146,7 @@ func init_car(car: RaceCar) -> PhysState:
 ## keyboard tap throws the car past it. Scaled by the steering input.
 func max_steer(v: float, mu: float) -> float:
 	var v2 := maxf(1.0, v * v)
-	return minf(spec.steer_lock, wb * mu * G / v2 + 1.35 * APK)
+	return minf(spec.steer_lock, (wb * mu * G / v2 + 1.35 * APK) * spec.steer_gain)
 
 ## Advance the car by dt.
 ## Hot path (every car, 8 substeps per tick): the tyre model is inlined and the car/drivetrain state
@@ -176,6 +176,7 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 	var grip_k := spec.grip_k
 	var v_ref := spec.v_ref
 	var crr := spec.crr
+	var offroad := spec.offroad_drag
 	var lift_a := spec.lift_a
 	var cd_a := spec.cd_a
 	var zeta := spec.susp_zeta
@@ -274,7 +275,7 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 			vt[i] = -wx * sd[i] + wy * cd[i]
 			if k == 0:
 				surf[i] = env.surface.call(c_x + WX[i] * ch - WY[i] * sh, c_y + WX[i] * sh + WY[i] * ch)
-				drag[i] = crr + SURF_DRAG[surf[i]]
+				drag[i] = crr + SURF_DRAG[surf[i]] * offroad
 			var sens := clampf(1.0 - load_sens * (fz[i] / fz0 - 1.0), 0.75, 1.15)
 			mu[i] = env_mu * grip_k * SURF_GRIP[surf[i]] * sens
 

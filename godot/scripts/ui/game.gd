@@ -242,6 +242,12 @@ var ai_memory_label: Label
 var record_label: Label ## the player's lap records on the selected circuit
 var record_forget_button: Button
 var ai_forget_button: Button
+# Car set-up (CMR 2.0's): one per circuit, the page shows the selected circuit's
+var car_setups := {} ## track key -> CarSetup notches
+var setup_sliders := {} ## setting -> HSlider
+var setup_values := {} ## setting -> Label with the notch
+var setup_heading: Label
+var setup_help: Label
 
 # Pit strategy chosen on the set-up page (the reference's strategy panel)
 var car_model := CarModel.new()
@@ -685,6 +691,7 @@ func _build_setup() -> void:
 	grid_picker = _option_field(row4, "GRID POSITION", ["Pole", "Middle", "Back", "Random"])
 	quali_picker = _option_field(row4, "CHAMPIONSHIP QUALIFYING", ["Drive it", "Simulate", "Skip (use grid position)"])
 	assists_picker = _option_field(row4, "DRIVING AIDS", ["Full assists", "ABS only", "Off"])
+	_build_car_setup(col)
 	_menu_rule(col)
 	rules_section = _label("RACE RULES & PIT STRATEGY", 16, CmrStyle.TEXT)
 	col.add_child(rules_section)
@@ -1174,9 +1181,128 @@ func _load_race_settings() -> void:
 		elif control is ColorPickerButton and v is Color:
 			(control as ColorPickerButton).color = v
 	_select_format(format_picker.selected) # visibility only: the saved refuel/wear values stay
+	car_setups.clear()
+	if cfg.has_section("car_setup"):
+		for t in cfg.get_section_keys("car_setup"):
+			var st := CarSetup.clean(cfg.get_value("car_setup", t))
+			if not CarSetup.is_stock(st):
+				car_setups[t] = st
+	_refresh_car_setup()
 	_loading_settings = false
 	if world_view and track_picker.selected != 0:
 		world_view.set_track(Race.get_track(TRACK_KEYS[track_picker.selected]))
+
+## CMR's car set-up: a five-notch slider per setting, the stock car in the middle. Changes are kept for the
+## circuit on the page (the championship round's in a championship).
+func _build_car_setup(col: VBoxContainer) -> void:
+	_menu_rule(col)
+	setup_heading = _label("CAR SET-UP", 16, CmrStyle.TEXT)
+	setup_heading.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	setup_heading.custom_minimum_size.x = 1 # a long circuit name trims instead of widening the column
+	col.add_child(setup_heading)
+	for key in CarSetup.SETTINGS:
+		var info: Array = CarSetup.SETTINGS[key]
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		row.custom_minimum_size.y = 30
+		col.add_child(row)
+		var title := _label(info[0], 14, CmrStyle.TEXT)
+		title.custom_minimum_size.x = 170
+		title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		row.add_child(title)
+		var lo := _label(info[1], 12, MUTED)
+		lo.custom_minimum_size.x = 48
+		lo.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		lo.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		row.add_child(lo)
+		var slider := HSlider.new()
+		slider.min_value = -CarSetup.NOTCHES
+		slider.max_value = CarSetup.NOTCHES
+		slider.step = 1
+		slider.tick_count = 2 * CarSetup.NOTCHES + 1
+		slider.ticks_on_borders = true
+		slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		slider.tooltip_text = info[3]
+		slider.value_changed.connect(_car_setup_changed.bind(key))
+		slider.mouse_entered.connect(func() -> void: setup_help.text = info[3])
+		row.add_child(slider)
+		setup_sliders[key] = slider
+		var hi := _label(info[2], 12, MUTED)
+		hi.custom_minimum_size.x = 48
+		hi.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		row.add_child(hi)
+		var notch := _label("0", 14, CmrStyle.TEXT)
+		notch.custom_minimum_size.x = 26
+		notch.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		notch.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		row.add_child(notch)
+		setup_values[key] = notch
+	setup_help = _label("The middle notch is the stock car. Point at a setting to see what it does.", 13, MUTED)
+	setup_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	setup_help.custom_minimum_size = Vector2(1, 38)
+	col.add_child(setup_help)
+	var help_row := HBoxContainer.new()
+	help_row.add_theme_constant_override("separation", 14)
+	col.add_child(help_row)
+	# the field's drivers each run their own (Drivers.ROSTER): try one
+	var copy := OptionButton.new()
+	copy.add_item("COPY A DRIVER'S SET-UP")
+	for who in Drivers.ROSTER:
+		copy.add_item(who.name)
+	copy.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	copy.custom_minimum_size.y = 42
+	copy.item_selected.connect(func(index: int) -> void:
+		if index <= 0:
+			return
+		var who: Dictionary = Drivers.ROSTER[index - 1]
+		var st := CarSetup.clean(who.setup)
+		if CarSetup.is_stock(st):
+			car_setups.erase(_menu_track_key())
+		else:
+			car_setups[_menu_track_key()] = st
+		_refresh_car_setup()
+		setup_help.text = "%s: %s" % [who.name, who.style]
+		copy.select(0)
+		_save_race_settings()
+	)
+	help_row.add_child(copy)
+	var stock := _button("STOCK SET-UP", CmrStyle.FIELD)
+	stock.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	stock.pressed.connect(func() -> void:
+		car_setups.erase(_menu_track_key())
+		_refresh_car_setup()
+		_save_race_settings()
+	)
+	help_row.add_child(stock)
+
+## Shows the set-up kept for the circuit on the page.
+func _refresh_car_setup() -> void:
+	if setup_sliders.is_empty() or not is_instance_valid(track_picker):
+		return
+	var key := _menu_track_key()
+	var st := CarSetup.clean(car_setups.get(key, {}))
+	var was := _loading_settings
+	_loading_settings = true
+	for k in setup_sliders:
+		(setup_sliders[k] as HSlider).value = st[k]
+		(setup_values[k] as Label).text = "%+d" % st[k] if st[k] != 0 else "0"
+	_loading_settings = was
+	setup_heading.text = "CAR SET-UP%s  ·  %s" % ["" if CarSetup.is_stock(st) else " (TUNED)", Race.get_track(key).name.to_upper()]
+
+func _car_setup_changed(value: float, setting: String) -> void:
+	if _loading_settings:
+		return
+	var key := _menu_track_key()
+	var st := CarSetup.clean(car_setups.get(key, {}))
+	st[setting] = int(value)
+	if CarSetup.is_stock(st):
+		car_setups.erase(key)
+	else:
+		car_setups[key] = st
+	setup_help.text = CarSetup.SETTINGS[setting][3]
+	_refresh_car_setup()
+	_save_race_settings()
 
 func _save_race_settings() -> void:
 	if not is_instance_valid(track_picker):
@@ -1197,6 +1323,8 @@ func _save_race_settings() -> void:
 		elif control is ColorPickerButton:
 			v = (control as ColorPickerButton).color
 		cfg.set_value("race", key, v)
+	for t in car_setups:
+		cfg.set_value("car_setup", t, car_setups[t])
 	cfg.save(SaveData.path("race_settings.cfg"))
 
 func _build_menu_car_preview() -> void:
@@ -1286,6 +1414,7 @@ func _update_menu_car_summary() -> void:
 	if is_championship_mode:
 		race_label = "ROUND %02d / %02d" % [_champ_round() + 1, CHAMPIONSHIP_CALENDAR.size()]
 	menu_car_summary.text = "%s    |    %.1f KM\n%s" % [current_track.name.to_upper(), current_track.L / 1000.0, race_label]
+	_refresh_car_setup()
 
 func _build_menu_header() -> void:
 	menu_header = HBoxContainer.new()
@@ -2393,6 +2522,7 @@ func _set_up_race() -> void:
 	settings.auto_strategist = strategist_toggle.button_pressed
 	settings.parallel = parallel_toggle.button_pressed
 	settings.crew = ["pro", "club", "amateur"][crew_picker.selected]
+	settings.car_setup = CarSetup.clean(car_setups.get(settings.track, {}))
 	if quali_run:
 		Qualifying.configure(settings)
 	elif is_championship_mode and not _round_quali().is_empty():
