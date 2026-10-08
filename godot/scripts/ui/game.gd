@@ -105,6 +105,7 @@ var _player_input := Race.PlayerInput.new() ## reused every frame instead of all
 
 # Audio
 var audio: RaceAudio
+var world_audio: WorldAudio ## everything else the race sounds like (it follows the race on its own)
 
 # 3D World View
 var world_view: Node3D
@@ -291,6 +292,8 @@ func _ready() -> void:
 func _build_audio() -> void:
 	audio = RaceAudio.new()
 	add_child(audio)
+	world_audio = WorldAudio.new(self)
+	add_child(world_audio)
 
 ## Battery and heat: the 3D view is only rendered while somebody can see it change. Behind the opaque front-end
 ## pages it is off; while paused or on the results screen it draws a few more frames and then keeps its last

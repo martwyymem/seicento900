@@ -164,6 +164,38 @@ The UI is laid out on a 1600×900 canvas and scaled to the window (`canvas_items
 aspect), so it keeps its proportions at any resolution; the 3D views render at the window's full pixel
 size. Options → Interface size makes the UI smaller or larger on top of that.
 
+## Sound
+
+`race_audio.gd` synthesises the player's engine live, as the reference does. Everything else comes from
+`scripts/ui/world_audio.gd`:
+
+- **The other cars nearest the camera.** Their engines follow their revs and throttle, with a Doppler shift as
+  they pass a trackside camera. Physics bots also squeal when they slide.
+- **Your car's surfaces.** Your car drums over kerbs at a rate set by its speed, and you hear it on grass and
+  gravel, scraping a barrier, in the wind (on the cameras that ride with the car) and throwing up spray on a
+  wet road.
+- **Hits.** Bumps and crashes between cars and into barriers come from a hit log the race keeps while the game
+  listens (`Race.impacts`). It never changes the race.
+- **Around the circuit.** Rain falls around you, the crowd chatters in the nearest grandstands and roars at the
+  start and for the winner, and pit crews work wheel guns and jacks at your stop and at others near the
+  camera.
+
+The player's car plays through a Car bus, which also carries the engine. From a trackside or overhead camera
+the bus is turned down with the car's distance, panned to its side of the picture and dulled. Everything else
+is placed in the race world, which listens through the race camera, on a World bus. M mutes both. The rest of
+the field is mixed under your own car, so in a pack your engine stays on top.
+
+The sounds are synthesised offline by `python3 tools/build_sounds.py` (numpy) into `audio/*.wav`. They are
+made from filtered noise, impulse trains and decaying resonances, with no recordings. Change the script and
+rebuild rather than editing a WAV. Filtering is done on the whole buffer in the frequency domain, so every loop
+wraps round seamlessly. Loops carry their loop points in the file, and `--stats` prints each sound's level,
+brightness and how smooth its loop seam is.
+
+At run time the node only places, pitches and fades the sounds, so the mixer does the per-sample work: about
+0.07 ms of script per frame with 16 cars. `tests/_audio_capture.gd`, run in a window, records a short Monza
+race off the Master, Car and World buses to `/tmp/audio_cap/` for checking the mix's levels. Run it with
+`--audio-driver Dummy` and it records in silence.
+
 ## Graphics and optional assets
 
 The race world is rendered in Forward+ with shader-driven materials in `shaders/`: a sky with drifting
@@ -249,9 +281,10 @@ bit for bit. Rough costs on an M4 Pro: 57 µs per car-tick of full physics, ~0.5
 - `scripts/sim/` — simulation, ported from `js/` (`CarModel`/`Tyres` ← car.js, `Physics`, `Track`,
   `Strategy`, `Race`, `Driver`, `Brain` (learning AI), `Weather` and helpers).
 - `scripts/ui/` — `game.gd` (menus, set-up, race loop, input, pause, results, championship),
-  `race_world.gd` (3D circuit, sky, cameras), `world_assets.gd` (optional skies, textures and tree models), `race_car_visual.gd`, `race_hud.gd`, `race_audio.gd`,
+  `race_world.gd` (3D circuit, sky, cameras), `world_assets.gd` (optional skies, textures and tree models), `race_car_visual.gd`, `race_hud.gd`, `race_audio.gd`, `world_audio.gd`,
   `ray_tracing.gd`, `rt_bvh.gd` and `rt_reflections.gd` (ray-traced reflections).
 - `ui/` — main game scene and race world scene.
+- `audio/` — the world's sounds, baked by `tools/build_sounds.py`.
 - `tests/` — headless parity tests against the JS version.
 
 Coordinates: the JS/2D x (east) and y (south) map to Godot X and Z; Y is up.

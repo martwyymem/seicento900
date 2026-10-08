@@ -44,3 +44,11 @@ bridge, Monza podium, Nürburg castle, Casino de Monte-Carlo, Silverstone Wing, 
 (`tools/fetch_surroundings.py` then `tools/build_surroundings.py`) come from OpenStreetMap and are baked to
 `godot/data/tracks/<key>_env.json`; add a landmark by naming its OSM element in `LANDMARKS` in
 `build_surroundings.py` and its nominal footprint in `LANDMARK_SIZE` in `surroundings.gd`.
+
+## Sounds
+
+The player's engine is synthesised live (`godot/scripts/ui/race_audio.gd`). Every other sound (other cars,
+kerbs, gravel, rain, crowd, impacts, pit crews) is baked by [`tools/build_sounds.py`](tools/build_sounds.py)
+(numpy) into `godot/audio/*.wav`, so change the script and rebuild (`python3 tools/build_sounds.py --stats`)
+rather than editing a WAV, then let Godot reimport (`godot --headless --path godot --import`).
+`world_audio.gd` plays them. Its `ENGINE_RPM` and `KERB_RATE` must match the script's.

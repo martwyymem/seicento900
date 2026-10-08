@@ -163,6 +163,12 @@ var brain: Brain = null
 var limiter := false ## the player has the flag speed limiter switched on (V)
 var rc: RaceControl = null ## flags, safety car, stewards and damage (null: contact is just physics, as before)
 var last_contact := 0.0
+## Hits for the game's sound (WorldAudio), oldest first, IMPACT_STRIDE floats each: x, y, closing speed (m/s),
+## kind (0 a barrier, 1 another car) and the two cars' ids (the second -1 for a barrier). Only kept while
+## hear_impacts is on, and whoever turns it on empties the list; the race itself never reads it.
+var impacts := PackedFloat32Array()
+var hear_impacts := false
+const IMPACT_STRIDE := 6
 
 var _env := Physics.Env.new()
 var _ctl := Physics.Controls.new()
@@ -1995,6 +2001,8 @@ func barrier_contact(car: RaceCar, mass: float) -> void:
 			hit_f = (ch * nx + sh * ny) * side
 	if rc and hit > 0.0:
 		rc.report_barrier(car, hit, hit_f)
+	if hear_impacts and hit > 0.0:
+		_heard(car.x, car.y, hit, 0, car.id, -1)
 	if hit > 5.0 and clock - car.last_hit > 1.5 and (car.is_player or not rc):
 		car.last_hit = clock
 		log_event("Ouch — that was the barrier!", "bad")
@@ -2085,11 +2093,24 @@ func collide() -> void:
 				kick(b, nx * jimp * wb, ny * jimp * wb, px - b.x, py - b.y)
 				if rc:
 					rc.report_contact(a, b, nx, ny, jimp * wa, jimp * wb)
+				if hear_impacts:
+					_heard(px, py, jimp, 1, a.id, b.id)
 				if brain and jimp > 1.0:
 					brain.contact(a, b, nx, ny)
 				if (a.is_player or b.is_player) and jimp > 2.5 and clock - last_contact > 1.0:
 					last_contact = clock
 					log_event("Contact with %s!" % (b.name if a.is_player else a.name), "bad")
+
+## One hit for the sound (impacts). Capped, in case whoever listens stops emptying the list.
+func _heard(x: float, y: float, dv: float, kind: int, id_a: int, id_b: int) -> void:
+	if impacts.size() >= IMPACT_STRIDE * 1024:
+		return
+	impacts.append(x)
+	impacts.append(y)
+	impacts.append(dv)
+	impacts.append(kind)
+	impacts.append(id_a)
+	impacts.append(id_b)
 
 ## How far a car can be pushed along (ux, uy) before its lateral limit (barrier / run-off edge).
 func room(car: RaceCar, ux: float, uy: float) -> float:

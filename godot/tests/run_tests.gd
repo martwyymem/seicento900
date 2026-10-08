@@ -12,7 +12,8 @@ const SUITES := [
 	"res://tests/test_ui_and_audio.gd",
 	"res://tests/test_qualifying.gd",
 	"res://tests/test_lap_records.gd",
-	"res://tests/test_pace_notes.gd"
+	"res://tests/test_pace_notes.gd",
+	"res://tests/test_world_audio.gd"
 ]
 
 const SURROUNDINGS := preload("res://scripts/ui/surroundings.gd")
@@ -21,6 +22,8 @@ const CAR_VISUAL := preload("res://scripts/ui/race_car_visual.gd")
 const WORLD := preload("res://scripts/ui/race_world.gd")
 
 func _initialize() -> void:
+	# the root joins the tree only after the first frame: until then a node a suite adds to it never gets _ready
+	await process_frame
 	var failed := 0
 	for path in SUITES:
 		var script = load(path)
