@@ -298,6 +298,8 @@ func make_car(id: int, name: String, color: Color, number: int, is_player: bool)
 	c.rpm = spec.idle_rpm
 	return c
 
+const START_FUEL_LAPS := 0.2 ## extra fuel a standing start burns, in laps of the car's mix
+
 func apply_plan(car: RaceCar, p: Dictionary) -> void:
 	car.plan = []
 	for st in p.stints:
@@ -313,6 +315,11 @@ func apply_plan(car: RaceCar, p: Dictionary) -> void:
 	car.history = [c0]
 	var f: float = p.stints[0].get("fuel", 0.0)
 	car.fuel = minf(spec.tank, f if f else Strategy.fuel_need(R, fpl))
+	if s.dynamic_running and not s.qualifying:
+		# the plan's fuel is for flying laps; the standing start costs a car about a fifth of a lap more, which
+		# would eat a stint's margin (at Indianapolis a car out of the tow then can't make six laps on the save mix).
+		# Only with dynamic running: without it the race keeps the JS reference's loads (tests/test_race.gd).
+		car.fuel = minf(spec.tank, car.fuel + START_FUEL_LAPS * fpl * car.mix_fuel)
 	if timed and not rules.refuel:
 		# R is an estimate and the leader finishes the lap the clock runs out on, so a timed race can run a lap
 		# or two longer than planned; without refuelling, fuel short then is a retirement for the whole field

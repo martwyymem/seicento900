@@ -68,6 +68,7 @@ Generated data (don't hand-edit; rebuild with the tools):
 - `TOW_MAX`, `wake_strength()`, `tow_drag()` — slipstream.
 - `ERR_RAMP` — how quickly a bot's driving error builds up.
 - `NEAR_PHYS_PICK_UP`, `NEAR_PHYS_DROP` (ahead), `NEAR_PHYS_BEHIND`, `NEAR_PHYS_BEHIND_DROP` — "Bot physics: nearby only" switching distances.
+- `START_FUEL_LAPS` — extra fuel every car loads for the standing start (with dynamic running).
 - `class Weather` — when showers start and how heavy they are.
 
 ### `scripts/sim/race_control.gd` — flags, safety car, damage, stewards
