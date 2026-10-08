@@ -136,55 +136,73 @@ func _process(_delta: float) -> void:
 	# Squeal BP center ~ 1550 Hz
 	var sq_c := clampf(TWO_PI * 1550.0 * dt, 0.01, 0.8)
 
+	# The loop runs SAMPLE_RATE times a second, so the synth's state lives in locals for the buffer and is
+	# stored back after it (member and untyped-array accesses were most of its cost); the output is the same.
+	var engine_on := active and current_master > 0.001
+	var squeal_on := squeal_vol > 0.001
+	var limiter_on := limiter_vol > 0.001
+	var inc0 := firing_hz * dt
+	var inc1 := (firing_hz * 2.0) * dt
+	var inc2 := (firing_hz * 3.0) * dt
+	var inc3 := (firing_hz * 4.0) * dt
+	var ph0: float = osc_phase[0]
+	var ph1: float = osc_phase[1]
+	var ph2: float = osc_phase[2]
+	var ph3: float = osc_phase[3]
+	var w0: float = osc_weights[0]
+	var w1: float = osc_weights[1]
+	var w2: float = osc_weights[2]
+	var w3: float = osc_weights[3]
+	var lp := lp_engine
+	var ex1 := bp_exhaust_p1
+	var ex2 := bp_exhaust_p2
+	var sq1 := bp_squeal_p1
+	var sq2 := bp_squeal_p2
+	var hp := hp_limiter
+	var hp_in := hp_limiter_in
+	var noise := noise_seed
+
 	for i in frames_avail:
 		var frame_out := 0.0
 
-		if active and current_master > 0.001:
-			# 1. Engine harmonics
+		if engine_on:
+			# 1. Engine harmonics (multiples 1-4 of the firing frequency): sawtooth, triangle, two squares
 			var raw_harmonics := 0.0
-			for h in 4:
-				var m := float(h + 1)
-				var phase: float = osc_phase[h]
-				osc_phase[h] = fmod(phase + (firing_hz * m) * dt, 1.0)
-
-				var wave := 0.0
-				if h == 0:
-					# Sawtooth
-					wave = 2.0 * phase - 1.0
-				elif h == 1:
-					# Triangle
-					wave = 2.0 * absf(2.0 * phase - 1.0) - 1.0
-				else:
-					# Square
-					wave = 0.7 if phase < 0.5 else -0.7
-				raw_harmonics += wave * osc_weights[h]
+			raw_harmonics += (2.0 * ph0 - 1.0) * w0
+			raw_harmonics += (2.0 * absf(2.0 * ph1 - 1.0) - 1.0) * w1
+			raw_harmonics += (0.7 if ph2 < 0.5 else -0.7) * w2
+			raw_harmonics += (0.7 if ph3 < 0.5 else -0.7) * w3
+			ph0 = fmod(ph0 + inc0, 1.0)
+			ph1 = fmod(ph1 + inc1, 1.0)
+			ph2 = fmod(ph2 + inc2, 1.0)
+			ph3 = fmod(ph3 + inc3, 1.0)
 
 			# Lowpass filter for engine
-			lp_engine += alpha_lp * (raw_harmonics - lp_engine)
-			frame_out += lp_engine * engine_vol
+			lp += alpha_lp * (raw_harmonics - lp)
+			frame_out += lp * engine_vol
 
 			# Fast LCG PRNG for noise
-			noise_seed = (noise_seed * 1103515245 + 12345) & 0x7FFFFFFF
-			var white_noise: float = (float(noise_seed) / 1073741824.0) - 1.0
+			noise = (noise * 1103515245 + 12345) & 0x7FFFFFFF
+			var white_noise: float = (float(noise) / 1073741824.0) - 1.0
 
 			# Exhaust rasp bandpass
-			bp_exhaust_p1 += ex_c * (white_noise - bp_exhaust_p1)
-			bp_exhaust_p2 += ex_c * (bp_exhaust_p1 - bp_exhaust_p2)
-			var exhaust_band: float = (bp_exhaust_p1 - bp_exhaust_p2) * 2.5
+			ex1 += ex_c * (white_noise - ex1)
+			ex2 += ex_c * (ex1 - ex2)
+			var exhaust_band: float = (ex1 - ex2) * 2.5
 			frame_out += exhaust_band * exhaust_vol
 
 			# Tyre squeal bandpass
-			if squeal_vol > 0.001:
-				bp_squeal_p1 += sq_c * (white_noise - bp_squeal_p1)
-				bp_squeal_p2 += sq_c * (bp_squeal_p1 - bp_squeal_p2)
-				var squeal_band: float = (bp_squeal_p1 - bp_squeal_p2) * 5.0
+			if squeal_on:
+				sq1 += sq_c * (white_noise - sq1)
+				sq2 += sq_c * (sq1 - sq2)
+				var squeal_band: float = (sq1 - sq2) * 5.0
 				frame_out += squeal_band * squeal_vol
 
 			# Limiter stutter (highpass)
-			if limiter_vol > 0.001:
-				hp_limiter = 0.88 * (hp_limiter + white_noise - hp_limiter_in)
-				hp_limiter_in = white_noise
-				frame_out += hp_limiter * limiter_vol
+			if limiter_on:
+				hp = 0.88 * (hp + white_noise - hp_in)
+				hp_in = white_noise
+				frame_out += hp * limiter_vol
 
 		# 2. Shift clack / thump transient
 		if shift_active:
@@ -219,4 +237,16 @@ func _process(_delta: float) -> void:
 		var final_sample := clampf(frame_out * current_master, -0.95, 0.95)
 		_mix_buffer[i] = Vector2(final_sample, final_sample)
 
+	osc_phase[0] = ph0
+	osc_phase[1] = ph1
+	osc_phase[2] = ph2
+	osc_phase[3] = ph3
+	lp_engine = lp
+	bp_exhaust_p1 = ex1
+	bp_exhaust_p2 = ex2
+	bp_squeal_p1 = sq1
+	bp_squeal_p2 = sq2
+	hp_limiter = hp
+	hp_limiter_in = hp_in
+	noise_seed = noise
 	playback.push_buffer(_mix_buffer)
