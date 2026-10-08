@@ -929,6 +929,7 @@ func set_mix(car: RaceCar, mix: String) -> void:
 	car.mix_fuel = Strategy.mix_fuel(cal, mix)
 
 const MIX_EVERY := 0.25 ## s between a bot's fuel-mix decisions: its fuel margin moves by millilitres a tick
+const MIX_BAND := 0.05 ## laps of fuel between a bot's switch to the save mix and its switch back off it
 
 ## The mix the car runs this tick: the player's own pick, else the plan's; bots (and the autopilot) manage it,
 ## a few times a second (staggered by car), and at once on a new lap or stint.
@@ -966,11 +967,13 @@ func _bot_mix(car: RaceCar) -> String:
 	var base := stint_mix(car)
 	var margin := fuel_margin(car)
 	var lap_fuel := car_fpl(car) * Strategy.mix_fuel(cal, base)
-	if margin < 0.05 * lap_fuel:
+	# each switch away from saving wants MIX_BAND more in hand than the switch back: right at one threshold the
+	# margin moves by millilitres a tick, and the mix would flick between the two at every decision
+	if margin < (0.05 + (MIX_BAND if car.mix == "save" and base != "save" else 0.0)) * lap_fuel:
 		return "save"
 	if base == "save" and car.brain and (car.brain.mind == "attack" or car.brain.mind == "defend"):
 		var extra := laps_to_stop(car) * car_fpl(car) * (1.0 - Strategy.mix_fuel(cal, "save"))
-		if margin > extra + 0.2:
+		if margin > extra + 0.2 + (0.0 if car.mix == "normal" else MIX_BAND * lap_fuel):
 			return "normal"
 	return base
 

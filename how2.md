@@ -70,6 +70,8 @@ Generated data (don't hand-edit; rebuild with the tools):
 - `ERR_RAMP` — how quickly a bot's driving error builds up.
 - `NEAR_PHYS_PICK_UP`, `NEAR_PHYS_DROP` (ahead), `NEAR_PHYS_BEHIND`, `NEAR_PHYS_BEHIND_DROP` — "Bot physics: nearby only" switching distances.
 - `START_FUEL_LAPS` — extra fuel every car loads for the standing start (with dynamic running).
+- `MIX_EVERY`, `MIX_BAND` — how often a bot (or the autopilot) rethinks its fuel mix, and the laps of fuel
+  between its switch to the save mix and its switch back.
 - `class Weather` — when showers start and how heavy they are.
 
 ### `scripts/sim/race_control.gd` — flags, safety car, damage, stewards
