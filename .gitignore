@@ -3,3 +3,5 @@ __pycache__/
 tools/osm_env/
 # elevation tiles cached by tools/fetch_horizon.py
 tools/.tiles/
+# Windows export (godot/export_presets.cfg); the exe goes to GitHub Releases
+build/
