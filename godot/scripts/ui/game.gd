@@ -49,6 +49,12 @@ const TRACK_DEFAULTS := {
 	"fiat": {"laps": 8, "wear": 2.0},
 }
 
+## Stock paints ◂ ▸ steps through on the set-up page (Enter on the swatch still mixes any colour)
+const PAINTS := ["#b3121d", "#f2f2f2", "#16181d", "#f5c400", "#ff7a00", "#1f4fa8", "#2e7d32", "#00a3b4", "#6a1b9a", "#8e9aa6"]
+## Pages the header tabs switch between with Q/E (PgUp/PgDn, the shoulder buttons)
+const MENU_PAGES := ["Information", "Set Up", "Repair"]
+const MENU_PAGE_IDS := ["information", "setup", "repair"] ## active_menu_page of each of MENU_PAGES
+const SETUP_KEYS := "↑ ↓ choose   ◂ ▸ change   Enter open / press   Home / End first / RACE   Q E pages   Esc back"
 const WARP_VALUES := [1, 2, 5, 10, 30, 60] ## time-warp steps (, and . keys)
 const UI_SCALES := [0.85, 1.0, 1.15, 1.3] ## Options → Interface size, on top of the window scaling
 ## 3D upscalers offered in the options (MetalFX only where the GPU driver supports it).
@@ -152,7 +158,6 @@ var repair_art: Control
 var last_race_parts := {} ## the player's parts at the end of the last single race, for the Repair page
 var menu_scroll: ScrollContainer
 var display_mode_picker: OptionButton
-var rules_section: Control
 var antialiasing_picker: OptionButton
 var vsync_toggle: CheckButton
 var fps_limit_picker: OptionButton
@@ -222,6 +227,14 @@ var player_number_picker: SpinBox
 var player_color_picker: ColorPickerButton
 var player_stripes_toggle: CheckButton
 var champ_reset_button: Button
+var setup_column: VBoxContainer ## the settings in the set-up page's scroll, in keyboard order
+var setup_race_button: Button
+var setup_hint: Label ## under RACE: what the focused setting does, and the menu keys
+var setup_folds := {} ## section key -> {head, body, title, summary}
+var setup_open := {"driver": false, "car": false, "rules": false, "plan": false} ## folded sections start shut
+var _setup_focus_at := 0 ## where the keyboard was in the set-up list, for when its control goes away
+var _lit_caption: Label ## the field caption picked out for the focused setting
+var _lit_caption_color := MUTED
 var champ_reset_dialog: ConfirmationDialog
 var menu_preview_car: Node3D
 var status_label: Label
@@ -246,7 +259,6 @@ var ai_forget_button: Button
 var car_setups := {} ## track key -> CarSetup notches
 var setup_sliders := {} ## setting -> HSlider
 var setup_values := {} ## setting -> Label with the notch
-var setup_heading: Label
 var setup_help: Label
 
 # Pit strategy chosen on the set-up page (the reference's strategy panel)
@@ -531,11 +543,20 @@ func _build_setup() -> void:
 	setup_panel.offset_bottom = 0
 	add_child(setup_panel)
 
+	# the settings scroll; the status, RACE and the key hint stay pinned under them
+	var page := _column(setup_panel, 8)
 	menu_scroll = ScrollContainer.new()
-	menu_scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	menu_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	menu_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	setup_panel.add_child(menu_scroll)
-	var col := _column(menu_scroll, 12)
+	menu_scroll.follow_focus = true
+	page.add_child(menu_scroll)
+	var gutter := MarginContainer.new() # keeps the fields and their focus ring clear of the scroll bar
+	gutter.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	gutter.add_theme_constant_override("margin_right", 16)
+	gutter.add_theme_constant_override("margin_left", 3)
+	menu_scroll.add_child(gutter)
+	var col := _column(gutter, 12)
+	setup_column = col
 	_title(col, "SET UP RACE", "SEICENTO 900 CUP")
 
 	var mode_row := HBoxContainer.new()
@@ -563,6 +584,10 @@ func _build_setup() -> void:
 	champ_side = VBoxContainer.new()
 	champ_side.add_theme_constant_override("separation", 6)
 	col.add_child(champ_side)
+	var quali_row := HBoxContainer.new()
+	champ_side.add_child(quali_row)
+	quali_picker = _option_field(quali_row, "QUALIFYING", ["Drive it", "Simulate", "Skip (use grid position)"])
+	quali_picker.tooltip_text = "Each round opens with qualifying for the grid: drive it yourself, let the co-driver set a time, or start from the grid position you pick"
 	champ_side.add_child(_label("CALENDAR", 13, MUTED))
 	champ_calendar = GridContainer.new()
 	champ_calendar.columns = 3
@@ -586,14 +611,8 @@ func _build_setup() -> void:
 	track_picker.custom_minimum_size.y = 40
 	_style_control(track_picker)
 	track_picker.item_selected.connect(_select_track)
+	track_picker.set_meta("caption", track_label)
 	col.add_child(track_picker)
-
-	var row1 := HBoxContainer.new()
-	row1.add_theme_constant_override("separation", 14)
-	col.add_child(row1)
-	laps_picker = _spin(row1, "LAPS", 1, 99, 6)
-	laps_picker.value_changed.connect(func(_value: float) -> void: _update_menu_car_summary())
-	opponents_picker = _spin(row1, "OPPONENTS", 0, 15, 12)
 
 	var format_row := HBoxContainer.new()
 	format_row.add_theme_constant_override("separation", 14)
@@ -609,60 +628,35 @@ func _build_setup() -> void:
 	_style_control(format_picker)
 	format_picker.item_selected.connect(_select_format)
 	format_col.add_child(format_picker)
+	laps_picker = _spin(format_row, "LAPS", 1, 99, 6)
+	laps_picker.value_changed.connect(func(_value: float) -> void: _update_menu_car_summary())
 	hours_picker = _spin(format_row, "HOURS", 0.25, 24, 1, 0.25)
 	hours_picker.value_changed.connect(func(_value: float) -> void: _update_menu_car_summary())
 	hours_picker.get_parent().visible = false
 	start_hour_picker = _spin(format_row, "START HOUR", 0, 23.75, 14, 0.25)
+	start_hour_picker.tooltip_text = "Time of day at the start; a long race runs on into the evening or the night"
 
 	var row2 := HBoxContainer.new()
 	row2.add_theme_constant_override("separation", 14)
 	col.add_child(row2)
-
-	var diff_col := VBoxContainer.new()
-	diff_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row2.add_child(diff_col)
-	_field_label(diff_col, "DIFFICULTY")
-	difficulty_picker = OptionButton.new()
-	for d in ["Easy", "Medium", "Hard", "Alien"]:
-		difficulty_picker.add_item(d)
+	opponents_picker = _spin(row2, "OPPONENTS", 0, 15, 12)
+	difficulty_picker = _option_field(row2, "DIFFICULTY", ["Easy", "Medium", "Hard", "Alien"])
 	difficulty_picker.selected = 1
-	difficulty_picker.custom_minimum_size.y = 40
-	_style_control(difficulty_picker)
-	diff_col.add_child(difficulty_picker)
-
-	var w_col := VBoxContainer.new()
-	w_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row2.add_child(w_col)
-	_field_label(w_col, "WEATHER")
-	weather_picker = OptionButton.new()
-	for w in ["Dry", "Wet", "Variable"]:
-		weather_picker.add_item(w)
-	weather_picker.selected = 0
-	weather_picker.custom_minimum_size.y = 40
-	_style_control(weather_picker)
+	weather_picker = _option_field(row2, "WEATHER", ["Dry", "Wet", "Variable"])
 	weather_picker.item_selected.connect(func(_index: int) -> void: _update_information_page())
-	w_col.add_child(weather_picker)
 
 	var row3 := HBoxContainer.new()
 	row3.add_theme_constant_override("separation", 14)
 	col.add_child(row3)
+	gearbox_picker = _option_field(row3, "TRANSMISSION", ["Automatic", "Manual (E/Q)"])
+	assists_picker = _option_field(row3, "DRIVING AIDS", ["Full assists", "ABS only", "Off"])
+	assists_picker.tooltip_text = "Full assists: ABS, traction and stability control, and help steering and braking for corners. ABS only: just the anti-lock brakes. Off: none"
+	grid_picker = _option_field(row3, "GRID POSITION", ["Pole", "Middle", "Back", "Random"])
 
-	var gb_col := VBoxContainer.new()
-	gb_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row3.add_child(gb_col)
-	_field_label(gb_col, "TRANSMISSION")
-	gearbox_picker = OptionButton.new()
-	gearbox_picker.add_item("Automatic")
-	gearbox_picker.add_item("Manual (E/Q)")
-	gearbox_picker.custom_minimum_size.y = 40
-	_style_control(gearbox_picker)
-	gb_col.add_child(gearbox_picker)
-
-	_menu_rule(col)
-	_field_label(col, "DRIVER PROFILE")
+	var driver := _fold_section(col, "driver", "DRIVER")
 	var profile_row := HBoxContainer.new()
 	profile_row.add_theme_constant_override("separation", 14)
-	col.add_child(profile_row)
+	driver.add_child(profile_row)
 	var name_col := VBoxContainer.new()
 	name_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	profile_row.add_child(name_col)
@@ -671,6 +665,7 @@ func _build_setup() -> void:
 	player_name_edit.text = "You"
 	player_name_edit.placeholder_text = "Driver name"
 	player_name_edit.custom_minimum_size.y = 40
+	player_name_edit.tooltip_text = "Type your name; ↑ ↓ leave the field"
 	name_col.add_child(player_name_edit)
 	player_number_picker = _spin(profile_row, "CAR NO.", 1, 99, 9)
 	var paint_col := VBoxContainer.new()
@@ -680,94 +675,102 @@ func _build_setup() -> void:
 	player_color_picker = ColorPickerButton.new()
 	player_color_picker.color = Color("#b3121d")
 	player_color_picker.custom_minimum_size = Vector2(76, 40)
+	player_color_picker.tooltip_text = "◂ ▸ step through the stock paints; Enter mixes your own"
 	paint_col.add_child(player_color_picker)
 	player_stripes_toggle = _check_field(profile_row, "Twin stripes", true)
 	player_color_picker.color_changed.connect(func(_color: Color) -> void: _update_menu_car_summary())
 	player_stripes_toggle.toggled.connect(func(_enabled: bool) -> void: _update_menu_car_summary())
+	player_name_edit.text_changed.connect(func(_text: String) -> void: _update_driver_summary())
+	player_number_picker.value_changed.connect(func(_value: float) -> void: _update_driver_summary())
 
-	var row4 := HBoxContainer.new()
-	row4.add_theme_constant_override("separation", 14)
-	col.add_child(row4)
-	grid_picker = _option_field(row4, "GRID POSITION", ["Pole", "Middle", "Back", "Random"])
-	quali_picker = _option_field(row4, "CHAMPIONSHIP QUALIFYING", ["Drive it", "Simulate", "Skip (use grid position)"])
-	assists_picker = _option_field(row4, "DRIVING AIDS", ["Full assists", "ABS only", "Off"])
-	_build_car_setup(col)
-	_menu_rule(col)
-	rules_section = _label("RACE RULES & PIT STRATEGY", 16, CmrStyle.TEXT)
-	col.add_child(rules_section)
+	_build_car_setup(_fold_section(col, "car", "CAR SET-UP"))
+	_build_strategy_section(col)
+
+	var rules := _fold_section(col, "rules", "RULES & AI")
 	var row5 := HBoxContainer.new()
 	row5.add_theme_constant_override("separation", 14)
-	col.add_child(row5)
+	rules.add_child(row5)
 	wear_picker = _spin(row5, "TYRE WEAR ×", 0.5, 5, 2, 0.5)
+	wear_picker.tooltip_text = "How fast tyres wear; each circuit sets its own when you pick it"
 	fuel_picker = _spin(row5, "FUEL USE ×", 0.5, 20, 1, 0.5)
+	fuel_picker.tooltip_text = "How fast the tank empties; each circuit sets its own when you pick it"
+	crew_picker = _option_field(row5, "PIT CREW", ["Pro", "Club", "Amateur"])
+	crew_picker.tooltip_text = "How quickly the crew changes tyres and refuels"
 	var row6 := HBoxContainer.new()
 	row6.add_theme_constant_override("separation", 10)
-	col.add_child(row6)
+	rules.add_child(row6)
 	mandatory_stop_toggle = _check_field(row6, "Mandatory stop", true)
+	mandatory_stop_toggle.tooltip_text = "Every car must make at least one pit stop"
 	two_compounds_toggle = _check_field(row6, "Two dry tyres", false)
+	two_compounds_toggle.tooltip_text = "Every car must race on two different dry compounds"
 	refuel_toggle = _check_field(row6, "Refuelling", true)
+	refuel_toggle.tooltip_text = "Off: the car starts with all the fuel it needs and stops only for tyres"
 	var row7 := HBoxContainer.new()
 	row7.add_theme_constant_override("separation", 10)
-	col.add_child(row7)
+	rules.add_child(row7)
 	collisions_toggle = _check_field(row7, "Car contact", true)
+	collisions_toggle.tooltip_text = "Off: cars pass through each other"
 	strategist_toggle = _check_field(row7, "Auto strategist", false)
 	strategist_toggle.tooltip_text = "On: the strategist boxes you by itself. Off: it only advises and you press P to call the stop"
 	parallel_toggle = _check_field(row7, "Parallel service", false)
+	parallel_toggle.tooltip_text = "Tyres and fuel go in at the same time instead of one after the other"
 	var row8 := HBoxContainer.new()
 	row8.add_theme_constant_override("separation", 10)
-	col.add_child(row8)
+	rules.add_child(row8)
 	draft_toggle = _check_field(row8, "Slipstream", true)
 	draft_toggle.tooltip_text = "A car close behind another pulls less air and gains speed; the tow builds and fades over about a second"
-	var crew_row := HBoxContainer.new()
-	col.add_child(crew_row)
-	crew_picker = _option_field(crew_row, "PIT CREW", ["Pro", "Club", "Amateur"])
-	race_control_toggle = _check_field(crew_row, "Race control", true)
+	race_control_toggle = _check_field(row8, "Race control", true)
 	race_control_toggle.tooltip_text = "Flags, safety car, red flags, stewards' penalties and crash damage"
-	dynamic_toggle = _check_field(crew_row, "Live wear and stops", true)
+	dynamic_toggle = _check_field(row8, "Live wear and stops", true)
 	dynamic_toggle.tooltip_text = "Tyre wear and fuel follow how hard each car is driven, and pit stops follow the live state of tyres and tank instead of the starting plan"
 	var bot_row := HBoxContainer.new()
-	col.add_child(bot_row)
+	bot_row.add_theme_constant_override("separation", 14)
+	rules.add_child(bot_row)
 	ai_learning_picker = _option_field(bot_row, "AI LEARNING", ["On", "Off"])
+	ai_learning_picker.tooltip_text = "On: the bots study how you drive each circuit and race you accordingly"
 	bot_physics_picker = _option_field(bot_row, "BOT PHYSICS", ["Full physics", "Rail model", "Nearby only"])
 	bot_physics_picker.tooltip_text = "Rail model and Nearby only use much less CPU (better battery life). Nearby only runs the full physics just for cars near you"
 	var memory_row := HBoxContainer.new()
 	memory_row.add_theme_constant_override("separation", 10)
-	col.add_child(memory_row)
+	rules.add_child(memory_row)
 	ai_memory_label = _label("", 13, CmrStyle.TEXT)
 	ai_memory_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	ai_memory_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	memory_row.add_child(ai_memory_label)
 	ai_forget_button = _button("FORGET", DANGER)
 	ai_forget_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	ai_forget_button.tooltip_text = "Make the bots forget what they learned about you here"
 	ai_forget_button.pressed.connect(_forget_ai_memory)
 	memory_row.add_child(ai_forget_button)
 	var record_row := HBoxContainer.new()
 	record_row.add_theme_constant_override("separation", 10)
-	col.add_child(record_row)
+	rules.add_child(record_row)
 	record_label = _label("", 13, CmrStyle.TEXT)
 	record_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	record_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	record_row.add_child(record_label)
 	record_forget_button = _button("FORGET", DANGER)
 	record_forget_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	record_forget_button.tooltip_text = "Delete your lap records and their ghosts here"
 	record_forget_button.pressed.connect(_forget_lap_records)
 	record_row.add_child(record_forget_button)
-	_build_strategy_section(col)
 
 	status_label = _label("", 13, ACCENT)
 	status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	col.add_child(status_label)
+	page.add_child(status_label)
 
-	var start_btn := _button("RACE  ▸", ACCENT)
-	start_btn.custom_minimum_size.y = 52
-	start_btn.add_theme_font_size_override("font_size", 24)
-	start_btn.pressed.connect(_start_race)
-	col.add_child(start_btn)
+	setup_race_button = _button("RACE  ▸", ACCENT)
+	setup_race_button.custom_minimum_size.y = 52
+	setup_race_button.add_theme_font_size_override("font_size", 24)
+	setup_race_button.tooltip_text = "W/↑ drive · S/↓/Space brake · A/D steer · E/Q gear · P box · Esc pause · H all the keys"
+	setup_race_button.pressed.connect(_start_race)
+	page.add_child(setup_race_button)
 
-	var foot := _label("W/↑ Drive · S/↓/Space Brake · A/D Steer · E/Q Gear · P Box · [/] Tyres · −/= Fuel · R Replan · C Camera · L Line · O Autopilot · ,/. Time · Esc Pause · Gamepad: stick / triggers", 11, MUTED)
-	foot.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	foot.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	col.add_child(foot)
+	setup_hint = _label("", 12, MUTED)
+	setup_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	setup_hint.custom_minimum_size = Vector2(1, 64) # room for a two-line description over the keys, so RACE stays put
+	page.add_child(setup_hint)
+	get_viewport().gui_focus_changed.connect(_setup_focus_changed)
 
 	for picker in [weather_picker, crew_picker]:
 		picker.item_selected.connect(func(_i: int) -> void: _queue_strategy_refresh())
@@ -780,8 +783,247 @@ func _build_setup() -> void:
 	_load_race_settings()
 	_update_championship_view()
 	_update_menu_car_summary()
+	_update_driver_summary()
 	_update_ai_memory()
 	_queue_strategy_refresh()
+
+## A set-up section that folds away behind its heading: Enter (or ▸ / ◂) on the heading opens or shuts it. The
+## heading carries a summary so a shut section still says what it holds; the page remembers which are open.
+func _fold_section(parent: VBoxContainer, key: String, title: String, rule := true) -> VBoxContainer:
+	if rule:
+		_menu_rule(parent)
+	var head := Button.new()
+	head.flat = true
+	head.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	head.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	head.custom_minimum_size = Vector2(1, 34) # a long summary trims instead of widening the column
+	head.add_theme_font_size_override("font_size", 16)
+	head.add_theme_color_override("font_color", CmrStyle.TEXT)
+	head.add_theme_color_override("font_focus_color", CmrStyle.TEXT)
+	for c in ["font_hover_color", "font_pressed_color", "font_hover_pressed_color"]:
+		head.add_theme_color_override(c, ACCENT)
+	head.tooltip_text = "Enter or ◂ ▸ shows or hides these settings"
+	head.pressed.connect(func() -> void: _open_section(key, not setup_open[key]))
+	parent.add_child(head)
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", 12)
+	parent.add_child(body)
+	setup_folds[key] = {"head": head, "body": body, "title": title, "summary": ""}
+	_open_section(key, setup_open.get(key, false), false)
+	return body
+
+func _open_section(key: String, open: bool, save := true) -> void:
+	setup_open[key] = open
+	(setup_folds[key].body as Control).visible = open
+	_fold_heading(key)
+	if save:
+		_save_race_settings()
+
+func _set_section_summary(key: String, summary: String) -> void:
+	if setup_folds.has(key):
+		setup_folds[key].summary = summary
+		_fold_heading(key)
+
+func _fold_heading(key: String) -> void:
+	var f: Dictionary = setup_folds[key]
+	(f.head as Button).text = "%s  %s%s" % ["▾" if setup_open[key] else "▸", f.title, "" if f.summary == "" else "      " + f.summary]
+
+func _update_driver_summary() -> void:
+	if is_instance_valid(player_name_edit):
+		var who := player_name_edit.text.strip_edges()
+		_set_section_summary("driver", "%s  ·  NO. %d" % [(who if who != "" else "You").to_upper(), int(player_number_picker.value)])
+
+func _update_rules_summary() -> void:
+	var rules: Array[String] = ["TYRES ×%.1f" % wear_picker.value, "FUEL ×%.1f" % fuel_picker.value, crew_picker.get_item_text(crew_picker.selected).to_upper() + " CREW"]
+	if not refuel_toggle.button_pressed:
+		rules.append("NO REFUEL")
+	_set_section_summary("rules", "  ·  ".join(rules))
+
+## The set-up page's settings in keyboard order: down each column, left to right across a row, then RACE.
+func _setup_focus_items() -> Array[Control]:
+	var out: Array[Control] = []
+	_collect_focusable(setup_column, out)
+	out.append(setup_race_button)
+	return out
+
+func _collect_focusable(node: Node, out: Array[Control]) -> void:
+	for child in node.get_children():
+		var c := child as Control
+		if c == null or not c.visible:
+			continue
+		if c is SpinBox:
+			out.append((c as SpinBox).get_line_edit()) # the box takes the keyboard through its text field
+		elif c.focus_mode == Control.FOCUS_ALL:
+			if not (c is BaseButton and (c as BaseButton).disabled):
+				out.append(c)
+		else:
+			_collect_focusable(c, out)
+
+func _focus_setup_item(items: Array[Control], index: int) -> void:
+	_setup_focus_at = clampi(index, 0, items.size() - 1)
+	items[_setup_focus_at].grab_focus()
+	_reveal_setting.call_deferred(items[_setup_focus_at])
+
+## Scroll the whole row of a focused setting into view (follow_focus alone shows just the control, so a
+## caption above it or a label beside it can stay cut off at the edge).
+func _reveal_setting(item: Control) -> void:
+	if not is_instance_valid(item) or not item.is_visible_in_tree() or not setup_column.is_ancestor_of(item):
+		return
+	var target := item
+	var up := item.get_parent()
+	for i in 3:
+		if up is HBoxContainer:
+			target = up
+			break
+		if up == setup_column or not up is Control:
+			break
+		up = up.get_parent()
+	if item.has_meta("caption"):
+		menu_scroll.ensure_control_visible(item.get_meta("caption"))
+	menu_scroll.ensure_control_visible(target)
+
+## Where the keyboard starts on the set-up page: the circuit, or the first setting of a championship.
+func _focus_setup_default() -> void:
+	if active_menu_page != "setup" or race:
+		return
+	var items := _setup_focus_items()
+	var at := items.find(track_picker)
+	if at < 0:
+		at = 0
+		while at < items.size() - 1 and items[at] in [mode_button, champ_reset_button]:
+			at += 1
+	_focus_setup_item(items, at)
+
+## ◂ ▸ on a set-up control: step a picker, number, switch, slider or paint, or open/shut a section.
+func _nudge_setting(c: Control, d: int, echo: bool) -> void:
+	if c is LineEdit and c.get_parent() is SpinBox:
+		var spin := c.get_parent() as SpinBox
+		spin.apply() # take what was typed first
+		spin.value += d * spin.step
+		(c as LineEdit).select_all()
+	elif c is OptionButton:
+		var opt := c as OptionButton
+		if opt.has_meta("list_only"):
+			return
+		var i := clampi(opt.selected + d, 0, opt.item_count - 1)
+		if i != opt.selected:
+			opt.select(i)
+			opt.item_selected.emit(i)
+	elif c is CheckButton:
+		if not echo:
+			(c as CheckButton).button_pressed = not (c as CheckButton).button_pressed
+	elif c is Slider:
+		(c as Slider).value += d * (c as Slider).step
+	elif c is ColorPickerButton:
+		var pick := c as ColorPickerButton
+		var near := 0
+		for i in PAINTS.size():
+			if _colour_gap(Color(PAINTS[i]), pick.color) < _colour_gap(Color(PAINTS[near]), pick.color):
+				near = i
+		pick.color = Color(PAINTS[posmod(near + d, PAINTS.size())])
+		pick.color_changed.emit(pick.color)
+	elif c == mode_button:
+		if not echo:
+			_toggle_mode()
+	else:
+		for key in setup_folds:
+			if setup_folds[key].head == c and setup_open[key] != (d > 0):
+				_open_section(key, d > 0)
+
+static func _colour_gap(a: Color, b: Color) -> float:
+	return absf(a.r - b.r) + absf(a.g - b.g) + absf(a.b - b.b)
+
+## A gamepad's A on the focused set-up control (the keyboard's Enter is the GUI's own ui_accept).
+func _press_setup_item(c: Control) -> void:
+	if c is OptionButton or c is ColorPickerButton or (c is LineEdit and c.get_parent() is SpinBox):
+		_nudge_setting(c, 1, false)
+	elif c is CheckButton:
+		(c as CheckButton).button_pressed = not (c as CheckButton).button_pressed
+	elif c is BaseButton:
+		(c as BaseButton).pressed.emit()
+
+## Keys for the set-up page, ahead of the controls (a spin box would take ↑ ↓ and a slider ◂ ▸ for itself).
+func _input(event: InputEvent) -> void:
+	if race or _starting or not (event is InputEventKey or event is InputEventJoypadButton) or not event.is_pressed():
+		return
+	if event is InputEventKey and (event.ctrl_pressed or event.meta_pressed or event.alt_pressed):
+		return # Cmd+Q and the like are the system's
+	if active_menu_page not in MENU_PAGE_IDS or not get_viewport().get_embedded_subwindows().filter(func(w: Window) -> bool: return w.visible).is_empty():
+		return # a picker's list or a confirmation is open: it has the keys
+	if active_menu_page == "setup" and not setup_panel.visible:
+		return
+	var owner := get_viewport().gui_get_focus_owner()
+	var typing := owner == player_name_edit
+	var key: Key = event.keycode if event is InputEventKey else KEY_NONE
+	var pad: JoyButton = event.button_index if event is InputEventJoypadButton else JOY_BUTTON_INVALID
+	var echo: bool = event.is_echo()
+	if (key in [KEY_Q, KEY_PAGEUP] and not typing) or pad == JOY_BUTTON_LEFT_SHOULDER:
+		if not echo:
+			_step_menu_page(-1)
+	elif (key in [KEY_E, KEY_PAGEDOWN] and not typing) or pad == JOY_BUTTON_RIGHT_SHOULDER:
+		if not echo:
+			_step_menu_page(1)
+	elif active_menu_page != "setup":
+		return
+	elif echo and (key == KEY_ESCAPE or pad in [JOY_BUTTON_B, JOY_BUTTON_START]):
+		pass
+	elif key == KEY_ESCAPE or pad == JOY_BUTTON_B:
+		_show_home()
+	elif pad == JOY_BUTTON_START:
+		_start_race()
+	else:
+		var items := _setup_focus_items()
+		var at := items.find(owner)
+		var dy := 0
+		var dx := 0
+		match [key, pad]:
+			[KEY_UP, _], [_, JOY_BUTTON_DPAD_UP]: dy = -1
+			[KEY_DOWN, _], [_, JOY_BUTTON_DPAD_DOWN]: dy = 1
+			[KEY_LEFT, _], [_, JOY_BUTTON_DPAD_LEFT]: dx = -1
+			[KEY_RIGHT, _], [_, JOY_BUTTON_DPAD_RIGHT]: dx = 1
+			[KEY_HOME, _]: dy = -items.size()
+			[KEY_END, _]: dy = items.size()
+			[_, JOY_BUTTON_A]: pass
+			_: return
+		if typing and (dx != 0 or key in [KEY_HOME, KEY_END]):
+			return # the caret's keys while the name is typed
+		if at < 0:
+			_focus_setup_item(items, _setup_focus_at) # nothing picked yet (or it went away): the first press picks
+		elif dy != 0:
+			_focus_setup_item(items, at + dy)
+		elif dx != 0:
+			_nudge_setting(owner, dx, echo)
+		elif pad == JOY_BUTTON_A:
+			_press_setup_item(owner)
+	get_viewport().set_input_as_handled()
+
+func _step_menu_page(direction: int) -> void:
+	var at := MENU_PAGE_IDS.find(active_menu_page)
+	var page: String = MENU_PAGES[clampi(at + direction, 0, MENU_PAGES.size() - 1)]
+	if page != MENU_PAGES[at]:
+		(menu_tab_buttons[page] as Button).pressed.emit()
+
+## The hint under RACE follows the keyboard: the focused setting's description over the menu keys, and the
+## setting's caption lit in orange.
+func _setup_focus_changed(control: Control) -> void:
+	if is_instance_valid(_lit_caption):
+		_lit_caption.add_theme_color_override("font_color", _lit_caption_color)
+	_lit_caption = null
+	if not is_instance_valid(setup_panel) or not setup_panel.is_ancestor_of(control):
+		return
+	var setting: Control = control.get_parent() if control.get_parent() is SpinBox else control
+	var items := _setup_focus_items()
+	if items.has(control):
+		_setup_focus_at = items.find(control)
+	setup_hint.text = "%s\n%s" % [setting.tooltip_text, SETUP_KEYS] if setting.tooltip_text != "" else SETUP_KEYS
+	var caption: Label = setting.get_meta("caption") if setting.has_meta("caption") else null
+	var holder := setting.get_parent()
+	if caption == null and holder is VBoxContainer and holder.get_child(0) is Label and holder.get_child_count() == 2:
+		caption = holder.get_child(0) # a _spin / _option_field column: caption over the control
+	if caption:
+		_lit_caption = caption
+		_lit_caption_color = caption.get_theme_color("font_color")
+		caption.add_theme_color_override("font_color", ACCENT)
 
 func _build_strategy_section(parent: VBoxContainer) -> void:
 	strategy_section = VBoxContainer.new()
@@ -804,10 +1046,10 @@ func _build_strategy_section(parent: VBoxContainer) -> void:
 	custom_box = VBoxContainer.new()
 	custom_box.add_theme_constant_override("separation", 4)
 	strategy_section.add_child(custom_box)
-	custom_box.add_child(_label("YOUR PLAN", 13, MUTED))
+	var plan := _fold_section(custom_box, "plan", "BUILD YOUR OWN PLAN", false)
 	custom_rows = VBoxContainer.new()
 	custom_rows.add_theme_constant_override("separation", 4)
-	custom_box.add_child(custom_rows)
+	plan.add_child(custom_rows)
 	var add := _button("+ STINT", CmrStyle.FIELD)
 	add.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	add.pressed.connect(func() -> void:
@@ -816,10 +1058,10 @@ func _build_strategy_section(parent: VBoxContainer) -> void:
 		base.append({"c": last.c, "laps": 1})
 		_set_custom(base, true)
 	)
-	custom_box.add_child(add)
+	plan.add_child(add)
 	custom_eval = _label("", 13, CmrStyle.TEXT)
 	custom_eval.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	custom_box.add_child(custom_eval)
+	plan.add_child(custom_eval)
 
 ## Laps the strategist plans for: the lap count, or the expected laps of a timed race.
 func _race_laps(track: Track) -> int:
@@ -843,6 +1085,7 @@ func _plan_opts(track: Track, laps: int, wear_mult: float) -> Dictionary:
 func _queue_strategy_refresh(reset_choice := true) -> void:
 	if _loading_settings or not is_instance_valid(strategy_list):
 		return
+	_update_rules_summary()
 	if reset_choice:
 		strategy_choice = 0
 		custom_stints = []
@@ -920,7 +1163,6 @@ func _plan_button(i: int) -> Button:
 	b.toggle_mode = true
 	b.button_group = strategy_group
 	b.button_pressed = strategy_choice == i
-	b.focus_mode = Control.FOCUS_NONE
 	b.custom_minimum_size.y = 46
 	b.add_theme_stylebox_override("normal", CmrStyle.box(CmrStyle.FIELD_DIM))
 	b.add_theme_stylebox_override("hover", CmrStyle.box(CmrStyle.FIELD))
@@ -1059,6 +1301,7 @@ func _update_custom_eval() -> void:
 		current_plan = strategy_options[strategy_choice] if strategy_choice < strategy_options.size() else null
 		custom_eval.text = "Edit any stint to build your own plan." if current_plan else ""
 		custom_eval.add_theme_color_override("font_color", MUTED)
+		_set_section_summary("plan", "")
 		return
 	var track := Race.get_track(TRACK_KEYS[track_picker.selected])
 	var res := strategy.evaluate(_plan_opts(track, _race_laps(track), wear_picker.value), custom_stints)
@@ -1066,11 +1309,13 @@ func _update_custom_eval() -> void:
 		custom_eval.text = "\n".join(res.errors.map(func(e): return "⚠ " + e))
 		custom_eval.add_theme_color_override("font_color", CmrStyle.RED)
 		current_plan = null
+		_set_section_summary("plan", "NOT VALID")
 	else:
 		var best: float = strategy_options[0].time if strategy_options.size() else res.time
 		custom_eval.text = "✓ Valid · est. %s (%s%.1f s vs best)" % [Race.fmt_time(res.time).get_slice(".", 0), "+" if res.time - best >= 0.0 else "", res.time - best]
 		custom_eval.add_theme_color_override("font_color", CmrStyle.GREEN)
 		current_plan = res
+		_set_section_summary("plan", "IN USE")
 
 ## What the learning AI remembers about you on the selected circuit.
 func _update_ai_memory() -> void:
@@ -1181,6 +1426,10 @@ func _load_race_settings() -> void:
 		elif control is ColorPickerButton and v is Color:
 			(control as ColorPickerButton).color = v
 	_select_format(format_picker.selected) # visibility only: the saved refuel/wear values stay
+	var opened = cfg.get_value("page", "open", {})
+	if opened is Dictionary:
+		for key in setup_folds:
+			_open_section(key, bool(opened.get(key, setup_open[key])), false)
 	car_setups.clear()
 	if cfg.has_section("car_setup"):
 		for t in cfg.get_section_keys("car_setup"):
@@ -1195,11 +1444,6 @@ func _load_race_settings() -> void:
 ## CMR's car set-up: a five-notch slider per setting, the stock car in the middle. Changes are kept for the
 ## circuit on the page (the championship round's in a championship).
 func _build_car_setup(col: VBoxContainer) -> void:
-	_menu_rule(col)
-	setup_heading = _label("CAR SET-UP", 16, CmrStyle.TEXT)
-	setup_heading.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	setup_heading.custom_minimum_size.x = 1 # a long circuit name trims instead of widening the column
-	col.add_child(setup_heading)
 	for key in CarSetup.SETTINGS:
 		var info: Array = CarSetup.SETTINGS[key]
 		var row := HBoxContainer.new()
@@ -1226,6 +1470,8 @@ func _build_car_setup(col: VBoxContainer) -> void:
 		slider.tooltip_text = info[3]
 		slider.value_changed.connect(_car_setup_changed.bind(key))
 		slider.mouse_entered.connect(func() -> void: setup_help.text = info[3])
+		slider.focus_entered.connect(func() -> void: setup_help.text = info[3])
+		slider.set_meta("caption", title) # lit while the slider has the keyboard (_setup_focus_changed)
 		row.add_child(slider)
 		setup_sliders[key] = slider
 		var hi := _label(info[2], 12, MUTED)
@@ -1238,7 +1484,7 @@ func _build_car_setup(col: VBoxContainer) -> void:
 		notch.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		row.add_child(notch)
 		setup_values[key] = notch
-	setup_help = _label("The middle notch is the stock car. Point at a setting to see what it does.", 13, MUTED)
+	setup_help = _label("The middle notch is the stock car. Point at a setting, or pick it with ↑ ↓, to see what it does.", 13, MUTED)
 	setup_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	setup_help.custom_minimum_size = Vector2(1, 38)
 	col.add_child(setup_help)
@@ -1247,6 +1493,8 @@ func _build_car_setup(col: VBoxContainer) -> void:
 	col.add_child(help_row)
 	# the field's drivers each run their own (Drivers.ROSTER): try one
 	var copy := OptionButton.new()
+	copy.set_meta("list_only", true) # ◂ ▸ would apply a set-up per press; Enter opens the list instead
+	copy.tooltip_text = "Enter opens the list of drivers; their set-up replaces yours on this circuit"
 	copy.add_item("COPY A DRIVER'S SET-UP")
 	for who in Drivers.ROSTER:
 		copy.add_item(who.name)
@@ -1288,7 +1536,7 @@ func _refresh_car_setup() -> void:
 		(setup_sliders[k] as HSlider).value = st[k]
 		(setup_values[k] as Label).text = "%+d" % st[k] if st[k] != 0 else "0"
 	_loading_settings = was
-	setup_heading.text = "CAR SET-UP%s  ·  %s" % ["" if CarSetup.is_stock(st) else " (TUNED)", Race.get_track(key).name.to_upper()]
+	_set_section_summary("car", "%s  ·  %s" % ["STOCK" if CarSetup.is_stock(st) else "TUNED", Race.get_track(key).name.to_upper()])
 
 func _car_setup_changed(value: float, setting: String) -> void:
 	if _loading_settings:
@@ -1325,6 +1573,7 @@ func _save_race_settings() -> void:
 		cfg.set_value("race", key, v)
 	for t in car_setups:
 		cfg.set_value("car_setup", t, car_setups[t])
+	cfg.set_value("page", "open", setup_open)
 	cfg.save(SaveData.path("race_settings.cfg"))
 
 func _build_menu_car_preview() -> void:
@@ -2264,6 +2513,7 @@ func _show_setup_page() -> void:
 	_select_menu_tab("Set Up")
 	menu_scroll.scroll_vertical = 0
 	_update_menu_car_summary()
+	_focus_setup_default.call_deferred()
 
 func _show_repair_page() -> void:
 	active_menu_page = "repair"
@@ -2994,6 +3244,7 @@ func _toggle_mode() -> void:
 func _update_championship_view() -> void:
 	var table: Dictionary = champ_data.get("table", {})
 	var saved := not table.is_empty() or int(champ_data.get("round", 0)) > 0
+	grid_picker.get_parent().visible = not is_championship_mode or quali_picker.selected == 2
 	if is_instance_valid(champ_reset_button):
 		champ_reset_button.visible = is_championship_mode and saved
 	if is_championship_mode:
@@ -3135,6 +3386,8 @@ func _unhandled_key_input(event: InputEvent) -> void:
 					_show_home()
 					get_viewport().set_input_as_handled()
 				return
+			if active_menu_page == "setup" and event.keycode not in [KEY_ESCAPE, KEY_BACKSPACE]:
+				return # the set-up list has the arrows (_input), and Enter belongs to the focused setting
 			match event.keycode:
 				KEY_ESCAPE, KEY_BACKSPACE:
 					_show_home()
@@ -3341,6 +3594,7 @@ func _button(text: String, color: Color) -> Button:
 func _style_control(control: Control) -> void:
 	if control is SpinBox:
 		(control as SpinBox).get_line_edit().add_theme_font_size_override("font_size", 17)
+		(control as SpinBox).select_all_on_focus = true # a number typed over the focused box replaces it
 
 func _select_format(index: int) -> void:
 	if is_instance_valid(hours_picker):

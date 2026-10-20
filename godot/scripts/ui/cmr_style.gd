@@ -149,19 +149,28 @@ static func build_theme() -> Theme:
 	t.set_stylebox("panel", "PopupPanel", popup)
 	t.set_stylebox("panel", "AcceptDialog", popup)
 
-	var grabber := StyleBoxFlat.new()
-	grabber.bg_color = Color(TEXT, 0.7)
-	var grabber_hi := StyleBoxFlat.new()
-	grabber_hi.bg_color = ORANGE
-	var track := StyleBoxFlat.new()
-	track.bg_color = Color(1, 1, 1, 0.1)
-	track.content_margin_left = 3
-	track.content_margin_right = 3
-	t.set_stylebox("scroll", "VScrollBar", track)
-	t.set_stylebox("grabber", "VScrollBar", grabber)
-	t.set_stylebox("grabber_highlight", "VScrollBar", grabber_hi)
-	t.set_stylebox("grabber_pressed", "VScrollBar", grabber_hi)
+	# scroll bars: a hairline track like the page rules, with a slim rounded handle that lights orange
+	for vertical in [true, false]:
+		var type := "VScrollBar" if vertical else "HScrollBar"
+		var track := StyleBoxLine.new()
+		track.vertical = vertical
+		track.thickness = 2
+		track.color = Color(TEXT, 0.22)
+		for side in [SIDE_LEFT, SIDE_RIGHT] if vertical else [SIDE_TOP, SIDE_BOTTOM]:
+			track.set_content_margin(side, 3) # 6 px across, the handle's width
+		t.set_stylebox("scroll", type, track)
+		t.set_stylebox("scroll_focus", type, track)
+		t.set_stylebox("grabber", type, _grabber(Color(TEXT, 0.6)))
+		t.set_stylebox("grabber_highlight", type, _grabber(ORANGE_SOFT))
+		t.set_stylebox("grabber_pressed", type, _grabber(ORANGE))
 	return t
+
+static func _grabber(color: Color) -> StyleBoxFlat:
+	var s := StyleBoxFlat.new()
+	s.bg_color = color
+	s.set_corner_radius_all(3)
+	s.corner_detail = 4
+	return s
 
 static func _focus_box() -> StyleBoxFlat:
 	var s := StyleBoxFlat.new()
