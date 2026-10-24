@@ -21,6 +21,7 @@ Scene objects (Godot looks them up by name):
            the panel gaps; the Paint surface is re-coloured per car)
   Details  bumpers, lamps, mirrors, wipers, badges, wheel wells, interior and roll cage
   Stripes  twin bonnet/roof stripes (toggled per car)
+  Cabin    dashboard, steering wheel, bucket seat and roll cage (Godot hides it on distant cars)
   Wheel    one wheel at the origin, outer face towards +X (mirror it for the left side)
 """
 import bpy
@@ -297,10 +298,10 @@ MATERIALS = {
 	# name: (base colour, roughness, metallic, extra)
 	"Paint": ((1.0, 1.0, 1.0), 0.32, 0.05, {"coat": 0.9}),
 	"Glass": ((0.06, 0.08, 0.09), 0.04, 0.0, {"alpha": 0.32}),
-	"Trim": ((0.018, 0.018, 0.02), 0.55, 0.0, {}),
+	"Trim": ((0.018, 0.018, 0.02), 0.42, 0.0, {}),
 	"Under": ((0.012, 0.012, 0.012), 0.9, 0.0, {}),
 	"Interior": ((0.045, 0.045, 0.05), 0.85, 0.0, {}),
-	"Bumper": ((0.075, 0.077, 0.08), 0.78, 0.0, {}),
+	"Bumper": ((0.075, 0.077, 0.08), 0.62, 0.0, {}),
 	"Grille": ((0.01, 0.01, 0.01), 0.7, 0.0, {}),
 	"Chrome": ((0.85, 0.86, 0.88), 0.12, 1.0, {}),
 	"Headlight": ((0.62, 0.63, 0.62), 0.06, 0.7, {"emit": ((1.0, 0.95, 0.84), 0.2)}),
@@ -310,7 +311,9 @@ MATERIALS = {
 	"Plate": ((0.94, 0.93, 0.89), 0.45, 0.0, {}),
 	"Seat": ((0.03, 0.03, 0.035), 0.9, 0.0, {}),
 	"Cage": ((0.55, 0.56, 0.58), 0.45, 0.6, {}),
-	"Tyre": ((0.03, 0.03, 0.03), 0.88, 0.0, {}),
+	"Tyre": ((0.03, 0.03, 0.03), 0.8, 0.0, {}),
+	"Sidewall": ((0.085, 0.085, 0.085), 0.7, 0.0, {}),  # raised tyre lettering, so the wheels read as turning
+	"Rim": ((0.5, 0.51, 0.53), 0.3, 0.75, {}),  # silver-painted steel wheel dish
 	"Steel": ((0.36, 0.37, 0.38), 0.42, 0.5, {}),
 	"Stripe": ((1.0, 1.0, 1.0), 0.4, 0.0, {}),
 }
@@ -824,6 +827,12 @@ def build_details(body):
 		pj.strip(mb, x - 0.0025, x + 0.0025, 0.571, 0.599, 1, 2, front_proj, "Trim", offset=0.0045)
 	# rear: plate recess on the bumper
 	pj.strip(mb, 0.27, -0.27, 0.33, 0.46, 24, 3, rear_proj, "Grille", offset=0.003)
+	# tailgate shut lines inboard of the lamps (the chase camera looks at this panel all race), its handle
+	# strip and the Fiat badge
+	for x in (-0.47, 0.47):
+		pj.strip(mb, x + 0.003, x - 0.003, 0.625, 0.99, 1, 14, rear_proj, "Trim", offset=0.0015)
+	pj.strip(mb, 0.13, -0.13, 0.735, 0.765, 10, 1, rear_proj, "Trim", offset=0.004)
+	pj.star(mb, rounded_rect(-0.032, 0.032, 0.79, 0.825, 0.01), rear_proj, "Chrome", offset=0.003, rings=2, samples=2)
 
 	# wipers parked on the scuttle, roof aerial, rear wiper, exhaust
 	for x0, x1 in ((-0.62, -0.10), (-0.02, 0.46)):
@@ -844,6 +853,8 @@ def build_details(body):
 	mb.box(bl(0, 1.74, 0.175), (0.9, 1.5, 0.07), "Under")
 
 	# interior: dashboard, steering wheel (left-hand drive), bucket seat and a six-point roll cage
+	details = mb
+	mb = MB()
 	mb.blob(bl(0, 1.37, 0.86), (0.62, 0.16, 0.09), "Interior", e=0.3)
 	mb.box(bl(0, 1.30, 0.62), (1.2, 0.1, 0.4), "Interior")
 	tilt = math.radians(62)
@@ -876,7 +887,7 @@ def build_details(body):
 	cage.append((bl(-0.63, 1.60, 0.55), bl(-0.63, 2.45, 0.62)))  # driver's door bar
 	for a, b in cage:
 		mb.tube(a, b, 0.02, "Cage", segs=8)
-	return mb, pj
+	return details, pj, mb
 
 
 def build_stripes(pj):
@@ -900,13 +911,21 @@ def build_wheel():
 		r = math.hypot(c.y, c.z)
 		radial = Vector((0, c.y / r, c.z / r))
 		return Vector((c.x, 0, 0)) * 2.0 + radial * (r - 0.22)
-	mb.lathe(tyre, 32, "Tyre", out=tyre_out)
+	mb.lathe(tyre, 40, "Tyre", out=tyre_out)
 	# tread grooves: three thin dark rings
 	for x in (-0.03, 0.0, 0.03):
-		mb.lathe([(x - 0.004, 0.2674), (x + 0.004, 0.2674)], 32, "Grille", out=lambda c: Vector((0, c.y, c.z)))
+		mb.lathe([(x - 0.004, 0.2674), (x + 0.004, 0.2674)], 40, "Grille", out=lambda c: Vector((0, c.y, c.z)))
+	# raised sidewall lettering: four grey arcs on the outer face, so a turning wheel reads as turning
+	for k in range(4):
+		a0 = 2 * math.pi * k / 4 + 0.25
+		rows = []
+		for r in (0.207, 0.231):
+			rows.append([Vector((hw + 0.0078 - 0.0034 * (r - 0.207) / 0.024, r * math.cos(a0 + 0.95 * j / 8),
+				r * math.sin(a0 + 0.95 * j / 8))) for j in range(9)])
+		mb.grid(rows, "Sidewall", out=Vector((1, 0, 0)))
 	rim = [(hw - 0.004, 0.178), (hw - 0.012, 0.168), (0.045, 0.163), (0.032, 0.160), (0.028, 0.150), (0.030, 0.125),
 		(0.036, 0.10), (0.040, 0.075), (0.041, 0.04), (0.041, 0.0)]
-	mb.lathe(rim, 36, "Steel", out=lambda c: Vector((1.0, 0, 0)) - Vector((0, c.y, c.z)) * 2.0)
+	mb.lathe(rim, 40, "Rim", out=lambda c: Vector((1.0, 0, 0)) - Vector((0, c.y, c.z)) * 2.0)
 	# brake drum behind the dish
 	mb.lathe([(0.0, 0.0), (0.0, 0.14), (-0.06, 0.14)], 24, "Under", out=lambda c: Vector((1.0, c.y, c.z)))
 	# ventilation holes, wheel nuts and the centre cap
@@ -997,14 +1016,14 @@ def render_views(cam, out_dir):
 def main():
 	bpy.ops.wm.read_factory_settings(use_empty=True)
 	body = build_body()
-	details, pj = build_details(body)
+	details, pj, cabin_mb = build_details(body)
 	liner = build_liner(body)
 	stripes = build_stripes(pj)
 	wheel = build_wheel()
 	body.extend(liner)
 	objs = [body.emit("Body", sharp_deg=55, colors=True), details.emit("Details", sharp_deg=40),
-		stripes.emit("Stripes"), wheel.emit("Wheel", sharp_deg=40)]
-	for name, ob in (("Body", objs[0]), ("Details", objs[1]), ("Stripes", objs[2]), ("Wheel", objs[3])):
+		stripes.emit("Stripes"), wheel.emit("Wheel", sharp_deg=40), cabin_mb.emit("Cabin", sharp_deg=40)]
+	for name, ob in (("Body", objs[0]), ("Details", objs[1]), ("Stripes", objs[2]), ("Wheel", objs[3]), ("Cabin", objs[4])):
 		print("%-8s %6d tris" % (name, sum(len(p.vertices) - 2 for p in ob.data.polygons)))
 	os.makedirs(os.path.dirname(OUT_GLB), exist_ok=True)
 	kw = dict(filepath=OUT_GLB, export_format="GLB", use_selection=False, export_apply=True, export_yup=True,

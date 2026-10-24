@@ -36,7 +36,7 @@ extends Resource
 @export var kerb_height := 0.075
 
 @export_group("Scenery")
-@export_enum("forest", "city", "oval") var theme := "forest"
+@export_enum("forest", "city", "oval", "country") var theme := "forest"
 @export var tree_density := 1.0
 @export var tree_patch := 0.3 ## how clumped the trees are
 @export var tree_conifer := 0.5 ## share of conifers
@@ -46,6 +46,10 @@ extends Resource
 @export var stand_tiers := 5
 @export var sea := false
 @export var floodlight_spacing := 180.0 ## metres between floodlight masts round the lap; 0 for none (the city has street lamps)
+## A stage on real public roads (tools/build_street_tracks.py): only what OpenStreetMap has there, plus barriers
+## across the side roads. No circuit furniture: no start gantry (a painted line), TV towers, floodlights,
+## grandstands, pit building, marshal posts, braking boards, hoardings, tyre walls or paddock.
+@export var street_stage := false
 
 @export_group("Names")
 @export var osm_names := false ## use the section names from OpenStreetMap

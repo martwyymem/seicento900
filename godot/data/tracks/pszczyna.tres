@@ -1,0 +1,127 @@
+[gd_resource type="Resource" script_class="TrackDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/corner_name.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/data/track_def.gd" id="2"]
+
+[sub_resource type="Resource" id="c1"]
+script = ExtResource("1")
+distance = 0.0
+name = "ul. Katowicka (Park Zamkowy)"
+
+[sub_resource type="Resource" id="c2"]
+script = ExtResource("1")
+distance = 463.7
+name = "Most na Pszczynce, Katowicka"
+
+[sub_resource type="Resource" id="c3"]
+script = ExtResource("1")
+distance = 533.3
+name = "Katowicka / Dworcowa"
+
+[sub_resource type="Resource" id="c4"]
+script = ExtResource("1")
+distance = 548.9
+name = "Dworcowa / Piastowska"
+
+[sub_resource type="Resource" id="c5"]
+script = ExtResource("1")
+distance = 603.9
+name = "ul. Piastowska (bruk)"
+
+[sub_resource type="Resource" id="c6"]
+script = ExtResource("1")
+distance = 780.4
+name = "Rynek"
+
+[sub_resource type="Resource" id="c7"]
+script = ExtResource("1")
+distance = 901.0
+name = "Brama Wybrańców"
+
+[sub_resource type="Resource" id="c8"]
+script = ExtResource("1")
+distance = 971.0
+name = "ul. Wojska Polskiego (Zamek)"
+
+[sub_resource type="Resource" id="c9"]
+script = ExtResource("1")
+distance = 1234.8
+name = "Wojska Polskiego / Żorska"
+
+[sub_resource type="Resource" id="c10"]
+script = ExtResource("1")
+distance = 1314.8
+name = "ul. Żorska"
+
+[sub_resource type="Resource" id="c11"]
+script = ExtResource("1")
+distance = 1526.7
+name = "Most na Pszczynce, Żorska"
+
+[sub_resource type="Resource" id="c12"]
+script = ExtResource("1")
+distance = 1895.0
+name = "Rondo Żorska / Wodzisławska"
+
+[sub_resource type="Resource" id="c13"]
+script = ExtResource("1")
+distance = 2005.1
+name = "Żorska / Szymanowskiego"
+
+[sub_resource type="Resource" id="c14"]
+script = ExtResource("1")
+distance = 2075.1
+name = "ul. Szymanowskiego"
+
+[sub_resource type="Resource" id="c15"]
+script = ExtResource("1")
+distance = 2513.6
+name = "Szymanowskiego / Chopina"
+
+[sub_resource type="Resource" id="c16"]
+script = ExtResource("1")
+distance = 2593.6
+name = "ul. Chopina (Park Zamkowy)"
+
+[sub_resource type="Resource" id="c17"]
+script = ExtResource("1")
+distance = 2762.6
+name = "Chopina / Łowiecka (Ludwikówka)"
+
+[sub_resource type="Resource" id="c18"]
+script = ExtResource("1")
+distance = 3433.1
+name = "Rondo św. Jadwigi Śląskiej"
+
+[sub_resource type="Resource" id="c19"]
+script = ExtResource("1")
+distance = 3535.4
+name = "ul. Katowicka"
+
+[resource]
+script = ExtResource("2")
+key = "pszczyna"
+display_name = "Pszczyna Castle Grounds"
+short_name = "Pszczyna"
+width = 7.0
+theme = "city"
+street_stage = true
+barrier = "armco"
+runoff = 1.5
+runoff_surface = "asphalt"
+runoff_paved = 1.5
+kerb_style = "none"
+kerb_width = 0.0
+tree_density = 0.7
+tree_patch = 0.7
+tree_conifer = 0.2
+grandstands = false
+stand_tiers = 0
+floodlight_spacing = 0.0
+pit_entry = -120.0
+pit_exit = 170.0
+pit_ramp = 50.0
+pit_offset = 8.4
+box_start = -65.0
+box_spacing = 9.0
+corners = Array[ExtResource("1")]([SubResource("c1"), SubResource("c2"), SubResource("c3"), SubResource("c4"), SubResource("c5"), SubResource("c6"), SubResource("c7"), SubResource("c8"), SubResource("c9"), SubResource("c10"), SubResource("c11"), SubResource("c12"), SubResource("c13"), SubResource("c14"), SubResource("c15"), SubResource("c16"), SubResource("c17"), SubResource("c18"), SubResource("c19")])

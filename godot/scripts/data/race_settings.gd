@@ -12,7 +12,7 @@ extends Resource
 @export_group("Field")
 @export_range(0, 15) var opponents := 15
 @export_enum("easy", "medium", "hard", "alien") var difficulty := "medium"
-@export_enum("pole", "middle", "back", "random") var grid := "middle"
+@export_enum("pole", "middle", "back", "random") var grid := "middle" ## or "p<N>": start in slot N (campaign stages start where their target is)
 @export var collisions := true
 @export var draft := true ## slipstream: a car behind another one, close and in line, pulls less air and gains speed
 @export var race_control := true ## flags, safety car, red flags, stewards' penalties and crash damage
@@ -23,8 +23,18 @@ extends Resource
 @export var qualifying := false ## a single-car qualifying session instead of a race (see Qualifying.configure)
 @export var quali_grid := {} ## {order: car ids fastest first, skills, quali} from a championship round's qualifying; empty = use `grid`
 
+@export_group("Mode")
+## race: the usual race (everything below at its default keeps it exactly as before).
+## rally: one special stage of a RallyEvent, the player alone against the clock (Rally.configure_stage).
+## time_trial: solo hot-lapping, no pit rules, wear or fuel use, laps until quit (TimeTrial.configure).
+@export_enum("race", "rally", "time_trial") var mode := "race"
+@export var stage_from := 0.0 ## rally: where the stage starts, metres after the start line
+@export var stage_to := 0.0 ## rally: where it finishes, metres after the start line (0: back at the start line, a full lap)
+@export_enum("tarmac", "gravel") var surface := "tarmac" ## the road itself (rally stages); tarmac changes nothing
+@export var rolling_start := false ## time trial: start at speed, on an out-lap run-up to the line
+
 @export_group("Conditions")
-@export_enum("dry", "wet", "variable") var weather := "dry"
+@export_enum("dry", "wet", "snow", "hail", "fog", "variable") var weather := "dry"
 @export_enum("M", "S", "H", "W") var starting_tyre := "M"
 @export var wear_mult := 2.0
 @export var fuel_mult := 1.0

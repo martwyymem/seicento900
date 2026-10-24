@@ -1,0 +1,186 @@
+{
+  "_comment": "Pszczyna, Poland: a closed loop of real public roads round the Park Zamkowy (castle park), from OpenStreetMap. The start line and the pit lane (on the park side) are on ul. Katowicka heading south below Rondo św. Jadwigi Śląskiej (Wojska Polskiego by the castle is too narrow for a pit lane). The lap: ul. Wojska Polskiego beside Pszczyna Castle heading west, right (north) onto ul. Żorska over the Pszczynka and through the Wodzisławska roundabout, right onto ul. Szymanowskiego, east along ul. Chopina on the park's north edge past Dwór Ludwikówka and the Staw Chuchółka pond, right at Rondo św. Jadwigi Śląskiej and south down ul. Katowicka over the Pszczynka, right at ul. Dworcowa into the cobbled ul. Piastowska, west across the Rynek and out past Brama Wybrańców back to Wojska Polskiego. Piastowska and the Rynek's east side are tagged access=no / motor_vehicle=no (pedestrianised old town); the direction driven follows every one-way. See tools/build_street_tracks.py for the keys.",
+  "key": "pszczyna",
+  "origin": [
+    49.9817,
+    18.9397
+  ],
+  "dem": "eudem25m",
+  "grid": 30,
+  "margin": 600,
+  "ways": [
+    284995304,
+    356842432,
+    579355740,
+    173787857,
+    421372221,
+    579355739,
+    421372218,
+    432600537,
+    513350700,
+    432600538,
+    513350696,
+    1370400631,
+    513350709,
+    1031967172,
+    307085829,
+    1002042990,
+    1002042989,
+    172576394,
+    172576376,
+    229692066,
+    441630213,
+    1125254837,
+    172569437,
+    229692072,
+    229692069,
+    176575076,
+    176575071,
+    172583261,
+    398001092,
+    666959005,
+    398001093,
+    172583331
+  ],
+  "start": {"node": 4945176715, "before": 20},
+  "corner_radius": 10.0,
+  "corners": [
+    {
+      "at": 0,
+      "name": "ul. Katowicka (Park Zamkowy)"
+    },
+    {
+      "node": 2490874212,
+      "after": 40,
+      "name": "ul. Wojska Polskiego (Zamek)"
+    },
+    {
+      "node": 1828422307,
+      "before": 50,
+      "name": "Wojska Polskiego / Żorska"
+    },
+    {
+      "node": 1828422307,
+      "after": 30,
+      "name": "ul. Żorska"
+    },
+    {
+      "node": 4211401618,
+      "before": 30,
+      "name": "Most na Pszczynce, Żorska"
+    },
+    {
+      "node": 3121440198,
+      "before": 50,
+      "name": "Rondo Żorska / Wodzisławska"
+    },
+    {
+      "node": 1834656749,
+      "before": 40,
+      "name": "Żorska / Szymanowskiego"
+    },
+    {
+      "node": 1834656749,
+      "after": 30,
+      "name": "ul. Szymanowskiego"
+    },
+    {
+      "node": 1834656974,
+      "before": 50,
+      "name": "Szymanowskiego / Chopina"
+    },
+    {
+      "node": 1834656974,
+      "after": 30,
+      "name": "ul. Chopina (Park Zamkowy)"
+    },
+    {
+      "node": 450219787,
+      "before": 40,
+      "name": "Chopina / Łowiecka (Ludwikówka)"
+    },
+    {
+      "node": 1834657043,
+      "before": 60,
+      "name": "Rondo św. Jadwigi Śląskiej"
+    },
+    {
+      "node": 1834600412,
+      "after": 30,
+      "name": "ul. Katowicka"
+    },
+    {
+      "node": 1832044070,
+      "before": 40,
+      "name": "Most na Pszczynce, Katowicka"
+    },
+    {
+      "node": 1870663274,
+      "after": 10,
+      "name": "Katowicka / Dworcowa"
+    },
+    {
+      "node": 1828422329,
+      "before": 25,
+      "name": "Dworcowa / Piastowska"
+    },
+    {
+      "node": 1828422329,
+      "after": 30,
+      "name": "ul. Piastowska (bruk)"
+    },
+    {
+      "node": 1834726804,
+      "before": 30,
+      "name": "Rynek"
+    },
+    {
+      "node": 2490874212,
+      "before": 30,
+      "name": "Brama Wybrańców"
+    }
+  ],
+  "blockage_types": [
+    "primary",
+    "secondary",
+    "tertiary",
+    "unclassified",
+    "residential",
+    "living_street",
+    "service",
+    "track",
+    "primary_link",
+    "secondary_link",
+    "tertiary_link"
+  ],
+  "blockage_skip_service": [
+    "driveway",
+    "parking_aisle",
+    "drive-through"
+  ],
+  "trackdef": {
+    "display_name": "Pszczyna Castle Grounds",
+    "short_name": "Pszczyna",
+    "width": 7.0,
+    "theme": "city",
+    "street_stage": true,
+    "barrier": "armco",
+    "runoff": 1.5,
+    "runoff_surface": "asphalt",
+    "runoff_paved": 1.5,
+    "kerb_style": "none",
+    "kerb_width": 0.0,
+    "tree_density": 0.7,
+    "tree_patch": 0.7,
+    "tree_conifer": 0.2,
+    "grandstands": false,
+    "stand_tiers": 0,
+    "floodlight_spacing": 0.0,
+    "pit_entry": -120.0,
+    "pit_exit": 170.0,
+    "pit_ramp": 50.0,
+    "pit_offset": 8.4,
+    "box_start": -65.0,
+    "box_spacing": 9.0
+  }
+}

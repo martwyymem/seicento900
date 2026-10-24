@@ -1,0 +1,67 @@
+[gd_resource type="Resource" script_class="TrackDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/corner_name.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/data/track_def.gd" id="2"]
+
+[sub_resource type="Resource" id="1"]
+script = ExtResource("1")
+d = 0.0
+name = "Prosta pod Szybem Andrzej"
+
+[sub_resource type="Resource" id="2"]
+script = ExtResource("1")
+d = 320.0
+name = "Zakręt Kościuszki"
+
+[sub_resource type="Resource" id="3"]
+script = ExtResource("1")
+d = 620.0
+name = "Dworcowa PKP"
+
+[sub_resource type="Resource" id="4"]
+script = ExtResource("1")
+d = 910.0
+name = "Szykana Przejazdu Kolejowego"
+
+[sub_resource type="Resource" id="5"]
+script = ExtResource("1")
+d = 1220.0
+name = "Aleja Kolonii Robotniczej"
+
+[sub_resource type="Resource" id="6"]
+script = ExtResource("1")
+d = 1540.0
+name = "Ofiar Oświęcimia"
+
+[sub_resource type="Resource" id="7"]
+script = ExtResource("1")
+d = 1860.0
+name = "Park Miejski w Brzeszczach"
+
+[sub_resource type="Resource" id="8"]
+script = ExtResource("1")
+d = 2180.0
+name = "Powrót Kopalniany"
+
+[resource]
+script = ExtResource("2")
+key = "brzeszcze"
+display_name = "Brzeszcze Industrial Sprint"
+short_name = "Brzeszcze"
+width = 7.2
+theme = "city"
+barrier = "armco"
+runoff = 3.0
+runoff_surface = "asphalt"
+runoff_paved = 1.0
+kerb_style = "yellow_black"
+kerb_width = 1.0
+tree_density = 0.25
+tree_patch = 0.50
+tree_conifer = 0.15
+grandstands = true
+stand_tiers = 3
+pit_entry = -220.0
+pit_exit = 200.0
+pit_offset = 8.6
+corners = [SubResource("1") ,SubResource("2") ,SubResource("3") ,SubResource("4") ,SubResource("5") ,SubResource("6") ,SubResource("7") ,SubResource("8")]

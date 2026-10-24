@@ -1,0 +1,213 @@
+{
+  "_comment": "Kraków, Poland: the 'first ring' (I obwodnica) of real streets round the Planty and the Old Town, under Wawel, from OpenStreetMap. The Planty itself is a park of footpaths; this loop drives the roads that encircle it. Driven anticlockwise, the legal one-way direction: the start line and the pit lane (on the Planty side) are on ul. św. Gertrudy, the longest straight; the lap: ul. Basztowa heading west past the Barbakan and Brama Floriańska, left at Długa/Sławkowska onto ul. Dunajewskiego, ul. Podwale past Teatr Bagatela (Karmelicka), ul. Straszewskiego south across Piłsudskiego and the Franciszkańska tram junction, left under Wawel on ul. Podzamcze and ul. św. Idziego (cobbles), left at Stradomska up ul. św. Gertrudy past the Dominikańska tram junction, ul. Westerplatte past Poczta Główna (Wielopole/Sienna) and north to Lubicz, left back onto Basztowa. Basztowa, Dunajewskiego, Podwale and part of Straszewskiego are tagged motor_vehicle=private (bus/tram/taxi ring) and Podzamcze/Idziego motor_vehicle=destination; tram tracks run along about half the lap. See tools/build_street_tracks.py for the keys.",
+  "key": "krakow",
+  "origin": [
+    50.0606,
+    19.9377
+  ],
+  "dem": "eudem25m",
+  "grid": 30,
+  "margin": 600,
+  "ways": [
+    364784222,
+    1527224192,
+    19803469,
+    82800559,
+    1527224191,
+    266581922,
+    25149946,
+    1419958809,
+    37844680,
+    298560676,
+    587231933,
+    587231932,
+    233571007,
+    298560674,
+    25443312,
+    907862381,
+    247800797,
+    24187120,
+    295356990,
+    368325434,
+    368325433,
+    664281394,
+    1536542394,
+    94092847,
+    1536542166,
+    37833188,
+    147579538,
+    147579536,
+    1041703629,
+    147579539,
+    147579540,
+    21094573,
+    1539173772,
+    1096968966,
+    253839214,
+    551180073,
+    58108840,
+    829330957,
+    829330958,
+    187972989,
+    78238137,
+    37836175,
+    82800563,
+    24187018
+  ],
+  "start": {"node": 2992364806, "before": 30},
+  "corner_radius": 12.0,
+  "corners": [
+    {
+      "at": 0,
+      "name": "ul. św. Gertrudy (Planty)"
+    },
+    {
+      "node": 5219326000,
+      "before": 180,
+      "name": "ul. Basztowa (Barbakan)"
+    },
+    {
+      "node": 5219326000,
+      "before": 40,
+      "name": "Basztowa / Długa / Sławkowska"
+    },
+    {
+      "node": 226009919,
+      "before": 50,
+      "name": "Basztowa / Dunajewskiego (Garbarska)"
+    },
+    {
+      "node": 226009919,
+      "after": 30,
+      "name": "ul. Dunajewskiego"
+    },
+    {
+      "node": 2419894894,
+      "before": 40,
+      "name": "Podwale / Karmelicka (Bagatela)"
+    },
+    {
+      "node": 2419894894,
+      "after": 30,
+      "name": "ul. Podwale"
+    },
+    {
+      "node": 2419894856,
+      "before": 40,
+      "name": "Podwale / Straszewskiego"
+    },
+    {
+      "node": 2419367482,
+      "before": 40,
+      "name": "Straszewskiego / Piłsudskiego (Filharmonia)"
+    },
+    {
+      "node": 2419367407,
+      "before": 40,
+      "name": "Straszewskiego / Franciszkańska"
+    },
+    {
+      "node": 2419367407,
+      "after": 40,
+      "name": "ul. Straszewskiego"
+    },
+    {
+      "node": 2067207841,
+      "before": 50,
+      "name": "Pod Wawelem"
+    },
+    {
+      "node": 2067207841,
+      "after": 30,
+      "name": "ul. Podzamcze (Wawel)"
+    },
+    {
+      "node": 236137518,
+      "before": 40,
+      "name": "Podzamcze / św. Idziego"
+    },
+    {
+      "node": 30375949,
+      "before": 20,
+      "name": "Droga do Zamku"
+    },
+    {
+      "node": 236136675,
+      "before": 40,
+      "name": "św. Idziego / Stradomska"
+    },
+    {
+      "node": 236136675,
+      "after": 30,
+      "name": "ul. św. Gertrudy"
+    },
+    {
+      "node": 30372096,
+      "before": 40,
+      "name": "Gertrudy / Dominikańska"
+    },
+    {
+      "node": 6643622515,
+      "before": 50,
+      "name": "Poczta Główna (Westerplatte / Wielopole)"
+    },
+    {
+      "node": 6643622515,
+      "after": 30,
+      "name": "ul. Westerplatte"
+    },
+    {
+      "node": 2420153436,
+      "before": 50,
+      "name": "Westerplatte / Lubicz"
+    },
+    {
+      "node": 2420153454,
+      "before": 30,
+      "name": "Basztowa / Szpitalna"
+    }
+  ],
+  "blockage_types": [
+    "primary",
+    "secondary",
+    "tertiary",
+    "unclassified",
+    "residential",
+    "living_street",
+    "service",
+    "track",
+    "primary_link",
+    "secondary_link",
+    "tertiary_link"
+  ],
+  "blockage_skip_service": [
+    "driveway",
+    "parking_aisle",
+    "drive-through"
+  ],
+  "trackdef": {
+    "display_name": "Kraków Royal Ring",
+    "short_name": "Kraków",
+    "width": 9.0,
+    "theme": "city",
+    "street_stage": true,
+    "barrier": "armco",
+    "runoff": 1.5,
+    "runoff_surface": "asphalt",
+    "runoff_paved": 1.5,
+    "kerb_style": "none",
+    "kerb_width": 0.0,
+    "tree_density": 0.6,
+    "tree_patch": 0.8,
+    "tree_conifer": 0.1,
+    "grandstands": false,
+    "stand_tiers": 0,
+    "floodlight_spacing": 0.0,
+    "pit_entry": -120.0,
+    "pit_exit": 170.0,
+    "pit_ramp": 50.0,
+    "pit_offset": -9.6,
+    "box_start": -65.0,
+    "box_spacing": 9.0
+  }
+}

@@ -2,7 +2,8 @@
 ## CMR 2.0's service screen. One drawing per part in Service.PARTS.
 extends Control
 
-const INK := CmrStyle.INK
+var INK: Color:
+	get: return CmrStyle.INK
 const FILL := Color("#ead3bf")
 const SHADE := Color("#dcc0aa")
 const W := 2.6 ## line width

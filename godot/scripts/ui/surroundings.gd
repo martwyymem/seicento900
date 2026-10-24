@@ -44,7 +44,8 @@ const PALETTES := {
 	"pl": [["#d6d0c2", "#e2ddd0", "#c8c2b2", "#b9b4a8", "#ece8de"], ["#6e7276", "#9b4a36", "#5a5e62"]],
 }
 const COUNTRY := {"gp": "de", "nordschleife": "de", "spa": "be", "monaco": "mc", "lemans": "fr", "monza": "it",
-	"silverstone": "uk", "suzuka": "jp", "zandvoort": "nl", "indy": "us", "fiat": "pl"}
+	"silverstone": "uk", "suzuka": "jp", "zandvoort": "nl", "indy": "us", "fiat": "pl",
+	"tokyo": "jp", "bielsko": "pl", "krakow": "pl", "oswiecim": "pl", "wilamowice": "pl", "brzeszcze": "pl", "pszczyna": "pl", "bor": "pl"}
 ## The trees of each country (models/trees.glb): [conifers, broadleaves, street and garden trees], each a
 ## species -> weight mix.
 const SPECIES := {
@@ -219,6 +220,9 @@ func build() -> void:
 	var root := Node3D.new()
 	root.name = "Surroundings"
 	world.track_root.add_child(root)
+	_build_surroundings(root)
+
+func _build_surroundings(root: Node3D) -> void:
 	_build_banking(root) # first: it keeps the trees off its ground
 	_build_woods(root)
 	_build_buildings(root)
@@ -227,6 +231,7 @@ func build() -> void:
 	_build_hedges(root)
 	_build_landmarks(root)
 	_build_pools(root)
+	_build_road_blockages(root)
 
 # --------------------------------------------------------------------------------------------- exclusions
 
@@ -566,7 +571,8 @@ func _build_buildings(root: Node3D) -> void:
 	var country: String = COUNTRY.get(track.cfg.key, "de")
 	var palette: Array = PALETTES[country]
 	var city := track.cfg.theme == "city"
-	var clear := track.half + track.cfg.runoff + (1.2 if city else 4.0)
+	# (on a street stage the old houses stand right behind the barrier, as they do by the real road)
+	var clear := track.half + track.cfg.runoff + (0.3 if track.cfg.street_stage else (1.2 if city else 4.0))
 	var casino: Dictionary = {} if has_landmark("Casino") else world._casino_spot()
 	var chunks := {}
 	for b in env.get("buildings", []):
@@ -584,6 +590,9 @@ func _build_buildings(root: Node3D) -> void:
 		if not casino.is_empty() and centre.distance_to(casino.p) < 32.0:
 			continue # the Casino landmark stands there
 		var skip := _reserved(centre.x, centre.y, clear)
+		if track.cfg.street_stage: # real houses stay, whatever a TV camera would like to see
+			var near := track_distance(centre.x, centre.y)
+			skip = near.x >= 0 and near.y < clear
 		if not skip:
 			for p in ring:
 				if track_distance(p.x, p.y).y < clear:
@@ -1442,3 +1451,198 @@ func _smooth_line(raw: Array[Vector2], flags: Array[float], step: float) -> Dict
 				best = maxf(best, smoothstep(0.0, 1.0, 1.0 - absf(q) / float(reach + 1) * 0.9))
 		lift.append(best)
 	return {"pts": out_pts, "lift": lift}
+
+
+# --------------------------------------------------------------------------------------------- road blockages
+
+static var _hazard_stripe_texture: Texture2D = null
+static var _no_entry_texture: Texture2D = null
+
+static func _get_hazard_stripe_texture() -> Texture2D:
+	if _hazard_stripe_texture != null:
+		return _hazard_stripe_texture
+	var w := 128
+	var h := 32
+	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
+	var red := Color("#d62020")
+	var white := Color("#f8f8f8")
+	var border := Color("#1a1a1a")
+	for x in w:
+		for y in h:
+			if y == 0 or y == h - 1:
+				img.set_pixel(x, y, border)
+			else:
+				# 45-degree diagonal chevron hazard stripes
+				var stripe := ((x + y * 2) % 32) < 16
+				img.set_pixel(x, y, red if stripe else white)
+	img.generate_mipmaps()
+	_hazard_stripe_texture = ImageTexture.create_from_image(img)
+	return _hazard_stripe_texture
+
+static func _get_no_entry_texture() -> Texture2D:
+	if _no_entry_texture != null:
+		return _no_entry_texture
+	var s := 64
+	var img := Image.create(s, s, false, Image.FORMAT_RGBA8)
+	var red := Color("#d62020")
+	var white := Color("#ffffff")
+	var dark := Color("#1a1a1a")
+	var r_outer := s * 0.48
+	var r_inner := s * 0.45
+	var center := Vector2(s * 0.5, s * 0.5)
+	for x in s:
+		for y in s:
+			var d := center.distance_to(Vector2(x + 0.5, y + 0.5))
+			if d > r_outer:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
+			elif d > r_inner:
+				img.set_pixel(x, y, dark)
+			else:
+				if absf(y + 0.5 - center.y) < s * 0.11 and absf(x + 0.5 - center.x) < s * 0.36:
+					img.set_pixel(x, y, white)
+				else:
+					img.set_pixel(x, y, red)
+	img.generate_mipmaps()
+	_no_entry_texture = ImageTexture.create_from_image(img)
+	return _no_entry_texture
+
+func _build_road_blockages(root: Node3D) -> void:
+	var blockages: Array = env.get("road_blockages", [])
+	if blockages.is_empty():
+		return
+
+	var blockages_root := Node3D.new()
+	blockages_root.name = "RoadBlockages"
+	root.add_child(blockages_root)
+
+	var c: Vector2 = world.world_center
+	var stripe_tex := _get_hazard_stripe_texture()
+	var no_entry_tex := _get_no_entry_texture()
+
+	var foot_mat := StandardMaterial3D.new()
+	foot_mat.albedo_color = Color("#757572")
+	foot_mat.roughness = 0.95
+
+	var steel_mat := StandardMaterial3D.new()
+	steel_mat.albedo_color = Color("#c0c5ca")
+	steel_mat.metallic = 0.7
+	steel_mat.roughness = 0.3
+
+	var post_mat := StandardMaterial3D.new()
+	post_mat.albedo_color = Color("#ff6200")
+	post_mat.roughness = 0.3
+
+	var reflector_mat := StandardMaterial3D.new()
+	reflector_mat.albedo_color = Color("#f0f4f8")
+	reflector_mat.metallic = 0.3
+	reflector_mat.roughness = 0.15
+
+	var sign_mat := StandardMaterial3D.new()
+	sign_mat.albedo_texture = no_entry_tex
+	sign_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	sign_mat.roughness = 0.4
+
+	var foot_mesh := BoxMesh.new()
+	foot_mesh.size = Vector3(0.45, 0.22, 0.65)
+	foot_mesh.material = foot_mat
+
+	var post_mesh := CylinderMesh.new()
+	post_mesh.top_radius = 0.035
+	post_mesh.bottom_radius = 0.035
+	post_mesh.height = 1.05
+	post_mesh.material = steel_mat
+
+	var marker_mesh := CylinderMesh.new()
+	marker_mesh.top_radius = 0.065
+	marker_mesh.bottom_radius = 0.075
+	marker_mesh.height = 0.95
+	marker_mesh.material = post_mat
+
+	var ring_mesh := CylinderMesh.new()
+	ring_mesh.top_radius = 0.076
+	ring_mesh.bottom_radius = 0.076
+	ring_mesh.height = 0.09
+	ring_mesh.material = reflector_mat
+
+	var sign_mesh := QuadMesh.new()
+	sign_mesh.size = Vector2(0.48, 0.48)
+	sign_mesh.material = sign_mat
+
+	for i in blockages.size():
+		var entry: Array = blockages[i]
+		if entry.size() < 4:
+			continue
+		var x: float = float(entry[0])
+		var y: float = float(entry[1])
+		var angle: float = float(entry[2])
+		var width: float = float(entry[3])
+
+		var pos_y := ground_height(x, y)
+		var b_node := Node3D.new()
+		b_node.name = "Blockage_%d" % i
+		b_node.position = Vector3(x - c.x, pos_y, y - c.y)
+		b_node.rotation.y = -angle
+		blockages_root.add_child(b_node)
+
+		var b_mat := StandardMaterial3D.new()
+		b_mat.albedo_texture = stripe_tex
+		b_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+		b_mat.uv1_scale = Vector3(maxf(1.0, width / 1.0), 1.0, 1.0)
+		b_mat.roughness = 0.35
+
+		var upper_board := MeshInstance3D.new()
+		var upper_mesh := BoxMesh.new()
+		upper_mesh.size = Vector3(width, 0.32, 0.05)
+		upper_mesh.material = b_mat
+		upper_board.mesh = upper_mesh
+		upper_board.position = Vector3(0.0, 0.72, 0.0)
+		b_node.add_child(upper_board)
+
+		var lower_board := MeshInstance3D.new()
+		var lower_mesh := BoxMesh.new()
+		lower_mesh.size = Vector3(width, 0.22, 0.05)
+		lower_mesh.material = b_mat
+		lower_board.mesh = lower_mesh
+		lower_board.position = Vector3(0.0, 0.32, 0.0)
+		b_node.add_child(lower_board)
+
+		var span_half := width * 0.42
+		for sgn: float in [-1.0, 1.0]:
+			var foot := MeshInstance3D.new()
+			foot.mesh = foot_mesh
+			foot.position = Vector3(span_half * sgn, 0.11, 0.0)
+			b_node.add_child(foot)
+
+			var post := MeshInstance3D.new()
+			post.mesh = post_mesh
+			post.position = Vector3(span_half * sgn, 0.525, 0.0)
+			b_node.add_child(post)
+
+		if width > 5.2:
+			var mid_foot := MeshInstance3D.new()
+			mid_foot.mesh = foot_mesh
+			mid_foot.position = Vector3(0.0, 0.11, 0.0)
+			b_node.add_child(mid_foot)
+
+			var mid_post := MeshInstance3D.new()
+			mid_post.mesh = post_mesh
+			mid_post.position = Vector3(0.0, 0.525, 0.0)
+			b_node.add_child(mid_post)
+
+		for sgn: float in [-1.0, 1.0]:
+			var marker_x: float = (width * 0.5 + 0.36) * sgn
+			var marker := MeshInstance3D.new()
+			marker.mesh = marker_mesh
+			marker.position = Vector3(marker_x, 0.475, 0.0)
+			b_node.add_child(marker)
+
+			for ry: float in [0.55, 0.75]:
+				var ring := MeshInstance3D.new()
+				ring.mesh = ring_mesh
+				ring.position = Vector3(marker_x, ry, 0.0)
+				b_node.add_child(ring)
+
+		var sign_inst := MeshInstance3D.new()
+		sign_inst.mesh = sign_mesh
+		sign_inst.position = Vector3(0.0, 0.72, 0.035)
+		b_node.add_child(sign_inst)

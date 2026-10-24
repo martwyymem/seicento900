@@ -9,8 +9,13 @@ uniform float translucency = 0.35;
 uniform float roughness_value = 0.88;
 uniform sampler2D grain : filter_linear_mipmap, repeat_enable;
 uniform bool linear_colors = false; // the Blender trees (models/trees.glb) store linear vertex colours
+// each tree's leaves a little yellower or bluer than its neighbours', and darker deep inside the crown (race_world sets
+// it; 0 keeps the plain look for other callers)
+uniform float variety : hint_range(0.0, 1.0) = 0.0;
 
 varying vec3 world_pos;
+varying vec3 tree_tint;
+varying float crown_height;
 
 // vertex colours are stored as sRGB
 vec3 to_linear(vec3 c) {
@@ -21,6 +26,9 @@ void vertex() {
 	vec3 origin = MODEL_MATRIX[3].xyz;
 	float h = max(VERTEX.y, 0.0) / sway_height;
 	float phase = dot(origin.xz, vec2(0.13, 0.07));
+	float pick = fract(sin(dot(origin.xz, vec2(12.9898, 78.233))) * 43758.5453);
+	tree_tint = mix(vec3(1.0), mix(vec3(0.82, 0.98, 0.92), vec3(1.14, 1.06, 0.74), pick), variety);
+	crown_height = clamp(VERTEX.y / sway_height, 0.0, 1.0);
 	float gust = sin(TIME * 0.7 + phase * 0.3) * 0.5 + 0.5;
 	float sway = (sin(TIME * 1.6 + phase) * 0.6 + sin(TIME * 2.9 + phase * 1.7) * 0.25) * (0.4 + 0.6 * gust);
 	vec3 bend = vec3(sway, 0.0, sway * 0.4) * h * h * 0.35 * wind;
@@ -33,6 +41,7 @@ void vertex() {
 void fragment() {
 	float n = texture(grain, world_pos.xz * 0.9 + world_pos.y * 0.37).r;
 	vec3 col = linear_colors ? COLOR.rgb : to_linear(COLOR.rgb);
+	col *= mix(vec3(1.0), tree_tint * mix(0.78, 1.1, crown_height), COLOR.a * variety);
 	ALBEDO = col * (0.82 + 0.36 * n);
 	ROUGHNESS = roughness_value;
 	SPECULAR = 0.3;

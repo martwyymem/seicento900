@@ -146,7 +146,7 @@ func hurt(car: RaceCar, dv: float, into_barrier := false, f := 0.0) -> bool:
 		wreck(car, dv, into_barrier)
 		return true
 	if car.is_player and add > 0.04:
-		var hint := " — box for repairs" if car.damage >= REPAIR_AT else ""
+		var hint := " — box for repairs" if car.damage >= REPAIR_AT and race.s.mode == "race" else ""
 		log_rc("Damage: %d%% (steering pull, less power)%s" % [roundi(car.damage * 100.0), hint], "bad")
 	elif not car.is_player and before < 0.15 and car.damage >= 0.15 and _near_player(car):
 		log_rc("%s is damaged and limping" % car.name, "info")
@@ -183,6 +183,7 @@ func repaired(car: RaceCar) -> void:
 	car.damage = 0.0
 	car.dmg_pull = 0.0
 	car.parts = {}
+	Service.sync(car)
 	car.repair_asked = false
 
 # ---------------- stewards ----------------
@@ -279,6 +280,8 @@ func step(dt: float) -> void:
 			_slide(c, dt)
 		elif c.dnf and not c.recovered and c.mode == "race" and not c.wrecked:
 			_strand(c) # out of fuel or retired where it stopped
+	if race.s.mode != "race":
+		return # alone against the clock (a rally stage): damage only, no flags, stewards or safety car
 	_update_yellows(dt)
 	_recover(dt)
 	# stewards decide a few seconds after the dust settles

@@ -13,9 +13,13 @@ uniform vec3 paved_run_color : source_color = vec3(0.3);
 uniform vec3 worn_color : source_color = vec3(0.42, 0.38, 0.3);
 uniform float roughness_dry = 0.95;
 uniform float wet = 0.0;
+uniform float snow : hint_range(0.0, 1.0) = 0.0;
 uniform float tuft = 1.0; // grass-like colour variation; lower for gravel and paved run-off
 uniform float slope_rock = 1.0;
 uniform vec3 rock_color : source_color = vec3(0.42, 0.4, 0.37);
+// richer verges (race_world sets it; 0 keeps the plain look for other callers): broad hue drift between warm and
+// cool greens, clover and wild flowers up close, mowing stripes and a ragged dirt-and-gravel edge on the run-off
+uniform float lush : hint_range(0.0, 1.0) = 0.0;
 
 uniform sampler2D grain : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D grain_normal : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
@@ -82,6 +86,24 @@ void fragment() {
 	vec3 dry_tint = vec3(1.08, 1.04, 0.84);
 	vec3 lush_tint = vec3(0.86, 0.96, 0.86);
 	col *= mix(vec3(1.0), mix(lush_tint, dry_tint, smoothstep(0.3, 0.7, macro)), tuft) * (0.8 + 0.4 * broad);
+	float px = length(fwidth(p)); // metres per pixel, to fade close-up detail before it shimmers
+	if (lush > 0.0) {
+		float g = tuft * lush;
+		// meadows drift between yellow-green and blue-green over a few hundred metres, a little more saturated
+		float hue = texture(grain, p * 0.0023 + 0.73).r;
+		vec3 drift = mix(vec3(0.84, 1.0, 0.9), vec3(1.1, 1.05, 0.74), smoothstep(0.28, 0.72, hue));
+		col = mix(col, col * drift, g);
+		float lum = dot(col, vec3(0.299, 0.587, 0.114));
+		col = max(mix(vec3(lum), col, 1.0 + 0.2 * g), vec3(0.0));
+		// darker clumps and lighter blades, then clover and flowers, only while a pixel is small
+		float near = 1.0 - smoothstep(0.015, 0.07, px);
+		float clump = texture(grain, p * 1.9 + 0.29).r;
+		col *= 1.0 + (clump - 0.5) * 0.3 * g * near;
+		float bloom = texture(grain, p * 6.1 + 0.83).r;
+		float flowers = smoothstep(0.76, 0.8, bloom) * smoothstep(0.45, 0.7, broad) * near * g;
+		vec3 petal = mix(vec3(0.85, 0.82, 0.62), vec3(0.8, 0.68, 0.18), step(0.5, fract(bloom * 37.0)));
+		col = mix(col, petal, flowers * 0.55);
+	}
 
 	float nmap_depth = use_textures ? 1.0 : 0.45;
 	float paved = 0.0;
@@ -113,6 +135,16 @@ void fragment() {
 		// tyre-worn strip along the road edge
 		float from_edge = abs(UV.x) - track_half;
 		float worn = smoothstep(1.6, 0.2, from_edge) * step(0.0, from_edge) * (0.5 + 0.5 * broad);
+		if (lush > 0.0) {
+			// a ragged band of dirt and gravel where wheels drop off the edge, then mowing stripes along the track
+			float ragged = 0.55 + 0.9 * texture(grain, vec2(UV.x * 0.3, world_pos.x * 0.11 + world_pos.z * 0.11) + 0.4).r;
+			float dirt = smoothstep(1.3 * ragged, 0.15, from_edge) * step(0.0, from_edge);
+			worn = mix(worn, max(worn, dirt), lush);
+			float stones = smoothstep(0.62, 0.7, texture(grain, p * 4.3 + 0.12).r) * (1.0 - smoothstep(0.02, 0.06, px));
+			col *= 1.0 + stones * worn * 0.35 * lush;
+			float band = smoothstep(0.42, 0.58, abs(fract(abs(UV.x) / 3.2) - 0.5) * 2.0);
+			col *= 1.0 + (band - 0.5) * 0.11 * lush * tuft * smoothstep(0.0, 1.5, from_edge);
+		}
 		float tarmac = 0.0;
 		if (use_paved) {
 			float reach = (UV.x < 0.0 ? COLOR.r : COLOR.g) * 32.0;
@@ -126,8 +158,13 @@ void fragment() {
 	}
 
 	col *= mix(1.0, 0.72, wet);
+	if (snow > 0.01) {
+		col = mix(col, vec3(0.92, 0.94, 0.98), snow * 0.85);
+	}
 	ALBEDO = col;
 	ROUGHNESS = clamp(mix(rough, rough * 0.62, wet), 0.05, 1.0);
+	// no extra specular when wet: wet paved run-off at a grazing angle already mirrors the sky, and more
+	// turned it into flat white glare that hid the road edge
 	SPECULAR = 0.35;
 	NORMAL_MAP = nmap;
 	NORMAL_MAP_DEPTH = nmap_depth;

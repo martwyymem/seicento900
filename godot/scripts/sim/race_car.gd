@@ -138,6 +138,13 @@ var line_off := 0.0 ## a physics bot's smoothed lateral target, relative to the 
 var damage := 0.0 ## 0 = straight, 1 = wrecked; costs power, drag and pace until repaired in the pits
 var dmg_pull := 0.0 ## steering pull from bent suspension (steer units, + = right)
 var parts := {} ## where the damage is: part -> 0..1 severity (Service.PARTS), for the service area
+# what the damaged parts do (Service.sync): all 1 / off on a sound car, so it drives exactly as before
+var fx_on := false
+var fx_power := 1.0 ## engine and exhaust
+var fx_brake := 1.0 ## brakes
+var fx_grip := 1.0 ## suspension
+var fx_drag := 1.0 ## bodywork
+var fx_gear := -1 ## gear last seen by Service.gearbox
 var wrecked := false ## crashed out: the car stays where it stopped until the marshals recover it
 var stranded := false ## a retired car still sitting on the circuit (an obstacle, flagged yellow)
 var recovered := false ## cleared away by the marshals

@@ -45,6 +45,9 @@ class Weather:
 	var mode := "dry"
 	var rain := 0.0
 	var wet := 0.0
+	var snow := 0.0
+	var hail := 0.0
+	var fog := 0.0
 	var showers: Array = [] ## [{start, end, intensity}]
 
 	func _init(mode_: String, duration: float, rng: SimUtil.Rng) -> void:
@@ -52,6 +55,18 @@ class Weather:
 		if mode == "wet":
 			rain = 0.7
 			wet = 0.85
+		elif mode == "snow":
+			snow = 0.85
+			wet = 0.65
+			rain = 0.0
+		elif mode == "hail":
+			hail = 0.90
+			wet = 0.75
+			rain = 0.35
+		elif mode == "fog":
+			fog = 1.0
+			wet = 0.15
+			rain = 0.0
 		if mode == "variable":
 			if duration < 5400.0:
 				var start := duration * (0.22 + 0.3 * rng.next())
@@ -70,7 +85,7 @@ class Weather:
 			for sh in showers:
 				r = maxf(r, sh.intensity * SimUtil.smooth01((t - sh.start) / 60.0) * SimUtil.smooth01((sh.end - t) / 60.0))
 			rain = r
-		if mode == "dry":
+		if mode == "dry" or mode == "snow" or mode == "hail" or mode == "fog":
 			return
 		var target := minf(1.0, rain * 1.2)
 		if rain > 0.05 and target > wet:
@@ -83,6 +98,12 @@ class Weather:
 			return "Dry all race"
 		if mode == "wet":
 			return "Rain all race"
+		if mode == "snow":
+			return "Snow all race — icy conditions"
+		if mode == "hail":
+			return "Severe hail storm — low traction"
+		if mode == "fog":
+			return "Dense fog all race — visibility restricted"
 		var sh = null
 		for x in showers:
 			if t < x.end:
@@ -167,6 +188,8 @@ var warp := 1
 var brain: Brain = null
 var limiter := false ## the player has the flag speed limiter switched on (V)
 var rc: RaceControl = null ## flags, safety car, stewards and damage (null: contact is just physics, as before)
+var stage: Rally.Stage = null ## s.mode == "rally": the special stage's clock, splits and penalties
+var tt: TimeTrial = null ## s.mode == "time_trial": sectors, the live delta and the lap list
 var last_contact := 0.0
 ## Hits for the game's sound (WorldAudio), oldest first, IMPACT_STRIDE floats each: x, y, closing speed (m/s),
 ## kind (0 a barrier, 1 another car) and the two cars' ids (the second -1 for a barrier). Only kept while
@@ -237,6 +260,10 @@ func _init(settings: RaceSettings, player_plan = null, seed_ := -1, models := {}
 	brain = Brain.new(self, not settings.demo) if settings.ai_learning != "off" and not settings.qualifying else null
 	build_field(player_plan)
 	rc = RaceControl.new(self) if settings.race_control and not settings.demo and not settings.qualifying else null
+	if settings.mode == "rally":
+		stage = Rally.Stage.new(self)
+	elif settings.mode == "time_trial":
+		tt = TimeTrial.new(self)
 	order = cars.duplicate()
 	for i in cars.size():
 		_order_idx[cars[i]] = i
@@ -363,11 +390,21 @@ static func _setup_key(setup: Dictionary) -> String:
 
 ## The grip a car's tyres give it: the compound in the conditions, and in the wet how good the driver is in it.
 func grip(car: RaceCar) -> float:
-	return tyres.tyre_grip(car.tyre, weather.wet) * (1.0 + (car.wet_skill - 1.0) * minf(1.0, weather.wet * 2.0))
+	var g := tyres.tyre_grip(car.tyre, weather.wet) * (1.0 + (car.wet_skill - 1.0) * minf(1.0, weather.wet * 2.0))
+	if weather.snow > 0.1:
+		g *= (1.0 - weather.snow * 0.42)
+	if weather.hail > 0.1:
+		g *= (1.0 - weather.hail * 0.36)
+	if weather.fog > 0.1:
+		g *= 0.94
+	if s.surface != "tarmac":
+		g *= Rally.SURFACE_GRIP.get(s.surface, 1.0) # a loose stage: the whole road is gravel
+	return g
 
 func build_field(player_plan) -> void:
 	var diff: Dictionary = DIFFICULTY[s.difficulty]
-	var options := strategy.plan(plan_opts({"diverse": true}))
+	# a rally stage or a time trial has no race to plan (and no field): the player gets the one-stint fallback
+	var options: Array = strategy.plan(plan_opts({"diverse": true})) if s.mode == "race" else []
 	var wild := _wild_pool(options)
 	var fallback := {"stops": 0, "stints": [{"c": "W" if weather.wet > 0.4 else "M", "laps": R, "fuel": minf(spec.tank, Strategy.fuel_need(R, fpl))}]}
 	var bots: Array[RaceCar] = []
@@ -419,11 +456,12 @@ func build_field(player_plan) -> void:
 	pl.stripes = s.stripes
 	pl.skill = 0.97 # used only while on autopilot
 	fit_setup(pl, s.car_setup)
-	var pp: Dictionary = player_plan if player_plan else (options[0] if options.size() else fallback)
+	var solo_mode := s.mode != "race"
+	var pp: Dictionary = player_plan if player_plan and not solo_mode else (options[0] if options.size() else fallback)
 	if s.qualifying:
 		quali_fuel = minf(spec.tank, Strategy.fuel_need(R, fpl))
 		pp = {"stops": 0, "stints": [{"c": quali_compound(), "laps": R, "fuel": quali_fuel}]}
-	elif not player_plan and not pp.get("stints", []).is_empty():
+	elif (not player_plan or solo_mode) and not pp.get("stints", []).is_empty():
 		pp = pp.duplicate(true)
 		pp.stints[0].c = s.starting_tyre
 	apply_plan(pl, pp)
@@ -446,6 +484,8 @@ func build_field(player_plan) -> void:
 			slot = n - 1
 		elif s.grid == "middle":
 			slot = n / 2
+		elif s.grid.begins_with("p") and s.grid.substr(1).is_valid_int():
+			slot = clampi(s.grid.substr(1).to_int() - 1, 0, n - 1) # a set slot: "p3" starts third (campaign stages)
 		else:
 			slot = int(floorf(rng.next() * n))
 		field.insert(slot, pl)
@@ -544,6 +584,10 @@ func step(dt: float, input: PlayerInput) -> void:
 	update_order()
 	if rc:
 		rc.step(dt)
+	if stage:
+		stage.tick(dt, input)
+	elif tt:
+		tt.tick()
 	if brain:
 		brain.observe()
 	rubber_band(dt)
@@ -1006,8 +1050,8 @@ func _timed_laps_after(car: RaceCar) -> int:
 	return ceili(left / lap_t) if left > 0.0 else 0
 
 func decide(car: RaceCar) -> void:
-	if s.qualifying:
-		return # nobody pits in a qualifying run
+	if s.qualifying or s.mode != "race":
+		return # nobody pits in a qualifying run, a rally stage or a time trial
 	var dyn := s.dynamic_running
 	if dyn:
 		_observe_rates(car)
@@ -1566,14 +1610,17 @@ func step_rail(car: RaceCar, dt: float) -> void:
 		if car.damage > 0.0:
 			vT *= 1.0 - (0.3 if rc else 0.06) * car.damage
 			drag *= 1.0 + 0.5 * car.damage
+			if car.fx_on:
+				vT *= sqrt(car.fx_grip)
+				drag *= car.fx_drag
 
 	var a := 0.0
 	var climb := G * tr.sample(tr.GRADE, car.s) + (0.0 if car.mode == "pit" else car_model.scrub(car.v, tr.sample(tr.RK, car.s), mu))
-	var a_max := car_model.max_accel(car.v, mass, mu, drag, car.mix_power) * (1.0 - 0.3 * car.damage) - climb
+	var a_max := car_model.max_accel(car.v, mass, mu, drag, car.mix_power) * (1.0 - 0.3 * car.damage) * car.fx_power - climb
 	if car.v < vT and car.fuel > 0.0 and a_max > 0.0:
 		a = minf(a_max, (vT - car.v) / dt)
 	elif car.v > vT:
-		a = -minf(mu * G + climb, (car.v - vT) / dt)
+		a = -minf(mu * G * car.fx_brake + climb, (car.v - vT) / dt)
 	else:
 		a = -car_model.resistance(car.v, mass, drag) / mass - climb
 	car.brake_on = a < -2.5
@@ -1649,7 +1696,8 @@ func surface_at(car: RaceCar, x: float, y: float) -> int:
 ## input: the player's controls (shift requests are consumed), or null for a bot.
 func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float, input: PlayerInput) -> void:
 	var tr := track
-	var hold := phase != "racing"
+	# a rally car waits on the handbrake, but throttle before the start lets it go: a jump start (Rally.Stage)
+	var hold := phase != "racing" and not (stage != null and car.is_player and phase == "countdown" and thr > 0.2)
 	if car.fuel <= 0.0:
 		thr = 0.0
 	var cm := car.model
@@ -1728,6 +1776,14 @@ func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float,
 		thr *= 1.0 - 0.3 * car.damage
 		drag_mul *= 1.0 + 0.5 * car.damage
 		steer = clampf(steer + car.dmg_pull, -1.0, 1.0)
+		if car.fx_on:
+			# and each damaged part breaks its own system (Service): misfires, brakes, grip, drag, gears
+			thr = Service.misfire(car, clock, thr)
+			brk *= car.fx_brake
+			steer = Service.steer_feel(car, steer, brk)
+			env.mu = mu * car.fx_grip
+			drag_mul *= car.fx_drag
+			Service.gearbox(car, spec.gears.size() - 1, clock)
 	# the fuel mix: a lean map gives the engine less to work with
 	env.power = car.mix_power
 	env.drag_mul = drag_mul
@@ -1832,6 +1888,32 @@ func _held_up(car: RaceCar) -> bool:
 		if ahead > 0.0 and ahead < 14.0 and absf(o.d - car.d) < spec.width + 0.8:
 			return true
 	return false
+
+## Instant recovery (Forza Horizon / NFS style): resets the player car onto the racing surface facing forward.
+func reset_player_car() -> bool:
+	if not player or phase != "racing" or player.mode != "race" or player.finished or player.out_of_fuel:
+		return false
+	var tr := track
+	var lim := tr.half - 1.5
+	player.d = clampf(player.d, -lim, lim)
+	var p := tr.pos(player.s, player.d)
+	player.x = p[0]
+	player.y = p[1]
+	player.heading = tr.heading(player.s)
+	player.px = player.x
+	player.py = player.y
+	player.ph = player.heading
+	player.vx = cos(player.heading) * 6.0
+	player.vy = sin(player.heading) * 6.0
+	player.v = 6.0
+	player.speed = 6.0
+	player.yaw_rate = 0.0
+	player.phys = null
+	player.rev = false
+	player.gear = 0
+	player.stuck_t = 0.0
+	log_event("Car reset to track — green flag!", "good")
+	return true
 
 func player_rejoin(car: RaceCar, dt: float) -> void:
 	if phase != "racing" or race_time < 3.0 or car.mode != "race" or car.finished or car.out_of_fuel:

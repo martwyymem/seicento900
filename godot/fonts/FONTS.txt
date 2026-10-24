@@ -1,0 +1,17 @@
+Fonts used by the interface skins (scripts/ui/cmr_style.gd). All are under the SIL Open Font License 1.1;
+each family's licence text is next to it (<Family>-OFL.txt; OFL.txt is Nunito Sans's). Downloaded from the
+google/fonts repository (https://github.com/google/fonts, ofl/<family>/), variable versions where they exist.
+
+NunitoSans.ttf       Nunito Sans (wght, wdth, opsz)   Off / Colin McRae Rally 2.0 skin   ofl/nunitosans
+PixelifySans.ttf     Pixelify Sans (wght)             PS1 skin                           ofl/pixelifysans
+VT323.ttf            VT323                            PS1 skin timers (monospaced)       ofl/vt323
+Oswald.ttf           Oswald (wght)                    NFS Most Wanted skin               ofl/oswald
+Archivo.ttf          Archivo (wght, wdth)             GTA San Andreas skin               ofl/archivo
+GrenzeGotisch.ttf    Grenze Gotisch (wght)            GTA San Andreas skin page titles   ofl/grenzegotisch
+Saira.ttf            Saira (wght, wdth)               NFS Carbon skin, MW/Carbon timers  ofl/saira
+Nunito.ttf           Nunito (wght, rounded)           Forza Horizon 1 skin               ofl/nunito
+NotoSansSymbols.ttf  Noto Sans Symbols (wght)         fallback: arrows, circled pad letters   ofl/notosanssymbols
+NotoSansSymbols2.ttf Noto Sans Symbols 2              fallback: ◂ ▸ selector triangles   ofl/notosanssymbols2
+
+Every skin face covers Polish (ąćęłńóśźż). None of the text faces have ◂ ▸ or Ⓐ Ⓑ Ⓧ Ⓨ, so every font
+CmrStyle hands out falls back to the two Noto Symbols fonts, then Godot's default font.

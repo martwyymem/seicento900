@@ -173,7 +173,7 @@ def building_kind(tags, footprint):
              'supermarket', 'commercial', 'retail', 'sports_hall', 'sports_centre', 'kindergarten'):
         return 2, 9.0
     if b in ('garage', 'garages', 'shed', 'hut', 'cabin', 'carport', 'roof', 'kiosk', 'toilets', 'container',
-             'bunker', 'static_caravan', 'shelter', 'transformer_tower', 'boathouse'):
+             'bunker', 'static_caravan', 'shelter', 'transformer_tower', 'boathouse', 'outbuilding'):
         return 3, 3.2
     if b in ('farm', 'barn', 'farm_auxiliary', 'stable', 'cowshed', 'greenhouse', 'silo'):
         return 4, 8.0

@@ -4,7 +4,8 @@ class_name LoadingScreen
 extends ColorRect
 
 const BLOCKS := 12
-const BLOCK_ON := CmrStyle.TEXT
+var BLOCK_ON: Color:
+	get: return CmrStyle.TEXT
 const BLOCK_OFF := Color(0.97, 0.94, 1.0, 0.28)
 
 var _title: HBoxContainer

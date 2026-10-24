@@ -25,6 +25,10 @@ uniform vec3 cloud_lit : source_color = vec3(1.0);
 uniform vec3 cloud_shade : source_color = vec3(0.55, 0.6, 0.68);
 uniform float star_amount = 0.0;
 uniform float cloud_opacity = 1.0;
+// race_world.gd's look (the defaults keep the plain look for other callers, e.g. the open world):
+uniform float cloud_paint = 0.0; // 1 = painted clouds: crisper edges, lit sun-side rims, darker bellies
+uniform float halo_amount = 0.0; // a wide warm aureole round the sun
+uniform float hdri_saturation = 1.0; // > 1 deepens the clear panoramas' pale blue
 
 // HDRI layers: A and B are two clear-sky times of day, O is an overcast sky.
 uniform sampler2D hdri_a : filter_linear, repeat_enable, hint_default_black;
@@ -91,9 +95,15 @@ vec4 clouds(vec3 d) {
 	vec2 wind = vec2(TIME * cloud_speed, TIME * cloud_speed * 0.35);
 	float n = texture(cloud_noise, p + wind).r * 0.65 + texture(cloud_noise, p * 2.7 - wind * 1.6).r * 0.35;
 	float cover = mix(cloud_cover, 0.92, overcast);
-	float dens = smoothstep(1.0 - cover, 1.0 - cover + 0.32, n) * smoothstep(0.0, 0.12, up);
+	float paint = cloud_paint * (1.0 - overcast);
+	float dens = smoothstep(1.0 - cover, 1.0 - cover + mix(0.32, 0.16, paint), n) * smoothstep(0.0, 0.12, up);
 	float lit = clamp(0.55 + 0.45 * dot(normalize(vec3(d.x, 0.0, d.z) + 1e-5), normalize(vec3(sun_dir.x, 0.0, sun_dir.z) + 1e-5)), 0.0, 1.0);
+	// painted: thin edges catch the light, thick cores and the side away from the sun go to the shade colour
+	float core = smoothstep(1.0 - cover + 0.08, 1.0 - cover + 0.5, n);
+	lit = mix(lit, clamp(lit * (1.15 - core * 0.55) + 0.1, 0.0, 1.0), paint);
 	vec3 cloud = mix(cloud_shade, cloud_lit, lit * (1.0 - overcast * 0.6));
+	float rim = pow(max(dot(d, normalize(sun_dir)), 0.0), 12.0) * (1.0 - core);
+	cloud += cloud_lit * rim * 0.5 * paint;
 	cloud = mix(cloud, glow_color * 1.2, glow_amount * 0.45 * (1.0 - overcast));
 	return vec4(cloud, dens * 0.92);
 }
@@ -108,6 +118,8 @@ void sky() {
 		float disc = smoothstep(0.99985, 0.99993, sd);
 		float halo = pow(max(sd, 0.0), 900.0) * 0.6 + pow(max(sd, 0.0), 40.0) * 0.12;
 		col += sun_color * (disc * 22.0 + halo * 2.0) * sun_disc * (1.0 - overcast * 0.92) * (1.0 - night);
+		// a wide aureole, warm at the golden hour
+		col += sun_color * pow(max(sd, 0.0), 8.0) * 0.18 * halo_amount * (1.0 - overcast) * (1.0 - night);
 		float md = dot(d, normalize(moon_dir));
 		float moon = smoothstep(0.99955, 0.99968, md);
 		col += vec3(0.85, 0.88, 0.95) * (moon * 3.0 + pow(max(md, 0.0), 400.0) * 0.25) * night * (1.0 - overcast * 0.85);
@@ -115,6 +127,8 @@ void sky() {
 
 	if (hdri_mix > 0.001) {
 		vec3 hd = mix(panorama(hdri_a, d, hdri_rot_a) * hdri_gain_a, panorama(hdri_b, d, hdri_rot_b) * hdri_gain_b, hdri_ab);
+		float hl = dot(hd, vec3(0.2126, 0.7152, 0.0722));
+		hd = max(mix(vec3(hl), hd, hdri_saturation), vec3(0.0));
 		col = mix(col, hd, hdri_mix);
 	}
 	vec4 cl = clouds(d);

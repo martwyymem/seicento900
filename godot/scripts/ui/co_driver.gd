@@ -111,9 +111,10 @@ func update(muted: bool, warp: int) -> void:
 		_next = (_next + 1) % m
 
 func _say(text: String) -> void:
-	if not can_speak():
+	var volume := AudioSettings.voice_volume(VOLUME) # Options → Audio (speech is outside the mixer)
+	if not can_speak() or volume <= 0:
 		return
-	DisplayServer.tts_speak(text, _voice, VOLUME, 1.0, RATE)
+	DisplayServer.tts_speak(text, _voice, volume, 1.0, RATE)
 
 ## Stops the co-driver mid-sentence (pause, leaving the race).
 static func silence() -> void:

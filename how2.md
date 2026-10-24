@@ -22,6 +22,7 @@ For more background read [`godot/README.md`](godot/README.md).
 | change pit-stop times                             | `CREWS` in `scripts/sim/strategy.gd`                                     |
 | tune flags, safety car, damage, penalties         | constants at the top of `scripts/sim/race_control.gd`                    |
 | change key bindings                               | `_unhandled_input` and `_update_input` in `scripts/ui/game.gd`             |
+| reset car onto track after spin/beach             | Backspace or R (or gamepad Back) in `scripts/ui/game.gd` and `race.gd`   |
 | change the menu / HUD colours and fonts           | `scripts/ui/cmr_style.gd`                                                |
 | change HUD layout sizes or the help text          | constants at the top of `scripts/ui/race_hud.gd`                         |
 | change graphics presets (Low…Ultra)               | `QUALITY_NAMES`, `TREE_SCALE`, `apply_graphics()` in `scripts/ui/race_world.gd` |
@@ -118,7 +119,7 @@ yellow-flag pace (`YELLOW_PACE`, `PLAYER_SLOW`), safety car (`SC_*`), marshal re
 - `TRACK_KEYS`, `TRACK_NAMES` — circuits offered in the menus (same order in both).
 - `TRACK_DEFAULTS` — default laps and tyre wear per circuit.
 - `CHAMPIONSHIP_CALENDAR`, `CHAMPIONSHIP_POINTS` — championship rounds and points.
-- `FRONT_MENU`, `TOP_MENU_TABS` — main menu entries.
+- `FRONT_MENU`, `TOP_MENU_TABS` — main menu entries (campaign, quick race, championship, options, quit; the mode is picked here only).
 - `WARP_VALUES`, `WARP_TICKS`, `WARP_SIM_SHARE` — time warp.
 - `UI_SCALES`, `UPSCALERS`, `UPSCALE_PRESETS`, `SHARPENING`, `FPS_LIMITS` — Options page choices.
 - `STILL_FPS`, `BACKGROUND_FPS` — frame caps when paused / in the background.
@@ -134,6 +135,7 @@ Saved under Godot's `user://` folder (on macOS:
 - `race_settings.cfg` — last set-up page values, and `[car_setup]`: the car set-up kept for each circuit.
 - `graphics.cfg` — Options page (`[graphics] quality` 0 Low … 3 Ultra, upscaler, FPS limit, …; `[audio] co_driver_voice`).
 - `championship.json` — championship progress and standings, and the player's car between rounds (`car`: damaged parts, steering pull, service minutes used).
+- `campaign.json` — campaign progress: furthest stage unlocked, best finish per stage, trophies won.
 - `brain.json` — what the learning AI knows about you (set-up page → Forget clears it).
 - `sky_cache.cfg` — cached HDRI sky analysis (`scripts/ui/world_assets.gd`).
 

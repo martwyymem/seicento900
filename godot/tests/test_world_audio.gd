@@ -231,8 +231,8 @@ func _in_the_world(errors: Array[String]) -> void:
 		errors.append("the race on screen should log its hits for the sound")
 	if AudioServer.get_bus_index("Car") < 0 or AudioServer.get_bus_index("World") < 0:
 		errors.append("the Car and World buses should exist")
-	if game.audio.player.bus != &"Car":
-		errors.append("the player's engine should go through the Car bus")
+	if game.audio.player.bus != &"Engine" or AudioServer.get_bus_send(AudioServer.get_bus_index("Engine")) != &"Car":
+		errors.append("the player's engine should go through the Engine bus into the Car bus")
 	if not world.get_viewport().audio_listener_enable_3d:
 		errors.append("the race view should listen to sounds in the world")
 	# the engine slots go to the cars nearest the camera

@@ -2,7 +2,12 @@
 
 Godot 4.7, GDScript. The JS game in the repo root stays as the reference until this version matches it.
 
-Run `godot --path godot` to open the front end. The set-up page covers lap and timed (endurance) races on
+> 📖 **Task Bible & Roadmap**: See [`../TASKS.md`](../TASKS.md) for the active master directives (snow/hail/fog weathers, retro PS1/PS2 shaders, Polish & Tokyo city tracks, campaign mode, and menu architecture). All agents must read `TASKS.md` before running.
+
+Run `godot --path godot` to open the front end. The main menu picks the mode: CAMPAIGN (the open world of
+Brzeszcze, below: each stage is a beacon to drive to; the stage list with ENTER STAGE stays in its pause menu), QUICK RACE (the custom race below;
+0 opponents is a solo time trial against your ghost and lap records), CHAMPIONSHIP, OPTIONS and QUIT. The
+set-up page has no mode switch of its own: its title names the mode and Esc goes back. The set-up page covers lap and timed (endurance) races on
 all eleven circuits, opponents and difficulty, weather, start time, grid position, driving aids, gearbox,
 driver profile and paint, pit rules, tyre wear, fuel use, crew, AI learning and bot physics. As in the
 reference, the strategist lists the fastest pit plans for those settings (lap time, fuel per lap, pit-stop
@@ -25,8 +30,8 @@ CMR's bumper and bonnet cams, roof, trackside TV, bird's-eye, full track). The w
 word strip under a line drawing of the circuit on the main menu, pale flat fields, and the
 information and repair layouts (map box, weather column, gradient bar, parts list with status marks). In
 the race the HUD shows CMR's fading standings bars, the co-driver's pace-note boxes (see below), split
-times, a segmented lap-progress bar and clock, an event feed, a pit-wall panel (tyres, fuel, plan,
-next stop), a curved segmented rev band with a big gear digit, a minimap, name tags and a help overlay.
+times, a segmented lap-progress bar and clock with prominent position badges, an event feed, a pit-wall panel (tyres, fuel, plan,
+next stop), a high-contrast tachometer and speedometer cluster with redline shift flashing (GT4 style), drafting cues (NFS style), an overtake celebration banner (Forza style), dynamic corner BRAKE warnings (GT4 style), an oriented directional minimap, car recovery keys (Backspace / R / gamepad Select), and onboarding help overlays.
 There is a pause menu, time warp with co-driver, skip-to-results after retiring or finishing, and a
 results screen with championship points.
 
@@ -255,6 +260,47 @@ see aren't traced. The circuit's part of the BVH goes to the GPU once, and only 
 well under a millisecond at 1600×900 on an M4 Pro. `tests/_rt_shot.gd`
 renders comparison screenshots and debug views: `DEBUG=1` traces primary rays, which should line up with
 the rendered scene, and `DEBUG=2` shows only what the reflections see.
+
+## Campaign open world: Brzeszcze
+
+CAMPAIGN opens a free-roam map of the whole town of Brzeszcze (Małopolska): every street, building, pond,
+wood and railway inside the town limit and some countryside round it, from OpenStreetMap, on EU-DEM ground
+heights. It is meant to feel like Forza Horizon or The Crew: a festival hub (Seicento Fest at the KS Górnik
+stadium), event beacons, traffic, speed traps, discoveries, a skill chain and a day that turns to night.
+
+- **Stages are beacons where they really start**: the industrial sprint on ul. Dworcowa by KWK Brzeszcze, the
+  Bór stage on ul. Bór. The away venues sit on the real roads out of town: Pszczyna west on the DW933, Oświęcim
+  east, Bielsko-Biała south on ul. Bielska, Wilamowice down the S1 and Tychy's Fiat track up it. Kraków is the
+  train from Brzeszcze Jawiszowice station and Tokyo the festival. Pull into a beacon, read the briefing card
+  and press Enter. The results bring the car back to the beacon, through the service area if it is damaged.
+- **Driving** uses the race's own tyre-model physics (`FreeCar`, `scripts/world/free_car.gd`) on the town's
+  surfaces (asphalt, setts, gravel tracks, grass). It rides the ground heights and the bridge decks and
+  embankments. Buildings, trees, lamp posts and parked cars are solid, the ponds can't be driven through, and
+  you can jump off the embankments.
+- **Traffic** (`traffic.gd`) drives the real road graph in lane at the limit, picks a way at junctions and gets
+  shoved when hit.
+- **HUD** (`open_world_hud.gd`): a satnav disc that turns with the car, with the GPS route (G routes to the
+  next stage, and chevrons light the road), the full map on M (pick an event, Enter sets the route), a
+  speedometer, the street and district names, and banners. Esc opens the pause menu: map, campaign stage
+  list, reset to road, skip time, main menu.
+- **Progress** (`user://open_world.json`, `world_progress.gd`): where you left the car, roads driven out of
+  all of them, landmarks discovered (the Andrzej shafts, churches, the station, chimneys), best speed per
+  speed trap, and fans. Fans come from banked skill chains: drifts, jumps, near misses and speed. A crash
+  loses the chain.
+- **Look**: festival colour grading (saturation and contrast), AgX, bloom and SSAO. Polish houses get hipped
+  or gabled roofs and the bloki are painted warm. Kerbs and pavements line the town streets, and the streets
+  carry Polish markings that break at junctions. There are about 180k trees (real meshes near, cards far),
+  street lamps that light up after dusk, the mine headframes, neo-Gothic church spires and chimneys. The
+  Beskidy stand on the southern skyline.
+
+The map is baked by `python3 tools/build_open_world.py [--refetch] [--check PNG]` into
+`data/world/brzeszcze.json` (roads with bridge decks and ramps, buildings, land cover, trees, lamps, places
+and the event spots), `brzeszcze_land.png` (ground.gdshader's land map) and `brzeszcze_map.png` (the satnav
+picture). Raw downloads are cached in `tools/open_world/cache`, so rebuilds run offline. The props (headframe,
+church spire, street furniture, the festival and four traffic cars, among them a Fiat 126p) are
+`models/town.glb` from `tools/blender/build_town.py`. `scripts/world/town_builder.gd` builds the scene,
+taking about 2 s. `tests/test_open_world.gd` checks the data, driving, walls, GPS, traffic and a full build;
+`tests/_open_world_shots.gd` is a windowed screenshot probe.
 
 ## Fiat Track
 

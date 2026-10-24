@@ -1,0 +1,142 @@
+[gd_resource type="Resource" script_class="TrackDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/corner_name.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/data/track_def.gd" id="2"]
+
+[sub_resource type="Resource" id="c1"]
+script = ExtResource("1")
+distance = 0.0
+name = "ul. św. Gertrudy (Planty)"
+
+[sub_resource type="Resource" id="c2"]
+script = ExtResource("1")
+distance = 221.0
+name = "Gertrudy / Dominikańska"
+
+[sub_resource type="Resource" id="c3"]
+script = ExtResource("1")
+distance = 310.3
+name = "Poczta Główna (Westerplatte / Wielopole)"
+
+[sub_resource type="Resource" id="c4"]
+script = ExtResource("1")
+distance = 390.3
+name = "ul. Westerplatte"
+
+[sub_resource type="Resource" id="c5"]
+script = ExtResource("1")
+distance = 929.9
+name = "Westerplatte / Lubicz"
+
+[sub_resource type="Resource" id="c6"]
+script = ExtResource("1")
+distance = 1102.9
+name = "Basztowa / Szpitalna"
+
+[sub_resource type="Resource" id="c7"]
+script = ExtResource("1")
+distance = 1260.6
+name = "ul. Basztowa (Barbakan)"
+
+[sub_resource type="Resource" id="c8"]
+script = ExtResource("1")
+distance = 1400.6
+name = "Basztowa / Długa / Sławkowska"
+
+[sub_resource type="Resource" id="c9"]
+script = ExtResource("1")
+distance = 1677.8
+name = "Basztowa / Dunajewskiego (Garbarska)"
+
+[sub_resource type="Resource" id="c10"]
+script = ExtResource("1")
+distance = 1757.8
+name = "ul. Dunajewskiego"
+
+[sub_resource type="Resource" id="c11"]
+script = ExtResource("1")
+distance = 1992.8
+name = "Podwale / Karmelicka (Bagatela)"
+
+[sub_resource type="Resource" id="c12"]
+script = ExtResource("1")
+distance = 2062.8
+name = "ul. Podwale"
+
+[sub_resource type="Resource" id="c13"]
+script = ExtResource("1")
+distance = 2179.7
+name = "Podwale / Straszewskiego"
+
+[sub_resource type="Resource" id="c14"]
+script = ExtResource("1")
+distance = 2344.9
+name = "Straszewskiego / Piłsudskiego (Filharmonia)"
+
+[sub_resource type="Resource" id="c15"]
+script = ExtResource("1")
+distance = 2549.8
+name = "Straszewskiego / Franciszkańska"
+
+[sub_resource type="Resource" id="c16"]
+script = ExtResource("1")
+distance = 2629.8
+name = "ul. Straszewskiego"
+
+[sub_resource type="Resource" id="c17"]
+script = ExtResource("1")
+distance = 2935.1
+name = "Pod Wawelem"
+
+[sub_resource type="Resource" id="c18"]
+script = ExtResource("1")
+distance = 3015.1
+name = "ul. Podzamcze (Wawel)"
+
+[sub_resource type="Resource" id="c19"]
+script = ExtResource("1")
+distance = 3138.1
+name = "Podzamcze / św. Idziego"
+
+[sub_resource type="Resource" id="c20"]
+script = ExtResource("1")
+distance = 3261.9
+name = "Droga do Zamku"
+
+[sub_resource type="Resource" id="c21"]
+script = ExtResource("1")
+distance = 3322.2
+name = "św. Idziego / Stradomska"
+
+[sub_resource type="Resource" id="c22"]
+script = ExtResource("1")
+distance = 3392.2
+name = "ul. św. Gertrudy"
+
+[resource]
+script = ExtResource("2")
+key = "krakow"
+display_name = "Kraków Royal Ring"
+short_name = "Kraków"
+width = 9.0
+theme = "city"
+street_stage = true
+barrier = "armco"
+runoff = 1.5
+runoff_surface = "asphalt"
+runoff_paved = 1.5
+kerb_style = "none"
+kerb_width = 0.0
+tree_density = 0.6
+tree_patch = 0.8
+tree_conifer = 0.1
+grandstands = false
+stand_tiers = 0
+floodlight_spacing = 0.0
+pit_entry = -120.0
+pit_exit = 170.0
+pit_ramp = 50.0
+pit_offset = -9.6
+box_start = -65.0
+box_spacing = 9.0
+corners = Array[ExtResource("1")]([SubResource("c1"), SubResource("c2"), SubResource("c3"), SubResource("c4"), SubResource("c5"), SubResource("c6"), SubResource("c7"), SubResource("c8"), SubResource("c9"), SubResource("c10"), SubResource("c11"), SubResource("c12"), SubResource("c13"), SubResource("c14"), SubResource("c15"), SubResource("c16"), SubResource("c17"), SubResource("c18"), SubResource("c19"), SubResource("c20"), SubResource("c21"), SubResource("c22")])

@@ -1,0 +1,102 @@
+[gd_resource type="Resource" script_class="TrackDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/corner_name.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/data/track_def.gd" id="2"]
+
+[sub_resource type="Resource" id="c1"]
+script = ExtResource("1")
+distance = 0.0
+name = "al. Armii Krajowej"
+
+[sub_resource type="Resource" id="c2"]
+script = ExtResource("1")
+distance = 316.9
+name = "Rondo Fieldorfa (pod Szyndzielnią)"
+
+[sub_resource type="Resource" id="c3"]
+script = ExtResource("1")
+distance = 441.9
+name = "ul. Karbowa"
+
+[sub_resource type="Resource" id="c4"]
+script = ExtResource("1")
+distance = 828.0
+name = "Karbowa, Hala Pietrzykowskiego"
+
+[sub_resource type="Resource" id="c5"]
+script = ExtResource("1")
+distance = 1539.2
+name = "Karbowa / Kolista"
+
+[sub_resource type="Resource" id="c6"]
+script = ExtResource("1")
+distance = 1694.1
+name = "ul. Karpacka"
+
+[sub_resource type="Resource" id="c7"]
+script = ExtResource("1")
+distance = 1991.3
+name = "Karpacka / Skarpowa"
+
+[sub_resource type="Resource" id="c8"]
+script = ExtResource("1")
+distance = 2341.7
+name = "Karpacka / Gościnna"
+
+[sub_resource type="Resource" id="c9"]
+script = ExtResource("1")
+distance = 2441.7
+name = "ul. Gościnna"
+
+[sub_resource type="Resource" id="c10"]
+script = ExtResource("1")
+distance = 2753.6
+name = "Rondo Gościnna / Kolista"
+
+[sub_resource type="Resource" id="c11"]
+script = ExtResource("1")
+distance = 3570.9
+name = "Gościnna / Daleka"
+
+[sub_resource type="Resource" id="c12"]
+script = ExtResource("1")
+distance = 4042.4
+name = "Rondo PTTK"
+
+[sub_resource type="Resource" id="c13"]
+script = ExtResource("1")
+distance = 4170.7
+name = "al. Armii Krajowej"
+
+[sub_resource type="Resource" id="c14"]
+script = ExtResource("1")
+distance = 4671.2
+name = "Armii Krajowej / Młodzieżowa"
+
+[resource]
+script = ExtResource("2")
+key = "bielsko"
+display_name = "Bielsko-Biała Szyndzielnia"
+short_name = "Bielsko-Biała"
+width = 7.0
+theme = "forest"
+street_stage = true
+barrier = "armco"
+runoff = 1.5
+runoff_surface = "grass"
+runoff_paved = 0.0
+kerb_style = "none"
+kerb_width = 0.0
+tree_density = 0.6
+tree_patch = 0.7
+tree_conifer = 0.55
+grandstands = false
+stand_tiers = 0
+floodlight_spacing = 0.0
+pit_entry = -150.0
+pit_exit = 230.0
+pit_ramp = 60.0
+pit_offset = -8.4
+box_start = -80.0
+box_spacing = 12.0
+corners = Array[ExtResource("1")]([SubResource("c1"), SubResource("c2"), SubResource("c3"), SubResource("c4"), SubResource("c5"), SubResource("c6"), SubResource("c7"), SubResource("c8"), SubResource("c9"), SubResource("c10"), SubResource("c11"), SubResource("c12"), SubResource("c13"), SubResource("c14")])

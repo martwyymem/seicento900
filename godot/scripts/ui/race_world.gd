@@ -19,6 +19,7 @@ const CROWD_SHADER := preload("res://shaders/crowd.gdshader")
 const SURROUNDINGS := preload("res://scripts/ui/surroundings.gd")
 const FAR_LAND := preload("res://scripts/ui/far_land.gd")
 const FURNITURE := preload("res://scripts/ui/trackside_furniture.gd")
+const LIGHTING := preload("res://scripts/ui/lighting_presets.gd")
 const ALTITUDE_SCALE := 1.0 ## heights at their real scale (the physics ignores elevation)
 const BEAM_COUNT := 4 ## headlight spotlights handed to the cars nearest the camera after dark
 const BEAM_REACH := 180.0 ## m: cars further from the camera than this get no headlight beam
@@ -48,17 +49,21 @@ const RAIN_GONE_SPAN := 0.16
 
 # Sky and light palette (parsed once, not every frame).
 const SKY_TOP_NIGHT := Color("#030611")
-const SKY_TOP_DAY := Color("#4a709c")
+const SKY_TOP_DAY := Color("#3b6eae")
 const SKY_TOP_OVERCAST := Color("#68727e")
 const HORIZON_NIGHT := Color("#121b2c")
-const HORIZON_DAY := Color("#a2b6cb")
+const HORIZON_DAY := Color("#9fbcdc")
 const HORIZON_OVERCAST := Color("#a2a7ad")
 const DUSK_GLOW := Color("#e98559")
 const GROUND_NIGHT := Color("#090e17")
 const GROUND_DAY := Color("#222822")
 const AMBIENT_NIGHT := Color("#8093b5")
 const SUN_NIGHT := Color("#8295c5")
-const SUN_DAY := Color("#fff3dd")
+const SUN_DAY := Color("#fff1d8")
+const SUN_GOLDEN := Color("#ffb46e") ## the low sun of the golden hour (Forza Horizon's late afternoon)
+const FILL_GOLDEN := Color("#9fa8de") ## the sky fill turns lavender-blue against a gold sun
+const FILL_OVERCAST := Color("#c3c8cf")
+const HAZE_GOLDEN := Color("#e8c9a6") ## the haze toward a low sun
 const ASPHALT_DRY := Color("#26292b")
 const ASPHALT_WET := Color("#13191f")
 const RUNOFF_WET := Color("#687582")
@@ -98,6 +103,13 @@ var asphalt_material: ShaderMaterial
 var runoff_material: ShaderMaterial
 var rain_particles: GPUParticles3D
 var _rain_material: StandardMaterial3D
+var snow_particles: GPUParticles3D
+var _snow_material: StandardMaterial3D
+var hail_particles: GPUParticles3D
+var _hail_material: StandardMaterial3D
+var _atmos_snow := 0.0
+var _atmos_hail := 0.0
+var _atmos_fog := 0.0
 var quality := 2
 var assets: RefCounted ## world_assets.gd, shared by every track
 ## Materials that follow the weather ("wet"/"rain") or nightfall ("night") uniforms.
@@ -241,6 +253,7 @@ func _ready() -> void:
 		quality = clampi(int(cfg.get_value("graphics", "quality", quality)), 0, QUALITY_NAMES.size() - 1)
 	_build_environment()
 	_build_beams()
+	add_child(preload("res://scripts/ui/lens_flare.gd").new()) # sun flare, drawn in this viewport under the HUD
 	apply_graphics(quality)
 
 func _exit_tree() -> void:
@@ -369,19 +382,31 @@ func set_race(value: Race) -> void:
 	_tv_heli = false
 	_lights_lit = -1
 
+## Back to the menus: let go of the race (its cars and skid marks) but keep the circuit built, so racing
+## there again needs no rebuild. The front-end pages cover the 3D view, so it isn't rebuilt for them.
+func release_race() -> void:
+	race = null
+	overview = true
+	for old in visuals.values():
+		old.queue_free()
+	visuals.clear()
+	if track:
+		_reset_skids()
+		position_overview()
+
 func _process(delta: float) -> void:
 	if not track or not camera:
 		return
 
 	if overview or not race:
-		_update_atmosphere(14.0, 0.0, 0.0)
+		_update_atmosphere(14.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 		_hide_beams()
 		_hide_lamp_lights()
 		_hide_own_tower(-1)
 		camera.global_position = camera.global_position.lerp(overview_target, 1.0 - exp(-2.4 * delta))
 		camera.look_at(Vector3(overview_target.x, 0, overview_target.z), Vector3.FORWARD)
 		return
-	_update_atmosphere(race.time_of_day, race.weather.wet, race.weather.rain)
+	_update_atmosphere(race.time_of_day, race.weather.wet, race.weather.rain, race.weather.snow, race.weather.hail, race.weather.fog)
 	CAR_VISUAL.set_night(night)
 
 	var focus := race.player
@@ -436,23 +461,32 @@ func _process(delta: float) -> void:
 ## and through a TV camera's long lens one several metres off still would, so the drops fade out nearer
 ## than where they span RAIN_FULL_SPAN of the picture, and for a long lens the shower moves out ahead.
 func _place_rain() -> void:
-	if not rain_particles or not rain_particles.emitting:
-		return
 	var height_per_m := 2.0 * tan(deg_to_rad(camera.fov) * 0.5) # picture height (m) one metre away
 	var full := RAIN_DROP / (RAIN_FULL_SPAN * height_per_m)
-	_rain_material.distance_fade_min_distance = RAIN_DROP / (RAIN_GONE_SPAN * height_per_m)
-	_rain_material.distance_fade_max_distance = full
-	rain_particles.global_position = camera.global_position - camera.global_basis.z * clampf(full - 10.0, 0.0, 40.0)
+	if rain_particles and rain_particles.emitting:
+		_rain_material.distance_fade_min_distance = RAIN_DROP / (RAIN_GONE_SPAN * height_per_m)
+		_rain_material.distance_fade_max_distance = full
+		rain_particles.global_position = camera.global_position - camera.global_basis.z * clampf(full - 10.0, 0.0, 40.0)
+	if snow_particles and snow_particles.emitting:
+		snow_particles.global_position = camera.global_position - camera.global_basis.z * clampf(full - 10.0, 0.0, 30.0)
+	if hail_particles and hail_particles.emitting:
+		if _hail_material:
+			_hail_material.distance_fade_min_distance = RAIN_DROP / (RAIN_GONE_SPAN * height_per_m)
+			_hail_material.distance_fade_max_distance = full
+		hail_particles.global_position = camera.global_position - camera.global_basis.z * clampf(full - 10.0, 0.0, 40.0)
 
-func _update_atmosphere(hour: float, wet: float, rain: float) -> void:
+func _update_atmosphere(hour: float, wet: float, rain: float, snow: float = 0.0, hail: float = 0.0, fog: float = 0.0) -> void:
 	if not world_environment or not sky_material or not sun:
 		return
 	# the sky only needs repainting when the hour or the weather has visibly moved on
 	var key := Vector3(hour, wet, rain)
-	if absf(key.x - _atmos_key.x) < 0.002 and absf(key.y - _atmos_key.y) < 0.002 and absf(key.z - _atmos_key.z) < 0.002:
+	if absf(key.x - _atmos_key.x) < 0.002 and absf(key.y - _atmos_key.y) < 0.002 and absf(key.z - _atmos_key.z) < 0.002 and absf(snow - _atmos_snow) < 0.002 and absf(hail - _atmos_hail) < 0.002 and absf(fog - _atmos_fog) < 0.002:
 		return
 	var first := _atmos_key.x < 0.0
 	_atmos_key = key
+	_atmos_snow = snow
+	_atmos_hail = hail
+	_atmos_fog = fog
 	var sun_v := SimUtil.sun_at(hour)
 	var el := sun_v[0]
 	var day_t := sun_v[2]
@@ -463,6 +497,10 @@ func _update_atmosphere(hour: float, wet: float, rain: float) -> void:
 	var horizon := HORIZON_NIGHT.lerp(HORIZON_DAY, day_t).lerp(HORIZON_OVERCAST, overcast * 0.7 * day_t)
 	var glow := dusk * (1.0 - overcast)
 	horizon = horizon.lerp(DUSK_GLOW, glow * 0.55)
+	var preset: Dictionary = LIGHTING.for_track(track.cfg.key if track else "")
+	var clear := day_t * (1.0 - overcast)
+	# the golden hour: from about 30 degrees down the sun turns gold and the sky fill lavender-blue
+	var golden := minf(1.0, (1.0 - smoothstep(4.0, 30.0, el)) * clear * float(preset.warmth))
 	sky_top_color = top
 	sky_horizon_color = horizon
 	var az := deg_to_rad(sun_v[1])
@@ -478,7 +516,9 @@ func _update_atmosphere(hour: float, wet: float, rain: float) -> void:
 	sky_material.set_shader_parameter("overcast", overcast)
 	sky_material.set_shader_parameter("sun_dir", _sky_dir(deg_to_rad(el), az))
 	sky_material.set_shader_parameter("moon_dir", _sky_dir(deg_to_rad(34.0), az))
-	sky_material.set_shader_parameter("sun_color", SUN_DAY.lerp(DUSK_GLOW, glow * 0.7))
+	sky_material.set_shader_parameter("sun_color", SUN_DAY.lerp(SUN_GOLDEN, golden * 0.6).lerp(DUSK_GLOW, glow * 0.7))
+	sky_material.set_shader_parameter("halo_amount", 0.35 * clear + 0.5 * golden)
+	sky_material.set_shader_parameter("cloud_paint", 1.0)
 	sky_material.set_shader_parameter("star_amount", smoothstep(0.35, 0.95, night))
 	sky_material.set_shader_parameter("cloud_lit", CLOUD_NIGHT.lerp(CLOUD_LIT, day_t).lerp(HORIZON_OVERCAST, overcast * 0.5 * day_t))
 	sky_material.set_shader_parameter("cloud_shade", (CLOUD_NIGHT * 0.6).lerp(CLOUD_SHADE, day_t).lerp(SKY_TOP_OVERCAST.darkened(0.2), overcast * day_t))
@@ -489,29 +529,46 @@ func _update_atmosphere(hour: float, wet: float, rain: float) -> void:
 		light_deg = lerpf(light_deg, maxf(hdri_el, 8.0), _hdri_weight)
 	sun.basis = Basis.looking_at(-_sky_dir(deg_to_rad(light_deg), az), Vector3.UP)
 	# the panoramas carry their own clouds, so the procedural layer only adds a faint drift over them
-	sky_material.set_shader_parameter("cloud_opacity", lerpf(1.0, 0.3, _hdri_weight))
+	sky_material.set_shader_parameter("cloud_opacity", lerpf(1.0, 0.75, _hdri_weight))
+	# the clear panoramas are pale; a deeper blue overhead reads as a bright, clean CMR sky
+	sky_material.set_shader_parameter("hdri_saturation", lerpf(1.0, 1.3, clear))
 
-	world_environment.ambient_light_energy = lerpf(0.3, 1.0, day_t) * (1.0 - overcast * 0.2)
-	world_environment.ambient_light_color = AMBIENT_NIGHT.lerp(Color.WHITE, day_t)
-	sun.light_energy = lerpf(0.1, 1.6, day_t) * (1.0 - overcast * 0.62)
-	sun.light_color = SUN_NIGHT.lerp(SUN_DAY, day_t).lerp(DUSK_GLOW, glow * 0.45)
+	# a clear sun about two and a half times the sky fill, and the fill a cool blue, so shadows are coloured
+	# rather than grey (the WRC stage sets' ratio); after dark and under cloud the fill is the sky's own
+	var fill: Color = (preset.fill as Color).lerp(FILL_GOLDEN, golden).lerp(FILL_OVERCAST, overcast)
+	world_environment.ambient_light_color = AMBIENT_NIGHT.lerp(fill, day_t)
+	world_environment.ambient_light_sky_contribution = lerpf(1.0, 0.5, clear)
+	world_environment.ambient_light_energy = lerpf(0.3, 0.95, day_t) * (1.0 - overcast * 0.2)
+	sun.light_energy = lerpf(0.1, 1.75, day_t) * (1.0 - overcast * 0.62) * lerpf(1.0, 0.8, golden)
+	sun.light_color = SUN_NIGHT.lerp(SUN_DAY, day_t).lerp(SUN_GOLDEN, golden * 0.85).lerp(DUSK_GLOW, glow * 0.35)
 	sun.shadow_opacity = lerpf(0.55, 1.0, day_t) * (1.0 - overcast * 0.45)
-	# haze thickens in the rain and takes on the horizon colour, so the distance melts into the sky
-	world_environment.fog_light_color = FOG_NIGHT.lerp(horizon, day_t).lerp(FOG_RAIN * lerpf(0.04, 1.0, day_t), overcast * 0.6)
-	world_environment.fog_density = 0.00032 + 0.00045 * overcast + 0.0024 * rain
-	world_environment.fog_sun_scatter = 0.18 * glow + 0.05 * (1.0 - overcast) * day_t
+	# haze takes on a paler, cooler horizon colour (gold toward a low sun) and thickens in the rain, so the
+	# distance melts into the sky and the scenery has depth
+	var haze_color := horizon.lerp(top, 0.12).lerp(HAZE_GOLDEN, golden * 0.4)
+	world_environment.fog_light_color = FOG_NIGHT.lerp(haze_color, day_t).lerp(FOG_RAIN * lerpf(0.04, 1.0, day_t), overcast * 0.6)
+	var haze := (0.00022 + 0.00022 * golden) * float(preset.haze)
+	world_environment.fog_density = haze + 0.00045 * overcast + 0.0024 * rain
+	world_environment.fog_sun_scatter = 0.18 * glow + (0.06 + 0.28 * golden) * clear
+	world_environment.adjustment_saturation = lerpf(1.02, float(preset.saturation) + 0.05 * golden, clear)
 	world_environment.glow_hdr_threshold = lerpf(1.0, 0.75, night)
-	# volumetric fog shows the headlight beams in the rain and after dark (High and Ultra only)
-	var volumetric := quality >= 2 and (rain > 0.08 or night > 0.45)
+	var is_fog := fog > 0.1 or (race and race.weather.mode == "fog")
+	# volumetric fog shows the headlight beams in the rain and after dark (High and Ultra only), or when in fog
+	var volumetric := is_fog or (quality >= 2 and (rain > 0.08 or night > 0.45 or hail > 0.08 or snow > 0.08))
 	if world_environment.volumetric_fog_enabled != volumetric:
 		world_environment.volumetric_fog_enabled = volumetric
-	world_environment.volumetric_fog_density = 0.0012 + 0.0035 * rain + 0.0005 * night
+	if is_fog:
+		world_environment.volumetric_fog_density = 0.025
+		world_environment.fog_density = 0.02
+	else:
+		world_environment.volumetric_fog_density = 0.0012 + 0.0035 * rain + 0.0005 * night
+		world_environment.fog_density = haze + 0.00045 * overcast + 0.0024 * rain
 	world_environment.volumetric_fog_albedo = Color(0.9, 0.92, 0.95).lerp(Color(0.3, 0.32, 0.36), night)
 	if far_land:
 		far_land.match_sky(sky_material, world_environment)
 	for m in _wet_materials:
 		m.set_shader_parameter("wet", wet)
 		m.set_shader_parameter("rain", rain)
+		m.set_shader_parameter("snow", snow)
 	for m in _night_materials:
 		m.set_shader_parameter("night", night)
 	_lamp_on = smoothstep(0.08, 0.55, night)
@@ -520,6 +577,12 @@ func _update_atmosphere(hour: float, wet: float, rain: float) -> void:
 	if rain_particles:
 		rain_particles.emitting = rain > 0.03
 		rain_particles.amount_ratio = clampf(rain, 0.0, 1.0)
+	if snow_particles:
+		snow_particles.emitting = snow > 0.03
+		snow_particles.amount_ratio = clampf(snow, 0.0, 1.0)
+	if hail_particles:
+		hail_particles.emitting = hail > 0.03
+		hail_particles.amount_ratio = clampf(hail, 0.0, 1.0)
 
 static func _sky_dir(el: float, az: float) -> Vector3:
 	return Vector3(sin(az) * cos(el), sin(el), -cos(az) * cos(el))
@@ -658,7 +721,8 @@ func _update_camera(delta: float) -> void:
 	_cam_head += wrapf(_focus_heading - _cam_head, -PI, PI) * _ease(30.0 if camera_mode in [2, 6, 7] else 5.0, delta, snap)
 	var fwd := Vector3(cos(_cam_head), 0.0, sin(_cam_head))
 	var v := Vector2(player.vx, player.vy).length()
-	var fov := 60.0 + minf(14.0, v * 0.35)
+	# the view opens out with speed, easing in off the line and settling by top speed rather than at a hard cap
+	var fov := 60.0 + 16.0 * smoothstep(4.0, 44.0, v)
 
 	match camera_mode:
 		0, 1: # chase / far chase
@@ -668,8 +732,12 @@ func _update_camera(delta: float) -> void:
 			var want := p - fwd * dist + Vector3.UP * height
 			# never dip under the road over a crest
 			want.y = maxf(want.y, _road_y(_focus_s - dist) + height * 0.6)
+			if not snap and v > 26.0:
+				want.y += sin(Time.get_ticks_msec() * 0.05) * (v - 26.0) * 0.001
 			camera.global_position = camera.global_position.lerp(want, _ease(7.0 if far else 10.0, delta, snap))
-			camera.look_at(p + fwd * (10.0 if far else 7.0) + Vector3.UP * (0.6 if far else 1.0), Vector3.UP)
+			var roll_tilt := clampf(-player.body_roll * 0.35, -0.06, 0.06)
+			var cam_up := Vector3.UP.rotated(fwd, roll_tilt)
+			camera.look_at(p + fwd * (10.0 if far else 7.0) + Vector3.UP * (0.6 if far else 1.0), cam_up)
 		2: # roof cam
 			camera.global_position = p + fwd * 0.25 + Vector3.UP * 1.3
 			var ahead := p + fwd * 30.0
@@ -716,6 +784,12 @@ func _update_camera(delta: float) -> void:
 			camera.global_position = camera.global_position.lerp(want, _ease(8.0, delta, snap))
 			camera.look_at(p, fwd)
 			fov = 55.0
+	if camera_mode in [0, 1, 2, 6, 7] and not snap and v > 3.0:
+		# a light judder over kerbs, gravel and grass, felt more the closer the camera rides to the car
+		var on: PackedFloat32Array = preload("res://scripts/ui/world_audio.gd").wheel_contact(race, player)
+		var t := Time.get_ticks_msec() * 0.001
+		var amp := (on[0] * 0.02 + on[2] * 0.026 + on[1] * 0.01) * clampf(v / 30.0, 0.3, 1.0) * (0.5 if camera_mode == 1 else 1.0)
+		camera.global_position.y += amp * (sin(t * 71.0) * 0.6 + sin(t * 113.0 + 1.3) * 0.4)
 	camera.fov += (fov - camera.fov) * _ease(4.0, delta, snap)
 
 ## The trackside director: keeps the camera on air while it has the car (at p, _focus_s along the track) in
@@ -1033,7 +1107,7 @@ func _update_beams() -> void:
 		var fwd := -visual.basis.z
 		var from := visual.position + fwd * 1.9 + Vector3.UP * 0.66
 		beam.look_at_from_position(from, visual.position + fwd * 26.0 - Vector3.UP * 0.4, Vector3.UP)
-		beam.light_energy = 24.0 * night
+		beam.light_energy = 24.0 * night * Service.lamp(_rank_cars[i], race.clock) # damaged electrics dim and flicker
 		beam.visible = true
 
 func toggle_racing_line() -> bool:
@@ -1064,8 +1138,8 @@ func _build_environment() -> void:
 	world_environment.ambient_light_energy = 0.65
 	# AgX keeps bright skies, headlights and sunsets from clipping to flat white
 	world_environment.tonemap_mode = Environment.TONE_MAPPER_AGX
-	world_environment.tonemap_exposure = 1.05
-	world_environment.tonemap_agx_contrast = 1.25
+	world_environment.tonemap_exposure = 1.0
+	world_environment.tonemap_agx_contrast = 1.4
 	world_environment.ssao_enabled = true
 	world_environment.ssao_radius = 1.6
 	world_environment.ssao_intensity = 1.6
@@ -1138,6 +1212,63 @@ func _build_environment() -> void:
 	rain_particles.draw_pass_1 = rain_mesh
 	rain_particles.emitting = false
 	add_child(rain_particles)
+
+	var snow_mesh := QuadMesh.new()
+	snow_mesh.size = Vector2(0.08, 0.08)
+	var snow_material := StandardMaterial3D.new()
+	snow_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	snow_material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	snow_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	snow_material.albedo_color = Color(0.95, 0.97, 1.0, 0.85)
+	snow_mesh.material = snow_material
+	_snow_material = snow_material
+	var snow_process := ParticleProcessMaterial.new()
+	snow_process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	snow_process.emission_box_extents = Vector3(32.0, 20.0, 32.0)
+	snow_process.direction = Vector3(0.0, -1.0, 0.0)
+	snow_process.spread = 15.0
+	snow_process.gravity = Vector3(0.5, -2.5, 0.2)
+	snow_process.initial_velocity_min = 1.2
+	snow_process.initial_velocity_max = 2.8
+	snow_particles = GPUParticles3D.new()
+	snow_particles.name = "Snow"
+	snow_particles.amount = 600
+	snow_particles.lifetime = 2.5
+	snow_particles.local_coords = true
+	snow_particles.visibility_aabb = AABB(Vector3(-40, -40, -40), Vector3(80, 80, 80))
+	snow_particles.process_material = snow_process
+	snow_particles.draw_pass_1 = snow_mesh
+	snow_particles.emitting = false
+	add_child(snow_particles)
+
+	var hail_mesh := QuadMesh.new()
+	hail_mesh.size = Vector2(0.045, 0.09)
+	var hail_material := StandardMaterial3D.new()
+	hail_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	hail_material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	hail_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	hail_material.albedo_color = Color(0.92, 0.95, 1.0, 0.8)
+	hail_material.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_PIXEL_ALPHA
+	hail_mesh.material = hail_material
+	_hail_material = hail_material
+	var hail_process := ParticleProcessMaterial.new()
+	hail_process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	hail_process.emission_box_extents = Vector3(34.0, 24.0, 34.0)
+	hail_process.direction = Vector3(0.0, -1.0, 0.0)
+	hail_process.spread = 4.0
+	hail_process.gravity = Vector3(0.0, -32.0, 0.0)
+	hail_process.initial_velocity_min = 22.0
+	hail_process.initial_velocity_max = 35.0
+	hail_particles = GPUParticles3D.new()
+	hail_particles.name = "Hail"
+	hail_particles.amount = 700
+	hail_particles.lifetime = 1.0
+	hail_particles.local_coords = true
+	hail_particles.visibility_aabb = AABB(Vector3(-40, -40, -40), Vector3(80, 80, 80))
+	hail_particles.process_material = hail_process
+	hail_particles.draw_pass_1 = hail_mesh
+	hail_particles.emitting = false
+	add_child(hail_particles)
 
 	camera = Camera3D.new()
 	camera.name = "RaceCamera"
@@ -1322,6 +1453,9 @@ func _build_terrain(ground: MeshInstance3D) -> void:
 	terrain_material.set_shader_parameter("use_vertex_color", true)
 	terrain_material.set_shader_parameter("tex_color_mix", 0.1)
 	terrain_material.set_shader_parameter("slope_rock", 0.4 if track.cfg.theme == "city" else 1.0)
+	terrain_material.set_shader_parameter("lush", 1.0)
+	if ground.material_override is ShaderMaterial:
+		(ground.material_override as ShaderMaterial).set_shader_parameter("lush", 1.0)
 	if surroundings:
 		surroundings.apply_land_map(terrain_material)
 	_terrain_material = terrain_material
@@ -1578,7 +1712,17 @@ func _build_road_supports() -> void:
 		instance.material_override = _terrain_material
 	track_root.add_child(instance)
 
+## Close-up road detail per quality preset (road.gdshader `detail`: aggregate, tar snakes, streaks, edge wear).
+const ROAD_DETAIL := [0.0, 1.0, 1.0, 1.0]
+
 func _add_ribbon(width: float, lift: float, material: Material, label: String) -> void:
+	var sm := material as ShaderMaterial
+	if sm and sm.shader == ROAD_SHADER:
+		sm.set_shader_parameter("detail", ROAD_DETAIL[quality])
+		# a street stage's carriageway is patched, cracked town tarmac; circuit asphalt stays smooth
+		sm.set_shader_parameter("street", 1.0 if label == "Asphalt" and track.cfg.street_stage else 0.0)
+	elif sm and sm.shader == GROUND_SHADER:
+		sm.set_shader_parameter("lush", 1.0)
 	var vertices := PackedVector3Array()
 	var indices := PackedInt32Array()
 	var half := width * 0.5
@@ -1643,8 +1787,11 @@ func _add_ribbon(width: float, lift: float, material: Material, label: String) -
 	track_root.add_child(instance)
 
 ## Painted white lines along both track edges, following the banking.
+const PAINT_SHADER := preload("res://shaders/road_paint.gdshader")
+
 func _add_edge_lines() -> void:
 	var vertices := PackedVector3Array()
+	var uvs := PackedVector2Array() # (across the line 0..1, metres along the lap) for the paint shader
 	var indices := PackedInt32Array()
 	for side in [-1.0, 1.0]:
 		var inner: float = side * (track.half - 0.52)
@@ -1657,6 +1804,8 @@ func _add_edge_lines() -> void:
 			var center := Vector3(track.X[i] - world_center.x, y, track.Y[i] - world_center.y)
 			vertices.append(center + normal * inner + Vector3.UP * track.bank_rise(s, inner))
 			vertices.append(center + normal * outer + Vector3.UP * track.bank_rise(s, outer))
+			uvs.append(Vector2(0.0, s))
+			uvs.append(Vector2(1.0, s))
 		for i in track.n:
 			var a := base + i * 2
 			var c := base + ((i + 1) % track.n) * 2
@@ -1667,6 +1816,7 @@ func _add_edge_lines() -> void:
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
 	arrays[Mesh.ARRAY_INDEX] = indices
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
@@ -1677,8 +1827,11 @@ func _add_edge_lines() -> void:
 	line.name = "EdgeLines"
 	line.mesh = st.commit()
 	line.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	var mat := _material(Color("#e8e5da"), 0.62)
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var mat := ShaderMaterial.new()
+	mat.shader = PAINT_SHADER
+	mat.set_shader_parameter("grain", noise_texture("grain"))
+	mat.set_shader_parameter("street", 1.0 if track.cfg.street_stage else 0.0)
+	_wet_materials.append(mat)
 	line.material_override = mat
 	track_root.add_child(line)
 
@@ -1814,6 +1967,8 @@ func _build_start_finish_gantry() -> void:
 		line_mat.roughness = 0.9
 	line.material_override = line_mat
 	track_root.add_child(line)
+	if track.cfg.street_stage:
+		return # a public road: just the painted line
 
 	# 2. Overhead gantry (Blender pieces): lattice legs, a box truss stretched across the road and the
 	# start-light housing, with two rows of five lights (both rows of a column share one material)
@@ -1967,6 +2122,8 @@ func _build_pit_lane() -> void:
 ## over the door, a glazed hospitality floor with a balcony and a roof terrace; end walls, and race
 ## control beside the pit exit.
 func _build_pit_garages() -> void:
+	if not track.cfg.grandstands or track.cfg.street_stage:
+		return
 	var span := _garage_span()
 	if span == Vector2.ZERO:
 		return
@@ -2506,8 +2663,8 @@ func _build_racing_line() -> void:
 	for i in n:
 		var s := i * track.step
 		var d := d_s[i]
-		var p_left := track.pos(s, d - 0.24)
-		var p_right := track.pos(s, d + 0.24)
+		var p_left := track.pos(s, d - 0.36)
+		var p_right := track.pos(s, d + 0.36)
 
 		verts.append(Vector3(p_left[0] - world_center.x, y_s[i] + track.bank_rise(s, d - 0.24), p_left[1] - world_center.y))
 		verts.append(Vector3(p_right[0] - world_center.x, y_s[i] + track.bank_rise(s, d + 0.24), p_right[1] - world_center.y))
@@ -2540,7 +2697,7 @@ func _build_racing_line() -> void:
 	rl_mat.vertex_color_is_srgb = true
 	rl_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	rl_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	rl_mat.albedo_color = Color(1, 1, 1, 0.72)
+	rl_mat.albedo_color = Color(1.1, 1.1, 1.1, 0.85)
 	racing_line_node.material_override = rl_mat
 	racing_line_node.visible = show_racing_line
 	track_root.add_child(racing_line_node)
@@ -2623,6 +2780,8 @@ func _build_trees(_extent: float) -> void:
 		var foliage := ShaderMaterial.new()
 		foliage.shader = FOLIAGE_SHADER
 		foliage.set_shader_parameter("grain", noise_texture("grain"))
+		foliage.set_shader_parameter("variety", 1.0)
+		foliage.set_shader_parameter("translucency", 0.5)
 		_wet_materials.append(foliage)
 		for k in kinds:
 			_add_tree_instances(root, meshes[k], Transform3D.IDENTITY, transforms[k], tints[k], foliage)
@@ -2827,7 +2986,7 @@ func _build_lighting() -> void:
 
 	# floodlight masts round the lap, outside the run-off (the city has street lamps instead): on the pit side
 	# behind the garages, and alternating sides elsewhere, wherever there is room
-	if cfg.theme != "city" and cfg.floodlight_spacing > 0.0:
+	if cfg.theme != "city" and cfg.floodlight_spacing > 0.0 and not cfg.street_stage:
 		var spacing := cfg.floodlight_spacing
 		var count := maxi(1, roundi(track.L / spacing))
 		for k in count:
@@ -2868,7 +3027,7 @@ func _build_lighting() -> void:
 
 	# the pit building: a post between the lane and the doors every 30 m, and a light strip under the ledge
 	var garages := _garage_span()
-	if garages != Vector2.ZERO:
+	if garages != Vector2.ZERO and not cfg.street_stage: # (a street stage has no pit building)
 		var sg := pit_side
 		var s := garages.x + 8.0
 		while s < garages.y - 4.0:
@@ -2916,7 +3075,7 @@ func _build_lighting() -> void:
 		var light := OmniLight3D.new()
 		light.name = "LampLight%d" % i
 		light.shadow_enabled = false
-		light.light_specular = 0.6
+		light.light_specular = 0.3 # 0.6 laid a sheet of white glare over wet tarmac and run-off under each mast
 		light.light_volumetric_fog_energy = 0.3 # the lamps' haze would grey the whole picture in rain
 		light.visible = false
 		root.add_child(light)
@@ -2940,7 +3099,7 @@ func _lamp_post(fx: Array, p: Vector2, ground: float, look: Vector2, mast: bool)
 		var at := top + to * 0.9 + Vector3.UP * 0.2
 		fx[1].append(Transform3D(basis.scaled_local(Vector3(5.7, 2.7, 0.3)), at - dir * 0.22))
 		fx[2].append(Transform3D(basis.scaled_local(Vector3(5.2, 2.2, 0.25)), at))
-		_register_lamp(at + dir * 2.0, Color("#eaf1ff"), 120.0, 110.0, false)
+		_register_lamp(at + dir * 2.0, Color("#eaf1ff"), 70.0, 85.0, false) # lights the circuit, not the woods around it
 	else:
 		var arm := 1.7
 		var basis := Basis.looking_at(to)
@@ -3003,7 +3162,7 @@ func _update_lamp_lights() -> void:
 ## seated crowd, a cantilever roof with sponsor boards on its fascia and the front wall, closed at each
 ## end by a side wall and stair. The run is split into straight stands that follow the road round bends.
 func _build_grandstands() -> void:
-	if not track.cfg.grandstands:
+	if not track.cfg.grandstands or track.cfg.street_stage:
 		return
 	var start_s: float = track.cfg.stands.x
 	var end_s: float = track.cfg.stands.y
@@ -3475,6 +3634,8 @@ func _setup_tv_cameras() -> void:
 		# on the outside of the bend, alternating sides on the straights
 		var side := -signf(k) if absf(k) > 1.0 / 300.0 else (1.0 if i % 2 == 0 else -1.0)
 		var kind := TvKind.TOWER if i % 4 == 0 else (TvKind.LONG if i % 4 == 2 else TvKind.GROUND)
+		if kind == TvKind.TOWER and track.cfg.street_stage:
+			kind = TvKind.LONG # no scaffold towers by a public road
 		# low cameras stand behind the barrier, except where it carries a catch fence, which would fill the
 		# shot at close range: there they stand on the road side of it
 		var edge := track.half + track.cfg.runoff

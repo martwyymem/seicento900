@@ -7,16 +7,36 @@ const RaceHud = preload("res://scripts/ui/race_hud.gd")
 
 ## Circuits offered in the menus, in menu order; each key needs data/tracks/<key>.tres and .json.
 ## TRACK_NAMES is the display name for the key at the same index.
-const TRACK_KEYS := ["gp", "nordschleife", "monaco", "indy", "lemans", "monza", "silverstone", "spa", "suzuka", "zandvoort", "fiat"]
-const TRACK_NAMES := ["Nürburgring GP", "Nordschleife", "Monaco", "Indianapolis", "Le Mans", "Monza", "Silverstone", "Spa-Francorchamps", "Suzuka", "Zandvoort", "Fiat Track"]
+const TRACK_KEYS := ["gp", "nordschleife", "monaco", "indy", "lemans", "monza", "silverstone", "spa", "suzuka", "zandvoort", "fiat", "tokyo", "bielsko", "krakow", "oswiecim", "wilamowice", "brzeszcze", "pszczyna", "bor"]
+const TRACK_NAMES := ["Nürburgring GP", "Nordschleife", "Monaco", "Indianapolis", "Le Mans", "Monza", "Silverstone", "Spa-Francorchamps", "Suzuka", "Zandvoort", "Fiat Track", "Tokyo C1 Expressway", "Bielsko-Biała Szyndzielnia", "Kraków Royal Ring", "Oświęcim Riverfront", "Wilamowice Country Loop", "Brzeszcze Industrial Sprint", "Pszczyna Castle Grounds", "Bór Forest Stage"]
 
 ## Championship rounds in order (track keys)
 const CHAMPIONSHIP_CALENDAR := ["monza", "silverstone", "spa", "gp", "monaco", "indy", "lemans", "nordschleife"]
 ## Points for 1st, 2nd, ... (F1 scoring); positions past the end score nothing
 const CHAMPIONSHIP_POINTS := [25, 18, 15, 12, 10, 8, 6, 4, 2, 1]
+## A season is set up before round 1 (champ_data.config) and locked once it is under way. Calendar presets:
+const SEASON_PRESETS := [
+	{"name": "Classic GP", "tracks": CHAMPIONSHIP_CALENDAR},
+	{"name": "Polish Tour", "tracks": ["wilamowice", "brzeszcze", "bor", "pszczyna", "bielsko", "oswiecim", "krakow", "fiat"]},
+	{"name": "World Tour", "tracks": ["monza", "suzuka", "silverstone", "zandvoort", "spa", "tokyo", "monaco", "krakow", "indy", "nordschleife"]},
+	{"name": "Full", "tracks": TRACK_KEYS},
+	{"name": "Custom", "tracks": []}, # whatever is ticked on the calendar list
+]
+const SEASON_LENGTHS := [{"name": "Sprint (½ laps)", "mult": 0.5}, {"name": "Standard", "mult": 1.0}, {"name": "Long (×1.5 laps)", "mult": 1.5}]
+const SEASON_POINTS := [
+	{"name": "25-18-15-12-10-8-6-4-2-1", "table": CHAMPIONSHIP_POINTS},
+	{"name": "10-8-6-5-4-3-2-1", "table": [10, 8, 6, 5, 4, 3, 2, 1]},
+	{"name": "10-6-4-3-2-1", "table": [10, 6, 4, 3, 2, 1]},
+]
+const WEATHER_KEYS := ["dry", "wet", "snow", "hail", "fog", "variable"]
+const SEASON_WEATHERS := ["Dry", "Wet", "Snow", "Hail", "Fog", "Variable", "Random each round"]
+const RANDOM_WEATHER_POOL := ["dry", "dry", "dry", "dry", "wet", "variable", "variable", "fog", "snow", "hail"]
+## Damage & repairs between events: Off (the car is rebuilt), Realistic (damage carries over, a 60-minute
+## service), Hardcore (it carries over and the crew gets half the time).
+const SEASON_DAMAGE := [{"name": "Off (rebuilt every round)", "minutes": 0}, {"name": "Realistic (60 min service)", "minutes": 60}, {"name": "Hardcore (30 min service)", "minutes": 30}]
 const PROJECT_FINISH_ABOVE := 0.05 ## share of the race left beyond which a DNF projects the finish instead of simulating it
 ## Tabs across the top of the race front end (set-up, repair, ...)
-const TOP_MENU_TABS := ["Information", "Set Up", "Repair", "Race", "Save", "Quit"]
+const TOP_MENU_TABS := ["Set Up", "Circuit Info", "Car & Service"]
 const MENU_TRACK_ART := preload("res://scripts/ui/menu_track_art.gd")
 const MENU_WEATHER_ICON := preload("res://scripts/ui/menu_weather_icon.gd")
 const MENU_TEMPERATURE_BAR := preload("res://scripts/ui/menu_temperature_bar.gd")
@@ -24,13 +44,17 @@ const MENU_REPAIR_ART := preload("res://scripts/ui/menu_repair_art.gd")
 const MENU_REPAIR_STATUS := preload("res://scripts/ui/menu_repair_status.gd")
 const MENU_CAR_SCENE := preload("res://scripts/ui/race_car_visual.tscn")
 const LOADING_SCREEN := preload("res://scripts/ui/loading_screen.gd")
+const RetroPipeline := preload("res://scripts/ui/retro_pipeline.gd")
+const CampaignData := preload("res://scripts/sim/campaign.gd")
 ## Main menu entries: `id` picks the action, `word` is the big sliding word, `desc` the line under it
 const FRONT_MENU := [
-	{"id": "quick_race", "word": "quick race", "desc": "One race on any circuit. Pick the track, laps and weather."},
-	{"id": "endurance", "word": "endurance", "desc": "Race for hours instead of laps, with pit stops and the light changing."},
-	{"id": "championship", "word": "championship", "desc": "Eight rounds around the calendar, with points carried from race to race."},
-	{"id": "options", "word": "options", "desc": "Display, frame rate and graphics settings."},
-	{"id": "quit", "word": "quit", "desc": "Close the game."},
+	{"id": "campaign", "word": "CAMPAIGN", "desc": "The Seicento Odyssey: From Bielsko-Biała across Poland to Tokyo"},
+	{"id": "quick_race", "word": "QUICK RACE", "desc": "Pick a circuit and race: the defaults are ready, just press Start"},
+	{"id": "rally", "word": "RALLY", "desc": "Special stages against the clock with your co-driver's pace notes"},
+	{"id": "time_trial", "word": "TIME TRIAL", "desc": "Hot laps alone on any circuit, against your ghost and your lap records"},
+	{"id": "championship", "word": "CHAMPIONSHIP", "desc": "Your own season: pick the calendar, rules and damage, then race for the title"},
+	{"id": "options", "word": "OPTIONS", "desc": "Retro shaders (F1), display, audio, driving aids, controls"},
+	{"id": "quit", "word": "QUIT", "desc": "Exit the game"},
 ]
 ## Per-circuit defaults applied when the track is picked: race laps, tyre wear and fuel use multipliers.
 ## Indianapolis is flat out all the way round, so tyres hardly matter there; it is a fuel race instead (a
@@ -47,16 +71,50 @@ const TRACK_DEFAULTS := {
 	"suzuka": {"laps": 6, "wear": 2.0},
 	"zandvoort": {"laps": 6, "wear": 2.0},
 	"fiat": {"laps": 8, "wear": 2.0},
+	"tokyo": {"laps": 6, "wear": 2.0},
+	"bielsko": {"laps": 5, "wear": 2.0},
+	"krakow": {"laps": 6, "wear": 2.0},
+	"oswiecim": {"laps": 8, "wear": 2.0},
+	"wilamowice": {"laps": 3, "wear": 2.0},
+	"brzeszcze": {"laps": 8, "wear": 2.0},
+	"pszczyna": {"laps": 6, "wear": 2.0},
+	"bor": {"laps": 7, "wear": 2.0},
 }
 
 ## Stock paints ◂ ▸ steps through on the set-up page (Enter on the swatch still mixes any colour)
 const PAINTS := ["#b3121d", "#f2f2f2", "#16181d", "#f5c400", "#ff7a00", "#1f4fa8", "#2e7d32", "#00a3b4", "#6a1b9a", "#8e9aa6"]
 ## Pages the header tabs switch between with Q/E (PgUp/PgDn, the shoulder buttons)
-const MENU_PAGES := ["Information", "Set Up", "Repair"]
-const MENU_PAGE_IDS := ["information", "setup", "repair"] ## active_menu_page of each of MENU_PAGES
-const SETUP_KEYS := "↑ ↓ choose   ◂ ▸ change   Enter open / press   Home / End first / RACE   Q E pages   Esc back"
+const MENU_PAGES := ["Set Up", "Circuit Info", "Car & Service"]
+const MENU_PAGE_IDS := ["setup", "information", "repair"] ## active_menu_page of each of MENU_PAGES
+const SETUP_KEYS := "↑ ↓ choose   ◂ ▸ change   Enter press   Home / End first / RACE   Q E pages   Esc back"
+## The same keys on a gamepad, shown while one is connected (_hint)
+const PAD_KEYS := {
+	"home": "✚ ◂ ▸ browse     Ⓐ select",
+	"setup": "✚ ↑ ↓ choose   ◂ ▸ change   Ⓐ press   LB RB pages   START race   Ⓑ back",
+	"information": "LB RB pages   Ⓐ open set up   START race   Ⓑ back",
+	"repair": "✚ ↑ ↓ part   Ⓐ repair   LB RB pages   START continue   Ⓑ back",
+	"options": "✚ ↑ ↓ choose   ◂ ▸ change   Ⓐ press   Ⓑ back",
+}
+const KEY_KEYS := {
+	"home": "◂ ▸ browse     Enter select",
+	"setup": SETUP_KEYS,
+	"information": "Q E pages   Enter open set up   Esc back",
+	"repair": "↑ ↓ part   Enter repair   Space continue   Q E pages   Esc back",
+	"options": "↑ ↓ choose   ◂ ▸ change   Enter press   Esc back",
+}
 const WARP_VALUES := [1, 2, 5, 10, 30, 60] ## time-warp steps (, and . keys)
 const UI_SCALES := [0.85, 1.0, 1.15, 1.3] ## Options → Interface size, on top of the window scaling
+const BASE_SIZE := Vector2i(1600, 900) ## the canvas the interface is laid out on (project.godot)
+## Options → Resolution presets (only those that fit the screen are offered, with Native and the window's own).
+const RESOLUTIONS: Array[Vector2i] = [Vector2i(1280, 720), Vector2i(1366, 768), Vector2i(1600, 900), Vector2i(1920, 1080), Vector2i(2560, 1440), Vector2i(3840, 2160)]
+## Options → Aspect ratio: Auto fills the window; a ratio letterboxes (or pillarboxes) the game to it.
+const ASPECTS := [
+	{"name": "Auto (fill the window)", "ratio": 0.0},
+	{"name": "16:9", "ratio": 16.0 / 9.0},
+	{"name": "16:10", "ratio": 16.0 / 10.0},
+	{"name": "21:9", "ratio": 21.0 / 9.0},
+	{"name": "4:3", "ratio": 4.0 / 3.0},
+]
 ## 3D upscalers offered in the options (MetalFX only where the GPU driver supports it).
 const UPSCALERS := [
 	{"name": "Off (native resolution)", "mode": Viewport.SCALING_3D_MODE_BILINEAR},
@@ -96,10 +154,14 @@ const TICK := 1.0 / 120.0 ## fixed simulation step (120 Hz); the parity tests an
 const WARP_TICKS := {2: 2, 5: 4, 10: 4, 30: 4, 60: 6} ## ticks the rail model steps at once at each time warp
 const WARP_SIM_SHARE := 0.6 ## at most this much of each frame goes on the simulation under time warp
 # Shorthands for the CmrStyle palette
-const INK := CmrStyle.TEXT
-const MUTED := CmrStyle.MUTED
-const ACCENT := CmrStyle.ORANGE
-const DANGER := CmrStyle.RED
+var INK: Color:
+	get: return CmrStyle.TEXT
+var MUTED: Color:
+	get: return CmrStyle.MUTED
+var ACCENT: Color:
+	get: return CmrStyle.ORANGE
+var DANGER: Color:
+	get: return CmrStyle.RED
 
 var race: Race
 var lap_records: LapRecords ## the player's lap records on this circuit, and the lap being recorded
@@ -126,9 +188,9 @@ var menu_home_strip: HBoxContainer
 var menu_home_desc: Label
 var menu_home_track: Label
 var options_panel: PanelContainer
-var upscaler_picker: OptionButton
-var upscale_preset_picker: OptionButton
-var sharpening_picker: OptionButton
+var upscaler_picker: MenuSelector
+var upscale_preset_picker: MenuSelector
+var sharpening_picker: MenuSelector
 var render_viewport: SubViewport
 var home_menu_index := 0
 var home_tween: Tween
@@ -139,6 +201,9 @@ var information_facts: Label
 var menu_car_preview: TextureRect
 var menu_car_viewport: SubViewport
 var render_view: TextureRect
+var retro_pipeline: RetroPipeline
+var retro_picker: MenuSelector
+var graphics_retro_mode := 0
 var menu_car_summary: Label
 var menu_car_rule: ColorRect
 var repair_panel: Control
@@ -157,11 +222,18 @@ var repair_button: Button
 var repair_art: Control
 var last_race_parts := {} ## the player's parts at the end of the last single race, for the Repair page
 var menu_scroll: ScrollContainer
-var display_mode_picker: OptionButton
-var antialiasing_picker: OptionButton
+var display_mode_picker: MenuSelector
+var resolution_picker: MenuSelector
+var resolution_note: Label
+var aspect_picker: MenuSelector
+var audio_pickers := {} ## AudioSettings channel key -> its volume picker
+var graphics_resolution := Vector2i(-1, -1) ## Options → Resolution: (-1, -1) as launched, ZERO native
+var graphics_aspect := 0 ## index into ASPECTS
+var _resolution_choices: Array[Vector2i] = [] ## what resolution_picker's entries stand for
+var antialiasing_picker: MenuSelector
 var vsync_toggle: CheckButton
-var fps_limit_picker: OptionButton
-var reflections_picker: OptionButton
+var fps_limit_picker: MenuSelector
+var reflections_picker: MenuSelector
 var ssao_toggle: CheckButton
 var shadows_toggle: CheckButton
 var codriver_voice_toggle: CheckButton
@@ -177,7 +249,7 @@ var graphics_ssao := true
 var graphics_shadows := true
 var codriver_voice := true ## Options → Co-driver voice: the pace notes are read aloud
 var graphics_ui_scale := 1 ## index into UI_SCALES
-var ui_scale_picker: OptionButton
+var ui_scale_picker: MenuSelector
 var menu_tab_buttons: Dictionary = {}
 var menu_tab_dividers: Dictionary = {}
 var menu_tab_index := 1
@@ -193,21 +265,38 @@ var quali_session := false ## the session on screen is a qualifying run, not a r
 var _idle_input := Race.PlayerInput.new()
 
 # Setup controls
-var mode_button: Button
+var setup_title_label: Label ## the set-up page's heading: the mode chosen on the main menu
+var setup_subtitle_label: Label
 var is_championship_mode := false
+var is_campaign_mode := false
+var campaign_stage_index := 0
+var campaign_side: VBoxContainer
+var campaign_act_label: Label
+var campaign_stage_picker: MenuSelector
+var campaign_title_label: Label
+var campaign_circuit_label: Label
+var campaign_desc_label: Label
+var campaign_target_label: Label
+var campaign_trophy_label: Label
+var campaign_tip_label: Label
+var campaign_start_button: Button
+var campaign_cleared := false ## the last campaign race met its target: back at the menu, the briefing moves on
+var open_world: OpenWorld = null ## the campaign's free roam round Brzeszcze (scripts/world/open_world.gd), kept once built
+var world_return := -1 ## the campaign stage started from the open world: its results lead back to its beacon
+var campaign_world_button: Button
 var champ_data: Dictionary = {}
-var track_picker: OptionButton
+var track_picker: MenuSelector
 var laps_picker: SpinBox
-var format_picker: OptionButton
+var format_picker: MenuSelector
 var hours_picker: SpinBox
 var start_hour_picker: SpinBox
 var opponents_picker: SpinBox
-var difficulty_picker: OptionButton
-var weather_picker: OptionButton
-var gearbox_picker: OptionButton
-var grid_picker: OptionButton
-var quali_picker: OptionButton ## championship qualifying: drive it, let the co-driver run it, or skip it
-var assists_picker: OptionButton
+var difficulty_picker: MenuSelector
+var weather_picker: MenuSelector
+var gearbox_picker: MenuSelector
+var grid_picker: MenuSelector
+var quali_picker: MenuSelector ## championship qualifying: drive it, let the co-driver run it, or skip it
+var assists_picker: MenuSelector
 var wear_picker: SpinBox
 var fuel_picker: SpinBox
 var mandatory_stop_toggle: CheckButton
@@ -219,19 +308,53 @@ var dynamic_toggle: CheckButton
 var draft_toggle: CheckButton
 var strategist_toggle: CheckButton
 var parallel_toggle: CheckButton
-var crew_picker: OptionButton
-var ai_learning_picker: OptionButton
-var bot_physics_picker: OptionButton
+var crew_picker: MenuSelector
+var ai_learning_picker: MenuSelector
+var bot_physics_picker: MenuSelector
 var player_name_edit: LineEdit
 var player_number_picker: SpinBox
 var player_color_picker: ColorPickerButton
 var player_stripes_toggle: CheckButton
+var setup_format_row: HBoxContainer
+var setup_conditions_row: HBoxContainer
+var setup_driving_row: HBoxContainer
+var setup_rule_divider: ColorRect
 var champ_reset_button: Button
 var setup_column: VBoxContainer ## the settings in the set-up page's scroll, in keyboard order
 var setup_race_button: Button
 var setup_hint: Label ## under RACE: what the focused setting does, and the menu keys
 var setup_folds := {} ## section key -> {head, body, title, summary}
-var setup_open := {"driver": false, "car": false, "rules": false, "plan": false} ## folded sections start shut
+var setup_open := {"driving": false, "race": false, "driver": false, "car": false, "strategy": false, "rules": false, "plan": false, "calendar": false} ## folded sections start shut
+var is_time_trial_mode := false ## main menu → TIME TRIAL: the quick-race page for a solo run (no field)
+var is_rally_mode := false ## main menu → RALLY: an event of special stages (Rally / RallyEvent)
+var rally_event: RallyEvent = null ## the rally being run (saved to user://rally.json between stages)
+var rally_car := {} ## the rally car between stages for the service area: {parts, pull, used, serviced}
+var _rally_recorded: Race = null ## the stage race already written into rally_event (results or a quit)
+var rally_side: VBoxContainer
+var rally_event_picker: MenuSelector
+var rally_info_label: Label
+var rally_restart_button: Button
+var tt_start_row: Control ## TIME TRIAL: standing or rolling start
+var tt_start_picker: MenuSelector
+var options_column: VBoxContainer ## the Options page's settings, in keyboard order
+var menu_prompt: Label ## the button prompts along the bottom of the Circuit Info, Car & Service and Options pages
+var menu_back_button: Button
+var _stick_latch := Vector2i.ZERO ## the left stick works as a d-pad on the menus: one step per push
+# championship season set-up (champ_data.config), shown before round 1 and locked once it has been raced
+var season_box: VBoxContainer
+var season_note: Label
+var season_preset_picker: MenuSelector
+var season_order_picker: MenuSelector
+var season_length_picker: MenuSelector
+var season_opponents_picker: MenuSelector
+var season_difficulty_picker: MenuSelector
+var season_weather_picker: MenuSelector
+var season_points_picker: MenuSelector
+var season_damage_picker: MenuSelector
+var season_track_toggles := {} ## track key -> CheckButton on the custom calendar list
+var _season_syncing := false
+var repair_continue: Button ## the service area's way on to the next event
+var repair_summary: Label ## every unrepaired part and what it will do in the next race
 var _setup_focus_at := 0 ## where the keyboard was in the set-up list, for when its control goes away
 var _lit_caption: Label ## the field caption picked out for the focused setting
 var _lit_caption_color := MUTED
@@ -291,6 +414,7 @@ func _ready() -> void:
 	theme = CmrStyle.build_theme()
 	get_viewport().size_changed.connect(_fit_3d_views)
 
+	_map_pad_buttons()
 	_load_championship()
 	_build_audio()
 	add_child(DevHud.new())
@@ -304,8 +428,54 @@ func _ready() -> void:
 	_build_results()
 	loading_screen = LOADING_SCREEN.new()
 	add_child(loading_screen)
+	_build_menu_prompt()
+	Input.joy_connection_changed.connect(func(_device: int, _connected: bool) -> void: _refresh_prompts())
 	_show_home()
 	_fit_3d_views.call_deferred()
+
+## A and B work the dialogs, the pause menu and the results like Enter and Esc (Godot maps only the keys).
+func _map_pad_buttons() -> void:
+	for pair in [["ui_accept", JOY_BUTTON_A], ["ui_cancel", JOY_BUTTON_B]]:
+		var has := false
+		for ev in InputMap.action_get_events(pair[0]):
+			has = has or (ev is InputEventJoypadButton and ev.button_index == pair[1])
+		if not has:
+			var ev := InputEventJoypadButton.new()
+			ev.button_index = pair[1]
+			ev.device = -1
+			InputMap.action_add_event(pair[0], ev)
+
+## A gamepad is plugged in: the prompts show its buttons instead of the keys.
+func _pad_connected() -> bool:
+	return not Input.get_connected_joypads().is_empty()
+
+## The button prompts for a front-end page (PAD_KEYS / KEY_KEYS).
+func _hint(page: String) -> String:
+	return str((PAD_KEYS if _pad_connected() else KEY_KEYS).get(page, ""))
+
+func _build_menu_prompt() -> void:
+	menu_prompt = _label("", 17, CmrStyle.ORANGE_SOFT)
+	menu_prompt.name = "MenuPrompt"
+	menu_prompt.anchor_left = 0.045
+	menu_prompt.anchor_right = 0.98
+	menu_prompt.anchor_top = 0.955
+	menu_prompt.anchor_bottom = 0.995
+	menu_prompt.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	menu_prompt.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(menu_prompt)
+	menu_prompt.hide()
+
+## Re-labels every prompt (a pad was plugged in or out, or the page changed).
+func _refresh_prompts() -> void:
+	if is_instance_valid(menu_back_button):
+		menu_back_button.text = "MAIN MENU (Ⓑ)" if _pad_connected() else "MAIN MENU (Esc)"
+	if is_instance_valid(menu_prompt):
+		menu_prompt.text = _hint(active_menu_page)
+		menu_prompt.visible = active_menu_page in ["information", "repair", "options"] and menu_tint.visible
+	if active_menu_page == "home" and is_instance_valid(menu_home_desc):
+		_home_select(home_menu_index, false)
+	if active_menu_page == "setup" and is_instance_valid(setup_hint):
+		_setup_focus_changed(get_viewport().gui_get_focus_owner())
 
 func _build_audio() -> void:
 	audio = RaceAudio.new()
@@ -317,7 +487,7 @@ func _build_audio() -> void:
 ## pages it is off; while paused or on the results screen it draws a few more frames and then keeps its last
 ## image. The frame-rate cap follows the same states, and drops further while the window is in the background.
 func _sync_rendering() -> void:
-	var covered := menu_tint.visible
+	var covered := menu_tint.visible or (open_world != null and open_world.active)
 	var still := not covered and race != null and (paused or race.phase == "finished") and not skipping
 	_still_frames = _still_frames + 1 if still else 0
 	var live := not covered and _still_frames <= STILL_FRAMES
@@ -335,6 +505,9 @@ func _sync_rendering() -> void:
 		Engine.max_fps = fps
 
 func _process(delta: float) -> void:
+	if retro_pipeline:
+		retro_pipeline.update_time(delta)
+	_pump_track_prefetch()
 	_sync_rendering()
 	if _starting:
 		return
@@ -391,7 +564,7 @@ func _process(delta: float) -> void:
 	world_view.render_alpha = accumulator / tick
 
 	if is_instance_valid(audio):
-		audio.update_car(p, not p.finished and not p.dnf)
+		audio.update_car(p, not p.finished and not p.dnf, race.weather if race else null)
 	hud.update(delta)
 	if race.phase == "finished":
 		_show_results()
@@ -417,7 +590,9 @@ func _update_input(dt: float) -> void:
 		return
 	var st := (1.0 if right else 0.0) - (1.0 if left else 0.0)
 	var back := st == 0.0 or signf(st) != signf(steer)
-	steer = move_toward(steer, st, (7.0 if back else 3.2) * dt)
+	var v_kmh := absf(race.player.speed) * 3.6 if (race and race.player) else 0.0
+	var steer_rate := 4.4 if v_kmh < 40.0 else lerpf(4.4, 2.6, clampf((v_kmh - 40.0) / 80.0, 0.0, 1.0))
+	steer = move_toward(steer, st, (8.0 if back else steer_rate) * dt)
 	throttle = move_toward(throttle, 1.0 if up else 0.0, 6.0 * dt)
 	brake = move_toward(brake, 1.0 if down else 0.0, 8.0 * dt)
 
@@ -486,13 +661,17 @@ func _build_viewport() -> void:
 	add_child(viewport)
 	render_view = _viewport_view(viewport)
 	render_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	retro_pipeline = RetroPipeline.new()
+	retro_pipeline.set_mode(graphics_retro_mode)
+	retro_pipeline.apply_to_texture_rect(render_view)
 	add_child(render_view)
 	move_child(render_view, 0)
 	move_child(viewport, 0)
 
 	world_view = load("res://ui/race_world.tscn").instantiate()
 	viewport.add_child(world_view)
-	world_view.set_track(Race.get_track(TRACK_KEYS[0]))
+	# no circuit built yet: the front-end pages cover the 3D view, so the world is built for the first race
+	# (set_race) instead of on every circuit change in the menus
 	lap_ghost = LapGhost.new()
 	world_view.add_child(lap_ghost)
 	_apply_world_graphics_settings()
@@ -515,6 +694,8 @@ func _fit_3d_views() -> void:
 		if not is_instance_valid(view) or not is_instance_valid(vp):
 			continue
 		var px := Vector2i((view.size * px_scale).round()).max(Vector2i(2, 2))
+		if vp == render_viewport:
+			px = _render_resolution(px)
 		if vp.size != px:
 			vp.size = px
 			_still_frames = 0 # a resized target is blank until it is drawn again
@@ -557,18 +738,18 @@ func _build_setup() -> void:
 	menu_scroll.add_child(gutter)
 	var col := _column(gutter, 12)
 	setup_column = col
-	_title(col, "SET UP RACE", "SEICENTO 900 CUP")
-
+	# the mode is picked on the main menu; the page just says which one it is (Esc goes back to change it)
 	var mode_row := HBoxContainer.new()
 	mode_row.add_theme_constant_override("separation", 10)
 	col.add_child(mode_row)
-
-	mode_button = _button("SINGLE RACE", CmrStyle.FIELD)
-	mode_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	mode_button.add_theme_font_size_override("font_size", 18)
-	mode_button.pressed.connect(_toggle_mode)
-	mode_row.add_child(mode_button)
+	var title_col := VBoxContainer.new()
+	title_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mode_row.add_child(title_col)
+	_title(title_col, "QUICK RACE", "SEICENTO 900 CUP")
+	setup_title_label = title_col.get_child(0)
+	setup_subtitle_label = title_col.get_child(1)
 	var reset_button := _button("RESET SEASON", DANGER)
+	reset_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	reset_button.pressed.connect(func() -> void: champ_reset_dialog.popup_centered())
 	mode_row.add_child(reset_button)
 	champ_reset_button = reset_button
@@ -576,6 +757,7 @@ func _build_setup() -> void:
 	champ_reset_dialog.title = "Reset championship"
 	champ_reset_dialog.dialog_text = "Discard the saved championship standings and restart at round 1?"
 	champ_reset_dialog.confirmed.connect(_reset_championship)
+	_refocus_after(champ_reset_dialog)
 	add_child(champ_reset_dialog)
 
 	champ_info_label = _label("", 13, CmrStyle.TEXT)
@@ -584,10 +766,7 @@ func _build_setup() -> void:
 	champ_side = VBoxContainer.new()
 	champ_side.add_theme_constant_override("separation", 6)
 	col.add_child(champ_side)
-	var quali_row := HBoxContainer.new()
-	champ_side.add_child(quali_row)
-	quali_picker = _option_field(quali_row, "QUALIFYING", ["Drive it", "Simulate", "Skip (use grid position)"])
-	quali_picker.tooltip_text = "Each round opens with qualifying for the grid: drive it yourself, let the co-driver set a time, or start from the grid position you pick"
+	_build_season_box(champ_side)
 	champ_side.add_child(_label("CALENDAR", 13, MUTED))
 	champ_calendar = GridContainer.new()
 	champ_calendar.columns = 3
@@ -601,11 +780,86 @@ func _build_setup() -> void:
 	champ_table.add_theme_constant_override("v_separation", 2)
 	champ_side.add_child(champ_table)
 	champ_side.hide()
+
+	campaign_side = VBoxContainer.new()
+	campaign_side.add_theme_constant_override("separation", 10)
+	col.add_child(campaign_side)
+
+	campaign_act_label = _label("ACT I: SILESIAN GRASSROOTS", 15, ACCENT)
+	campaign_side.add_child(campaign_act_label)
+
+	_field_label(campaign_side, "SELECT CAMPAIGN STAGE")
+	campaign_stage_picker = MenuSelector.new()
+	campaign_stage_picker.custom_minimum_size.y = 42
+	_style_control(campaign_stage_picker)
+	campaign_stage_picker.item_selected.connect(_select_campaign_stage)
+	campaign_side.add_child(campaign_stage_picker)
+
+	var briefing_card := PanelContainer.new()
+	var card_style := StyleBoxFlat.new()
+	card_style.bg_color = Color(0.18, 0.14, 0.25, 0.75)
+	card_style.border_color = Color(CmrStyle.ORANGE, 0.6)
+	card_style.set_border_width_all(1)
+	card_style.set_corner_radius_all(4)
+	card_style.content_margin_left = 14
+	card_style.content_margin_right = 14
+	card_style.content_margin_top = 12
+	card_style.content_margin_bottom = 12
+	briefing_card.add_theme_stylebox_override("panel", card_style)
+	campaign_side.add_child(briefing_card)
+
+	var card_col := VBoxContainer.new()
+	card_col.add_theme_constant_override("separation", 8)
+	briefing_card.add_child(card_col)
+
+	campaign_title_label = _label("Stage 1: Rookie Shakedown", 20, CmrStyle.TEXT)
+	card_col.add_child(campaign_title_label)
+
+	campaign_circuit_label = _label("📍 Circuit: Wilamowice Country Loop", 14, CmrStyle.ORANGE_SOFT)
+	card_col.add_child(campaign_circuit_label)
+
+	var obj_row := VBoxContainer.new()
+	obj_row.add_theme_constant_override("separation", 4)
+	card_col.add_child(obj_row)
+
+	campaign_target_label = _label("★ TARGET: Finish P3 or higher", 14, Color("#34d399"))
+	obj_row.add_child(campaign_target_label)
+
+	campaign_trophy_label = _label("🏆 Trophy: Wilamowice Bronze Piston", 13, Color("#fbbf24"))
+	obj_row.add_child(campaign_trophy_label)
+
+	campaign_desc_label = _label("", 13, CmrStyle.TEXT)
+	campaign_desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	card_col.add_child(campaign_desc_label)
+
+	campaign_tip_label = _label("", 12, MUTED)
+	campaign_tip_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	card_col.add_child(campaign_tip_label)
+
+	campaign_start_button = _button("ENTER STAGE  ▸", ACCENT)
+	campaign_start_button.custom_minimum_size.y = 52
+	campaign_start_button.add_theme_font_size_override("font_size", 22)
+	campaign_start_button.tooltip_text = "Start this campaign stage immediately"
+	campaign_start_button.pressed.connect(_start_race)
+	campaign_side.add_child(campaign_start_button)
+
+	campaign_world_button = _button("FREE ROAM IN BRZESZCZE  ▸", CmrStyle.ORANGE_SOFT)
+	campaign_world_button.custom_minimum_size.y = 42
+	campaign_world_button.tooltip_text = "Drive the open world: every stage is a beacon on the map of Brzeszcze"
+	campaign_world_button.pressed.connect(func(): _enter_open_world(campaign_stage_index))
+	campaign_world_button.visible = OpenWorld.available()
+	campaign_side.add_child(campaign_world_button)
+
+	campaign_side.hide()
+
+	_build_rally_side(col)
+
 	_menu_rule(col)
+	setup_rule_divider = col.get_child(-1)
 
 	_field_label(col, "CIRCUIT")
 	track_label = col.get_child(-1)
-	track_picker = OptionButton.new()
+	track_picker = MenuSelector.new()
 	for name in TRACK_NAMES:
 		track_picker.add_item(name)
 	track_picker.custom_minimum_size.y = 40
@@ -614,14 +868,30 @@ func _build_setup() -> void:
 	track_picker.set_meta("caption", track_label)
 	col.add_child(track_picker)
 
+	var tt_col := VBoxContainer.new()
+	col.add_child(tt_col)
+	tt_start_row = tt_col
+	_field_label(tt_col, "START")
+	tt_start_picker = MenuSelector.new()
+	tt_start_picker.add_item("Standing start")
+	tt_start_picker.add_item("Rolling start")
+	tt_start_picker.custom_minimum_size.y = 40
+	_style_control(tt_start_picker)
+	tt_start_picker.set_meta("caption", tt_col.get_child(-1))
+	tt_start_picker.item_selected.connect(func(_i: int) -> void: _update_menu_car_summary())
+	tt_col.add_child(tt_start_picker)
+	tt_col.visible = false
+
 	var format_row := HBoxContainer.new()
 	format_row.add_theme_constant_override("separation", 14)
 	col.add_child(format_row)
+	setup_format_row = format_row
+	# the essentials up front (circuit, laps, opponents, difficulty, weather); the rest folds away below
 	var format_col := VBoxContainer.new()
 	format_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	format_row.add_child(format_col)
 	_field_label(format_col, "RACE FORMAT")
-	format_picker = OptionButton.new()
+	format_picker = MenuSelector.new()
 	format_picker.add_item("Lap race")
 	format_picker.add_item("Timed endurance")
 	format_picker.custom_minimum_size.y = 40
@@ -635,25 +905,40 @@ func _build_setup() -> void:
 	hours_picker.get_parent().visible = false
 	start_hour_picker = _spin(format_row, "START HOUR", 0, 23.75, 14, 0.25)
 	start_hour_picker.tooltip_text = "Time of day at the start; a long race runs on into the evening or the night"
+	var start_col := start_hour_picker.get_parent()
+	format_row.remove_child(format_col)
+	format_row.remove_child(start_col)
+	_grid_spacers(format_row, 2)
 
 	var row2 := HBoxContainer.new()
 	row2.add_theme_constant_override("separation", 14)
 	col.add_child(row2)
+	setup_conditions_row = row2
 	opponents_picker = _spin(row2, "OPPONENTS", 0, 15, 12)
+	opponents_picker.tooltip_text = "Cars against you. 0 = solo time trial: hot-lap alone against your ghost and lap records"
+	opponents_picker.value_changed.connect(func(_v: float) -> void: _update_opponents_label())
 	difficulty_picker = _option_field(row2, "DIFFICULTY", ["Easy", "Medium", "Hard", "Alien"])
 	difficulty_picker.selected = 1
-	weather_picker = _option_field(row2, "WEATHER", ["Dry", "Wet", "Variable"])
+	weather_picker = _option_field(row2, "WEATHER", ["Dry", "Wet", "Snow", "Hail", "Fog", "Variable"])
 	weather_picker.item_selected.connect(func(_index: int) -> void: _update_information_page())
 
+	var race_fold := _fold_section(col, "race", "ADVANCED · FORMAT & START TIME")
+	var race_row := HBoxContainer.new()
+	race_row.add_theme_constant_override("separation", 14)
+	race_fold.add_child(race_row)
+	race_row.add_child(format_col)
+	race_row.add_child(start_col)
+	_grid_spacers(race_row, 1)
 	var row3 := HBoxContainer.new()
 	row3.add_theme_constant_override("separation", 14)
-	col.add_child(row3)
+	_fold_section(col, "driving", "ADVANCED · GEARBOX, AIDS & GRID").add_child(row3)
+	setup_driving_row = row3
 	gearbox_picker = _option_field(row3, "TRANSMISSION", ["Automatic", "Manual (E/Q)"])
 	assists_picker = _option_field(row3, "DRIVING AIDS", ["Full assists", "ABS only", "Off"])
 	assists_picker.tooltip_text = "Full assists: ABS, traction and stability control, and help steering and braking for corners. ABS only: just the anti-lock brakes. Off: none"
 	grid_picker = _option_field(row3, "GRID POSITION", ["Pole", "Middle", "Back", "Random"])
 
-	var driver := _fold_section(col, "driver", "DRIVER")
+	var driver := _fold_section(col, "driver", "ADVANCED · DRIVER & PAINT")
 	var profile_row := HBoxContainer.new()
 	profile_row.add_theme_constant_override("separation", 14)
 	driver.add_child(profile_row)
@@ -683,10 +968,10 @@ func _build_setup() -> void:
 	player_name_edit.text_changed.connect(func(_text: String) -> void: _update_driver_summary())
 	player_number_picker.value_changed.connect(func(_value: float) -> void: _update_driver_summary())
 
-	_build_car_setup(_fold_section(col, "car", "CAR SET-UP"))
-	_build_strategy_section(col)
+	_build_car_setup(_fold_section(col, "car", "ADVANCED · CAR SET-UP"))
+	_build_strategy_section(_fold_section(col, "strategy", "ADVANCED · PIT STRATEGY"))
 
-	var rules := _fold_section(col, "rules", "RULES & AI")
+	var rules := _fold_section(col, "rules", "ADVANCED · RULES & AI")
 	var row5 := HBoxContainer.new()
 	row5.add_theme_constant_override("separation", 14)
 	rules.add_child(row5)
@@ -802,7 +1087,7 @@ func _fold_section(parent: VBoxContainer, key: String, title: String, rule := tr
 	head.add_theme_color_override("font_focus_color", CmrStyle.TEXT)
 	for c in ["font_hover_color", "font_pressed_color", "font_hover_pressed_color"]:
 		head.add_theme_color_override(c, ACCENT)
-	head.tooltip_text = "Enter or ◂ ▸ shows or hides these settings"
+	head.tooltip_text = "A / Enter or ◂ ▸ shows or hides these settings"
 	head.pressed.connect(func() -> void: _open_section(key, not setup_open[key]))
 	parent.add_child(head)
 	var body := VBoxContainer.new()
@@ -843,7 +1128,8 @@ func _update_rules_summary() -> void:
 func _setup_focus_items() -> Array[Control]:
 	var out: Array[Control] = []
 	_collect_focusable(setup_column, out)
-	out.append(setup_race_button)
+	if setup_race_button.visible: # a campaign stage starts from its briefing's ENTER STAGE instead
+		out.append(setup_race_button)
 	return out
 
 func _collect_focusable(node: Node, out: Array[Control]) -> void:
@@ -887,12 +1173,28 @@ func _focus_setup_default() -> void:
 	if active_menu_page != "setup" or race:
 		return
 	var items := _setup_focus_items()
+	if is_campaign_mode:
+		var at := items.find(campaign_start_button)
+		if at < 0:
+			at = items.find(campaign_stage_picker)
+		if at >= 0:
+			_focus_setup_item(items, at)
+			_show_briefing_top.call_deferred()
+			return
 	var at := items.find(track_picker)
 	if at < 0:
 		at = 0
-		while at < items.size() - 1 and items[at] in [mode_button, champ_reset_button]:
+		while at < items.size() - 1 and items[at] == champ_reset_button:
 			at += 1
 	_focus_setup_item(items, at)
+
+## The briefing from its top (title, act, stage), scrolled only as far as ENTER STAGE needs.
+func _show_briefing_top() -> void:
+	if not is_instance_valid(menu_scroll) or not is_campaign_mode or active_menu_page != "setup":
+		return
+	menu_scroll.scroll_vertical = 0
+	if is_instance_valid(campaign_start_button) and campaign_start_button.is_visible_in_tree():
+		menu_scroll.ensure_control_visible(campaign_start_button)
 
 ## ◂ ▸ on a set-up control: step a picker, number, switch, slider or paint, or open/shut a section.
 func _nudge_setting(c: Control, d: int, echo: bool) -> void:
@@ -901,14 +1203,8 @@ func _nudge_setting(c: Control, d: int, echo: bool) -> void:
 		spin.apply() # take what was typed first
 		spin.value += d * spin.step
 		(c as LineEdit).select_all()
-	elif c is OptionButton:
-		var opt := c as OptionButton
-		if opt.has_meta("list_only"):
-			return
-		var i := clampi(opt.selected + d, 0, opt.item_count - 1)
-		if i != opt.selected:
-			opt.select(i)
-			opt.item_selected.emit(i)
+	elif c is MenuSelector:
+		(c as MenuSelector).step(d) # (a browse-only list just shows the next entry)
 	elif c is CheckButton:
 		if not echo:
 			(c as CheckButton).button_pressed = not (c as CheckButton).button_pressed
@@ -922,9 +1218,6 @@ func _nudge_setting(c: Control, d: int, echo: bool) -> void:
 				near = i
 		pick.color = Color(PAINTS[posmod(near + d, PAINTS.size())])
 		pick.color_changed.emit(pick.color)
-	elif c == mode_button:
-		if not echo:
-			_toggle_mode()
 	else:
 		for key in setup_folds:
 			if setup_folds[key].head == c and setup_open[key] != (d > 0):
@@ -935,44 +1228,70 @@ static func _colour_gap(a: Color, b: Color) -> float:
 
 ## A gamepad's A on the focused set-up control (the keyboard's Enter is the GUI's own ui_accept).
 func _press_setup_item(c: Control) -> void:
-	if c is OptionButton or c is ColorPickerButton or (c is LineEdit and c.get_parent() is SpinBox):
+	if c is MenuSelector:
+		(c as MenuSelector).activate(0 if (c as MenuSelector).browse_only else 1)
+	elif c is ColorPickerButton or (c is LineEdit and c.get_parent() is SpinBox):
 		_nudge_setting(c, 1, false)
 	elif c is CheckButton:
 		(c as CheckButton).button_pressed = not (c as CheckButton).button_pressed
 	elif c is BaseButton:
 		(c as BaseButton).pressed.emit()
 
-## Keys for the set-up page, ahead of the controls (a spin box would take ↑ ↓ and a slider ◂ ▸ for itself).
+## Menu keys and gamepad buttons, ahead of the controls (a spin box would take ↑ ↓ and a slider ◂ ▸ for
+## itself): on every front-end page Esc / B goes back to the main menu, Q E / LB RB switch the header pages,
+## START races (or leaves the service area); ↑ ↓ ◂ ▸ and Enter / A work the page's list. The left stick works
+## as the d-pad. The main menu's own keys are in _unhandled_input / _unhandled_key_input.
 func _input(event: InputEvent) -> void:
-	if race or _starting or not (event is InputEventKey or event is InputEventJoypadButton) or not event.is_pressed():
+	if race or _starting or not menu_tint.visible:
+		return
+	if not get_viewport().get_embedded_subwindows().filter(func(w: Window) -> bool: return w.visible).is_empty():
+		return # a confirmation is open: it has the keys (A and B work it as Enter and Esc)
+	if event is InputEventJoypadMotion:
+		_stick_as_dpad(event as InputEventJoypadMotion)
+		return
+	if not (event is InputEventKey or event is InputEventJoypadButton) or not event.is_pressed():
 		return
 	if event is InputEventKey and (event.ctrl_pressed or event.meta_pressed or event.alt_pressed):
 		return # Cmd+Q and the like are the system's
-	if active_menu_page not in MENU_PAGE_IDS or not get_viewport().get_embedded_subwindows().filter(func(w: Window) -> bool: return w.visible).is_empty():
-		return # a picker's list or a confirmation is open: it has the keys
-	if active_menu_page == "setup" and not setup_panel.visible:
+	var page := active_menu_page
+	if page == "home" or (page == "setup" and not setup_panel.visible):
 		return
 	var owner := get_viewport().gui_get_focus_owner()
 	var typing := owner == player_name_edit
 	var key: Key = event.keycode if event is InputEventKey else KEY_NONE
 	var pad: JoyButton = event.button_index if event is InputEventJoypadButton else JOY_BUTTON_INVALID
 	var echo: bool = event.is_echo()
-	if (key in [KEY_Q, KEY_PAGEUP] and not typing) or pad == JOY_BUTTON_LEFT_SHOULDER:
+	if key == KEY_ESCAPE or pad == JOY_BUTTON_B or (key == KEY_BACKSPACE and not typing and page != "setup"):
+		if not echo:
+			_show_home()
+	elif page in MENU_PAGE_IDS and ((key in [KEY_Q, KEY_PAGEUP] and not typing) or pad == JOY_BUTTON_LEFT_SHOULDER):
 		if not echo:
 			_step_menu_page(-1)
-	elif (key in [KEY_E, KEY_PAGEDOWN] and not typing) or pad == JOY_BUTTON_RIGHT_SHOULDER:
+	elif page in MENU_PAGE_IDS and ((key in [KEY_E, KEY_PAGEDOWN] and not typing) or pad == JOY_BUTTON_RIGHT_SHOULDER):
 		if not echo:
 			_step_menu_page(1)
-	elif active_menu_page != "setup":
-		return
-	elif echo and (key == KEY_ESCAPE or pad in [JOY_BUTTON_B, JOY_BUTTON_START]):
-		pass
-	elif key == KEY_ESCAPE or pad == JOY_BUTTON_B:
-		_show_home()
-	elif pad == JOY_BUTTON_START:
-		_start_race()
-	else:
-		var items := _setup_focus_items()
+	elif pad == JOY_BUTTON_START and page in MENU_PAGE_IDS:
+		if page == "repair" and _servicing():
+			_continue_from_service()
+		else:
+			_start_race()
+	elif page == "repair":
+		match [key, pad]:
+			[KEY_UP, _], [_, JOY_BUTTON_DPAD_UP]: _select_repair_part(repair_selected - 1)
+			[KEY_DOWN, _], [_, JOY_BUTTON_DPAD_DOWN]: _select_repair_part(repair_selected + 1)
+			[KEY_ENTER, _], [KEY_KP_ENTER, _], [_, JOY_BUTTON_A]: _repair_selected()
+			[KEY_SPACE, _]:
+				if _servicing():
+					_continue_from_service()
+			_: return
+	elif page == "information":
+		match [key, pad]:
+			[KEY_ENTER, _], [KEY_KP_ENTER, _], [KEY_SPACE, _], [_, JOY_BUTTON_A]: _show_setup_page()
+			_: return
+	elif page in ["setup", "options"]:
+		var items := _setup_focus_items() if page == "setup" else _options_focus_items()
+		if items.is_empty():
+			return
 		var at := items.find(owner)
 		var dy := 0
 		var dx := 0
@@ -988,14 +1307,47 @@ func _input(event: InputEvent) -> void:
 		if typing and (dx != 0 or key in [KEY_HOME, KEY_END]):
 			return # the caret's keys while the name is typed
 		if at < 0:
-			_focus_setup_item(items, _setup_focus_at) # nothing picked yet (or it went away): the first press picks
+			if page == "setup":
+				_focus_setup_item(items, _setup_focus_at) # nothing picked yet (or it went away): the first press picks
+			else:
+				items[0].grab_focus()
 		elif dy != 0:
-			_focus_setup_item(items, at + dy)
+			if page == "setup":
+				_focus_setup_item(items, at + dy)
+			else:
+				items[clampi(at + dy, 0, items.size() - 1)].grab_focus()
 		elif dx != 0:
 			_nudge_setting(owner, dx, echo)
 		elif pad == JOY_BUTTON_A:
 			_press_setup_item(owner)
+	else:
+		return
 	get_viewport().set_input_as_handled()
+
+## The left stick as a d-pad on the menus: one step each time it is pushed past half way.
+func _stick_as_dpad(ev: InputEventJoypadMotion) -> void:
+	if ev.axis != JOY_AXIS_LEFT_X and ev.axis != JOY_AXIS_LEFT_Y:
+		return
+	var idx := 0 if ev.axis == JOY_AXIS_LEFT_X else 1
+	get_viewport().set_input_as_handled() # (the GUI would move the focus on its own as well)
+	if absf(ev.axis_value) < 0.35:
+		_stick_latch[idx] = 0
+		return
+	if absf(ev.axis_value) < 0.6 or _stick_latch[idx] != 0:
+		return
+	var dir := 1 if ev.axis_value > 0.0 else -1
+	_stick_latch[idx] = dir
+	var button: JoyButton
+	if idx == 0:
+		button = JOY_BUTTON_DPAD_RIGHT if dir > 0 else JOY_BUTTON_DPAD_LEFT
+	else:
+		button = JOY_BUTTON_DPAD_DOWN if dir > 0 else JOY_BUTTON_DPAD_UP
+	for pressed in [true, false]:
+		var press := InputEventJoypadButton.new()
+		press.device = ev.device
+		press.button_index = button
+		press.pressed = pressed
+		Input.parse_input_event(press)
 
 func _step_menu_page(direction: int) -> void:
 	var at := MENU_PAGE_IDS.find(active_menu_page)
@@ -1009,13 +1361,13 @@ func _setup_focus_changed(control: Control) -> void:
 	if is_instance_valid(_lit_caption):
 		_lit_caption.add_theme_color_override("font_color", _lit_caption_color)
 	_lit_caption = null
-	if not is_instance_valid(setup_panel) or not setup_panel.is_ancestor_of(control):
+	if control == null or not is_instance_valid(setup_panel) or not setup_panel.is_ancestor_of(control):
 		return
 	var setting: Control = control.get_parent() if control.get_parent() is SpinBox else control
 	var items := _setup_focus_items()
 	if items.has(control):
 		_setup_focus_at = items.find(control)
-	setup_hint.text = "%s\n%s" % [setting.tooltip_text, SETUP_KEYS] if setting.tooltip_text != "" else SETUP_KEYS
+	setup_hint.text = "%s\n%s" % [setting.tooltip_text, _hint("setup")] if setting.tooltip_text != "" else _hint("setup")
 	var caption: Label = setting.get_meta("caption") if setting.has_meta("caption") else null
 	var holder := setting.get_parent()
 	if caption == null and holder is VBoxContainer and holder.get_child(0) is Label and holder.get_child_count() == 2:
@@ -1029,8 +1381,6 @@ func _build_strategy_section(parent: VBoxContainer) -> void:
 	strategy_section = VBoxContainer.new()
 	strategy_section.add_theme_constant_override("separation", 6)
 	parent.add_child(strategy_section)
-	_menu_rule(strategy_section)
-	strategy_section.add_child(_label("PIT STRATEGY", 16, CmrStyle.TEXT))
 	race_length_label = _label("", 13, MUTED)
 	race_length_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	strategy_section.add_child(race_length_label)
@@ -1067,15 +1417,18 @@ func _build_strategy_section(parent: VBoxContainer) -> void:
 func _race_laps(track: Track) -> int:
 	if format_picker.selected == 1:
 		return strategy.estimate_laps(track, hours_picker.value * 3600.0, {
-			"fuel_mult": fuel_picker.value, "weather": ["dry", "wet", "variable"][weather_picker.selected],
+			"fuel_mult": fuel_picker.value, "weather": ["dry", "wet", "snow", "hail", "fog", "variable"][weather_picker.selected],
 			"wear_mult": wear_picker.value, "crew": ["pro", "club", "amateur"][crew_picker.selected],
 			"parallel": parallel_toggle.button_pressed, "refuel": refuel_toggle.button_pressed,
 		})
 	return int(laps_picker.value)
 
-func _plan_opts(track: Track, laps: int, wear_mult: float) -> Dictionary:
+## `weather` is the race's ("dry", "wet", …); empty takes the set-up page's picker.
+func _plan_opts(track: Track, laps: int, wear_mult: float, weather := "") -> Dictionary:
+	if weather == "":
+		weather = ["dry", "wet", "snow", "hail", "fog", "variable"][weather_picker.selected]
 	return {
-		"track": track, "laps": laps, "wet": 0.85 if weather_picker.selected == 1 else 0.0,
+		"track": track, "laps": laps, "wet": 0.85 if weather in ["wet", "snow", "hail"] else (0.15 if weather == "variable" else 0.0),
 		"wear_mult": wear_mult, "fuel_mult": fuel_picker.value,
 		"rules": {"mandatory_stop": mandatory_stop_toggle.button_pressed, "two_compounds": two_compounds_toggle.button_pressed, "refuel": refuel_toggle.button_pressed},
 		"crew": ["pro", "club", "amateur"][crew_picker.selected], "parallel": parallel_toggle.button_pressed,
@@ -1105,6 +1458,10 @@ func _refresh_strategy() -> void:
 		custom_box.hide()
 		await get_tree().process_frame
 		await get_tree().process_frame
+		# the prefetcher works it out off the main thread: wait for it rather than freeze the page
+		_prioritise_track_prefetch(track.key)
+		while track.cal.is_empty() and _track_prefetch_pending(track.key) and track == Race.get_track(TRACK_KEYS[track_picker.selected]):
+			await get_tree().process_frame
 		if track != Race.get_track(TRACK_KEYS[track_picker.selected]):
 			_strategy_pending = false
 			_queue_strategy_refresh(false)
@@ -1231,7 +1588,7 @@ func _editor_stints() -> Array:
 	for st in src:
 		out.append({"c": st.c, "laps": int(st.laps)})
 	if out.is_empty():
-		out.append({"c": "W" if weather_picker.selected == 1 else "M", "laps": _race_laps(Race.get_track(TRACK_KEYS[track_picker.selected]))})
+		out.append({"c": "W" if weather_picker.selected in [1, 2, 3] else "M", "laps": _race_laps(Race.get_track(TRACK_KEYS[track_picker.selected]))})
 	return out
 
 func _set_custom(stints: Array, rebuild: bool) -> void:
@@ -1256,7 +1613,7 @@ func _render_custom_rows() -> void:
 		var num := _label("%d." % (k + 1), 15, MUTED)
 		num.custom_minimum_size.x = 26
 		row.add_child(num)
-		var compound := OptionButton.new()
+		var compound := MenuSelector.new()
 		for c in Tyres.KEYS:
 			compound.add_item(tyre_model.compounds[c].display_name)
 		compound.select(Tyres.KEYS.find(stints[k].c))
@@ -1321,7 +1678,7 @@ func _update_custom_eval() -> void:
 func _update_ai_memory() -> void:
 	if not is_instance_valid(ai_memory_label):
 		return
-	var key: String = CHAMPIONSHIP_CALENDAR[_champ_round()] if is_championship_mode else TRACK_KEYS[track_picker.selected]
+	var key: String = _calendar()[_champ_round()] if is_championship_mode else TRACK_KEYS[track_picker.selected]
 	var track := Race.get_track(key)
 	var name: String = track.cfg.short_name if track.cfg and track.cfg.short_name != "" else track.name
 	var m := Brain.summary(key)
@@ -1356,7 +1713,7 @@ func _update_lap_records(key: String, name: String) -> void:
 		record_label.text = "Your lap record at %s: %s. G shows or hides its ghost in the race." % [name, " · ".join(parts)]
 
 func _forget_lap_records() -> void:
-	var key: String = CHAMPIONSHIP_CALENDAR[_champ_round()] if is_championship_mode else TRACK_KEYS[track_picker.selected]
+	var key: String = _calendar()[_champ_round()] if is_championship_mode else TRACK_KEYS[track_picker.selected]
 	var dialog := ConfirmationDialog.new()
 	dialog.title = "Forget lap records"
 	dialog.dialog_text = "Delete your lap records and their ghosts at %s?" % Race.get_track(key).name
@@ -1369,11 +1726,12 @@ func _forget_lap_records() -> void:
 		if not dialog.visible:
 			dialog.queue_free()
 	)
+	_refocus_after(dialog)
 	add_child(dialog)
 	dialog.popup_centered()
 
 func _forget_ai_memory() -> void:
-	var key: String = CHAMPIONSHIP_CALENDAR[_champ_round()] if is_championship_mode else TRACK_KEYS[track_picker.selected]
+	var key: String = _calendar()[_champ_round()] if is_championship_mode else TRACK_KEYS[track_picker.selected]
 	var dialog := ConfirmationDialog.new()
 	dialog.title = "Forget AI memory"
 	dialog.dialog_text = "Make the bots forget everything they learned about you at %s?" % Race.get_track(key).name
@@ -1385,6 +1743,7 @@ func _forget_ai_memory() -> void:
 		if not dialog.visible:
 			dialog.queue_free()
 	)
+	_refocus_after(dialog)
 	add_child(dialog)
 	dialog.popup_centered()
 
@@ -1413,8 +1772,8 @@ func _load_race_settings() -> void:
 			continue
 		var v = cfg.get_value("race", key)
 		var control: Control = controls[key]
-		if control is OptionButton:
-			(control as OptionButton).select(clampi(int(v), 0, (control as OptionButton).item_count - 1))
+		if control is MenuSelector:
+			(control as MenuSelector).select(clampi(int(v), 0, (control as MenuSelector).item_count - 1))
 		elif control is SpinBox:
 			if control == laps_picker:
 				laps_picker.max_value = 200 if TRACK_KEYS[track_picker.selected] == "indy" else 99
@@ -1438,8 +1797,6 @@ func _load_race_settings() -> void:
 				car_setups[t] = st
 	_refresh_car_setup()
 	_loading_settings = false
-	if world_view and track_picker.selected != 0:
-		world_view.set_track(Race.get_track(TRACK_KEYS[track_picker.selected]))
 
 ## CMR's car set-up: a five-notch slider per setting, the stock car in the middle. Changes are kept for the
 ## circuit on the page (the championship round's in a championship).
@@ -1492,9 +1849,9 @@ func _build_car_setup(col: VBoxContainer) -> void:
 	help_row.add_theme_constant_override("separation", 14)
 	col.add_child(help_row)
 	# the field's drivers each run their own (Drivers.ROSTER): try one
-	var copy := OptionButton.new()
-	copy.set_meta("list_only", true) # ◂ ▸ would apply a set-up per press; Enter opens the list instead
-	copy.tooltip_text = "Enter opens the list of drivers; their set-up replaces yours on this circuit"
+	var copy := MenuSelector.new()
+	copy.browse_only = true # ◂ ▸ browse the drivers; A / Enter applies the one shown
+	copy.tooltip_text = "◂ ▸ pick a driver, then A / Enter: their set-up replaces yours on this circuit"
 	copy.add_item("COPY A DRIVER'S SET-UP")
 	for who in Drivers.ROSTER:
 		copy.add_item(who.name)
@@ -1560,8 +1917,8 @@ func _save_race_settings() -> void:
 	for key in controls:
 		var control: Control = controls[key]
 		var v
-		if control is OptionButton:
-			v = (control as OptionButton).selected
+		if control is MenuSelector:
+			v = (control as MenuSelector).selected
 		elif control is SpinBox:
 			v = (control as SpinBox).value
 		elif control is CheckButton:
@@ -1647,7 +2004,13 @@ func _build_menu_car_preview() -> void:
 
 ## The circuit the front end is currently pointing at: this round's in a championship, otherwise the picked one.
 func _menu_track_key() -> String:
-	return CHAMPIONSHIP_CALENDAR[_champ_round()] if is_championship_mode else TRACK_KEYS[track_picker.selected]
+	if is_championship_mode:
+		return _calendar()[_champ_round()]
+	elif is_campaign_mode:
+		return CampaignData.get_stage(campaign_stage_index).track
+	elif is_rally_mode:
+		return str(_rally().stage_def(mini(_rally().stage_index, _rally().stage_count() - 1)).track)
+	return TRACK_KEYS[track_picker.selected]
 
 func _update_menu_car_summary() -> void:
 	if not is_instance_valid(menu_car_summary) or not is_instance_valid(track_picker):
@@ -1658,10 +2021,19 @@ func _update_menu_car_summary() -> void:
 		menu_preview_car.call("set_stripes", player_stripes_toggle.button_pressed)
 		menu_preview_car.set("car_number", int(player_number_picker.value))
 	var race_label := "%d LAPS" % int(laps_picker.value)
-	if format_picker.selected == 1 and not is_championship_mode:
-		race_label = "%s ENDURANCE" % _fmt_hours(hours_picker.value).to_upper()
 	if is_championship_mode:
-		race_label = "ROUND %02d / %02d" % [_champ_round() + 1, CHAMPIONSHIP_CALENDAR.size()]
+		race_label = "ROUND %02d / %02d" % [_champ_round() + 1, _calendar().size()]
+	elif is_campaign_mode:
+		var st := CampaignData.get_stage(campaign_stage_index)
+		race_label = "STAGE %02d / %02d  ·  %d LAPS" % [campaign_stage_index + 1, CampaignData.STAGES.size(), st.laps]
+	elif is_rally_mode:
+		var ev := _rally()
+		var i := mini(ev.stage_index, ev.stage_count() - 1)
+		race_label = "SS%d / %d  ·  %.1f KM STAGE" % [i + 1, ev.stage_count(), Rally.stage_length(ev.stage_def(i), current_track.L) / 1000.0]
+	elif is_time_trial_mode:
+		race_label = "TIME TRIAL  ·  %s START" % ("ROLLING" if is_instance_valid(tt_start_picker) and tt_start_picker.selected == 1 else "STANDING")
+	elif format_picker.selected == 1:
+		race_label = "%s ENDURANCE" % _fmt_hours(hours_picker.value).to_upper()
 	menu_car_summary.text = "%s    |    %.1f KM\n%s" % [current_track.name.to_upper(), current_track.L / 1000.0, race_label]
 	_refresh_car_setup()
 
@@ -1673,19 +2045,16 @@ func _build_menu_header() -> void:
 	menu_header.offset_top = 52
 	menu_header.offset_right = -58
 	menu_header.offset_bottom = 100
-	menu_header.add_theme_constant_override("separation", 0)
+	menu_header.add_theme_constant_override("separation", 16) # room either side of the rule before MAIN MENU
 	add_child(menu_header)
 
 	var tabs := HBoxContainer.new()
 	tabs.add_theme_constant_override("separation", 0)
 	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	menu_header.add_child(tabs)
-	_menu_tab(tabs, "Information", _show_information_page)
 	_menu_tab(tabs, "Set Up", _show_setup_page)
-	_menu_tab(tabs, "Repair", _show_repair_page)
-	_menu_tab(tabs, "Race", _start_race)
-	_menu_tab(tabs, "Save", _save_championship)
-	_menu_tab(tabs, "Quit", func() -> void: get_tree().quit())
+	_menu_tab(tabs, "Circuit Info", _show_information_page)
+	_menu_tab(tabs, "Car & Service", _show_repair_page)
 
 	var player := Label.new()
 	player.text = "PLAYER 1  │  YOU"
@@ -1693,6 +2062,23 @@ func _build_menu_header() -> void:
 	player.add_theme_color_override("font_color", MUTED)
 	player.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	menu_header.add_child(player)
+
+	var sep := ColorRect.new()
+	sep.custom_minimum_size = Vector2(2, 42)
+	sep.color = CmrStyle.DIM
+	sep.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	menu_header.add_child(sep)
+
+	var back_btn := Button.new()
+	back_btn.text = "MAIN MENU (Esc)"
+	back_btn.flat = true
+	back_btn.focus_mode = Control.FOCUS_NONE
+	back_btn.add_theme_font_override("font", CmrStyle.font(400))
+	back_btn.add_theme_font_size_override("font_size", 18)
+	back_btn.add_theme_color_override("font_color", ACCENT)
+	back_btn.pressed.connect(_show_home)
+	menu_header.add_child(back_btn)
+	menu_back_button = back_btn
 
 ## A CMR header tab: plain text, a hairline between tabs, the current page picked out in orange.
 func _menu_tab(parent: Control, title: String, callback: Callable) -> void:
@@ -1715,7 +2101,7 @@ func _menu_tab(parent: Control, title: String, callback: Callable) -> void:
 	menu_tab_buttons[title] = tab
 	if callback.is_valid():
 		tab.pressed.connect(callback)
-	if title != "Quit":
+	if title != TOP_MENU_TABS[-1]:
 		var divider := ColorRect.new()
 		divider.custom_minimum_size = Vector2(2, 42)
 		divider.color = CmrStyle.DIM
@@ -1825,7 +2211,7 @@ func _build_repair_page() -> void:
 	repair_panel.add_child(column)
 	var title := _label("TIME REMAINING", 26, CmrStyle.TEXT)
 	column.add_child(title)
-	repair_note = _label("%d minute time allocation" % Service.ALLOCATION, 18, MUTED)
+	repair_note = _label("%d minute time allocation" % _service_allocation(), 18, MUTED)
 	column.add_child(repair_note)
 	var time_row := HBoxContainer.new()
 	time_row.alignment = BoxContainer.ALIGNMENT_BEGIN
@@ -1866,6 +2252,16 @@ func _build_repair_page() -> void:
 		rule.custom_minimum_size.y = 2
 		column.add_child(rule)
 		repair_row_rules.append(rule)
+	repair_summary = _label("", 14, CmrStyle.ORANGE_SOFT)
+	repair_summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	repair_summary.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	column.add_child(repair_summary)
+	repair_continue = _button("CONTINUE  ▸", ACCENT)
+	repair_continue.custom_minimum_size.y = 52
+	repair_continue.add_theme_font_size_override("font_size", 20)
+	repair_continue.focus_mode = Control.FOCUS_NONE # START (or Enter on the page) continues
+	repair_continue.pressed.connect(_continue_from_service)
+	column.add_child(repair_continue)
 	_select_repair_part(repair_selected)
 	repair_panel.hide()
 
@@ -1912,6 +2308,7 @@ func _build_repair_page() -> void:
 	repair_button.anchor_top = 0.64
 	repair_button.anchor_right = 0.66
 	repair_button.anchor_bottom = 0.7
+	repair_button.focus_mode = Control.FOCUS_NONE # Enter / A on the page repairs (_input)
 	repair_button.pressed.connect(_repair_selected)
 	repair_details.add_child(repair_button)
 
@@ -1972,13 +2369,17 @@ func _build_repair_page() -> void:
 ## The car the Repair page shows: the championship car between rounds ({parts, pull, used}), otherwise the
 ## state the last single race left it in (nothing carries over from one).
 func _service_car() -> Dictionary:
-	if is_championship_mode:
-		var car = champ_data.get("car", {})
-		return car if car is Dictionary else {}
+	if _servicing():
+		return _carried_car()
 	return {"parts": last_race_parts}
 
+## The service area is working on a car that goes on to another event (a championship with damage on, or
+## the campaign); a quick race's car is rebuilt for every race, so its page only shows the damage.
+func _servicing() -> bool:
+	return (is_championship_mode and _service_allocation() > 0) or is_campaign_mode or (is_rally_mode and _service_allocation() > 0)
+
 func _service_left() -> int:
-	return Service.ALLOCATION - int(_service_car().get("used", 0))
+	return _service_allocation() - int(_service_car().get("used", 0))
 
 func _part_severity(part: String) -> float:
 	var parts = _service_car().get("parts", {})
@@ -1993,7 +2394,7 @@ func _repair_row_pressed(index: int) -> void:
 
 ## The crew fixes the selected part if the time left covers it.
 func _repair_selected() -> void:
-	if not is_championship_mode:
+	if not _servicing():
 		return
 	var part: String = Service.PARTS.keys()[repair_selected]
 	var need := Service.minutes(part, _part_severity(part))
@@ -2002,9 +2403,29 @@ func _repair_selected() -> void:
 		return
 	car.parts.erase(part)
 	car["used"] = int(car.get("used", 0)) + need
-	champ_data["car"] = car
-	_save_championship()
+	car["serviced"] = true
+	_store_carried_car(car)
 	_select_repair_part(repair_selected)
+
+## Leaves the service area for the next event (whatever is left unrepaired goes with the car).
+func _continue_from_service() -> void:
+	var car := _carried_car()
+	if not car.is_empty():
+		car["serviced"] = true
+		_store_carried_car(car)
+	if is_rally_mode and not car.get("applied", false):
+		_rally().apply_service(car.get("parts", {}), int(car.get("used", 0)))
+		car["applied"] = true
+		_store_carried_car(car)
+	_start_race()
+
+## The service area opens on the first broken part (or where it was, if nothing is).
+func _first_damaged_part() -> int:
+	var names: Array = Service.PARTS.keys()
+	for i in names.size():
+		if _part_severity(names[i]) >= 0.01:
+			return i
+	return repair_selected
 
 func _select_repair_part(index: int) -> void:
 	repair_selected = clampi(index, 0, repair_rows.size() - 1)
@@ -2022,28 +2443,50 @@ func _select_repair_part(index: int) -> void:
 	var part: String = names[repair_selected]
 	var sev := _part_severity(part)
 	var need := Service.minutes(part, sev)
+	var servicing := _servicing()
+	var next := "stage" if is_campaign_mode or is_rally_mode else "round"
 	repair_part_name.text = part.to_upper()
 	repair_time_label.text = "%02d:00" % need
-	repair_clock.text = "%02d:00" % left
+	repair_clock.text = "%02d:00" % maxi(0, left)
 	repair_art.part = part
 	var copy: String = Service.PARTS[part][2]
-	if not is_championship_mode:
-		repair_note.text = "Single race: the car is rebuilt for every race"
-		copy += " Damage from your last race is shown; in a championship it carries over to the next round, and the crew gets %d minutes to fix what they can." % Service.ALLOCATION
+	if not servicing:
+		repair_note.text = "Car rebuilt for every race" if not is_championship_mode else "Damage & repairs off this season"
+		if sev >= 0.01:
+			copy += " Last race: %s" % Service.symptom(part, sev)
+		copy += " In a championship (damage on) or the campaign it carries over, and the crew gets the service time to fix what they can."
 	else:
-		repair_note.text = "%d minute time allocation" % Service.ALLOCATION
+		repair_note.text = "%d minute time allocation" % _service_allocation()
 		if need == 0:
 			copy += " In working order."
-		elif need > left:
-			copy += " Not enough service time left: it starts the next round as it is."
 		else:
-			copy += " %d%% damaged. Repair it for %d minute%s of the time left (click it again or press Repair); unrepaired damage costs power, adds drag and pulls the car to one side in the next round." % [roundi(sev * 100.0), need, "" if need == 1 else "s"]
+			copy += " %d%% damaged: %s" % [roundi(sev * 100.0), Service.symptom(part, sev)]
+			if need > left:
+				copy += " Not enough service time left: it starts the next %s like this." % next
+			else:
+				copy += " Repair it for %d minute%s of the time left." % [need, "" if need == 1 else "s"]
 	repair_copy.text = copy
-	repair_button.visible = is_championship_mode
+	repair_button.visible = servicing
 	repair_button.disabled = need == 0 or need > left
 	var marker := lerpf(0.045, 0.56, sev)
 	repair_damage_marker.anchor_left = marker
 	repair_damage_marker.anchor_right = marker + 0.005
+	if is_instance_valid(repair_summary):
+		var parts = _service_car().get("parts", {})
+		var unrepaired := _unrepaired_text(parts if parts is Dictionary else {})
+		if not servicing:
+			repair_summary.text = ""
+		elif unrepaired == "":
+			repair_summary.text = "The car is in working order for the next %s." % next
+		else:
+			repair_summary.text = "IF LEFT UNREPAIRED, NEXT %s:\n%s" % [next.to_upper(), unrepaired]
+	if is_instance_valid(repair_continue):
+		repair_continue.visible = servicing
+		if is_championship_mode:
+			var nr := _next_round()
+			repair_continue.text = "CONTINUE TO ROUND %d  ▸" % (nr + 1) if nr < _calendar().size() else "CONTINUE  ▸"
+		else:
+			repair_continue.text = "CONTINUE TO THE STAGE  ▸"
 
 ## CMR 2.0-style title screen: a column of slanted bars running in from the left edge, the lit one in
 ## lime, with the car turning on its showroom stand to the right.
@@ -2097,7 +2540,7 @@ func _build_home_screen() -> void:
 			menu_home_strip.add_child(divider)
 		var item: Dictionary = FRONT_MENU[i]
 		var button := Button.new()
-		button.text = str(item.word).to_lower()
+		button.text = str(item.word)
 		button.flat = true
 		button.focus_mode = Control.FOCUS_NONE
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -2142,7 +2585,9 @@ func _build_options_page() -> void:
 	options_panel.add_child(scroll)
 	var column := _column(scroll, 12)
 	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_title(column, "OPTIONS", "DISPLAY, GRAPHICS & CO-DRIVER")
+	scroll.follow_focus = true
+	options_column = column
+	_title(column, "OPTIONS", "DISPLAY, GRAPHICS, AUDIO & CO-DRIVER")
 	_menu_rule(column)
 	_field_label(column, "DISPLAY")
 	var display_row := HBoxContainer.new()
@@ -2159,6 +2604,17 @@ func _build_options_page() -> void:
 	ui_scale_picker = _option_field(display_row, "INTERFACE SIZE", ["Small", "Normal", "Large", "Extra large"])
 	ui_scale_picker.select(graphics_ui_scale)
 	ui_scale_picker.item_selected.connect(_on_ui_scale_selected)
+	var resolution_row := HBoxContainer.new()
+	resolution_row.add_theme_constant_override("separation", 22)
+	column.add_child(resolution_row)
+	resolution_picker = _option_field(resolution_row, "RESOLUTION", [])
+	resolution_picker.item_selected.connect(_on_resolution_selected)
+	aspect_picker = _option_field(resolution_row, "ASPECT RATIO", ASPECTS.map(func(a): return a.name))
+	aspect_picker.item_selected.connect(_on_aspect_selected)
+	resolution_note = _label("", 14, MUTED)
+	resolution_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	resolution_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	resolution_row.add_child(resolution_note)
 	var frame_row := HBoxContainer.new()
 	frame_row.add_theme_constant_override("separation", 22)
 	column.add_child(frame_row)
@@ -2211,6 +2667,34 @@ func _build_options_page() -> void:
 	lighting_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	column.add_child(lighting_note)
 	_menu_rule(column)
+	_field_label(column, "RETRO GRAPHICS & NOSTALGIA SHADERS (F1)")
+	var retro_row := HBoxContainer.new()
+	retro_row.add_theme_constant_override("separation", 22)
+	column.add_child(retro_row)
+	retro_picker = _option_field(retro_row, "GRAPHIC STYLE", RetroPipeline.MODE_NAMES)
+	retro_picker.item_selected.connect(_on_retro_selected)
+	_grid_spacers(retro_row, 2)
+	var retro_note := _label("Relive the golden age of racing games with authentic PS1/PS2 post-processing: PS1 15-bit dithered downscaling, NFS Most Wanted golden amber bloom, GTA San Andreas heat shimmer, NFS Carbon midnight blue, Colin McRae Rally 2.0 broadcast contrast, or Forza Horizon 1 warmth. Toggle anytime with F1.", 14, MUTED)
+	retro_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	column.add_child(retro_note)
+	_menu_rule(column)
+	_field_label(column, "AUDIO")
+	var volume_row: HBoxContainer = null
+	for ch in AudioSettings.CHANNELS:
+		if volume_row == null or volume_row.get_child_count() == 3:
+			volume_row = HBoxContainer.new()
+			volume_row.add_theme_constant_override("separation", 22)
+			column.add_child(volume_row)
+		var picker := _option_field(volume_row, ch.name, AudioSettings.step_names())
+		picker.select(AudioSettings.level(ch.key) / 10)
+		picker.item_selected.connect(_on_volume_selected.bind(ch.key))
+		audio_pickers[ch.key] = picker
+	var audio_note := _label("Off mutes a sound; 100% is the full mix. Engine is your car's engine, Effects everything else in the race (kerbs, gravel, hits, other cars, crowd, rain, pit crews). The co-driver speaks through your system's text-to-speech, which Master and Co-driver voice also turn down. M mutes it all in a race.", 14, MUTED)
+	audio_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	audio_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	audio_note.size_flags_stretch_ratio = 2.0
+	volume_row.add_child(audio_note)
+	_menu_rule(column)
 	_field_label(column, "CO-DRIVER")
 	var codriver_row := HBoxContainer.new()
 	codriver_row.add_theme_constant_override("separation", 22)
@@ -2231,12 +2715,40 @@ func _build_options_page() -> void:
 	sharpening_picker.select(graphics_sharpening)
 	antialiasing_picker.select(graphics_antialiasing)
 	display_mode_picker.select(graphics_display_mode)
+	aspect_picker.select(graphics_aspect)
+	_rebuild_resolution_picker()
 	vsync_toggle.button_pressed = graphics_vsync
 	fps_limit_picker.select(graphics_fps_limit)
 	ssao_toggle.button_pressed = graphics_ssao
 	shadows_toggle.button_pressed = graphics_shadows
 	reflections_picker.select(graphics_reflections)
+	retro_picker.select(graphics_retro_mode)
 	_apply_upscaling()
+
+func _on_retro_selected(index: int) -> void:
+	graphics_retro_mode = index
+	if retro_pipeline:
+		retro_pipeline.set_mode(graphics_retro_mode)
+	_apply_ui_skin()
+	_save_graphics_settings()
+
+func _cycle_retro_mode() -> void:
+	if not retro_pipeline:
+		return
+	graphics_retro_mode = retro_pipeline.cycle_mode()
+	if is_instance_valid(retro_picker):
+		retro_picker.select(graphics_retro_mode)
+	_apply_ui_skin()
+	_save_graphics_settings()
+
+## The menus and HUD take the look of the graphic style (CmrStyle skins), restyled live.
+func _apply_ui_skin() -> void:
+	var name := CmrStyle.skin_for_mode(graphics_retro_mode)
+	if name == CmrStyle.skin:
+		return
+	CmrStyle.apply_skin(name, self)
+	_lit_caption_color = CmrStyle.recolor(_lit_caption_color)
+	_refresh_prompts()
 
 func _on_codriver_voice_toggled(enabled: bool) -> void:
 	codriver_voice = enabled
@@ -2282,6 +2794,104 @@ func _apply_upscaling() -> void:
 func _on_display_mode_selected(index: int) -> void:
 	graphics_display_mode = index
 	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN if index == 1 else DisplayServer.WINDOW_MODE_WINDOWED)
+	_rebuild_resolution_picker()
+	_apply_resolution.call_deferred() # once the window has left (or entered) fullscreen
+	_save_graphics_settings()
+
+## Options → Resolution's entries: Native, the presets that fit the screen, and the window's own size.
+func _resolution_options() -> Array[Vector2i]:
+	var out: Array[Vector2i] = [Vector2i.ZERO]
+	var screen := DisplayServer.screen_get_size(DisplayServer.window_get_current_screen())
+	for r in RESOLUTIONS:
+		if screen.x <= 0 or (r.x <= screen.x and r.y <= screen.y):
+			out.append(r)
+	var current := _current_resolution()
+	if current.x > 0 and not out.has(current):
+		out.append(current)
+		out.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.x * a.y < b.x * b.y)
+	return out
+
+## The resolution the picker shows: the chosen one, or before any choice the window's size (Native in fullscreen).
+func _current_resolution() -> Vector2i:
+	if graphics_resolution.x >= 0:
+		return graphics_resolution
+	return DisplayServer.window_get_size() if graphics_display_mode == 0 else Vector2i.ZERO
+
+func _rebuild_resolution_picker() -> void:
+	if not is_instance_valid(resolution_picker):
+		return
+	_resolution_choices = _resolution_options()
+	resolution_picker.clear()
+	for r in _resolution_choices:
+		resolution_picker.add_item("Native (desktop)" if r == Vector2i.ZERO else "%d × %d" % [r.x, r.y])
+	resolution_picker.select(maxi(0, _resolution_choices.find(_current_resolution())))
+	var caption := resolution_picker.get_parent().get_child(0) as Label
+	if caption:
+		caption.text = "RENDER RESOLUTION" if graphics_display_mode == 1 else "RESOLUTION"
+	_update_resolution_note()
+
+func _update_resolution_note() -> void:
+	if not is_instance_valid(resolution_note):
+		return
+	if graphics_display_mode == 1:
+		resolution_note.text = "Fullscreen keeps your desktop's resolution (macOS never lets a game change it): the 3D view is drawn at this size and scaled to fill the screen, while menus and HUD stay sharp. 3D upscaling then works from it."
+	else:
+		resolution_note.text = "Sets the window's size in pixels (Native fills the desktop). A ratio other than Auto adds black bars to keep the picture, menus and HUD in that shape."
+
+func _on_resolution_selected(index: int) -> void:
+	if index < 0 or index >= _resolution_choices.size():
+		return
+	graphics_resolution = _resolution_choices[index]
+	_apply_resolution()
+	_save_graphics_settings()
+
+## Windowed: sizes and centres the window (Native maximises it). Fullscreen: the screen keeps the desktop's
+## resolution, and _fit_3d_views renders the 3D view at the chosen one instead (_render_resolution).
+func _apply_resolution() -> void:
+	if graphics_display_mode == 0 and graphics_resolution.x >= 0 and DisplayServer.get_name() != "headless":
+		if graphics_resolution == Vector2i.ZERO:
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MAXIMIZED)
+		else:
+			if DisplayServer.window_get_mode() != DisplayServer.WINDOW_MODE_WINDOWED:
+				DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+			var screen := DisplayServer.screen_get_usable_rect(DisplayServer.window_get_current_screen())
+			var win_size := graphics_resolution.min(screen.size) if screen.size.x > 0 else graphics_resolution
+			DisplayServer.window_set_size(win_size)
+			var outer := DisplayServer.window_get_size_with_decorations().min(screen.size)
+			DisplayServer.window_set_position(screen.position + (screen.size - outer) / 2)
+	_fit_3d_views()
+
+## The 3D view's render target for px screen pixels: in fullscreen with a resolution chosen, fitted inside it
+## (never above the screen's own). The upscaler's render scale then applies on top.
+func _render_resolution(px: Vector2i) -> Vector2i:
+	var res := graphics_resolution
+	if graphics_display_mode != 1 or res.x <= 0:
+		return px
+	var k := minf(1.0, minf(float(res.x) / px.x, float(res.y) / px.y))
+	return Vector2i((Vector2(px) * k).round()).max(Vector2i(2, 2))
+
+func _on_aspect_selected(index: int) -> void:
+	graphics_aspect = clampi(index, 0, ASPECTS.size() - 1)
+	_apply_aspect()
+	_save_graphics_settings()
+
+## Auto: the canvas expands to the window's shape. A ratio: the canvas takes that shape (at least 1600×900, as
+## Auto would lay it out in such a window) and the window letterboxes or pillarboxes it with black bars.
+func _apply_aspect() -> void:
+	var win := get_window()
+	var ratio: float = ASPECTS[graphics_aspect].ratio
+	win.content_scale_size = aspect_canvas(ratio)
+	win.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND if ratio <= 0.0 else Window.CONTENT_SCALE_ASPECT_KEEP
+	_fit_3d_views.call_deferred()
+
+## The canvas size for an aspect ratio (0: Auto, the base canvas).
+static func aspect_canvas(ratio: float) -> Vector2i:
+	if ratio <= 0.0:
+		return BASE_SIZE
+	return Vector2i(roundi(maxf(BASE_SIZE.x, BASE_SIZE.y * ratio)), roundi(maxf(BASE_SIZE.y, BASE_SIZE.x / ratio)))
+
+func _on_volume_selected(index: int, key: String) -> void:
+	AudioSettings.set_level(key, index * 10)
 	_save_graphics_settings()
 
 ## The interface follows the window size on its own; this scales it further on top.
@@ -2371,7 +2981,15 @@ func _load_graphics_settings() -> void:
 			graphics_upscaler = 2 if scale_index > 0 else 0
 			graphics_upscale_preset = maxi(scale_index, 1)
 		graphics_ui_scale = clampi(int(config.get_value("graphics", "ui_scale", 1)), 0, UI_SCALES.size() - 1)
+		var res = config.get_value("graphics", "resolution", Vector2i(-1, -1))
+		graphics_resolution = res if res is Vector2i and res.x >= -1 else Vector2i(-1, -1)
+		graphics_aspect = clampi(int(config.get_value("graphics", "aspect", 0)), 0, ASPECTS.size() - 1)
+		AudioSettings.load_from(config)
 		codriver_voice = bool(config.get_value("audio", "co_driver_voice", true))
+		graphics_retro_mode = clampi(int(config.get_value("graphics", "retro_mode", 0)), 0, RetroPipeline.MODE_NAMES.size() - 1)
+		if retro_pipeline:
+			retro_pipeline.set_mode(graphics_retro_mode)
+		CmrStyle.apply_skin(CmrStyle.skin_for_mode(graphics_retro_mode)) # before the pages are built
 	if not _upscaler_available(graphics_upscaler):
 		graphics_upscaler = 0
 	get_window().content_scale_factor = UI_SCALES[graphics_ui_scale]
@@ -2379,6 +2997,9 @@ func _load_graphics_settings() -> void:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 	else:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+	_apply_resolution()
+	_apply_aspect()
+	AudioSettings.apply()
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED if graphics_vsync else DisplayServer.VSYNC_DISABLED)
 	_apply_upscaling()
 
@@ -2398,7 +3019,11 @@ func _save_graphics_settings() -> void:
 	config.set_value("graphics", "ssao", graphics_ssao)
 	config.set_value("graphics", "shadows", graphics_shadows)
 	config.set_value("graphics", "ui_scale", graphics_ui_scale)
+	config.set_value("graphics", "resolution", graphics_resolution)
+	config.set_value("graphics", "aspect", graphics_aspect)
+	AudioSettings.save_to(config)
 	config.set_value("audio", "co_driver_voice", codriver_voice)
+	config.set_value("graphics", "retro_mode", graphics_retro_mode)
 	config.save(SaveData.path("graphics.cfg"))
 
 func _layout_home_strip() -> void:
@@ -2411,7 +3036,7 @@ func _home_select(index: int, animate := true) -> void:
 	for i in FRONT_MENU.size():
 		var button: Button = menu_home_strip.get_child(i * 2)
 		button.add_theme_color_override("font_color", ACCENT if i == home_menu_index else CmrStyle.DIM)
-	menu_home_desc.text = "%s        ◂  ▸  browse     enter  select" % FRONT_MENU[home_menu_index].desc
+	menu_home_desc.text = "%s        %s" % [FRONT_MENU[home_menu_index].desc, _hint("home")]
 	var selected: Control = menu_home_strip.get_child(home_menu_index * 2)
 	var target_x := get_viewport_rect().size.x * 0.16 - selected.position.x
 	if home_tween and home_tween.is_running():
@@ -2431,16 +3056,29 @@ func _home_item_pressed(index: int) -> void:
 
 func _activate_home_item() -> void:
 	match FRONT_MENU[home_menu_index].id:
-		"quick_race":
-			_set_championship_mode(false)
-			_set_race_format(0)
+		"campaign":
+			_start_campaign_mode()
+		"quick_race", "time_trial":
+			is_campaign_mode = false
+			is_championship_mode = false
+			is_rally_mode = false
+			is_time_trial_mode = FRONT_MENU[home_menu_index].id == "time_trial"
+			_update_mode_view()
 			_show_setup_page()
-		"endurance":
-			_set_championship_mode(false)
-			_set_race_format(1)
+		"rally":
+			is_campaign_mode = false
+			is_championship_mode = false
+			is_time_trial_mode = false
+			is_rally_mode = true
+			_load_rally()
+			_update_mode_view()
 			_show_setup_page()
 		"championship":
-			_set_championship_mode(true)
+			is_campaign_mode = false
+			is_time_trial_mode = false
+			is_rally_mode = false
+			is_championship_mode = true
+			_update_mode_view()
 			_show_setup_page()
 		"options":
 			_show_options_page()
@@ -2460,6 +3098,7 @@ func _select_menu_tab(title: String) -> void:
 func _show_home() -> void:
 	active_menu_page = "home"
 	_hide_pages()
+	get_viewport().gui_release_focus() # the strip takes ◂ ▸ and A itself
 	menu_home.show()
 	menu_tint.color = CmrStyle.TINT_HOME
 	var backdrop := Race.get_track(_menu_track_key())
@@ -2471,8 +3110,9 @@ func _show_home() -> void:
 ## Hide every front-end page, leaving just the backdrop.
 func _hide_pages() -> void:
 	for page in [menu_home, menu_header, setup_panel, repair_panel, repair_details, options_panel, information_panel,
-			menu_car_preview, menu_car_summary, menu_car_rule]:
-		page.hide()
+			menu_car_preview, menu_car_summary, menu_car_rule, menu_prompt]:
+		if is_instance_valid(page):
+			page.hide()
 	menu_tint.show()
 
 func _place_car_preview(left: float, top: float, right: float, bottom: float) -> void:
@@ -2490,6 +3130,8 @@ func _show_options_page() -> void:
 	_hide_pages()
 	options_panel.show()
 	menu_tint.color = CmrStyle.TINT_OPTIONS
+	_refresh_prompts()
+	_focus_page.call_deferred()
 
 func _show_information_page() -> void:
 	active_menu_page = "information"
@@ -2497,8 +3139,10 @@ func _show_information_page() -> void:
 	information_panel.show()
 	menu_header.show()
 	menu_tint.color = CmrStyle.TINT_INFO
-	_select_menu_tab("Information")
+	_select_menu_tab("Circuit Info")
 	_update_information_page()
+	get_viewport().gui_release_focus()
+	_refresh_prompts()
 
 func _show_setup_page() -> void:
 	active_menu_page = "setup"
@@ -2513,6 +3157,7 @@ func _show_setup_page() -> void:
 	_select_menu_tab("Set Up")
 	menu_scroll.scroll_vertical = 0
 	_update_menu_car_summary()
+	_refresh_prompts()
 	_focus_setup_default.call_deferred()
 
 func _show_repair_page() -> void:
@@ -2524,12 +3169,16 @@ func _show_repair_page() -> void:
 	repair_details.show()
 	menu_header.show()
 	menu_tint.color = CmrStyle.TINT_REPAIR
-	_select_menu_tab("Repair")
-	_select_repair_part(repair_selected)
+	_select_menu_tab("Car & Service")
+	get_viewport().gui_release_focus() # ↑ ↓ pick the part, A repairs it (_input)
+	_select_repair_part(_first_damaged_part())
+	_refresh_prompts()
 
 func _set_championship_mode(value: bool) -> void:
-	if is_championship_mode != value:
-		_toggle_mode()
+	is_championship_mode = value
+	if value:
+		is_campaign_mode = false
+	_update_mode_view()
 
 func _set_race_format(index: int) -> void:
 	if format_picker.selected != index:
@@ -2540,31 +3189,45 @@ func _set_race_format(index: int) -> void:
 func _update_information_page() -> void:
 	if not is_instance_valid(information_panel):
 		return
-	var track_key: String = TRACK_KEYS[track_picker.selected]
+	var track_key := _menu_track_key()
 	var race_length := ""
 	if is_championship_mode:
 		var round_idx: int = _champ_round()
-		track_key = CHAMPIONSHIP_CALENDAR[round_idx]
-		race_length = "Round %d of %d" % [round_idx + 1, CHAMPIONSHIP_CALENDAR.size()]
+		track_key = _calendar()[round_idx]
+		race_length = "Round %d of %d" % [round_idx + 1, _calendar().size()]
+	elif is_campaign_mode:
+		var st := CampaignData.get_stage(campaign_stage_index)
+		track_key = st.track
+		race_length = "%s · %d lap%s" % [st.title, st.laps, "" if st.laps == 1 else "s"]
+	elif is_rally_mode:
+		var ev := _rally()
+		race_length = "Rally · stage %d of %d" % [mini(ev.stage_index + 1, ev.stage_count()), ev.stage_count()]
 	elif format_picker.selected == 1:
 		race_length = "Timed race · %s" % _fmt_hours(hours_picker.value)
 	else:
 		race_length = "%d lap%s" % [int(laps_picker.value), "" if int(laps_picker.value) == 1 else "s"]
 	var current_track: Track = Race.get_track(track_key)
 	information_title.text = current_track.name
-	var weather_options: Array[String] = ["Dry", "Wet", "Variable"]
-	var weather_name: String = weather_options[weather_picker.selected]
+	var weather_options: Array[String] = ["Dry", "Wet", "Snow", "Hail", "Fog", "Variable"]
+	var weather_name: String = str(CampaignData.get_stage(campaign_stage_index).weather).capitalize() if is_campaign_mode else weather_options[weather_picker.selected]
+	var opponents_count: int = CampaignData.get_stage(campaign_stage_index).opponents if is_campaign_mode else int(opponents_picker.value)
+	if is_championship_mode:
+		weather_name = _season_weather(_champ_round()).capitalize()
+		opponents_count = int(_season().opponents)
+	elif is_time_trial_mode:
+		opponents_count = 0
+	var start_time_val: float = CampaignData.get_stage(campaign_stage_index).start_hour if is_campaign_mode else start_hour_picker.value
 	information_facts.text = "Circuit length   %.1f km\n\n%s\nStart time   %s\nWeather   %s\nOpponents   %d" % [
 		current_track.L / 1000.0,
 		race_length,
-		_format_start_time(start_hour_picker.value),
+		_format_start_time(start_time_val),
 		weather_name,
-		int(opponents_picker.value)
+		opponents_count
 	]
 	information_facts.text += _records_text(track_key)
 	if information_map.has_method("set_track"):
 		information_map.set_track(current_track, true)
-	if is_instance_valid(menu_home_art) and not is_championship_mode:
+	if is_instance_valid(menu_home_art) and not is_championship_mode and not is_campaign_mode:
 		menu_home_art.set_track(current_track)
 
 ## The player's lap records on a circuit, for the Information page.
@@ -2648,7 +3311,7 @@ func _pause_action(act: String) -> void:
 		"restart":
 			_set_paused(false)
 			_commit_brain()
-			_start_race()
+			_start_race(true)
 		"retire":
 			_set_paused(false)
 			race.player.dnf = true
@@ -2664,6 +3327,86 @@ func _pause_action(act: String) -> void:
 func _commit_brain() -> void:
 	if race and race.brain:
 		race.brain.commit()
+
+# ------------------------------------------------------------------------------------- circuit prefetch
+## Building a circuit's Track (spline, racing line, speed profile: 0.1-0.6 s) and calibrating the strategist
+## on it (reference laps: 0.3-1.8 s) used to freeze the set-up page on the first visit to each circuit. A
+## worker thread does both for every circuit, one at a time, in the background: pure data, on its own Track
+## and Strategy copies, handed to the main thread (Race's track cache, the cached Track's cal) once done.
+var _prefetch_queue: Array = [] ## [key, phase] still to do; phase "track" builds the Track, "cal" calibrates
+var _prefetch_started := false
+var _prefetch_task := -1 ## WorkerThreadPool task id, -1 when idle
+var _prefetch_job: Array = [] ## the [key, phase] the task is on
+var _prefetch_result = null ## the task's Track ("track") or cal Dictionary ("cal"), read once it has finished
+
+func _pump_track_prefetch() -> void:
+	if _prefetch_task != -1:
+		if not WorkerThreadPool.is_task_completed(_prefetch_task):
+			return
+		WorkerThreadPool.wait_for_task_completion(_prefetch_task)
+		_prefetch_task = -1
+		var key: String = _prefetch_job[0]
+		if _prefetch_job[1] == "track":
+			if not Race._track_cache.has(key) and _prefetch_result is Track:
+				Race._track_cache[key] = _prefetch_result
+		elif _prefetch_result is Dictionary and not (_prefetch_result as Dictionary).is_empty():
+			var cached: Track = Race._track_cache.get(key)
+			if cached and cached.cal.is_empty():
+				cached.cal = _prefetch_result
+		_prefetch_result = null
+	if not _prefetch_started:
+		_prefetch_started = true
+		# outwards from the circuit on the page, the order ◂ ▸ reaches them; every Track first, then the strategist
+		var at: int = track_picker.selected if is_instance_valid(track_picker) else 0
+		var order: Array = [TRACK_KEYS[at]]
+		for d in range(1, TRACK_KEYS.size()):
+			for k in [TRACK_KEYS[posmod(at + d, TRACK_KEYS.size())], TRACK_KEYS[posmod(at - d, TRACK_KEYS.size())]]:
+				if not order.has(k):
+					order.append(k)
+		for k in order:
+			_prefetch_queue.append([k, "track"])
+		for k in order:
+			_prefetch_queue.append([k, "cal"])
+	if race or _starting:
+		return # no background work while a race runs
+	while not _prefetch_queue.is_empty():
+		var job: Array = _prefetch_queue.pop_front()
+		var cached: Track = Race._track_cache.get(job[0])
+		if job[1] == "track" and cached:
+			continue
+		if job[1] == "cal" and cached and not cached.cal.is_empty():
+			continue
+		_prefetch_job = job
+		_prefetch_task = WorkerThreadPool.add_task(_prefetch_work.bind(job[0], job[1]), false, "Prefetch %s %s" % job)
+		return
+
+## Worker thread: touches nothing shared (a Track of its own; for "cal", one that is never handed over).
+func _prefetch_work(key: String, phase: String) -> void:
+	var tr := Track.new(Track.load_def(key))
+	if phase == "track":
+		_prefetch_result = tr
+	else:
+		_prefetch_result = Strategy.new(CarModel.new(), Tyres.new()).calibrate(tr)
+
+## Moves a circuit's prefetch to the front of the queue (the page is on it now).
+func _prioritise_track_prefetch(key: String) -> void:
+	for phase in ["cal", "track"]:
+		var job := [key, phase]
+		var i := _prefetch_queue.find(job)
+		if i > 0:
+			_prefetch_queue.remove_at(i)
+			_prefetch_queue.push_front(job)
+
+## Whether the prefetcher will still deliver this circuit's strategist calibration.
+func _track_prefetch_pending(key: String) -> bool:
+	if race or _starting:
+		return false
+	return _prefetch_queue.has([key, "cal"]) or (_prefetch_task != -1 and _prefetch_job == [key, "cal"])
+
+func _exit_tree() -> void:
+	if _prefetch_task != -1:
+		WorkerThreadPool.wait_for_task_completion(_prefetch_task)
+		_prefetch_task = -1
 
 func _notification(what: int) -> void:
 	# keep what the bots learned if the window is closed mid-race
@@ -2693,8 +3436,16 @@ func _build_results() -> void:
 ## Sets up and shows a race from the set-up page (or restarts the one running). While it is being set up
 ## nothing steps (neither the race on screen nor the new one) and further presses are ignored; the race
 ## shown until now is disposed once the world and the HUD have the new one.
-func _start_race() -> void:
+## restart: the pause menu's RESTART (the same event again, so no service stop in between).
+func _start_race(restart := false) -> void:
 	if _starting:
+		return
+	if not restart and (is_championship_mode or is_campaign_mode or is_rally_mode) and _service_due():
+		# CMR 2.0: between events the car goes through the service area first
+		if race:
+			_go_to_service()
+		else:
+			_show_repair_page()
 		return
 	_starting = true
 	var shown: Race = world_view.race
@@ -2706,50 +3457,76 @@ func _start_race() -> void:
 func _set_up_race() -> void:
 	status_label.text = "Configuring car and optimizing race strategy..."
 	status_label.modulate = ACCENT
+	campaign_cleared = false
 	await get_tree().process_frame
 
-	if _strategy_pending and not is_championship_mode:
+	if _strategy_pending and not is_championship_mode and not is_campaign_mode and not is_rally_mode and not is_time_trial_mode:
 		status_label.text = "The strategist is still working out the plans — try again in a moment."
 		return
 	var settings := RaceSettings.new()
 	var plan = current_plan
 	var quali_run := false
 	if is_championship_mode:
-		if _next_round() >= CHAMPIONSHIP_CALENDAR.size():
-			champ_data = {"round": 0, "scored": false, "table": {}}
+		if _next_round() >= _calendar().size():
+			champ_data = {"round": 0, "scored": false, "table": {}, "config": _season()} # a new season on the same settings
 		if champ_data.get("scored", false):
 			champ_data["round"] = int(champ_data.get("round", 0)) + 1
 			champ_data["scored"] = false
 		_save_championship()
 		quali_run = quali_picker.selected != 2 and _round_quali().is_empty()
-		var t_key: String = CHAMPIONSHIP_CALENDAR[int(champ_data.get("round", 0))]
+		var round_idx := int(champ_data.get("round", 0))
+		var t_key: String = _calendar()[round_idx]
 		settings.track = t_key
 		var defaults: Dictionary = TRACK_DEFAULTS.get(t_key, {"laps": 6, "wear": 2.0})
-		settings.laps = defaults.laps
+		var season := _season()
+		settings.laps = _season_laps(t_key)
+		settings.opponents = clampi(int(season.opponents), 1, 15)
+		settings.difficulty = ["easy", "medium", "hard", "alien"][clampi(int(season.difficulty), 0, 3)]
+		settings.weather = _season_weather(round_idx)
 		settings.wear_mult = defaults.wear
 		settings.fuel_mult = defaults.get("fuel", 1.0)
 		settings.format = "laps"
+		settings.start_hour = start_hour_picker.value
+	elif is_campaign_mode:
+		var stage: Dictionary = CampaignData.get_stage(campaign_stage_index)
+		settings.track = stage.track
+		settings.laps = stage.laps
+		settings.format = "laps"
+		settings.weather = stage.weather
+		settings.opponents = stage.opponents
+		settings.difficulty = stage.difficulty
+		settings.start_hour = stage.start_hour
+		settings.wear_mult = stage.get("wear_mult", 2.0)
+		settings.fuel_mult = stage.get("fuel_mult", 1.0)
+	elif is_rally_mode:
+		if _rally().is_over():
+			_new_rally(_rally().key) # the rally was finished: run it again from the first stage
+		var sd := _rally().stage_def()
+		settings.track = sd.track
+		settings.laps = 1
+		settings.start_hour = float(sd.get("hour", 12.0))
+		plan = {} # a stage has no strategy: the race gives the car its one-stint fallback
 	else:
 		settings.track = TRACK_KEYS[track_picker.selected]
 		settings.laps = int(laps_picker.value)
 		settings.format = "time" if format_picker.selected == 1 else "laps"
 		settings.hours = hours_picker.value
-	settings.start_hour = start_hour_picker.value
+		settings.start_hour = start_hour_picker.value
 
 	await _open_loading_screen(settings, quali_run)
 	if quali_run:
 		plan = {} # the session builds its own one-run plan
-	elif is_championship_mode:
-		# every round is planned by the strategist for that circuit's race length, tyre wear and fuel use (the
-		# round's, not the menu's: a plan made at the menu's fuel use would start Indianapolis nearly dry)
-		var opts := _plan_opts(Race.get_track(settings.track), settings.laps, settings.wear_mult)
+	elif is_championship_mode or is_campaign_mode:
+		# every round is planned by the strategist for that circuit's race length, tyre wear and fuel use
+		var opts := _plan_opts(Race.get_track(settings.track), settings.laps, settings.wear_mult, settings.weather if is_campaign_mode or is_championship_mode else "")
 		opts.fuel_mult = settings.fuel_mult
 		var options := strategy.plan(opts)
 		plan = options[0] if options.size() else null
 
-	settings.opponents = int(opponents_picker.value)
-	settings.difficulty = ["easy", "medium", "hard", "alien"][difficulty_picker.selected]
-	settings.weather = ["dry", "wet", "variable"][weather_picker.selected]
+	if not is_campaign_mode and not is_championship_mode:
+		settings.opponents = 0 if is_time_trial_mode else int(opponents_picker.value)
+		settings.difficulty = ["easy", "medium", "hard", "alien"][difficulty_picker.selected]
+		settings.weather = ["dry", "wet", "snow", "hail", "fog", "variable"][weather_picker.selected]
 	settings.gearbox = "manual" if gearbox_picker.selected == 1 else "auto"
 	settings.player_name = player_name_edit.text.strip_edges() if not player_name_edit.text.strip_edges().is_empty() else "You"
 	settings.player_number = int(player_number_picker.value)
@@ -2757,9 +3534,9 @@ func _set_up_race() -> void:
 	settings.stripes = player_stripes_toggle.button_pressed
 	settings.ai_learning = "off" if ai_learning_picker.selected == 1 else "on"
 	settings.bot_physics = ["on", "off", "near"][bot_physics_picker.selected]
-	settings.grid = ["pole", "middle", "back", "random"][grid_picker.selected]
+	settings.grid = str(CampaignData.get_stage(campaign_stage_index).get("grid", "middle")) if is_campaign_mode else ["pole", "middle", "back", "random"][grid_picker.selected] # a stage sets its own grid
 	settings.assists = ["full", "abs", "off"][assists_picker.selected]
-	if not is_championship_mode:
+	if not is_championship_mode and not is_campaign_mode:
 		settings.wear_mult = wear_picker.value
 		settings.fuel_mult = fuel_picker.value
 	settings.mandatory_stop = mandatory_stop_toggle.button_pressed
@@ -2777,19 +3554,29 @@ func _set_up_race() -> void:
 		Qualifying.configure(settings)
 	elif is_championship_mode and not _round_quali().is_empty():
 		settings.quali_grid = _round_quali().grid # the round's qualifying sets the grid
+	if is_rally_mode:
+		Rally.configure_stage(settings, _rally().stage_def(), _rally().difficulty)
+	elif is_time_trial_mode:
+		TimeTrial.configure(settings, tt_start_picker.selected == 1)
+		plan = {}
 
 	if plan == null:
-		status_label.text = "No valid pit strategy for these settings — pick a plan or fix the custom one."
-		status_label.modulate = DANGER
-		loading_screen.hide()
-		return
+		if is_campaign_mode:
+			plan = {"stints": [{"c": "soft" if settings.weather == "dry" else ("wet" if settings.weather in ["wet", "snow", "hail"] else "soft"), "laps": settings.laps}]}
+		else:
+			status_label.text = "No valid pit strategy for these settings — pick a plan or fix the custom one."
+			status_label.modulate = DANGER
+			loading_screen.hide()
+			return
 	_save_race_settings()
 	await _loading_progress(0.35)
 	race = Race.new(settings, (plan as Dictionary).duplicate(true), -1, {"car_model": car_model, "tyres": tyre_model, "strategy": strategy})
 	quali_session = quali_run
-	var carried = champ_data.get("car", {}) if is_championship_mode and settings.race_control else {}
-	if carried is Dictionary and carried.get("parts", {}) is Dictionary and not carried.get("parts", {}).is_empty():
-		# what the service crew didn't get to is still bent
+	if is_rally_mode:
+		_rally().begin_stage(race) # the damage carried in, the rivals' runs (the lap model's calibration, once per circuit)
+	var carried := _carried_car() if settings.race_control and not is_rally_mode else {}
+	if carried.get("parts", {}) is Dictionary and not carried.get("parts", {}).is_empty():
+		# what the service crew didn't get to is still broken (the field's cars come rebuilt)
 		Service.fit(race.player, carried.parts, float(carried.get("pull", 0.0)))
 	if quali_run and quali_picker.selected == 1:
 		# the co-driver runs the laps: no session to drive, straight to the sheet
@@ -2846,6 +3633,7 @@ func _hide_front_end() -> void:
 	menu_home.hide()
 	menu_tint.hide()
 	menu_header.hide()
+	menu_prompt.hide()
 
 ## Cover the front end with the stage loading screen and let it draw before the race is built on this thread.
 func _open_loading_screen(settings: RaceSettings, qualifying := false) -> void:
@@ -2856,6 +3644,9 @@ func _open_loading_screen(settings: RaceSettings, qualifying := false) -> void:
 	var segments: Array = [track.name, race_length]
 	if is_championship_mode:
 		segments.insert(1, "round %d" % (_champ_round() + 1))
+	elif is_campaign_mode:
+		var st := CampaignData.get_stage(campaign_stage_index)
+		segments.insert(0, st.get("title", "Campaign Stage"))
 	loading_screen.open(segments, "Circuit Length", "%.2f km" % (track.L / 1000.0))
 	await _loading_progress(0.15)
 
@@ -2868,6 +3659,9 @@ func _show_results() -> void:
 		if is_instance_valid(audio):
 			audio.update_car(race.player, false)
 		_show_quali_sheet(race, Qualifying.sheet(race), false)
+		return
+	if is_rally_mode and race.stage:
+		_show_rally_results()
 		return
 	hud.hide()
 	pause_panel.hide()
@@ -2889,12 +3683,30 @@ func _show_results() -> void:
 	var laps: int = race.winner.finish_lap if race.winner else race.R
 	var sub := "%s · %s%d lap%s · %s" % [race.track.name, ("%s · " % _fmt_hours(race.duration / 3600.0)) if race.timed else "", laps,
 		"" if laps == 1 else "s",
-		{"dry": "Dry", "wet": "Wet", "variable": "Variable weather"}.get(race.s.weather, "Dry")]
+		{"dry": "Dry", "wet": "Wet", "variable": "Variable weather"}.get(race.s.weather, str(race.s.weather).capitalize())]
 	if race.projected:
 		sub += " · Finish projected from the field's pace"
 	if fast:
 		sub += " · Fastest lap %s %s" % [fast.car.name, Race.fmt_time(fast.t)]
 	col.add_child(_label("CHEQUERED FLAG · %s" % title, 26, INK))
+	if is_campaign_mode and me.car.dnf:
+		CampaignData.record_result(campaign_stage_index, 999) # a retirement counts as a failed try
+		col.add_child(_label("OBJECTIVE FAILED — you did not finish. Retry to advance!", 14, DANGER))
+	elif is_campaign_mode:
+		var c_res := CampaignData.record_result(campaign_stage_index, me.pos)
+		campaign_cleared = c_res.success
+		var c_box := VBoxContainer.new()
+		c_box.add_theme_constant_override("separation", 3)
+		col.add_child(c_box)
+		if c_res.success:
+			c_box.add_child(_label("★ STAGE OBJECTIVE COMPLETED! ★", 18, Color("#10b981")))
+			c_box.add_child(_label("🏆 Trophy Awarded: %s" % c_res.trophy, 14, Color("#f59e0b")))
+			if c_res.newly_unlocked:
+				var nxt_st := CampaignData.get_stage(c_res.unlocked_stage)
+				c_box.add_child(_label("▶ Next Stage Unlocked: %s (%s)" % [nxt_st.title, nxt_st.act_name], 14, ACCENT))
+		else:
+			var req_pos: int = CampaignData.get_stage(campaign_stage_index).target_pos
+			c_box.add_child(_label("OBJECTIVE FAILED — Finished P%d (Target: P%d or better). Retry to advance!" % [me.pos, req_pos], 14, DANGER))
 	var sub_label := _label(sub, 13, MUTED)
 	sub_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	col.add_child(sub_label)
@@ -2912,13 +3724,18 @@ func _show_results() -> void:
 
 	var is_champ := is_championship_mode
 	last_race_parts = Service.snapshot(race.player)
+	if is_campaign_mode and race.s.race_control:
+		# the car goes on to the next stage (or the retry) as it finished; the service area comes first
+		CampaignData.save_car({"parts": last_race_parts, "pull": Service.pull_rate(race.player), "used": 0, "serviced": false})
 	if is_champ:
 		_score_championship_round(rows)
+	var service_next := _service_due() and (is_campaign_mode or int(champ_data.get("round", 0)) < _calendar().size() - 1)
+	if service_next:
 		var damaged := Service.total(last_race_parts)
-		if damaged >= 0.01 and int(champ_data.get("round", 0)) < CHAMPIONSHIP_CALENDAR.size() - 1:
-			var svc := _label("Your car is %d%% damaged. The crew has %d minutes in the service area before the next round; whatever they don't fix starts the race bent." % [roundi(damaged * 100.0), Service.ALLOCATION], 13, CmrStyle.ORANGE_SOFT)
-			svc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			col.add_child(svc)
+		var svc := _label("Your car is %d%% damaged. The crew has %d minutes in the service area before the next %s; whatever they don't fix is still broken at the start." % [
+			roundi(damaged * 100.0), _service_allocation(), "stage" if is_campaign_mode else "round"], 13, CmrStyle.ORANGE_SOFT)
+		svc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		col.add_child(svc)
 	var headers := ["POS", "NO.", "DRIVER", "LAPS", "TIME / GAP", "BEST LAP", "STOPS", "TYRES"]
 	var widths := [46, 44, 250, 50, 210, 100, 56, 120]
 	if is_champ:
@@ -2954,27 +3771,43 @@ func _show_results() -> void:
 	var primary: Button
 	if is_champ:
 		_render_championship_standings(col)
-		var last := int(champ_data.get("round", 0)) >= CHAMPIONSHIP_CALENDAR.size() - 1
+		var last := int(champ_data.get("round", 0)) >= _calendar().size() - 1
 		if last:
 			primary = _button("FINISH CHAMPIONSHIP", ACCENT)
 			primary.pressed.connect(_return_to_setup)
 		else:
-			var next_name: String = Race.get_track(CHAMPIONSHIP_CALENDAR[int(champ_data.get("round", 0)) + 1]).name
+			var next_name: String = Race.get_track(_calendar()[int(champ_data.get("round", 0)) + 1]).name
 			var next_label := "NEXT ROUND: %s ▸" % next_name.to_upper()
 			if quali_picker.selected != 2:
 				next_label = "NEXT: %s QUALIFYING ▸" % next_name.to_upper()
 			primary = _button(next_label, ACCENT)
 			primary.pressed.connect(_start_race)
+	elif is_campaign_mode:
+		if campaign_cleared and campaign_stage_index < CampaignData.STAGES.size() - 1:
+			primary = _button("NEXT STAGE ▸", ACCENT)
+			primary.pressed.connect(func() -> void:
+				campaign_stage_index += 1
+				_populate_campaign_stages()
+				_apply_campaign_stage(campaign_stage_index)
+				_start_race()
+			)
+		elif campaign_cleared:
+			primary = _button("RACE THE FINALE AGAIN ▸", ACCENT)
+			primary.pressed.connect(_start_race)
+		else:
+			primary = _button("RETRY STAGE ▸", ACCENT)
+			primary.pressed.connect(_start_race)
 	else:
 		primary = _button("RACE AGAIN", ACCENT)
 		primary.pressed.connect(_start_race)
+	if service_next:
+		# the service area is the way on: the next event starts from there
+		primary.text = "SERVICE AREA ▸"
+		for c in primary.pressed.get_connections():
+			primary.pressed.disconnect(c.callable)
+		primary.pressed.connect(_go_to_service)
 	primary.custom_minimum_size.y = 44
 	buttons.add_child(primary)
-	if is_champ and Service.total(last_race_parts) >= 0.01 and int(champ_data.get("round", 0)) < CHAMPIONSHIP_CALENDAR.size() - 1:
-		var service := _button("SERVICE AREA ▸", CmrStyle.FIELD)
-		service.custom_minimum_size.y = 44
-		service.pressed.connect(_go_to_service)
-		buttons.add_child(service)
 	var back := _button("BACK TO MENU", CmrStyle.FIELD)
 	back.custom_minimum_size.y = 44
 	back.pressed.connect(_return_to_setup)
@@ -3014,7 +3847,7 @@ func _show_quali_sheet(qrace: Race, rows: Array, simulated: bool) -> void:
 	col.custom_minimum_size.x = 1060
 	var title := "P%d OF %d" % [me.pos, rows.size()] if me.time != null else "NO TIME SET — YOU START FROM THE BACK"
 	col.add_child(_label("QUALIFYING · %s" % title, 26, INK))
-	var sub := "%s · Round %d of %d" % [qrace.track.name, _next_round() + 1, CHAMPIONSHIP_CALENDAR.size()]
+	var sub := "%s · Round %d of %d" % [qrace.track.name, _next_round() + 1, _calendar().size()]
 	if simulated:
 		sub += " · Your co-driver ran the laps"
 	elif me.time != null:
@@ -3107,9 +3940,9 @@ static func _fmt_hours(h: float) -> String:
 	return "%d h" % int(q) if q == floorf(q) else "%s h" % q
 
 func _round_points(r: Dictionary) -> int:
-	if r.car.dnf or r.pos > CHAMPIONSHIP_POINTS.size():
+	if r.car.dnf or r.pos > _points_table().size():
 		return 0
-	return CHAMPIONSHIP_POINTS[r.pos - 1]
+	return _points_table()[r.pos - 1]
 
 func _sorted_standings() -> Array:
 	var list: Array = champ_data.get("table", {}).values()
@@ -3125,8 +3958,8 @@ func _sorted_standings() -> Array:
 func _render_championship_standings(col: VBoxContainer) -> void:
 	var list := _sorted_standings()
 	var round_idx := int(champ_data.get("round", 0))
-	var heading := "STANDINGS AFTER ROUND %d OF %d" % [round_idx + 1, CHAMPIONSHIP_CALENDAR.size()]
-	if round_idx >= CHAMPIONSHIP_CALENDAR.size() - 1 and not list.is_empty():
+	var heading := "STANDINGS AFTER ROUND %d OF %d" % [round_idx + 1, _calendar().size()]
+	if round_idx >= _calendar().size() - 1 and not list.is_empty():
 		heading = "YOU ARE THE CHAMPION!" if list[0].get("is_player", false) else "CHAMPION: %s" % str(list[0].name).to_upper()
 	var div := _label(heading, 16, ACCENT)
 	div.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -3161,7 +3994,8 @@ func _score_championship_round(results: Array) -> void:
 		table[cid] = entry
 		if car.is_player:
 			# the car goes to the service area as it finished, with a fresh time allocation
-			champ_data["car"] = {"parts": Service.snapshot(car), "pull": Service.pull_rate(car), "used": 0}
+			champ_data["car"] = {"parts": Service.snapshot(car), "pull": Service.pull_rate(car), "used": 0, "serviced": false} \
+				if _service_allocation() > 0 else {}
 	_save_championship()
 
 ## The championship round to drive next: a round whose results were already seen is done.
@@ -3171,9 +4005,9 @@ func _next_round() -> int:
 
 ## The round the menus show (a finished championship shows its last round).
 func _champ_round() -> int:
-	return mini(_next_round(), CHAMPIONSHIP_CALENDAR.size() - 1)
+	return mini(_next_round(), _calendar().size() - 1)
 
-func _return_to_setup() -> void:
+func _return_to_setup(to_service := false) -> void:
 	_commit_brain()
 	var shown: Race = world_view.race
 	if race and race != shown:
@@ -3192,18 +4026,27 @@ func _return_to_setup() -> void:
 	status_label.text = ""
 	status_label.modulate = MUTED
 	result_panel.hide()
+	var raced := campaign_stage_index
+	if is_campaign_mode and campaign_cleared and CampaignData.is_unlocked(campaign_stage_index + 1) and campaign_stage_index < CampaignData.STAGES.size() - 1:
+		campaign_stage_index += 1 # stage won: the menu briefs the next one
+	campaign_cleared = false
+	_update_mode_view()
 	_show_setup_page()
 	_update_championship_view()
 	_update_ai_memory()
 
-	var t_key: String = CHAMPIONSHIP_CALENDAR[_champ_round()] if is_championship_mode else TRACK_KEYS[track_picker.selected]
-	world_view.set_track(Race.get_track(t_key))
+	world_view.release_race() # keeps the circuit built: a race there again starts without a rebuild
 	if shown:
 		shown.dispose() # (after the world has let go of it)
+	if is_campaign_mode and world_return >= 0 and not to_service:
+		world_return = -1
+		_enter_open_world(raced) # a stage started at a beacon in Brzeszcze ends back at its beacon
+	elif not to_service:
+		world_return = -1 # (through the service area the way back to the open world is kept)
 
 ## From the results to the Repair page, to spend the service time before the next round.
 func _go_to_service() -> void:
-	_return_to_setup()
+	_return_to_setup(true)
 	_show_repair_page()
 
 func _select_track(index: int) -> void:
@@ -3217,44 +4060,283 @@ func _select_track(index: int) -> void:
 		wear_picker.value = defaults.wear
 		fuel_picker.value = defaults.get("fuel", 1.0)
 		_loading_settings = false
-	if world_view and not is_championship_mode:
-		world_view.set_track(Race.get_track(key))
+	_prioritise_track_prefetch(key)
 	_update_information_page()
 	_update_menu_car_summary()
 	_update_ai_memory()
 	_queue_strategy_refresh()
 
-func _toggle_mode() -> void:
-	is_championship_mode = not is_championship_mode
-	mode_button.text = "CHAMPIONSHIP · 8 ROUNDS" if is_championship_mode else "SINGLE RACE"
-	track_picker.visible = not is_championship_mode
-	track_label.visible = not is_championship_mode
-	laps_picker.get_parent().visible = not is_championship_mode and format_picker.selected == 0
-	format_picker.get_parent().visible = not is_championship_mode
-	hours_picker.get_parent().visible = not is_championship_mode and format_picker.selected == 1
-	strategy_section.visible = not is_championship_mode
-	_update_championship_view()
+## Main menu → CAMPAIGN: the briefing of the furthest stage unlocked. The stage dictates the race (circuit,
+## laps, weather, field, start time), so the quick-race settings are left as they were.
+func _start_campaign_mode() -> void:
+	is_time_trial_mode = false
+	is_rally_mode = false
+	is_campaign_mode = true
+	is_championship_mode = false
+	campaign_cleared = false
+	var prog := CampaignData.load_progress()
+	campaign_stage_index = clampi(int(prog.get("unlocked", 0)), 0, CampaignData.STAGES.size() - 1)
+	_update_mode_view()
+	if OpenWorld.available():
+		_enter_open_world("") # the campaign lives in the open world: drive to the next stage's beacon
+	else:
+		_show_setup_page()
+
+## The campaign's open world (scripts/world/open_world.gd), built on first use and kept for the way back.
+## spawn: "" where the car was left, or a stage index to start at that stage's beacon.
+func _enter_open_world(spawn) -> void:
+	if open_world == null:
+		open_world = OpenWorld.new()
+		add_child(open_world)
+		open_world.stage_requested.connect(_on_world_stage)
+		open_world.leave_requested.connect(_on_world_leave)
+	_hide_front_end()
+	result_panel.hide()
+	active_menu_page = "world"
+	get_viewport().gui_release_focus()
+	await open_world.open(spawn, {
+		"gearbox": "manual" if gearbox_picker.selected == 1 else "auto",
+		"assists": ["full", "abs", "off"][assists_picker.selected],
+		"paint": player_color_picker.color,
+		"number": int(player_number_picker.value),
+		"retro_material": retro_pipeline.material if retro_pipeline else null,
+		"source_viewport": render_viewport,
+		"audio": audio,
+	})
+
+## A beacon in the open world starts its campaign stage; the results bring the car back to it.
+func _on_world_stage(index: int) -> void:
+	is_campaign_mode = true
+	is_championship_mode = false
+	is_rally_mode = false
+	is_time_trial_mode = false
+	campaign_stage_index = index
+	world_return = index
+	open_world.suspend()
+	_update_mode_view()
+	_start_race()
+
+func _on_world_leave(to: String) -> void:
+	if to == "stages":
+		_update_mode_view()
+		_show_setup_page()
+	else:
+		_show_home()
+
+func _populate_campaign_stages() -> void:
+	if not is_instance_valid(campaign_stage_picker):
+		return
+	campaign_stage_picker.clear()
+	var prog := CampaignData.load_progress()
+	var unlocked: int = int(prog.get("unlocked", 0))
+	var best_pos: Dictionary = prog.get("best_pos", {})
+	var trophies: Array = prog.get("trophies", [])
+	for i in CampaignData.STAGES.size():
+		var st: Dictionary = CampaignData.STAGES[i]
+		var is_un := i <= unlocked
+		var completed: bool = (st.trophy in trophies) or (best_pos.has(str(i)) and int(best_pos[str(i)]) <= int(st.target_pos)) or (i < unlocked)
+		var prefix := "★ " if completed else ("▶ " if i == unlocked else "🔒 ")
+		campaign_stage_picker.add_item("%s%s" % [prefix, st.title])
+		campaign_stage_picker.set_item_disabled(i, not is_un)
+	campaign_stage_picker.selected = campaign_stage_index
+
+func _select_campaign_stage(index: int) -> void:
+	if CampaignData.is_unlocked(index):
+		_apply_campaign_stage(index)
+	else:
+		campaign_stage_picker.select(campaign_stage_index) # ◂ ▸ can land on a locked stage: stay put
+
+func _apply_campaign_stage(stage_idx: int) -> void:
+	campaign_stage_index = stage_idx
+	var st: Dictionary = CampaignData.get_stage(stage_idx)
+	if is_instance_valid(campaign_stage_picker) and campaign_stage_picker.selected != stage_idx:
+		campaign_stage_picker.select(stage_idx)
+	_update_campaign_view()
+	_update_information_page()
+	_update_menu_car_summary()
+
+func _update_campaign_view() -> void:
+	if not is_instance_valid(campaign_act_label):
+		return
+	var st: Dictionary = CampaignData.get_stage(campaign_stage_index)
+	var t_idx := TRACK_KEYS.find(st.track)
+	var tr_name: String = TRACK_NAMES[t_idx] if t_idx >= 0 else Race.get_track(st.track).name
+
+	campaign_act_label.text = str(st.get("act_name", "")).to_upper()
+	if is_instance_valid(campaign_title_label):
+		campaign_title_label.text = str(st.get("title", ""))
+	var weather_name: String = str(st.get("weather", "dry")).capitalize()
+	if is_instance_valid(campaign_circuit_label):
+		campaign_circuit_label.text = "📍 %s  ·  %d Laps  ·  %s  ·  %d Rivals (%s)" % [
+			tr_name,
+			st.get("laps", 3),
+			weather_name,
+			st.get("opponents", 5),
+			str(st.get("difficulty", "medium")).capitalize()
+		]
+		if int(st.get("eased", 0)) > 0:
+			campaign_circuit_label.text += "  ·  eased from %s after %d tries" % [str(st.base_difficulty).capitalize(), int(st.fails)]
+	var target_pos: int = int(st.get("target_pos", 3))
+	if target_pos == 1:
+		campaign_target_label.text = "★ TARGET OBJECTIVE: Win the race (P1)"
+	else:
+		campaign_target_label.text = "★ TARGET OBJECTIVE: Finish P%d or higher" % target_pos
+	campaign_trophy_label.text = "🏆 Trophy: %s" % str(st.get("trophy", ""))
+	campaign_desc_label.text = str(st.get("desc", ""))
+	campaign_tip_label.text = "💡 Mechanic: \"%s\"" % str(st.get("tip", ""))
+
+## The opponents number says when it means a solo run.
+func _update_opponents_label() -> void:
+	if is_instance_valid(opponents_picker):
+		opponents_picker.suffix = "(SOLO)" if int(opponents_picker.value) == 0 else ""
+
+## The set-up page's heading: the mode picked on the main menu, and where in it the player is.
+## Shows or hides a folded section's heading (its body follows the heading's open state).
+func _show_fold(key: String, on: bool) -> void:
+	if setup_folds.has(key):
+		(setup_folds[key].head as Control).visible = on
+		(setup_folds[key].body as Control).visible = on and setup_open.get(key, false)
+		# (the rule drawn above the heading goes with it)
+		var head: Control = setup_folds[key].head
+		var at := head.get_index()
+		if at > 0 and head.get_parent().get_child(at - 1) is ColorRect:
+			(head.get_parent().get_child(at - 1) as ColorRect).visible = on
+
+func _update_setup_title() -> void:
+	if not is_instance_valid(setup_title_label):
+		return
+	if is_campaign_mode:
+		var st := CampaignData.get_stage(campaign_stage_index)
+		setup_title_label.text = "CAMPAIGN · STAGE %d/%d" % [campaign_stage_index + 1, CampaignData.STAGES.size()]
+		setup_subtitle_label.text = str(st.get("act_name", "THE SEICENTO ODYSSEY")).to_upper()
+	elif is_championship_mode:
+		setup_title_label.text = "CHAMPIONSHIP · ROUND %d/%d" % [_champ_round() + 1, _calendar().size()]
+		setup_subtitle_label.text = "SEICENTO 900 CUP"
+	elif is_rally_mode:
+		var ev := _rally()
+		setup_title_label.text = "RALLY · STAGE %d/%d" % [mini(ev.stage_index + 1, ev.stage_count()), ev.stage_count()]
+		setup_subtitle_label.text = str(ev.def.name).to_upper()
+	else:
+		setup_title_label.text = "TIME TRIAL" if is_time_trial_mode else "QUICK RACE"
+		setup_subtitle_label.text = "SOLO HOT LAPS · YOUR GHOST AND LAP RECORDS" if is_time_trial_mode else "SEICENTO 900 CUP"
+
+func _update_mode_view() -> void:
+	_update_opponents_label()
+	if is_instance_valid(rally_side):
+		rally_side.visible = is_rally_mode
+	if is_instance_valid(tt_start_row):
+		tt_start_row.visible = is_time_trial_mode
+	if is_rally_mode:
+		_update_rally_view()
+	elif is_campaign_mode:
+		if is_instance_valid(champ_reset_button):
+			champ_reset_button.visible = false
+		campaign_side.show()
+		champ_side.hide()
+		champ_info_label.text = ""
+		track_picker.visible = false
+		track_label.visible = false
+		if is_instance_valid(setup_rule_divider):
+			setup_rule_divider.visible = false
+		if is_instance_valid(setup_format_row):
+			setup_format_row.visible = false
+		if is_instance_valid(setup_conditions_row):
+			setup_conditions_row.visible = false
+		if is_instance_valid(grid_picker):
+			grid_picker.get_parent().visible = false
+		if is_instance_valid(strategy_section):
+			strategy_section.visible = false
+		_show_fold("strategy", false)
+		_show_fold("race", false) # the stage / the season sets format and length
+		if setup_folds.has("rules"):
+			var rf: Dictionary = setup_folds["rules"]
+			(rf.head as Control).visible = false
+			(rf.body as Control).visible = false
+		if is_instance_valid(setup_race_button):
+			setup_race_button.visible = false
+		_populate_campaign_stages()
+		_apply_campaign_stage(campaign_stage_index)
+	elif is_championship_mode:
+		campaign_side.hide()
+		champ_side.show()
+		track_picker.visible = false
+		track_label.visible = false
+		if is_instance_valid(setup_rule_divider):
+			setup_rule_divider.visible = true
+		if is_instance_valid(setup_format_row):
+			setup_format_row.visible = false
+		if is_instance_valid(setup_conditions_row):
+			setup_conditions_row.visible = false
+		if is_instance_valid(grid_picker):
+			grid_picker.get_parent().visible = quali_picker.selected == 2
+		if is_instance_valid(strategy_section):
+			strategy_section.visible = false
+		_show_fold("strategy", false)
+		_show_fold("race", false) # the stage / the season sets format and length
+		if setup_folds.has("rules"):
+			var rf: Dictionary = setup_folds["rules"]
+			(rf.head as Control).visible = false
+			(rf.body as Control).visible = false
+		if is_instance_valid(setup_race_button):
+			setup_race_button.visible = true
+			setup_race_button.text = "RACE  ▸"
+		_update_championship_view()
+	else:
+		if is_instance_valid(champ_reset_button):
+			champ_reset_button.visible = false
+		campaign_side.hide()
+		champ_side.hide()
+		champ_info_label.text = ""
+		track_picker.visible = true
+		track_label.visible = true
+		if is_instance_valid(setup_rule_divider):
+			setup_rule_divider.visible = true
+		if is_instance_valid(setup_format_row):
+			setup_format_row.visible = true
+			laps_picker.get_parent().visible = format_picker.selected == 0
+			hours_picker.get_parent().visible = format_picker.selected == 1
+		if is_instance_valid(setup_conditions_row):
+			setup_conditions_row.visible = true
+		if is_instance_valid(grid_picker):
+			grid_picker.get_parent().visible = not is_time_trial_mode
+		if is_instance_valid(strategy_section):
+			strategy_section.visible = true
+		_show_fold("strategy", true)
+		_show_fold("race", not is_time_trial_mode)
+		# a time trial is a solo run: no field, no grid
+		opponents_picker.get_parent().visible = not is_time_trial_mode
+		difficulty_picker.get_parent().visible = not is_time_trial_mode
+		if setup_folds.has("rules"):
+			var rf: Dictionary = setup_folds["rules"]
+			(rf.head as Control).visible = true
+			(rf.body as Control).visible = setup_open.get("rules", false)
+		if is_instance_valid(setup_race_button):
+			setup_race_button.visible = true
+			setup_race_button.text = "RACE  ▸"
+	_update_setup_title()
 	_update_information_page()
 	_update_menu_car_summary()
 	_update_ai_memory()
 
-	var t_key: String = CHAMPIONSHIP_CALENDAR[_champ_round()] if is_championship_mode else TRACK_KEYS[track_picker.selected]
-	world_view.set_track(Race.get_track(t_key))
-
 func _update_championship_view() -> void:
 	var table: Dictionary = champ_data.get("table", {})
 	var saved := not table.is_empty() or int(champ_data.get("round", 0)) > 0
-	grid_picker.get_parent().visible = not is_championship_mode or quali_picker.selected == 2
+	grid_picker.get_parent().visible = not is_campaign_mode and not is_time_trial_mode and (not is_championship_mode or quali_picker.selected == 2)
+	_sync_season_view()
 	if is_instance_valid(champ_reset_button):
 		champ_reset_button.visible = is_championship_mode and saved
 	if is_championship_mode:
-		var points := "-".join(CHAMPIONSHIP_POINTS.map(func(x): return str(x)))
-		var info := "%d rounds, one on each circuit, %s points. Race length and tyre wear are set per circuit." % [CHAMPIONSHIP_CALENDAR.size(), points]
+		var points := "-".join(_points_table().map(func(x): return str(x)))
+		var season := _season()
+		var info := "%d round%s, %s points, %d opponents (%s), %s. Damage & repairs: %s." % [_calendar().size(), "" if _calendar().size() == 1 else "s",
+			points, int(season.opponents), ["Easy", "Medium", "Hard", "Alien"][clampi(int(season.difficulty), 0, 3)],
+			str(SEASON_WEATHERS[clampi(int(season.weather), 0, SEASON_WEATHERS.size() - 1)]).to_lower(),
+			str(SEASON_DAMAGE[clampi(int(season.damage), 0, SEASON_DAMAGE.size() - 1)].name).to_lower()]
 		if quali_picker.selected != 2:
 			info += " Each round opens with single-car qualifying: an out lap, then the timed laps, and the fastest lap takes pole."
 		var nxt := _next_round()
-		if saved and nxt < CHAMPIONSHIP_CALENDAR.size():
-			info += " Saved championship: next is round %d, %s." % [nxt + 1, Race.get_track(CHAMPIONSHIP_CALENDAR[nxt]).name]
+		if saved and nxt < _calendar().size():
+			info += " Saved championship: next is round %d, %s." % [nxt + 1, Race.get_track(_calendar()[nxt]).name]
 			var q := _round_quali()
 			if not q.is_empty():
 				info += " You qualified P%d: the race is next." % int(q.pos)
@@ -3265,20 +4347,21 @@ func _update_championship_view() -> void:
 		_render_champ_side(nxt if saved else 0)
 		champ_side.show()
 	else:
-		champ_info_label.text = "Single race on selected track with custom options."
+		champ_info_label.text = ""
 		champ_info_label.hide()
 		champ_side.hide()
+	_update_setup_title()
 
 ## Calendar with progress (done / next) and the saved standings, like the reference's side panel.
 func _render_champ_side(done: int) -> void:
 	for child in champ_calendar.get_children() + champ_table.get_children():
 		child.queue_free()
 	var ink := CmrStyle.TEXT
-	for i in CHAMPIONSHIP_CALENDAR.size():
+	for i in _calendar().size():
 		var is_next := i == done
 		var color := MUTED if i < done else (ACCENT if is_next else ink)
 		champ_calendar.add_child(_label(str(i + 1), 13, color))
-		var name := _label(Race.get_track(CHAMPIONSHIP_CALENDAR[i]).name, 13, color)
+		var name := _label(Race.get_track(_calendar()[i]).name, 13, color)
 		name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		champ_calendar.add_child(name)
 		champ_calendar.add_child(_label("✓" if i < done else ("NEXT" if is_next else ""), 12, CmrStyle.GREEN if i < done else ACCENT))
@@ -3305,8 +4388,275 @@ func _render_champ_side(done: int) -> void:
 		champ_table.add_child(name)
 		champ_table.add_child(_label("%d" % int(e.points), 13, color))
 
+# ---------------- the championship season's set-up (champ_data.config) ----------------
+func _default_season() -> Dictionary:
+	return {"preset": 0, "custom": CHAMPIONSHIP_CALENDAR.duplicate(), "calendar": CHAMPIONSHIP_CALENDAR.duplicate(), "order": 0,
+		"length": 1, "opponents": 12, "difficulty": 1, "weather": 0, "points": 0, "quali": 0, "damage": 1, "seed": randi() % 1000000}
+
+## The season's settings, filled in with the defaults (a season saved before they existed keeps the old rules:
+## the classic calendar, F1 points, realistic damage).
+func _season() -> Dictionary:
+	var c = champ_data.get("config")
+	if not (c is Dictionary):
+		c = {}
+	var d := _default_season()
+	for k in d:
+		if not c.has(k):
+			c[k] = d[k]
+	var cal: Array = (c.calendar as Array).filter(func(k) -> bool: return str(k) in TRACK_KEYS) if c.calendar is Array else []
+	c.calendar = cal if not cal.is_empty() else CHAMPIONSHIP_CALENDAR.duplicate()
+	champ_data["config"] = c
+	return c
+
+## The season's rounds, in order (track keys).
+func _calendar() -> Array:
+	return _season().calendar
+
+func _points_table() -> Array:
+	return SEASON_POINTS[clampi(int(_season().points), 0, SEASON_POINTS.size() - 1)].table
+
+## Once the first round (or its qualifying) has been driven the season's settings are fixed.
+func _season_locked() -> bool:
+	var q = champ_data.get("quali", {})
+	return int(champ_data.get("round", 0)) > 0 or bool(champ_data.get("scored", false)) \
+		or not (champ_data.get("table", {}) as Dictionary).is_empty() or (q is Dictionary and not q.is_empty())
+
+## The weather of a round: the season's, or a roll per round (fixed by the season's seed) for "Random".
+func _season_weather(round_idx: int) -> String:
+	var c := _season()
+	var w := int(c.weather)
+	if w >= WEATHER_KEYS.size():
+		return RANDOM_WEATHER_POOL[posmod(hash([int(c.seed), round_idx]), RANDOM_WEATHER_POOL.size())]
+	return WEATHER_KEYS[w]
+
+func _season_laps(key: String) -> int:
+	var defaults: Dictionary = TRACK_DEFAULTS.get(key, {"laps": 6, "wear": 2.0})
+	return maxi(1, roundi(float(defaults.laps) * SEASON_LENGTHS[clampi(int(_season().length), 0, 2)].mult))
+
+## Minutes of service between events (0: damage doesn't carry over).
+func _service_allocation() -> int:
+	if is_rally_mode:
+		return _rally().service_minutes() if not _rally().is_over() else 0
+	if is_championship_mode:
+		return int(SEASON_DAMAGE[clampi(int(_season().damage), 0, SEASON_DAMAGE.size() - 1)].minutes)
+	return Service.ALLOCATION
+
+func _build_season_box(parent: VBoxContainer) -> void:
+	season_box = VBoxContainer.new()
+	season_box.add_theme_constant_override("separation", 10)
+	parent.add_child(season_box)
+	season_box.add_child(_label("SEASON SET-UP", 16, CmrStyle.TEXT))
+	season_note = _label("", 13, MUTED)
+	season_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	season_box.add_child(season_note)
+	var row1 := HBoxContainer.new()
+	row1.add_theme_constant_override("separation", 14)
+	season_box.add_child(row1)
+	season_preset_picker = _option_field(row1, "CALENDAR", SEASON_PRESETS.map(func(p): return p.name))
+	season_preset_picker.tooltip_text = "Classic GP: the eight great circuits. Polish Tour: the Silesian and Kraków streets. World Tour, Full (every circuit), or Custom: tick your own below"
+	season_order_picker = _option_field(row1, "ORDER", ["As listed", "Shuffled"])
+	season_order_picker.tooltip_text = "Race the calendar in its order, or shuffle it"
+	season_length_picker = _option_field(row1, "RACE LENGTH", SEASON_LENGTHS.map(func(p): return p.name))
+	season_length_picker.tooltip_text = "Laps per round, against each circuit's standard race distance"
+	var row2 := HBoxContainer.new()
+	row2.add_theme_constant_override("separation", 14)
+	season_box.add_child(row2)
+	var counts := []
+	for i in range(1, 16):
+		counts.append(str(i))
+	season_opponents_picker = _option_field(row2, "OPPONENTS", counts)
+	season_opponents_picker.tooltip_text = "Cars against you in every round"
+	season_difficulty_picker = _option_field(row2, "DIFFICULTY", ["Easy", "Medium", "Hard", "Alien"])
+	season_weather_picker = _option_field(row2, "WEATHER", SEASON_WEATHERS)
+	season_weather_picker.tooltip_text = "One weather for the whole season, or a roll of the dice for every round (mostly dry)"
+	var row3 := HBoxContainer.new()
+	row3.add_theme_constant_override("separation", 14)
+	season_box.add_child(row3)
+	season_points_picker = _option_field(row3, "POINTS", SEASON_POINTS.map(func(p): return p.name))
+	season_points_picker.tooltip_text = "Points for 1st, 2nd, 3rd … (no points for a retirement)"
+	quali_picker = _option_field(row3, "QUALIFYING", ["Drive it", "Simulate", "Skip (use grid position)"])
+	quali_picker.tooltip_text = "Each round opens with qualifying for the grid: drive it yourself, let the co-driver set a time, or start from the grid position you pick"
+	season_damage_picker = _option_field(row3, "DAMAGE & REPAIRS", SEASON_DAMAGE.map(func(p): return p.name))
+	season_damage_picker.tooltip_text = "Realistic: damage carries over to the next round and the crew has 60 minutes of service to fix what they can. Hardcore: only 30. Off: the car is rebuilt for every round"
+	var cal := _fold_section(season_box, "calendar", "CALENDAR · TICK THE CIRCUITS", false)
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 14)
+	cal.add_child(grid)
+	for i in TRACK_KEYS.size():
+		var key: String = TRACK_KEYS[i]
+		var tick := _check_field(grid, TRACK_NAMES[i], false)
+		tick.tooltip_text = "Race at %s this season (picks the Custom calendar)" % TRACK_NAMES[i]
+		tick.toggled.connect(_season_track_toggled.bind(key))
+		season_track_toggles[key] = tick
+	for picker in [season_preset_picker, season_order_picker, season_length_picker, season_opponents_picker,
+			season_difficulty_picker, season_weather_picker, season_points_picker, quali_picker, season_damage_picker]:
+		(picker as MenuSelector).item_selected.connect(func(_i: int) -> void: _season_changed())
+
+## A season setting was changed on the page (before round 1).
+func _season_changed() -> void:
+	if _season_syncing or _loading_settings:
+		return
+	var c := _season()
+	if _season_locked():
+		_sync_season_view()
+		return
+	var preset := season_preset_picker.selected
+	var order := season_order_picker.selected
+	if order == 1 and (int(c.order) != 1 or preset != int(c.preset)):
+		c.seed = randi() % 1000000 # a fresh shuffle
+	if preset != int(c.preset) and preset < SEASON_PRESETS.size() - 1:
+		c.custom = (SEASON_PRESETS[preset].tracks as Array).duplicate()
+	c.preset = preset
+	c.order = order
+	c.length = season_length_picker.selected
+	c.opponents = season_opponents_picker.selected + 1
+	c.difficulty = season_difficulty_picker.selected
+	c.weather = season_weather_picker.selected
+	c.points = season_points_picker.selected
+	c.quali = quali_picker.selected
+	c.damage = season_damage_picker.selected
+	_rebuild_calendar(c)
+	_save_championship()
+	_update_championship_view()
+
+func _season_track_toggled(on: bool, key: String) -> void:
+	if _season_syncing or _season_locked():
+		return
+	var c := _season()
+	var ticked: Array = []
+	for k in TRACK_KEYS:
+		if (season_track_toggles[k] as CheckButton).button_pressed:
+			ticked.append(k)
+	if ticked.is_empty():
+		_season_syncing = true
+		(season_track_toggles[key] as CheckButton).button_pressed = true # a season needs a round
+		_season_syncing = false
+		return
+	# keep the order the rounds were in, new ones at the end
+	var custom: Array = (c.calendar as Array).filter(func(k) -> bool: return k in ticked)
+	for k in ticked:
+		if not k in custom:
+			custom.append(k)
+	c.custom = custom
+	c.preset = SEASON_PRESETS.size() - 1
+	_rebuild_calendar(c)
+	_save_championship()
+	_update_championship_view()
+
+## The calendar from the preset (or the ticked circuits) and the order.
+func _rebuild_calendar(c: Dictionary) -> void:
+	var preset := clampi(int(c.preset), 0, SEASON_PRESETS.size() - 1)
+	var base: Array = (SEASON_PRESETS[preset].tracks as Array).duplicate() if preset < SEASON_PRESETS.size() - 1 else (c.custom as Array).duplicate()
+	if int(c.order) == 1:
+		var rng := RandomNumberGenerator.new()
+		rng.seed = int(c.seed)
+		for i in range(base.size() - 1, 0, -1):
+			var j := rng.randi_range(0, i)
+			var t = base[i]
+			base[i] = base[j]
+			base[j] = t
+	c.calendar = base
+
+## Shows the season's settings on the page, locked once it is under way.
+func _sync_season_view() -> void:
+	if not is_instance_valid(season_box):
+		return
+	var c := _season()
+	var locked := _season_locked()
+	_season_syncing = true
+	season_preset_picker.select(clampi(int(c.preset), 0, SEASON_PRESETS.size() - 1))
+	season_order_picker.select(clampi(int(c.order), 0, 1))
+	season_length_picker.select(clampi(int(c.length), 0, SEASON_LENGTHS.size() - 1))
+	season_opponents_picker.select(clampi(int(c.opponents) - 1, 0, 14))
+	season_difficulty_picker.select(clampi(int(c.difficulty), 0, 3))
+	season_weather_picker.select(clampi(int(c.weather), 0, SEASON_WEATHERS.size() - 1))
+	season_points_picker.select(clampi(int(c.points), 0, SEASON_POINTS.size() - 1))
+	quali_picker.select(clampi(int(c.quali), 0, 2))
+	season_damage_picker.select(clampi(int(c.damage), 0, SEASON_DAMAGE.size() - 1))
+	for k in season_track_toggles:
+		var tick: CheckButton = season_track_toggles[k]
+		tick.button_pressed = k in c.calendar
+		tick.disabled = locked
+	for picker in [season_preset_picker, season_order_picker, season_length_picker, season_opponents_picker,
+			season_difficulty_picker, season_weather_picker, season_points_picker, quali_picker, season_damage_picker]:
+		(picker as MenuSelector).disabled = locked
+	_season_syncing = false
+	_set_section_summary("calendar", "%d ROUND%s" % [c.calendar.size(), "" if c.calendar.size() == 1 else "S"])
+	season_note.text = "This season's settings are locked now that it is under way. RESET SEASON to change them." if locked \
+		else "Set up the season, then press %s to race round 1. The settings lock once it has been raced." % ("START" if _pad_connected() else "RACE")
+
+## After a confirmation closes, the keyboard / gamepad goes back to where it was on the page.
+func _refocus_after(dialog: Window) -> void:
+	dialog.visibility_changed.connect(func() -> void:
+		if not dialog.visible:
+			_focus_page.call_deferred()
+	)
+
+## Puts the focus back on the page shown (it is never left with nothing focused).
+func _focus_page() -> void:
+	if race or _starting:
+		return
+	match active_menu_page:
+		"setup":
+			var items := _setup_focus_items()
+			if not items.is_empty():
+				_focus_setup_item(items, _setup_focus_at)
+		"options":
+			var items := _options_focus_items()
+			if not items.is_empty():
+				items[0].grab_focus()
+		_:
+			get_viewport().gui_release_focus()
+
+func _options_focus_items() -> Array[Control]:
+	var out: Array[Control] = []
+	if is_instance_valid(options_column):
+		_collect_focusable(options_column, out)
+	return out
+
+# ---------------- the car between events: damage carried over, and the service area ----------------
+## The car carried to the next event ({parts, pull, used, serviced}): the championship's (unless its damage
+## is off), the campaign's, or {} for a quick race (the car is rebuilt for every race).
+func _carried_car() -> Dictionary:
+	var car = {}
+	if is_championship_mode:
+		car = champ_data.get("car", {}) if _service_allocation() > 0 else {}
+	elif is_campaign_mode:
+		car = CampaignData.load_car()
+	elif is_rally_mode:
+		car = rally_car
+	return car if car is Dictionary else {}
+
+func _store_carried_car(car: Dictionary) -> void:
+	if is_championship_mode:
+		champ_data["car"] = car
+		_save_championship()
+	elif is_campaign_mode:
+		CampaignData.save_car(car)
+	elif is_rally_mode:
+		rally_car = car
+		_save_rally()
+
+## The car comes to the service area damaged and the crew hasn't been to it yet: the next event waits for it.
+func _service_due() -> bool:
+	if is_championship_mode and _next_round() >= _calendar().size():
+		return false # the season is over: the next one starts with a new car
+	var car := _carried_car()
+	var parts = car.get("parts", {})
+	return parts is Dictionary and Service.total(parts) >= 0.01 and not bool(car.get("serviced", false))
+
+## Every unrepaired part and what it will do in the next race, in plain words.
+func _unrepaired_text(parts: Dictionary) -> String:
+	var lines: Array[String] = []
+	for part in Service.PARTS:
+		var sev := clampf(float(parts.get(part, 0.0)), 0.0, 1.0)
+		if sev >= 0.01:
+			lines.append("%s %d%%: %s" % [part.to_upper(), roundi(sev * 100.0), Service.symptom(part, sev)])
+	return "\n".join(lines)
+
 func _reset_championship() -> void:
-	champ_data = {"round": 0, "scored": false, "table": {}}
+	champ_data = {"round": 0, "scored": false, "table": {}, "config": _season()} # the settings stay, unlocked
 	_save_championship()
 	_update_championship_view()
 	_update_information_page()
@@ -3321,9 +4671,10 @@ func _load_championship() -> void:
 	if not (parsed is Dictionary) or not (parsed.get("table", {}) is Dictionary):
 		return
 	var saved_round := int(parsed.get("round", -1))
-	if saved_round < 0 or saved_round >= CHAMPIONSHIP_CALENDAR.size():
+	champ_data = parsed # (its config, if any, says how long the season is)
+	if saved_round < 0 or saved_round >= _calendar().size():
+		champ_data = {"round": 0, "scored": false, "table": {}, "config": champ_data.get("config", {})}
 		return
-	champ_data = parsed
 	champ_data["round"] = saved_round
 	champ_data["scored"] = bool(parsed.get("scored", false))
 
@@ -3354,15 +4705,27 @@ func _unhandled_input(event: InputEvent) -> void:
 		match event.button_index:
 			JOY_BUTTON_RIGHT_SHOULDER: shift_up = true
 			JOY_BUTTON_LEFT_SHOULDER: shift_down = true
-			JOY_BUTTON_Y: _pit()
+			JOY_BUTTON_Y:
+				if race and race.tt:
+					_restart_time_trial() # nobody pits in a time trial: Y restarts the run
+				else:
+					_pit()
 			JOY_BUTTON_X: _cycle_mix()
+			JOY_BUTTON_BACK, JOY_BUTTON_MISC1:
+				if race: race.reset_player_car()
 			JOY_BUTTON_START: _set_paused(not paused)
+			JOY_BUTTON_B:
+				if paused: _set_paused(false) # B backs out of the pause menu
 		return
 
 func _unhandled_key_input(event: InputEvent) -> void:
 	if not event is InputEventKey:
 		return
 	var down: bool = event.pressed and not event.echo
+	if down and (event.keycode == KEY_F1 or event.physical_keycode == KEY_F1):
+		_cycle_retro_mode()
+		get_viewport().set_input_as_handled()
+		return
 	if not race:
 		if not down:
 			return
@@ -3419,15 +4782,24 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if skipping or race.phase == "finished":
 		return
 	match event.physical_keycode:
+		KEY_BACKSPACE:
+			if race: race.reset_player_car()
 		KEY_E: shift_up = true
 		KEY_Q: shift_down = true
 		KEY_P: _pit()
+		KEY_T:
+			if race.tt:
+				_restart_time_trial()
 		KEY_BRACKETLEFT: _cycle_pit_tyre(-1)
 		KEY_BRACKETRIGHT: _cycle_pit_tyre(1)
 		KEY_MINUS, KEY_KP_SUBTRACT: _adjust_pit_fuel(-1.0)
 		KEY_EQUAL, KEY_KP_ADD: _adjust_pit_fuel(1.0)
 		KEY_F: _cycle_mix()
-		KEY_R: _replan()
+		KEY_R:
+			if event.shift_pressed:
+				_replan()
+			elif race:
+				race.reset_player_car()
 		KEY_O: _toggle_autopilot()
 		KEY_C: _cycle_camera()
 		KEY_L: _toggle_racing_line()
@@ -3516,6 +4888,8 @@ func _toggle_pause() -> void:
 	_set_paused(not paused)
 
 func _quit_race() -> void:
+	if is_rally_mode and race and race.stage and _rally_recorded != race:
+		_record_rally_stage() # walking away from a stage is retiring from it: classified at the superrally time
 	_return_to_setup()
 
 func _panel(min_size := Vector2.ZERO) -> PanelContainer:
@@ -3537,6 +4911,7 @@ func _column(parent: Control, spacing := 12) -> VBoxContainer:
 
 func _title(parent: Control, title: String, subtitle: String) -> void:
 	var t := _label(title, 30, INK)
+	t.add_theme_font_override("font", CmrStyle.title_font())
 	parent.add_child(t)
 	var sub := _label(subtitle, 13, ACCENT)
 	parent.add_child(sub)
@@ -3612,12 +4987,12 @@ func _select_format(index: int) -> void:
 	_queue_strategy_refresh()
 
 
-func _option_field(parent: Control, title: String, options: Array) -> OptionButton:
+func _option_field(parent: Control, title: String, options: Array) -> MenuSelector:
 	var col := VBoxContainer.new()
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	parent.add_child(col)
 	_field_label(col, title)
-	var opt := OptionButton.new()
+	var opt := MenuSelector.new()
 	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	for o in options:
 		opt.add_item(str(o))
@@ -3641,3 +5016,217 @@ func _check_field(parent: Control, title: String, default_val: bool) -> CheckBut
 	_style_control(chk)
 	parent.add_child(chk)
 	return chk
+
+# ---------------- rally (RallyEvent) and time trial ----------------
+const RALLY_FILE := "rally.json"
+
+## The rally being run, loaded (or started on the first event) on first use.
+func _rally() -> RallyEvent:
+	if rally_event == null:
+		_load_rally()
+	return rally_event
+
+func _new_rally(key: String) -> void:
+	rally_event = RallyEvent.new(key)
+	rally_car = {}
+	_rally_recorded = null
+	_save_rally()
+
+func _load_rally() -> void:
+	if rally_event != null:
+		return
+	var path := SaveData.path(RALLY_FILE)
+	if FileAccess.file_exists(path):
+		var d = JSON.parse_string(FileAccess.get_file_as_string(path))
+		if d is Dictionary and not Rally.event(str(d.get("key", ""))).is_empty():
+			rally_event = RallyEvent.from_dict(d)
+			var car = d.get("car", {})
+			rally_car = car if car is Dictionary else {}
+			return
+	_new_rally(Rally.EVENTS[0].key)
+
+func _save_rally() -> void:
+	if rally_event == null:
+		return
+	var d := rally_event.to_dict()
+	d["car"] = rally_car
+	var f := FileAccess.open(SaveData.path(RALLY_FILE), FileAccess.WRITE)
+	if f:
+		f.store_string(JSON.stringify(d))
+
+## The rally block of the set-up page: the event picker, its stages and the standings so far.
+func _build_rally_side(col: VBoxContainer) -> void:
+	rally_side = VBoxContainer.new()
+	rally_side.add_theme_constant_override("separation", 10)
+	col.add_child(rally_side)
+	_field_label(rally_side, "RALLY")
+	var caption: Control = rally_side.get_child(-1)
+	rally_event_picker = MenuSelector.new()
+	for e in Rally.EVENTS:
+		rally_event_picker.add_item("%s  ·  %d stages" % [e.name, e.stages.size()])
+	rally_event_picker.custom_minimum_size.y = 42
+	_style_control(rally_event_picker)
+	rally_event_picker.set_meta("caption", caption)
+	rally_event_picker.item_selected.connect(_select_rally_event)
+	rally_side.add_child(rally_event_picker)
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", CmrStyle.box(Color(CmrStyle.PANEL, 0.75), Color(CmrStyle.ORANGE, 0.6), 14, 12))
+	rally_side.add_child(card)
+	rally_info_label = _label("", 15, CmrStyle.TEXT)
+	rally_info_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	card.add_child(rally_info_label)
+	rally_restart_button = _button("RESTART THIS RALLY", CmrStyle.FIELD)
+	rally_restart_button.custom_minimum_size.y = 40
+	rally_restart_button.pressed.connect(func() -> void:
+		_new_rally(_rally().key)
+		_update_mode_view())
+	rally_side.add_child(rally_restart_button)
+	rally_side.hide()
+
+## Picking another event starts it afresh (the one in progress is dropped).
+func _select_rally_event(index: int) -> void:
+	var key: String = Rally.EVENTS[clampi(index, 0, Rally.EVENTS.size() - 1)].key
+	if _rally().key != key:
+		_new_rally(key)
+	_update_mode_view()
+
+## The set-up page in rally mode: the event's own stages decide circuit, conditions and length.
+func _update_rally_view() -> void:
+	var ev := _rally()
+	campaign_side.hide()
+	champ_side.hide()
+	champ_info_label.text = ""
+	if is_instance_valid(champ_reset_button):
+		champ_reset_button.visible = false
+	track_picker.visible = false
+	track_label.visible = false
+	if is_instance_valid(setup_rule_divider):
+		setup_rule_divider.visible = true
+	if is_instance_valid(setup_format_row):
+		setup_format_row.visible = false
+	if is_instance_valid(setup_conditions_row):
+		setup_conditions_row.visible = false
+	if is_instance_valid(grid_picker):
+		grid_picker.get_parent().visible = false
+	if is_instance_valid(strategy_section):
+		strategy_section.visible = false
+	_show_fold("strategy", false)
+	_show_fold("race", false)
+	if setup_folds.has("rules"):
+		var rf: Dictionary = setup_folds["rules"]
+		(rf.head as Control).visible = false
+		(rf.body as Control).visible = false
+	rally_event_picker.select(Rally.event_keys().find(ev.key))
+	var lines: Array[String] = [str(ev.def.get("blurb", "")), ""]
+	for i in ev.stage_count():
+		var sd := ev.stage_def(i)
+		var tr := Race.get_track(sd.track)
+		var mark := "▸ " if i == ev.stage_index else ("✓ " if i < ev.stage_index else "   ")
+		var svc := "  (service %d min before)" % int(sd.service) if int(sd.get("service", 0)) > 0 else ""
+		lines.append("%sSS%d  %s — %s · %.1f km · %s · %s · %s%s" % [mark, i + 1, sd.name, tr.cfg.short_name if tr.cfg.short_name != "" else tr.name,
+			Rally.stage_length(sd, tr.L) / 1000.0, sd.surface, sd.weather, _format_start_time(float(sd.hour)), svc])
+	if ev.results.size():
+		var table := ev.standings()
+		var me: Dictionary = table.filter(func(r): return r.is_player)[0]
+		lines.append("")
+		lines.append("%s: P%d of %d, %s" % ["Final result" if ev.is_over() else "Overall after SS%d" % ev.results.size(),
+			me.pos, table.size(), Race.fmt_time(me.time) if me.pos == 1 else "+%.1f s" % me.gap])
+	lines.append("")
+	lines.append("Difficulty: %s · Co-driver pace notes on · Damage carries over between stages" % str(ev.difficulty).capitalize())
+	rally_info_label.text = "\n".join(lines)
+	rally_restart_button.visible = ev.stage_index > 0
+	if is_instance_valid(setup_race_button):
+		setup_race_button.visible = true
+		setup_race_button.text = "RUN IT AGAIN  ▸" if ev.is_over() else "START SS%d  ▸" % (ev.stage_index + 1)
+
+## Writes the stage just driven (or abandoned) into the rally; returns the stage's classification.
+func _record_rally_stage() -> Array:
+	var ev := _rally()
+	if _rally_recorded == race:
+		return ev.stage_results(ev.stage_index - 1)
+	_rally_recorded = race
+	var rows := ev.finish_stage(race)
+	rally_car = {"parts": ev.parts.duplicate(), "pull": ev.pull, "used": 0,
+		"serviced": ev.is_over() or ev.service_minutes() <= 0}
+	_save_rally()
+	return rows
+
+## After a stage: its times, the overall classification, and the way on (service, the next stage, or done).
+func _show_rally_results() -> void:
+	var ev := _rally()
+	var rows := _record_rally_stage()
+	hud.hide()
+	pause_panel.hide()
+	if is_instance_valid(audio):
+		audio.update_car(race.player, false)
+	result_panel.show()
+	for child in result_scroll.get_children():
+		child.queue_free()
+	var col := _column(result_scroll, 8)
+	col.custom_minimum_size.x = 1060
+	var i := ev.stage_index - 1
+	var sd := ev.stage_def(i)
+	var me: Dictionary = rows.filter(func(r): return r.is_player)[0]
+	var title := "SS%d %s · %s" % [i + 1, str(sd.name).to_upper(), "RETIRED" if me.dnf else "P%d OF %d" % [me.pos, rows.size()]]
+	col.add_child(_label(title, 26, INK))
+	var sub := "%s · %s · %s · %s" % [ev.def.name, race.track.name, sd.surface, str(sd.weather).capitalize()]
+	if me.note != "":
+		sub += " · " + str(me.note)
+	var sub_label := _label(sub, 14, MUTED)
+	sub_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(sub_label)
+	var widths := [46, 44, 250, 130, 110, 330]
+	var head_style := CmrStyle.box(Color(0, 0, 0, 0.25), Color.TRANSPARENT, 14, 3)
+	var stage_table := VBoxContainer.new()
+	stage_table.add_theme_constant_override("separation", 3)
+	col.add_child(stage_table)
+	stage_table.add_child(_result_row(["POS", "NO.", "DRIVER", "STAGE TIME", "GAP", ""], widths, head_style, CmrStyle.ORANGE_SOFT, 13))
+	for r in rows:
+		var fill: Color = CmrStyle.ORANGE if r.is_player else (CmrStyle.FIELD if r.pos % 2 == 1 else CmrStyle.FIELD_DIM)
+		stage_table.add_child(_result_row([str(r.pos), str(r.number), r.name, ("DNF " if r.dnf else "") + Race.fmt_time(r.time),
+			"+%.2f" % r.gap if r.pos > 1 else "", r.note], widths, CmrStyle.box(fill, Color.TRANSPARENT, 14, 3), CmrStyle.INK, 16, r.color))
+	var table := ev.standings()
+	col.add_child(_label("%s AFTER SS%d" % ["FINAL CLASSIFICATION" if ev.is_over() else "OVERALL", ev.results.size()], 20, INK))
+	var overall := VBoxContainer.new()
+	overall.add_theme_constant_override("separation", 3)
+	col.add_child(overall)
+	overall.add_child(_result_row(["POS", "NO.", "DRIVER", "TOTAL", "GAP", "STAGE WINS"], widths, head_style, CmrStyle.ORANGE_SOFT, 13))
+	for r in table:
+		var fill: Color = CmrStyle.ORANGE if r.is_player else (CmrStyle.FIELD if r.pos % 2 == 1 else CmrStyle.FIELD_DIM)
+		overall.add_child(_result_row([str(r.pos), str(r.number), r.name, Race.fmt_time(r.time), "+%.1f" % r.gap if r.pos > 1 else "",
+			str(r.stage_wins) if r.stage_wins > 0 else ""], widths, CmrStyle.box(fill, Color.TRANSPARENT, 14, 3), CmrStyle.INK, 16, r.color))
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 12)
+	var primary: Button
+	if ev.is_over():
+		primary = _button("RALLY COMPLETE · BACK TO THE RALLY PAGE", ACCENT)
+		primary.pressed.connect(_return_to_setup)
+	elif _service_due():
+		primary = _button("SERVICE AREA · %d MIN  ▸" % ev.service_minutes(), ACCENT)
+		primary.pressed.connect(_go_to_service)
+	else:
+		primary = _button("NEXT: SS%d %s  ▸" % [ev.stage_index + 1, str(ev.stage_def().name).to_upper()], ACCENT)
+		primary.pressed.connect(_start_race)
+	primary.custom_minimum_size.y = 44
+	buttons.add_child(primary)
+	var back := _button("BACK TO MENU", CmrStyle.FIELD)
+	back.custom_minimum_size.y = 44
+	back.pressed.connect(_return_to_setup)
+	buttons.add_child(back)
+	col.add_child(buttons)
+	primary.grab_focus()
+	_fit_result_panel(col)
+
+## TIME TRIAL: T or the pad's Y puts the car back at the start at once (the session's laps stay).
+func _restart_time_trial() -> void:
+	if not race or not race.tt or paused:
+		return
+	race.tt.restart()
+	accumulator = 0.0
+	throttle = 0.0
+	brake = 0.0
+	steer = 0.0
+	hud._mode_split = {}
+	hud._mode_seen = race.tt.laps.size()
+	if is_instance_valid(audio):
+		audio.beep(880.0, 1)

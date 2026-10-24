@@ -43,6 +43,9 @@ func build(w: Node3D) -> void:
 	root = Node3D.new()
 	root.name = "Furniture"
 	world.track_root.add_child(root)
+	if track.cfg.street_stage: # a public road: only the bridges OpenStreetMap has over it
+		_build_bridges()
+		return
 	_build_marshal_posts()
 	if track.cfg.theme != "oval":
 		_build_braking_boards()

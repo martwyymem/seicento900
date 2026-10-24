@@ -1,0 +1,112 @@
+[gd_resource type="Resource" script_class="TrackDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/corner_name.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/data/track_def.gd" id="2"]
+
+[sub_resource type="Resource" id="c1"]
+script = ExtResource("1")
+distance = 0.0
+name = "ul. Paderewskiego"
+
+[sub_resource type="Resource" id="c2"]
+script = ExtResource("1")
+distance = 144.4
+name = "Paderewskiego, Wilamowiczanka"
+
+[sub_resource type="Resource" id="c3"]
+script = ExtResource("1")
+distance = 390.2
+name = "Rondo Paderewskiego / Kęcka"
+
+[sub_resource type="Resource" id="c4"]
+script = ExtResource("1")
+distance = 551.8
+name = "ul. Kęcka"
+
+[sub_resource type="Resource" id="c5"]
+script = ExtResource("1")
+distance = 1043.0
+name = "Kęcka / Kalwaryjska"
+
+[sub_resource type="Resource" id="c6"]
+script = ExtResource("1")
+distance = 1198.7
+name = "ul. Krakowska"
+
+[sub_resource type="Resource" id="c7"]
+script = ExtResource("1")
+distance = 1617.9
+name = "Hecznarowice, Krakowska / Jana Pawła II"
+
+[sub_resource type="Resource" id="c8"]
+script = ExtResource("1")
+distance = 1727.9
+name = "ul. Jana Pawła II"
+
+[sub_resource type="Resource" id="c9"]
+script = ExtResource("1")
+distance = 1910.8
+name = "Jana Pawła II / Cicha"
+
+[sub_resource type="Resource" id="c10"]
+script = ExtResource("1")
+distance = 3344.8
+name = "Pańskie Pola"
+
+[sub_resource type="Resource" id="c11"]
+script = ExtResource("1")
+distance = 3673.8
+name = "Jana Pawła II / Handlowa"
+
+[sub_resource type="Resource" id="c12"]
+script = ExtResource("1")
+distance = 3891.6
+name = "ul. Latosińskiego"
+
+[sub_resource type="Resource" id="c13"]
+script = ExtResource("1")
+distance = 4395.9
+name = "Latosińskiego nad stawem"
+
+[sub_resource type="Resource" id="c14"]
+script = ExtResource("1")
+distance = 5173.0
+name = "Latosińskiego / Sobieskiego"
+
+[sub_resource type="Resource" id="c15"]
+script = ExtResource("1")
+distance = 5283.0
+name = "ul. Jana III Sobieskiego"
+
+[sub_resource type="Resource" id="c16"]
+script = ExtResource("1")
+distance = 6579.4
+name = "Rynek (Sobieskiego / Paderewskiego)"
+
+[resource]
+script = ExtResource("2")
+key = "wilamowice"
+display_name = "Wilamowice Country Loop"
+short_name = "Wilamowice"
+width = 6.5
+theme = "country"
+street_stage = true
+barrier = "armco"
+runoff = 2.0
+runoff_surface = "grass"
+runoff_paved = 0.0
+kerb_style = "none"
+kerb_width = 0.0
+tree_density = 0.35
+tree_patch = 0.6
+tree_conifer = 0.3
+grandstands = false
+stand_tiers = 0
+floodlight_spacing = 0.0
+pit_entry = -120.0
+pit_exit = 170.0
+pit_ramp = 50.0
+pit_offset = -8.4
+box_start = -65.0
+box_spacing = 9.0
+corners = Array[ExtResource("1")]([SubResource("c1"), SubResource("c2"), SubResource("c3"), SubResource("c4"), SubResource("c5"), SubResource("c6"), SubResource("c7"), SubResource("c8"), SubResource("c9"), SubResource("c10"), SubResource("c11"), SubResource("c12"), SubResource("c13"), SubResource("c14"), SubResource("c15"), SubResource("c16")])

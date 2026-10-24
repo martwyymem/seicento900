@@ -10,10 +10,16 @@ const SUITES := [
 	"res://tests/test_strategy.gd",
 	"res://tests/test_dynamics.gd",
 	"res://tests/test_ui_and_audio.gd",
+	"res://tests/test_service_season.gd",
 	"res://tests/test_qualifying.gd",
 	"res://tests/test_lap_records.gd",
+	"res://tests/test_rally.gd",
+	"res://tests/test_time_trial.gd",
 	"res://tests/test_pace_notes.gd",
-	"res://tests/test_world_audio.gd"
+	"res://tests/test_world_audio.gd",
+	"res://tests/test_options.gd",
+	"res://tests/test_retro_pipeline.gd",
+	"res://tests/test_open_world.gd"
 ]
 
 const SURROUNDINGS := preload("res://scripts/ui/surroundings.gd")
@@ -55,6 +61,7 @@ static func release(tree: SceneTree) -> void:
 	WORLD._trackside.clear()
 	CmrStyle._fonts.clear()
 	Race._track_cache.clear()
+	TownMap._cache.clear()
 	Brain._store = null
 	await tree.process_frame
 	await tree.process_frame

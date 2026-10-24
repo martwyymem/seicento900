@@ -6,9 +6,11 @@ var condition := "cloud":
 		condition = value
 		queue_redraw()
 
-const INK := CmrStyle.INK
+var INK: Color:
+	get: return CmrStyle.INK
 const CLOUD := Color("#f4f3ef")
-const SUN := CmrStyle.ORANGE
+var SUN: Color:
+	get: return CmrStyle.ORANGE
 
 func _ready() -> void:
 	custom_minimum_size = Vector2(48, 52)

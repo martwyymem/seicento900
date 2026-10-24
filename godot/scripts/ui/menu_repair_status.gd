@@ -6,9 +6,11 @@ var state := "none":
 		state = value
 		queue_redraw()
 
-const INK := CmrStyle.MUTED
+var INK: Color:
+	get: return CmrStyle.MUTED
 const PAPER := Color(0.87, 0.83, 0.92, 0.55)
-const WARNING := CmrStyle.ORANGE
+var WARNING: Color:
+	get: return CmrStyle.ORANGE
 
 func _ready() -> void:
 	custom_minimum_size = Vector2(38, 34)

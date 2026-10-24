@@ -110,6 +110,7 @@ func _init(game_: Node = null) -> void:
 	game = game_
 
 func _ready() -> void:
+	AudioSettings.ensure_buses() # Car, Engine and CarFx under it, World (Options → Audio)
 	_car_bus = _bus("Car")
 	_world_bus = _bus("World")
 	if AudioServer.get_bus_effect_count(_car_bus) == 0:
@@ -118,16 +119,16 @@ func _ready() -> void:
 		lp.cutoff_hz = 20000.0
 		AudioServer.add_bus_effect(_car_bus, lp)
 		AudioServer.set_bus_effect_enabled(_car_bus, 1, false)
-	_kerb = _flat("kerb", "Car")
-	_gravel = _flat("gravel", "Car")
-	_grass = _flat("grass", "Car")
-	_scrape = _flat("scrape", "Car")
-	_wind = _flat("wind", "Car")
-	_spray = _flat("spray", "Car")
+	_kerb = _flat("kerb", "CarFx")
+	_gravel = _flat("gravel", "CarFx")
+	_grass = _flat("grass", "CarFx")
+	_scrape = _flat("scrape", "CarFx")
+	_wind = _flat("wind", "CarFx")
+	_spray = _flat("spray", "CarFx")
 	_rain = _flat("rain", "World")
 	for i in CAR_SHOT_SLOTS:
 		var p := AudioStreamPlayer.new()
-		p.bus = "Car"
+		p.bus = "CarFx"
 		add_child(p)
 		_car_shots.append(p)
 
@@ -304,7 +305,7 @@ func _process(delta: float) -> void:
 		_build_world_voices()
 	var muted: bool = game.audio.muted if is_instance_valid(game.audio) else false
 	AudioServer.set_bus_mute(_car_bus, muted)
-	AudioServer.set_bus_mute(_world_bus, muted)
+	AudioServer.set_bus_mute(_world_bus, muted or AudioSettings.effects_silent())
 	_clock += delta
 
 	var cam: Camera3D = world.camera
@@ -322,7 +323,11 @@ func _process(delta: float) -> void:
 	_update_player_car(race, delta)
 	_update_engines(race, cam_pos, delta)
 	_update_crowd(cam_pos, delta)
-	drive(_rain, clampf(race.weather.rain / 0.7, 0.0, 1.0), RAIN_DB, 1.0, delta, 2.0, 1.0)
+	if race.weather.hail > 0.1:
+		var hail_level := clampf(race.weather.hail, 0.0, 1.0)
+		drive(_rain, hail_level, RAIN_DB + 3.0, 1.45, delta, 4.0, 2.0)
+	else:
+		drive(_rain, clampf(race.weather.rain / 0.7, 0.0, 1.0), RAIN_DB, 1.0, delta, 2.0, 1.0)
 	_hear_impacts(race, cam_pos)
 	_update_pits(race, cam_pos)
 
@@ -382,7 +387,7 @@ func _build_world_voices() -> void:
 	for i in SHOT_SLOTS:
 		_shots.append(_spatial("", 8.0, HEAR_HIT))
 	if is_instance_valid(game.audio):
-		game.audio.player.bus = "Car"
+		game.audio.player.bus = "Engine"
 
 ## The player's car is heard from where the camera is: plain when riding with it, else turned down with its
 ## distance, panned to its side of the picture and dulled by the air in between.
@@ -418,7 +423,11 @@ func _update_player_car(race: Race, delta: float) -> void:
 	var rough := pow(clampf(v / 20.0, 0.0, 1.0), 0.8)
 	drive(_kerb, minf(1.0, on[0] * 2.0) * pow(go, 0.7), KERB_DB, clampf(v / KERB_RIPPLE / KERB_RATE, 0.4, 2.6), delta, 30.0, 18.0)
 	drive(_grass, on[1] * rough, GRASS_DB, 0.8 + 0.4 * go, delta)
-	drive(_gravel, on[2] * rough, GRAVEL_DB, 0.75 + 0.5 * go, delta)
+	if race.weather.snow > 0.1 and live and (p.slip > 0.12 or absf(p.lat_v) > 0.8):
+		var snow_slip := clampf(maxf(p.slip * 1.4, absf(p.lat_v) / 4.0) * race.weather.snow, 0.0, 1.0)
+		drive(_gravel, maxf(on[2] * rough, snow_slip * 0.75), GRAVEL_DB - 2.0, 0.58 + 0.25 * go, delta, 25.0, 12.0)
+	else:
+		drive(_gravel, on[2] * rough, GRAVEL_DB, 0.75 + 0.5 * go, delta)
 	var scraping := live and v > 1.5 and touching_barrier(race, p)
 	drive(_scrape, pow(clampf(v / 20.0, 0.0, 1.0), 0.7) if scraping else 0.0, SCRAPE_DB, 0.85 + 0.3 * go, delta, 30.0, 12.0)
 	var air := clampf(v / WIND_FULL, 0.0, 1.0)

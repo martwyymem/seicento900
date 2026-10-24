@@ -1,5 +1,8 @@
 # Agent instructions
 
+> ⚠️ **MANDATORY INSTRUCTION FOR ALL AI AGENTS & MODELS**:
+> Every agent and model **MUST read [`TASKS.md`](TASKS.md) before planning or running any tasks**. `TASKS.md` is the authoritative bible and roadmap for all new game features (dynamic weathers, retro shaders, Polish & Tokyo city tracks, campaign mode, and streamlined menus). Always consult and align with `TASKS.md` before writing or modifying code.
+
 ## Current game
 
 The active game is the Godot project in [`godot/`](godot/). Open it with
@@ -52,3 +55,15 @@ kerbs, gravel, rain, crowd, impacts, pit crews) is baked by [`tools/build_sounds
 (numpy) into `godot/audio/*.wav`, so change the script and rebuild (`python3 tools/build_sounds.py --stats`)
 rather than editing a WAV, then let Godot reimport (`godot --headless --path godot --import`).
 `world_audio.gd` plays them. Its `ENGINE_RPM` and `KERB_RATE` must match the script's.
+
+## Campaign open world (Brzeszcze)
+
+The campaign's free-roam map lives in [`godot/scripts/world/`](godot/scripts/world/) (`open_world.gd` is the mode; game.gd
+calls `_enter_open_world`). Its data is baked from OpenStreetMap and EU-DEM by
+[`tools/build_open_world.py`](tools/build_open_world.py) into `godot/data/world/brzeszcze*.{json,png}`, so change the
+script and rebuild rather than editing the JSON. Its props are `godot/models/town.glb` from
+[`tools/blender/build_town.py`](tools/blender/build_town.py). `town_builder.gd` finds them by object name (`Headframe`,
+`ChurchSpire`, `Streetlamp`, `TrafficLight`, `BusShelter`, `LevelCrossing`, `FestivalStage`, `FestivalArch`, `Tent`,
+`FlagPole`, `CarHatch`, `CarSedan`, `CarVan`, `Maluch`) and the tintable surfaces by material name (`Paint`, `Lamp`,
+`Banner`), so keep those names stable. The stage beacons map campaign tracks to the baker's named spots
+(`OpenWorld.STAGE_SPOTS`).
