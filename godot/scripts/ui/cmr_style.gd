@@ -40,14 +40,20 @@ static var TINT_SETUP := Color("#5a5173")
 static var TINT_INFO := Color("#524a6d")
 static var TINT_REPAIR := Color("#5e5476")
 static var TINT_OPTIONS := Color("#554c70")
+## HUD: the dark plate under in-race panels, the faded end of the CMR gradient bars, the circuit map's field
+static var PLATE := Color(0.13, 0.08, 0.2)
+static var BAR_FADE := Color(0.55, 0.36, 0.85)
+static var MAP := Color("#8a73b0")
 
+const PIXEL_FACES := ["res://fonts/PixelifySans.ttf", "res://fonts/VT323.ttf"] ## the PS1 skin's faces, drawn without antialiasing
 const SYMBOLS := [preload("res://fonts/NotoSansSymbols2.ttf"), preload("res://fonts/NotoSansSymbols.ttf")] ## ◂ ▸, arrows, Ⓐ Ⓑ
 
 ## RetroPipeline mode -> skin: 0 Off, 1 PS1, 2 NFS Most Wanted, 3 GTA San Andreas, 4 NFS Carbon, 5 CMR 2.0, 6 Forza Horizon 1
 const SKIN_FOR_MODE := ["cmr", "ps1", "mw", "sa", "carbon", "cmr", "fh1"]
 const PALETTE_KEYS := ["INK", "INK_SOFT", "TEXT", "MUTED", "DIM", "ORANGE", "ORANGE_SOFT", "ORANGE_DEEP", "FOCUS",
 	"VIOLET", "PLUM", "GREEN", "RED", "AMBER", "PURPLE", "FIELD", "FIELD_HOVER", "FIELD_EDGE", "FIELD_DIM", "PAPER",
-	"PANEL", "PANEL_EDGE", "POPUP", "TINT_HOME", "TINT_SETUP", "TINT_INFO", "TINT_REPAIR", "TINT_OPTIONS"]
+	"PANEL", "PANEL_EDGE", "POPUP", "TINT_HOME", "TINT_SETUP", "TINT_INFO", "TINT_REPAIR", "TINT_OPTIONS",
+	"PLATE", "BAR_FADE", "MAP"]
 ## Per skin: palette overrides (missing keys keep CMR's), the face and its axes, weight shift and clamp,
 ## the timer face, corner radius, focus-ring radius, horizontal skew, anti-aliased edges, a hard drop
 ## shadow (PS1 bevel), a neon glow on the focus ring (Carbon) and a text outline (San Andreas).
@@ -61,7 +67,8 @@ const SKINS := {
 		"VIOLET": "#6aa6ff", "PLUM": "#2c4ea6", "GREEN": "#6ee066", "RED": "#ff4848", "AMBER": "#ffa020", "PURPLE": "#c6a0ff",
 		"FIELD": "#b5b9c6", "FIELD_HOVER": "#d3d6df", "FIELD_EDGE": "#eceef4", "FIELD_DIM": Color(0.71, 0.73, 0.78, 0.5),
 		"PAPER": "#d9dae2", "PANEL": Color(0.09, 0.12, 0.28, 0.96), "PANEL_EDGE": Color(0.86, 0.88, 0.95, 0.75), "POPUP": "#27356c",
-		"TINT_HOME": "#1d2b5e", "TINT_SETUP": "#1f2a58", "TINT_INFO": "#1b2854", "TINT_REPAIR": "#212d5c", "TINT_OPTIONS": "#1c2956"}},
+		"TINT_HOME": "#1d2b5e", "TINT_SETUP": "#1f2a58", "TINT_INFO": "#1b2854", "TINT_REPAIR": "#212d5c", "TINT_OPTIONS": "#1c2956",
+		"PLATE": "#0b1030", "BAR_FADE": "#4f78d8", "MAP": "#34508f"}},
 	"mw": {"face": "res://fonts/Oswald.ttf", "axes": {}, "wadd": 150, "wmin": 300, "wmax": 700, "digits": "res://fonts/Saira.ttf",
 		"radius": 0, "focus_radius": 0, "skew": 0.2, "aa": true, "drop": 0, "glow": 0, "outline": 0, "title": "", "colors": {
 		"INK": "#0e100c", "INK_SOFT": "#4b5045", "TEXT": "#f1f2ea", "MUTED": "#b8bdae", "DIM": Color(0.94, 0.95, 0.9, 0.45),
@@ -69,7 +76,8 @@ const SKINS := {
 		"VIOLET": "#8fc4d8", "PLUM": "#355866", "GREEN": "#4ee08a", "RED": "#ff4040", "AMBER": "#ffae1f", "PURPLE": "#c890ff",
 		"FIELD": "#c7cac0", "FIELD_HOVER": "#e0e2da", "FIELD_EDGE": "#5a5e54", "FIELD_DIM": Color(0.7, 0.72, 0.68, 0.5),
 		"PAPER": "#e6e4da", "PANEL": Color(0.07, 0.075, 0.07, 0.95), "PANEL_EDGE": Color(0.76, 0.87, 0.12, 0.6), "POPUP": "#26282a",
-		"TINT_HOME": "#18191a", "TINT_SETUP": "#1c1d1f", "TINT_INFO": "#1a1b1d", "TINT_REPAIR": "#1e1f20", "TINT_OPTIONS": "#191a1c"}},
+		"TINT_HOME": "#18191a", "TINT_SETUP": "#1c1d1f", "TINT_INFO": "#1a1b1d", "TINT_REPAIR": "#1e1f20", "TINT_OPTIONS": "#191a1c",
+		"PLATE": "#060706", "BAR_FADE": "#5b7d88", "MAP": "#3b4a50"}},
 	"sa": {"face": "res://fonts/Archivo.ttf", "axes": {"wdth": 88}, "wadd": 300, "wmin": 400, "wmax": 900, "digits": "res://fonts/Archivo.ttf",
 		"radius": 0, "focus_radius": 2, "skew": 0.0, "aa": true, "drop": 0, "glow": 0, "outline": 5, "title": "res://fonts/GrenzeGotisch.ttf", "colors": {
 		"INK": "#0b0b0d", "INK_SOFT": "#3e4046", "TEXT": "#f3f3f1", "MUTED": "#a9c6e6", "DIM": Color(0.86, 0.9, 0.96, 0.5),
@@ -77,7 +85,8 @@ const SKINS := {
 		"VIOLET": "#5c90d8", "PLUM": "#23447f", "GREEN": "#c4f27a", "RED": "#e33b3b", "AMBER": "#ffb020", "PURPLE": "#c8a2ff",
 		"FIELD": "#cfd9e6", "FIELD_HOVER": "#e6edf5", "FIELD_EDGE": "#23252b", "FIELD_DIM": Color(0.78, 0.82, 0.88, 0.5),
 		"PAPER": "#efe8d6", "PANEL": Color(0.03, 0.03, 0.035, 0.93), "PANEL_EDGE": Color(0.95, 0.95, 0.95, 0.45), "POPUP": "#151517",
-		"TINT_HOME": "#0d0d0f", "TINT_SETUP": "#111114", "TINT_INFO": "#0f1013", "TINT_REPAIR": "#121215", "TINT_OPTIONS": "#0e0f12"}},
+		"TINT_HOME": "#0d0d0f", "TINT_SETUP": "#111114", "TINT_INFO": "#0f1013", "TINT_REPAIR": "#121215", "TINT_OPTIONS": "#0e0f12",
+		"PLATE": "#020203", "BAR_FADE": "#3d6fb8", "MAP": "#2c3f5c"}},
 	"carbon": {"face": "res://fonts/Saira.ttf", "axes": {"wdth": 80}, "wadd": 50, "wmin": 250, "wmax": 800, "digits": "res://fonts/Saira.ttf",
 		"radius": 2, "focus_radius": 3, "skew": 0.0, "aa": true, "drop": 0, "glow": 8, "outline": 0, "title": "", "colors": {
 		"INK": "#05131d", "INK_SOFT": "#36576a", "TEXT": "#e9f7fe", "MUTED": "#9cc4d9", "DIM": Color(0.9, 0.97, 1.0, 0.45),
@@ -85,7 +94,8 @@ const SKINS := {
 		"VIOLET": "#3fe0c2", "PLUM": "#176d86", "GREEN": "#86ec7a", "RED": "#ff4d5e", "AMBER": "#ffb020", "PURPLE": "#b98cff",
 		"FIELD": "#b9d4e2", "FIELD_HOVER": "#d6e9f2", "FIELD_EDGE": "#2fc8de", "FIELD_DIM": Color(0.6, 0.72, 0.8, 0.45),
 		"PAPER": "#dcebf3", "PANEL": Color(0.03, 0.07, 0.13, 0.95), "PANEL_EDGE": Color(0.13, 0.84, 0.94, 0.6), "POPUP": "#102339",
-		"TINT_HOME": "#0b1628", "TINT_SETUP": "#0d182c", "TINT_INFO": "#0a1526", "TINT_REPAIR": "#0e1a2e", "TINT_OPTIONS": "#0c172a"}},
+		"TINT_HOME": "#0b1628", "TINT_SETUP": "#0d182c", "TINT_INFO": "#0a1526", "TINT_REPAIR": "#0e1a2e", "TINT_OPTIONS": "#0c172a",
+		"PLATE": "#020a14", "BAR_FADE": "#1b9fb8", "MAP": "#1a4560"}},
 	"fh1": {"face": "res://fonts/Nunito.ttf", "axes": {}, "wadd": 300, "wmin": 300, "wmax": 1000, "digits": "res://fonts/Nunito.ttf",
 		"radius": 10, "focus_radius": 13, "skew": 0.0, "aa": true, "drop": 0, "glow": 0, "outline": 0, "title": "", "colors": {
 		"INK": "#2a1024", "INK_SOFT": "#6b4a63", "TEXT": "#fff6fa", "MUTED": "#ffd0e4", "DIM": Color(1.0, 0.93, 0.97, 0.5),
@@ -93,7 +103,8 @@ const SKINS := {
 		"VIOLET": "#ff5aa5", "PLUM": "#a3206e", "GREEN": "#8ce65a", "RED": "#ff5252", "AMBER": "#ff9d1a", "PURPLE": "#d29bff",
 		"FIELD": "#fff4ea", "FIELD_HOVER": "#fffcf7", "FIELD_EDGE": "#ff8a3d", "FIELD_DIM": Color(1.0, 0.95, 0.91, 0.5),
 		"PAPER": "#fff0dc", "PANEL": Color(0.32, 0.07, 0.24, 0.95), "PANEL_EDGE": Color(1.0, 0.78, 0.3, 0.6), "POPUP": "#6e1550",
-		"TINT_HOME": "#8f1d63", "TINT_SETUP": "#871b5e", "TINT_INFO": "#7f1a5a", "TINT_REPAIR": "#8b2262", "TINT_OPTIONS": "#841c5d"}},
+		"TINT_HOME": "#8f1d63", "TINT_SETUP": "#871b5e", "TINT_INFO": "#7f1a5a", "TINT_REPAIR": "#8b2262", "TINT_OPTIONS": "#841c5d",
+		"PLATE": "#2a0a20", "BAR_FADE": "#e8559c", "MAP": "#9b3a78"}},
 }
 
 static var skin := "cmr"
@@ -111,7 +122,7 @@ static func palette() -> Dictionary:
 		"GREEN": GREEN, "RED": RED, "AMBER": AMBER, "PURPLE": PURPLE, "FIELD": FIELD, "FIELD_HOVER": FIELD_HOVER,
 		"FIELD_EDGE": FIELD_EDGE, "FIELD_DIM": FIELD_DIM, "PAPER": PAPER, "PANEL": PANEL, "PANEL_EDGE": PANEL_EDGE,
 		"POPUP": POPUP, "TINT_HOME": TINT_HOME, "TINT_SETUP": TINT_SETUP, "TINT_INFO": TINT_INFO,
-		"TINT_REPAIR": TINT_REPAIR, "TINT_OPTIONS": TINT_OPTIONS}
+		"TINT_REPAIR": TINT_REPAIR, "TINT_OPTIONS": TINT_OPTIONS, "PLATE": PLATE, "BAR_FADE": BAR_FADE, "MAP": MAP}
 
 ## The palette a skin would use (CMR's for any key it leaves out).
 static func skin_palette(name: String) -> Dictionary:
@@ -131,6 +142,7 @@ static func _set_palette(p: Dictionary) -> void:
 	PAPER = p.PAPER; PANEL = p.PANEL; PANEL_EDGE = p.PANEL_EDGE; POPUP = p.POPUP
 	TINT_HOME = p.TINT_HOME; TINT_SETUP = p.TINT_SETUP; TINT_INFO = p.TINT_INFO
 	TINT_REPAIR = p.TINT_REPAIR; TINT_OPTIONS = p.TINT_OPTIONS
+	PLATE = p.PLATE; BAR_FADE = p.BAR_FADE; MAP = p.MAP
 
 ## Switches the whole interface to a skin: palette, the cached fonts (changed in place, so every label
 ## using them follows), the shared theme (refilled in place) and, given a root, every colour already
@@ -161,7 +173,15 @@ static func _face(path: String) -> Font:
 	if path == "res://fonts/NunitoSans.ttf":
 		return FACE
 	if not _faces.has(path):
-		_faces[path] = load(path)
+		var f: Font = load(path)
+		if path in PIXEL_FACES and f is FontFile:
+			# PS1: the pixel faces draw hard-edged, blocky glyphs (no antialiasing, hinting or sub-pixel offsets)
+			var ff := f as FontFile
+			ff.antialiasing = TextServer.FONT_ANTIALIASING_NONE
+			ff.hinting = TextServer.HINTING_NONE
+			ff.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_DISABLED
+			ff.multichannel_signed_distance_field = false
+		_faces[path] = f
 	return _faces[path]
 
 static func _fallbacks() -> Array[Font]:
@@ -287,7 +307,9 @@ static func _fill_theme(t: Theme) -> void:
 		for c in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color",
 				"icon_normal_color", "icon_hover_color", "icon_pressed_color", "icon_focus_color"]:
 			t.set_color(c, type, INK)
-		t.set_color("font_disabled_color", type, INK_SOFT)
+		# disabled reads through the dim field, which is translucent over the page tint (INK_SOFT vanished
+		# into it in the dark skins); the paler field and the faded ink still say "off"
+		t.set_color("font_disabled_color", type, Color(INK, 0.78))
 	t.set_font_size("font_size", "Button", 16)
 	t.set_font_size("font_size", "OptionButton", 17)
 	t.set_icon("arrow", "OptionButton", _arrow_icon())

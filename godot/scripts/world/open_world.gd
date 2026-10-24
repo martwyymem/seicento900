@@ -103,6 +103,8 @@ func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	viewport = SubViewport.new()
 	viewport.size = Vector2i(1600, 900)
+	# its own 3D world: sharing the game's would let the race scene's sky, sun and environment take over
+	viewport.own_world_3d = true
 	viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	viewport.msaa_3d = Viewport.MSAA_2X
 	viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA

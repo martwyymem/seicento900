@@ -330,6 +330,8 @@ func _build_woods(root: Node3D) -> void:
 	foliage.shader = FOLIAGE_SHADER
 	foliage.set_shader_parameter("grain", world.noise_texture("grain"))
 	foliage.set_shader_parameter("linear_colors", true)
+	foliage.set_shader_parameter("variety", 1.0)
+	foliage.set_shader_parameter("translucency", 0.5)
 	world._wet_materials.append(foliage)
 	for c in chunks:
 		for species in chunks[c]:

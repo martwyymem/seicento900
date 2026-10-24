@@ -114,9 +114,10 @@ void fragment() {
 	if (street > 0.0) {
 		// alligator cracking in worn zones, more of it towards the edges where the base gives way
 		float worn_zone = texture(grain, vec2(d, s) * 0.05 + 0.11).r + 0.18 * smoothstep(half_width - 1.8, half_width, abs(d));
-		float e = cell_edge(vec2(d, s) * vec2(2.6, 1.9));
+		float e = cell_edge(vec2(d, s) * vec2(1.9, 1.4));
 		float e_aa = fwidth(e);
-		crack = (1.0 - smoothstep(0.015, 0.015 + e_aa * 1.5, e)) * smoothstep(0.52, 0.66, worn_zone) * street * (1.0 - smoothstep(0.025, 0.07, px));
+		float broken = smoothstep(0.38, 0.55, texture(grain, vec2(d, s) * 0.8 + 0.31).r); // not every edge has opened
+		crack = (1.0 - smoothstep(0.014, 0.014 + e_aa * 1.5, e)) * broken * smoothstep(0.58, 0.7, worn_zone) * street * (1.0 - smoothstep(0.035, 0.11, px));
 	}
 
 	// resurfaced patches: rectangles of slightly darker, smoother tarmac; in town many more, each its own age
@@ -187,8 +188,9 @@ void fragment() {
 
 	// sealed cracks and patch seams (black, a little glossy) and open cracks (dark), through the paint
 	float sealed = max(tar, seam * 0.9);
-	col = mix(col, col * 0.3 + vec3(0.006), sealed * 0.85);
-	rough = mix(rough, 0.55, sealed * 0.7);
+	// matte, not glossy: a shiny sealant caught the low sun as white squiggles
+	col = mix(col, col * 0.4 + vec3(0.004), sealed * 0.8);
+	rough = mix(rough, max(rough, 0.82), sealed);
 	col *= 1.0 - crack * 0.55;
 	col += vec3(0.035, 0.035, 0.038) * glint * (1.0 - w);
 

@@ -8,7 +8,8 @@ var state := "none":
 
 var INK: Color:
 	get: return CmrStyle.MUTED
-const PAPER := Color(0.87, 0.83, 0.92, 0.55)
+var PAPER: Color:
+	get: return CmrStyle.FIELD_DIM
 var WARNING: Color:
 	get: return CmrStyle.ORANGE
 

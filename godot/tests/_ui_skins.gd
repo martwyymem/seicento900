@@ -13,7 +13,7 @@ func _initialize() -> void:
 	var game: Control = load("res://ui/game.tscn").instantiate()
 	root.add_child(game)
 	await process_frame
-	var chars := "ąćęłńóśźż◂▸↑↓Ⓐ Ⓑ"
+	var chars := "ąćęłńóśźż◂▸←→↑↓Ⓐ Ⓑ"
 	for mode in CmrStyle.SKIN_FOR_MODE.size():
 		game._on_retro_selected(mode)
 		await process_frame

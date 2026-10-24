@@ -364,6 +364,138 @@ def building_spec(tags, ring):
     return kind, round(h, 1), lv, roof
 
 
+def building_measurements():
+    """Load the compact, offline GUGiK extract and index measured buildings by local footprint."""
+    path = os.path.join(CACHE, KEY + '_gugik.json')
+    if not os.path.exists(path):
+        return {}
+    data = json.load(open(path, encoding='utf-8'))
+    # Centre-based bins keep conflation cheap while the final candidate check uses footprint bounds.
+    index = {}
+    def add(layer, rec):
+        ring = rec.get('ring', [])
+        if len(ring) < 3:
+            return
+        cx = sum(p[0] for p in ring) / len(ring)
+        cy = sum(p[1] for p in ring) / len(ring)
+        index.setdefault((int(cx // 32), int(cy // 32)), []).append((layer, rec, cx, cy, _ring_bounds(ring)))
+    for rec in data.get('lod2', []): add('lod2', rec)
+    for rec in data.get('lod1', []): add('lod1', rec)
+    for rec in data.get('bdot', []): add('bdot', rec)
+    colours = {}
+    orto = data.get('orto', {})
+    for x, y, r, g, b in orto.get('cols', []):
+        colours[(round(x / 8), round(y / 8))] = '#%02x%02x%02x' % (r, g, b)
+    print('GUGiK measurements indexed:', {k: sum(1 for v in index.values() for x in v if x[0] == k)
+                                          for k in ('lod2', 'lod1', 'bdot')},
+          'roof colours:', len(colours), flush=True)
+    return {'index': index, 'colours': colours, 'matched': set()}
+
+
+def _ring_bounds(ring):
+    return (min(p[0] for p in ring), min(p[1] for p in ring), max(p[0] for p in ring), max(p[1] for p in ring))
+
+
+def _ring_area_abs(ring):
+    return abs(sum(ring[i][0] * ring[(i + 1) % len(ring)][1] - ring[(i + 1) % len(ring)][0] * ring[i][1]
+                   for i in range(len(ring))) * 0.5)
+
+
+def _inside_ring(x, y, ring):
+    inside = False
+    j = len(ring) - 1
+    for i, (xi, yi) in enumerate(ring):
+        xj, yj = ring[j]
+        if (yi > y) != (yj > y) and x < (xj - xi) * (y - yi) / (yj - yi) + xi:
+            inside = not inside
+        j = i
+    return inside
+
+
+def _intersection_area_sampled(a, b, bounds):
+    """Approximate polygon intersection with 1 m cell-centre samples for robust non-convex footprints."""
+    x0, y0, x1, y1 = bounds
+    step = 1.0
+    hits = 0
+    for iy in range(int(math.ceil(y0 / step)), int(math.floor(y1 / step))):
+        y = (iy + 0.5) * step
+        for ix in range(int(math.ceil(x0 / step)), int(math.floor(x1 / step))):
+            x = (ix + 0.5) * step
+            if _inside_ring(x, y, a) and _inside_ring(x, y, b):
+                hits += 1
+    return float(hits) * step * step
+
+
+def conflate_building(ring, osm_id, osm_type, measurements):
+    """Return append-only record metadata: measured heights/roof geometry/colour and source ids."""
+    if not measurements:
+        return {'id': ('r' if osm_type == 'relation' else 'w') + str(osm_id)}
+    index = measurements['index']
+    bounds = _ring_bounds(ring)
+    cx = sum(p[0] for p in ring) / len(ring)
+    cy = sum(p[1] for p in ring) / len(ring)
+    candidates = []
+    for ix in range(int(cx // 32) - 1, int(cx // 32) + 2):
+        for iy in range(int(cy // 32) - 1, int(cy // 32) + 2):
+            candidates.extend(index.get((ix, iy), []))
+    def score(item):
+        layer, rec, mx, my, mb = item
+        if abs(cx - mx) > 24 or abs(cy - my) > 24:
+            return -1.0
+        ix0, iy0 = max(bounds[0], mb[0]), max(bounds[1], mb[1])
+        ix1, iy1 = min(bounds[2], mb[2]), min(bounds[3], mb[3])
+        inter = _intersection_area_sampled(ring, rec['ring'], (ix0, iy0, ix1, iy1))
+        aa = max(1.0, _ring_area_abs(ring))
+        ab = max(1.0, _ring_area_abs(rec['ring']))
+        iou = inter / max(1.0, aa + ab - inter)
+        # Prioritize real footprint overlap; centroid proximity resolves attached/outbuilding duplicates.
+        return iou - math.hypot(cx - mx, cy - my) / 500.0
+    ranked = sorted(((score(c), c) for c in candidates), key=lambda x: x[0], reverse=True)
+    chosen = {}
+    for layer in ('lod2', 'lod1', 'bdot'):
+        hit = next((item for value, item in ranked if item[0] == layer and value > 0.12), None)
+        if hit:
+            chosen[layer] = hit[1]
+    extra = {'id': ('r' if osm_type == 'relation' else 'w') + str(osm_id)}
+    l2, l1, bd = chosen.get('lod2'), chosen.get('lod1'), chosen.get('bdot')
+    if l2:
+        extra['src'] = 'GUGiK LoD2 2017'
+        if l2.get('roofs'):
+            extra['rs'] = l2['roofs']
+        rt = int(l2.get('rt', 0))
+        extra['roof_code'] = rt
+        # GUGiK's roofType uses CityGML's code list.
+        roof_types = {1000: 'flat', 1010: 'shed', 1020: 'shed', 1030: 'gabled', 1040: 'hipped',
+                      1050: 'half_hipped', 1060: 'mansard', 1070: 'pyramidal', 1080: 'dome',
+                      1090: 'dome', 1100: 'shed', 1120: 'pyramidal'}
+        if rt in roof_types:
+            extra['roof'] = roof_types[rt]
+    if l1:
+        total_h = float(l1.get('h', 0))
+        extra['eh'] = round(total_h * 0.72, 1)
+        extra['rh'] = round(total_h, 1)
+        extra['src'] = (extra.get('src', '') + ' + ' if extra.get('src') else '') + 'GUGiK LoD1 2024'
+    if l2 and l2.get('roofs'):
+        zvals = [float(face[i + 2]) for face in l2['roofs'] for i in range(0, len(face) - 2, 3)]
+        if zvals:
+            extra['eh'] = round(min(zvals), 1)
+            extra['rh'] = round(max(zvals), 1)
+    if bd:
+        extra['bd'] = {'function': bd.get('pf', ''), 'storeys': bd.get('lk')}
+        if not extra.get('eh') and bd.get('lk'):
+            try: extra['eh'] = round(float(bd['lk']) * 2.9, 1)
+            except (TypeError, ValueError): pass
+        if not extra.get('src'): extra['src'] = 'GUGiK BDOT10k'
+    colour = measurements['colours'].get((round(cx / 8), round(cy / 8)))
+    if colour:
+        extra['rc'] = colour
+        extra['src'] = (extra.get('src', '') + ' + ' if extra.get('src') else '') + 'GUGiK orthophoto'
+    for layer, record in chosen.items():
+        if record.get('id'):
+            measurements['matched'].add((layer, str(record['id'])))
+    return extra
+
+
 def build(check_png=None):
     data = fetch_osm(False)
     elev = fetch_elevation(False)
@@ -568,6 +700,9 @@ def build(check_png=None):
 
     # ---- buildings
     buildings = []
+    measurements = building_measurements()
+    landmark_path = os.path.join(HERE, 'open_world', 'landmarks.json')
+    landmark_defs = json.load(open(landmark_path, encoding='utf-8')) if os.path.exists(landmark_path) else []
     bgrid = SegGrid(40.0)
     for e in els:
         t = e.get('tags', {})
@@ -584,16 +719,39 @@ def build(check_png=None):
             if not (fx0 <= cx <= fx1 and fy0 <= cy <= fy1):
                 continue
             kind, h, lv, roof = building_spec(t, ring)
+            extra = conflate_building(ring, e['id'], e['type'], measurements)
+            if extra.get('eh'):
+                # The LoD1 value is a measured roof height; use a conservative wall/eave estimate
+                # unless LoD2 supplied the actual eave planes.
+                h = round(float(extra['eh']), 1)
+            if extra.get('roof'):
+                roof = extra['roof']
+            if extra.get('bd', {}).get('storeys'):
+                try: lv = max(1, int(round(float(extra['bd']['storeys']))))
+                except (TypeError, ValueError): pass
             flat = []
             for p in ring:
                 flat += [r1(p[0]), r1(p[1])]
             entry = [kind, h, lv, roof, flat]
             if t.get('name') and kind in ('church', 'public', 'commercial'):
                 entry.append(t['name'])
+            if len(entry) == 5:
+                entry.append('')
+            # Landmark authors can append "lm" and "lmh" without changing the collision ring at index 4.
+            match = next((x for x in landmark_defs if str(x.get('osm_id')) == str(e['id']) and
+                          x.get('osm_type', 'way') == e['type']), None)
+            if match:
+                extra['lm'] = match['model']
+                extra['lmh'] = extra.get('rh', h)
+            entry.append(extra)
             buildings.append(entry)
             for a, b in zip(ring, ring[1:] + ring[:1]):
                 bgrid.add(a, b, len(buildings) - 1)
     print(len(buildings), 'buildings')
+    if measurements:
+        print('GUGiK conflation:', sum(1 for b in buildings if len(b) > 6 and any(k in b[6] for k in ('eh', 'rs', 'bd'))),
+              'buildings with measured height/roof/storeys; orthophoto roof colours:',
+              sum(1 for b in buildings if len(b) > 6 and 'rc' in b[6]), flush=True)
 
     # ---- land cover areas
     areas = []
@@ -932,7 +1090,7 @@ def build(check_png=None):
         'stops': [[r1(x), r1(y), n] for x, y, n in stops],
         'places': places,
         'spots': spots,
-        'credits': 'Map data © OpenStreetMap contributors (ODbL). Elevation: EU-DEM via OpenTopoData.',
+        'credits': 'Map/building footprints © OpenStreetMap contributors (ODbL). Building heights, roof geometry and BDOT10k attributes: Główny Urząd Geodezji i Kartografii (GUGiK), Modele 3D budynków LoD1 2024 / LoD2 2017 and BDOT10k; optional roof colours use PZGiK orthophoto when included in the extract. PZGiK data made available under Prawo geodezyjne i kartograficzne art. 40a ust. 2. Elevation: EU-DEM via OpenTopoData.',
     }
     os.makedirs(OUT_DIR, exist_ok=True)
     path = os.path.join(OUT_DIR, KEY + '.json')

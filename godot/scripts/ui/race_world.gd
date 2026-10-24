@@ -19,6 +19,7 @@ const CROWD_SHADER := preload("res://shaders/crowd.gdshader")
 const SURROUNDINGS := preload("res://scripts/ui/surroundings.gd")
 const FAR_LAND := preload("res://scripts/ui/far_land.gd")
 const FURNITURE := preload("res://scripts/ui/trackside_furniture.gd")
+const ROADSIDE_PROPS := preload("res://scripts/ui/roadside_props.gd")
 const LIGHTING := preload("res://scripts/ui/lighting_presets.gd")
 const ALTITUDE_SCALE := 1.0 ## heights at their real scale (the physics ignores elevation)
 const BEAM_COUNT := 4 ## headlight spotlights handed to the cars nearest the camera after dark
@@ -103,10 +104,16 @@ var asphalt_material: ShaderMaterial
 var runoff_material: ShaderMaterial
 var rain_particles: GPUParticles3D
 var _rain_material: StandardMaterial3D
+var rain_splash_particles: GPUParticles3D
+var rain_mist_particles: GPUParticles3D
 var snow_particles: GPUParticles3D
 var _snow_material: StandardMaterial3D
 var hail_particles: GPUParticles3D
 var _hail_material: StandardMaterial3D
+var hail_ground: GPUParticlesCollisionBox3D
+var ambient_leaves: GPUParticles3D
+var ambient_motes: GPUParticles3D
+var ambient_fog: GPUParticles3D
 var _atmos_snow := 0.0
 var _atmos_hail := 0.0
 var _atmos_fog := 0.0
@@ -121,6 +128,7 @@ var surroundings: RefCounted
 var far_land: RefCounted ## far_land.gd: the hills and sea on the horizon, null where there is no data
 ## Marshal posts, braking boards, bridges and the paddock (trackside_furniture.gd)
 var furniture: RefCounted
+var roadside_props: RefCounted
 ## Barrier segments built as tyre walls (trackside_furniture.gd tyre_cells), left out of the plain barrier
 var tyre_cells := {}
 ## The detailed terrain's grid (_build_terrain): corner, spacing, and per point its height, squared distance to
@@ -282,6 +290,19 @@ func apply_graphics(level: int) -> void:
 		sun.directional_shadow_max_distance = [220.0, 320.0, 420.0, 560.0][quality]
 		# a real sun is half a degree across: soft, contact-hardening shadows on the top preset
 		sun.light_angular_distance = 0.5 if quality >= 3 else 0.0
+	for weather_particles in [rain_particles, rain_splash_particles, rain_mist_particles, snow_particles, hail_particles]:
+		if weather_particles:
+			if weather_particles == rain_particles:
+				weather_particles.amount = [180, 280, 380, 480][quality]
+			elif weather_particles == rain_mist_particles:
+				weather_particles.amount = [18, 28, 38, 48][quality]
+			elif weather_particles == hail_particles:
+				weather_particles.amount = [120, 190, 260, 320][quality]
+			else:
+				weather_particles.amount = [70, 110, 150, 190][quality]
+	for ambient_particles in [ambient_leaves, ambient_motes, ambient_fog]:
+		if ambient_particles:
+			ambient_particles.amount = [4, 7, 10, 12][quality]
 	if world_environment:
 		world_environment.ssil_enabled = quality >= 3
 		world_environment.sky.radiance_size = Sky.RADIANCE_SIZE_128 if quality < 2 else Sky.RADIANCE_SIZE_256
@@ -350,6 +371,8 @@ func set_race(value: Race) -> void:
 	if track != value.track:
 		set_track(value.track)
 		race = value
+	if roadside_props:
+		roadside_props.set_rally(value.s.mode == "rally")
 	# a restart on the same circuit reuses the scenery but not the previous field
 	for old in visuals.values():
 		old.queue_free()
@@ -467,6 +490,10 @@ func _place_rain() -> void:
 		_rain_material.distance_fade_min_distance = RAIN_DROP / (RAIN_GONE_SPAN * height_per_m)
 		_rain_material.distance_fade_max_distance = full
 		rain_particles.global_position = camera.global_position - camera.global_basis.z * clampf(full - 10.0, 0.0, 40.0)
+	if rain_splash_particles:
+		rain_splash_particles.global_position = camera.global_position - camera.global_basis.z * 11.0 + Vector3(0.0, -3.0, 0.0)
+	if rain_mist_particles:
+		rain_mist_particles.global_position = camera.global_position - camera.global_basis.z * 15.0 + Vector3(0.0, -2.5, 0.0)
 	if snow_particles and snow_particles.emitting:
 		snow_particles.global_position = camera.global_position - camera.global_basis.z * clampf(full - 10.0, 0.0, 30.0)
 	if hail_particles and hail_particles.emitting:
@@ -474,6 +501,11 @@ func _place_rain() -> void:
 			_hail_material.distance_fade_min_distance = RAIN_DROP / (RAIN_GONE_SPAN * height_per_m)
 			_hail_material.distance_fade_max_distance = full
 		hail_particles.global_position = camera.global_position - camera.global_basis.z * clampf(full - 10.0, 0.0, 40.0)
+	if hail_ground:
+		hail_ground.global_position = camera.global_position - camera.global_basis.z * 12.0 + Vector3(0.0, -2.4, 0.0)
+	for ambient_particles in [ambient_leaves, ambient_motes, ambient_fog]:
+		if ambient_particles:
+			ambient_particles.global_position = camera.global_position - camera.global_basis.z * 12.0 + Vector3(0.0, -3.0, 0.0)
 
 func _update_atmosphere(hour: float, wet: float, rain: float, snow: float = 0.0, hail: float = 0.0, fog: float = 0.0) -> void:
 	if not world_environment or not sky_material or not sun:
@@ -518,7 +550,7 @@ func _update_atmosphere(hour: float, wet: float, rain: float, snow: float = 0.0,
 	sky_material.set_shader_parameter("moon_dir", _sky_dir(deg_to_rad(34.0), az))
 	sky_material.set_shader_parameter("sun_color", SUN_DAY.lerp(SUN_GOLDEN, golden * 0.6).lerp(DUSK_GLOW, glow * 0.7))
 	sky_material.set_shader_parameter("halo_amount", 0.35 * clear + 0.5 * golden)
-	sky_material.set_shader_parameter("cloud_paint", 1.0)
+	sky_material.set_shader_parameter("cloud_paint", day_t) # after dark the clouds stay soft and unlit
 	sky_material.set_shader_parameter("star_amount", smoothstep(0.35, 0.95, night))
 	sky_material.set_shader_parameter("cloud_lit", CLOUD_NIGHT.lerp(CLOUD_LIT, day_t).lerp(HORIZON_OVERCAST, overcast * 0.5 * day_t))
 	sky_material.set_shader_parameter("cloud_shade", (CLOUD_NIGHT * 0.6).lerp(CLOUD_SHADE, day_t).lerp(SKY_TOP_OVERCAST.darkened(0.2), overcast * day_t))
@@ -577,6 +609,21 @@ func _update_atmosphere(hour: float, wet: float, rain: float, snow: float = 0.0,
 	if rain_particles:
 		rain_particles.emitting = rain > 0.03
 		rain_particles.amount_ratio = clampf(rain, 0.0, 1.0)
+	if rain_splash_particles:
+		rain_splash_particles.emitting = rain > 0.12
+		rain_splash_particles.amount_ratio = clampf(rain * (0.7 if quality < 2 else 1.0), 0.0, 1.0)
+	if rain_mist_particles:
+		rain_mist_particles.emitting = rain > 0.2
+		rain_mist_particles.amount_ratio = clampf(rain * (0.6 if quality < 2 else 0.85), 0.0, 1.0)
+	if ambient_leaves:
+		ambient_leaves.emitting = quality >= 1 and surroundings != null and rain < 0.1 and snow < 0.1 and night < 0.7
+		ambient_leaves.amount_ratio = 0.45 if hour < 10.0 or hour > 17.0 else 0.18
+	if ambient_motes:
+		ambient_motes.emitting = quality >= 1 and golden > 0.18 and rain < 0.08 and night < 0.45
+		ambient_motes.amount_ratio = clampf(golden * 0.65, 0.0, 0.65)
+	if ambient_fog:
+		ambient_fog.emitting = quality >= 1 and is_fog
+		ambient_fog.amount_ratio = clampf(fog * 0.65 + (0.25 if race and race.weather.mode == "fog" else 0.0), 0.0, 0.75)
 	if snow_particles:
 		snow_particles.emitting = snow > 0.03
 		snow_particles.amount_ratio = clampf(snow, 0.0, 1.0)
@@ -1185,33 +1232,92 @@ func _build_environment() -> void:
 	add_child(sun)
 
 	var rain_mesh := QuadMesh.new()
-	rain_mesh.size = Vector2(0.035, RAIN_DROP)
+	rain_mesh.size = Vector2(0.025, RAIN_DROP * 1.35)
 	var rain_material := StandardMaterial3D.new()
 	rain_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	rain_material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	rain_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	rain_material.albedo_color = Color(0.72, 0.82, 0.94, 0.42)
+	rain_material.albedo_color = Color(0.7, 0.8, 0.94, 0.34)
 	rain_material.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_PIXEL_ALPHA # see _place_rain
 	rain_mesh.material = rain_material
 	_rain_material = rain_material
 	var rain_process := ParticleProcessMaterial.new()
 	rain_process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	rain_process.emission_box_extents = Vector3(34.0, 24.0, 34.0)
-	rain_process.direction = Vector3(0.0, -1.0, 0.0)
-	rain_process.spread = 4.0
-	rain_process.gravity = Vector3(0.0, -24.0, 0.0)
-	rain_process.initial_velocity_min = 17.0
-	rain_process.initial_velocity_max = 25.0
+	rain_process.emission_box_extents = Vector3(30.0, 20.0, 30.0)
+	rain_process.direction = Vector3(-0.08, -1.0, 0.015)
+	rain_process.spread = 2.0
+	rain_process.gravity = Vector3(0.0, -18.0, 0.0)
+	rain_process.initial_velocity_min = 25.0
+	rain_process.initial_velocity_max = 34.0
 	rain_particles = GPUParticles3D.new()
 	rain_particles.name = "Rain"
-	rain_particles.amount = 700
-	rain_particles.lifetime = 1.2
+	rain_particles.amount = [180, 280, 380, 480][quality]
+	rain_particles.lifetime = 0.9
 	rain_particles.local_coords = true
 	rain_particles.visibility_aabb = AABB(Vector3(-40, -40, -40), Vector3(80, 80, 80))
 	rain_particles.process_material = rain_process
 	rain_particles.draw_pass_1 = rain_mesh
 	rain_particles.emitting = false
 	add_child(rain_particles)
+	# A low, low-alpha road layer reads as spray kicked off the surface without whitening the racing line.
+	var splash_mesh := QuadMesh.new()
+	splash_mesh.size = Vector2(0.045, 0.13)
+	var splash_mat := StandardMaterial3D.new()
+	splash_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	splash_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	splash_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	splash_mat.albedo_color = Color(0.72, 0.84, 0.93, 0.2)
+	splash_mesh.material = splash_mat
+	var splash_pm := ParticleProcessMaterial.new()
+	splash_pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	splash_pm.emission_box_extents = Vector3(22.0, 0.12, 28.0)
+	splash_pm.direction = Vector3(0.0, 1.0, 0.0)
+	splash_pm.spread = 30.0
+	splash_pm.gravity = Vector3(0.0, -5.5, 0.0)
+	splash_pm.initial_velocity_min = 0.8
+	splash_pm.initial_velocity_max = 2.2
+	splash_pm.angular_velocity_min = -90.0
+	splash_pm.angular_velocity_max = 90.0
+	rain_splash_particles = GPUParticles3D.new()
+	rain_splash_particles.name = "RoadSpray"
+	rain_splash_particles.amount = [70, 110, 150, 190][quality]
+	rain_splash_particles.lifetime = 0.55
+	rain_splash_particles.local_coords = true
+	rain_splash_particles.visibility_aabb = AABB(Vector3(-30, -10, -35), Vector3(60, 24, 70))
+	rain_splash_particles.process_material = splash_pm
+	rain_splash_particles.draw_pass_1 = splash_mesh
+	rain_splash_particles.emitting = false
+	add_child(rain_splash_particles)
+	var mist_mesh := QuadMesh.new()
+	mist_mesh.size = Vector2(1.2, 0.7)
+	var mist_mat := StandardMaterial3D.new()
+	mist_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mist_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mist_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mist_mat.albedo_color = Color(0.76, 0.84, 0.92, 0.08)
+	mist_mesh.material = mist_mat
+	var mist_pm := ParticleProcessMaterial.new()
+	mist_pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	mist_pm.emission_box_extents = Vector3(26.0, 1.5, 30.0)
+	mist_pm.direction = Vector3(0.0, 0.08, -1.0)
+	mist_pm.spread = 14.0
+	mist_pm.initial_velocity_min = 0.15
+	mist_pm.initial_velocity_max = 0.55
+	mist_pm.gravity = Vector3(0.0, -0.04, 0.0)
+	mist_pm.damping_min = 0.1
+	mist_pm.damping_max = 0.3
+	mist_pm.scale_min = 0.7
+	mist_pm.scale_max = 1.35
+	rain_mist_particles = GPUParticles3D.new()
+	rain_mist_particles.name = "RainMist"
+	rain_mist_particles.amount = [18, 28, 38, 48][quality]
+	rain_mist_particles.lifetime = 5.0
+	rain_mist_particles.local_coords = true
+	rain_mist_particles.visibility_aabb = AABB(Vector3(-34, -6, -38), Vector3(68, 16, 76))
+	rain_mist_particles.process_material = mist_pm
+	rain_mist_particles.draw_pass_1 = mist_mesh
+	rain_mist_particles.emitting = false
+	add_child(rain_mist_particles)
 
 	var snow_mesh := QuadMesh.new()
 	snow_mesh.size = Vector2(0.08, 0.08)
@@ -1230,9 +1336,13 @@ func _build_environment() -> void:
 	snow_process.gravity = Vector3(0.5, -2.5, 0.2)
 	snow_process.initial_velocity_min = 1.2
 	snow_process.initial_velocity_max = 2.8
+	snow_process.angular_velocity_min = -90.0
+	snow_process.angular_velocity_max = 90.0
+	snow_process.angle_min = -180.0
+	snow_process.angle_max = 180.0
 	snow_particles = GPUParticles3D.new()
 	snow_particles.name = "Snow"
-	snow_particles.amount = 600
+	snow_particles.amount = [70, 110, 150, 190][quality]
 	snow_particles.lifetime = 2.5
 	snow_particles.local_coords = true
 	snow_particles.visibility_aabb = AABB(Vector3(-40, -40, -40), Vector3(80, 80, 80))
@@ -1259,16 +1369,31 @@ func _build_environment() -> void:
 	hail_process.gravity = Vector3(0.0, -32.0, 0.0)
 	hail_process.initial_velocity_min = 22.0
 	hail_process.initial_velocity_max = 35.0
+	hail_process.angular_velocity_min = -280.0
+	hail_process.angular_velocity_max = 280.0
+	hail_process.angle_min = -180.0
+	hail_process.angle_max = 180.0
+	hail_process.collision_mode = ParticleProcessMaterial.COLLISION_RIGID
+	hail_process.collision_friction = 0.15
+	hail_process.collision_bounce = 0.58
 	hail_particles = GPUParticles3D.new()
 	hail_particles.name = "Hail"
-	hail_particles.amount = 700
-	hail_particles.lifetime = 1.0
+	hail_particles.amount = [120, 190, 260, 320][quality]
+	hail_particles.lifetime = 0.85
 	hail_particles.local_coords = true
 	hail_particles.visibility_aabb = AABB(Vector3(-40, -40, -40), Vector3(80, 80, 80))
 	hail_particles.process_material = hail_process
 	hail_particles.draw_pass_1 = hail_mesh
 	hail_particles.emitting = false
 	add_child(hail_particles)
+	hail_ground = GPUParticlesCollisionBox3D.new()
+	hail_ground.name = "HailBouncePlane"
+	hail_ground.size = Vector3(64.0, 0.25, 64.0)
+	hail_ground.position.y = -2.4
+	add_child(hail_ground)
+	ambient_leaves = FxParticles.attach(self, "leaves", quality, 0.42)
+	ambient_motes = FxParticles.attach(self, "dust_motes", quality, 0.45)
+	ambient_fog = FxParticles.attach(self, "fog_wisp", quality, 0.38)
 
 	camera = Camera3D.new()
 	camera.name = "RaceCamera"
@@ -1366,6 +1491,8 @@ func _build_track() -> void:
 		surroundings.build()
 	furniture = FURNITURE.new()
 	furniture.build(self)
+	roadside_props = ROADSIDE_PROPS.new()
+	roadside_props.build(self)
 	if track.cfg.theme == "city":
 		if not (surroundings and surroundings.has_buildings()):
 			_build_city_blocks()
@@ -2074,9 +2201,16 @@ func _build_pit_lane() -> void:
 	pit_mat.set_shader_parameter("half_width", 3.2)
 	pit_mat.set_shader_parameter("patches", 0.3)
 	pit_mat.set_shader_parameter("rubber", 0.5)
+	pit_mat.set_shader_parameter("edge_dust", 0.0)
+	pit_mat.set_shader_parameter("detail", ROAD_DETAIL[quality])
+	if track.cfg.street_stage:
+		pit_mat.set_shader_parameter("street", 0.5)
 	inst.material_override = pit_mat
 	track_root.add_child(inst)
 
+	# a street stage's roadside pit lane is only painted off: no concrete wall down the middle of a real street
+	if track.cfg.street_stage:
+		return
 	# Pit wall concrete barrier
 	var wall_s0 := cfg.pit_entry + cfg.pit_ramp * 0.55
 	var wall_s1 := cfg.pit_exit - cfg.pit_ramp * 0.55

@@ -86,21 +86,21 @@ const PAINTS := ["#b3121d", "#f2f2f2", "#16181d", "#f5c400", "#ff7a00", "#1f4fa8
 ## Pages the header tabs switch between with Q/E (PgUp/PgDn, the shoulder buttons)
 const MENU_PAGES := ["Set Up", "Circuit Info", "Car & Service"]
 const MENU_PAGE_IDS := ["setup", "information", "repair"] ## active_menu_page of each of MENU_PAGES
-const SETUP_KEYS := "↑ ↓ choose   ◂ ▸ change   Enter press   Home / End first / RACE   Q E pages   Esc back"
+const SETUP_KEYS := "↑ ↓ choose   ← → change   Enter press   Home / End first / RACE   Q E pages   Esc back"
 ## The same keys on a gamepad, shown while one is connected (_hint)
 const PAD_KEYS := {
-	"home": "✚ ◂ ▸ browse     Ⓐ select",
-	"setup": "✚ ↑ ↓ choose   ◂ ▸ change   Ⓐ press   LB RB pages   START race   Ⓑ back",
+	"home": "✚ ← → browse     Ⓐ select",
+	"setup": "✚ ↑ ↓ choose   ← → change   Ⓐ press   LB RB pages   START race   Ⓑ back",
 	"information": "LB RB pages   Ⓐ open set up   START race   Ⓑ back",
 	"repair": "✚ ↑ ↓ part   Ⓐ repair   LB RB pages   START continue   Ⓑ back",
-	"options": "✚ ↑ ↓ choose   ◂ ▸ change   Ⓐ press   Ⓑ back",
+	"options": "✚ ↑ ↓ choose   ← → change   Ⓐ press   Ⓑ back",
 }
 const KEY_KEYS := {
-	"home": "◂ ▸ browse     Enter select",
+	"home": "← → browse     Enter select",
 	"setup": SETUP_KEYS,
 	"information": "Q E pages   Enter open set up   Esc back",
 	"repair": "↑ ↓ part   Enter repair   Space continue   Q E pages   Esc back",
-	"options": "↑ ↓ choose   ◂ ▸ change   Enter press   Esc back",
+	"options": "↑ ↓ choose   ← → change   Enter press   Esc back",
 }
 const WARP_VALUES := [1, 2, 5, 10, 30, 60] ## time-warp steps (, and . keys)
 const UI_SCALES := [0.85, 1.0, 1.15, 1.3] ## Options → Interface size, on top of the window scaling
@@ -786,6 +786,7 @@ func _build_setup() -> void:
 	col.add_child(campaign_side)
 
 	campaign_act_label = _label("ACT I: SILESIAN GRASSROOTS", 15, ACCENT)
+	campaign_act_label.visible = false # the page's subtitle already names the act (it read twice, one above the other)
 	campaign_side.add_child(campaign_act_label)
 
 	_field_label(campaign_side, "SELECT CAMPAIGN STAGE")
@@ -797,7 +798,7 @@ func _build_setup() -> void:
 
 	var briefing_card := PanelContainer.new()
 	var card_style := StyleBoxFlat.new()
-	card_style.bg_color = Color(0.18, 0.14, 0.25, 0.75)
+	card_style.bg_color = Color(CmrStyle.PANEL, 0.75)
 	card_style.border_color = Color(CmrStyle.ORANGE, 0.6)
 	card_style.set_border_width_all(1)
 	card_style.set_corner_radius_all(4)
@@ -813,19 +814,21 @@ func _build_setup() -> void:
 	briefing_card.add_child(card_col)
 
 	campaign_title_label = _label("Stage 1: Rookie Shakedown", 20, CmrStyle.TEXT)
+	campaign_title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART # long Polish stage names wrap, never run off the card
 	card_col.add_child(campaign_title_label)
 
 	campaign_circuit_label = _label("📍 Circuit: Wilamowice Country Loop", 14, CmrStyle.ORANGE_SOFT)
+	campaign_circuit_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	card_col.add_child(campaign_circuit_label)
 
 	var obj_row := VBoxContainer.new()
 	obj_row.add_theme_constant_override("separation", 4)
 	card_col.add_child(obj_row)
 
-	campaign_target_label = _label("★ TARGET: Finish P3 or higher", 14, Color("#34d399"))
+	campaign_target_label = _label("★ TARGET: Finish P3 or higher", 14, CmrStyle.GREEN)
 	obj_row.add_child(campaign_target_label)
 
-	campaign_trophy_label = _label("🏆 Trophy: Wilamowice Bronze Piston", 13, Color("#fbbf24"))
+	campaign_trophy_label = _label("🏆 Trophy: Wilamowice Bronze Piston", 13, CmrStyle.AMBER)
 	obj_row.add_child(campaign_trophy_label)
 
 	campaign_desc_label = _label("", 13, CmrStyle.TEXT)
@@ -1188,13 +1191,32 @@ func _focus_setup_default() -> void:
 			at += 1
 	_focus_setup_item(items, at)
 
-## The briefing from its top (title, act, stage), scrolled only as far as ENTER STAGE needs.
-func _show_briefing_top() -> void:
+## The briefing from its top (page heading, act, stage), scrolled only as far as ENTER STAGE needs and never
+## so far that the page heading ("CAMPAIGN · STAGE 7/9") leaves the view. The briefing's texts were only just set (their wrapped heights
+## settle a frame or two later) and focusing ENTER STAGE scrolls the page on its own, deferred: so this waits
+## for both before it measures and places the scroll.
+func _show_briefing_top(frames := 2) -> void:
+	if frames > 0:
+		# one-shot frame hooks rather than await: they go away with the node if the page is torn down first
+		var next := _show_briefing_top.bind(frames - 1)
+		if not get_tree().process_frame.is_connected(next):
+			get_tree().process_frame.connect(next, CONNECT_ONE_SHOT)
+		return
 	if not is_instance_valid(menu_scroll) or not is_campaign_mode or active_menu_page != "setup":
 		return
-	menu_scroll.scroll_vertical = 0
-	if is_instance_valid(campaign_start_button) and campaign_start_button.is_visible_in_tree():
-		menu_scroll.ensure_control_visible(campaign_start_button)
+	menu_scroll.scroll_vertical = roundi(_briefing_scroll())
+
+## Where the set-up page's scroll should sit for the campaign briefing (see _show_briefing_top).
+func _briefing_scroll() -> float:
+	if not is_instance_valid(campaign_start_button) or not campaign_start_button.is_visible_in_tree():
+		return 0.0
+	var content := menu_scroll.get_child(0) as Control
+	var top := content.global_position.y
+	var view := menu_scroll.size.y
+	var need := campaign_start_button.global_position.y - top + campaign_start_button.size.y + 8.0 - view
+	var target_label: Control = campaign_title_label if is_instance_valid(campaign_title_label) else setup_title_label
+	var keep := target_label.global_position.y - top # the stage title stays in view
+	return clampf(need, 0.0, maxf(0.0, keep))
 
 ## ◂ ▸ on a set-up control: step a picker, number, switch, slider or paint, or open/shut a section.
 func _nudge_setting(c: Control, d: int, echo: bool) -> void:
@@ -1999,6 +2021,7 @@ func _build_menu_car_preview() -> void:
 	menu_car_summary.anchor_right = 0.555
 	menu_car_summary.anchor_bottom = 0.79
 	menu_car_summary.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	menu_car_summary.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS # a long circuit name stops short of the set-up column
 	add_child(menu_car_summary)
 	_update_menu_car_summary()
 
@@ -2131,10 +2154,13 @@ func _build_information_page() -> void:
 	map_column.add_child(map_heading)
 	var map_frame := PanelContainer.new()
 	map_frame.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	map_frame.size_flags_vertical = Control.SIZE_FILL
-	map_frame.custom_minimum_size.y = 480
+	# the frame takes the height the heading, the temperature scale and the (wrapped) description leave it,
+	# so the column never runs past the page into the key hints
+	map_frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	map_frame.custom_minimum_size.y = 180
+	map_frame.clip_contents = true
 	var map_style := StyleBoxFlat.new()
-	map_style.bg_color = Color("#8a73b0")
+	map_style.bg_color = CmrStyle.MAP
 	map_style.set_content_margin_all(0)
 	map_frame.add_theme_stylebox_override("panel", map_style)
 	map_column.add_child(map_frame)
@@ -2356,12 +2382,14 @@ func _build_repair_page() -> void:
 	hundred.anchor_bottom = 0.81
 	hundred.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	repair_details.add_child(hundred)
-	repair_copy = _label("", 18, CmrStyle.TEXT)
+	repair_copy = _label("", 17, CmrStyle.TEXT)
 	repair_copy.anchor_left = 0.045
 	repair_copy.anchor_top = 0.83
 	repair_copy.anchor_right = 0.56
-	repair_copy.anchor_bottom = 0.96
+	repair_copy.anchor_bottom = 0.955
 	repair_copy.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	repair_copy.max_lines_visible = 4 # stops above the key hints; a longer note ends in "…"
+	repair_copy.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	repair_details.add_child(repair_copy)
 	_select_repair_part(repair_selected)
 	repair_details.hide()
@@ -3699,8 +3727,8 @@ func _show_results() -> void:
 		c_box.add_theme_constant_override("separation", 3)
 		col.add_child(c_box)
 		if c_res.success:
-			c_box.add_child(_label("★ STAGE OBJECTIVE COMPLETED! ★", 18, Color("#10b981")))
-			c_box.add_child(_label("🏆 Trophy Awarded: %s" % c_res.trophy, 14, Color("#f59e0b")))
+			c_box.add_child(_label("★ STAGE OBJECTIVE COMPLETED! ★", 18, CmrStyle.GREEN))
+			c_box.add_child(_label("🏆 Trophy Awarded: %s" % c_res.trophy, 14, CmrStyle.AMBER))
 			if c_res.newly_unlocked:
 				var nxt_st := CampaignData.get_stage(c_res.unlocked_stage)
 				c_box.add_child(_label("▶ Next Stage Unlocked: %s (%s)" % [nxt_st.title, nxt_st.act_name], 14, ACCENT))
@@ -3763,7 +3791,7 @@ func _show_results() -> void:
 		var fill: Color = CmrStyle.ORANGE if car.is_player else (CmrStyle.FIELD if r.pos % 2 == 1 else CmrStyle.FIELD_DIM)
 		var row := _result_row(cells, widths, CmrStyle.box(fill, Color.TRANSPARENT, 14, 3), CmrStyle.INK, 15, car.color)
 		if fast and fast.car == car:
-			(row.get_child(0).get_child(5) as Label).add_theme_color_override("font_color", Color("#6a1fc0"))
+			(row.get_child(0).get_child(5) as Label).add_theme_color_override("font_color", CmrStyle.PLUM)
 		table.add_child(row)
 
 	var buttons := HBoxContainer.new()
@@ -3900,7 +3928,8 @@ func _fit_result_panel(col: Control) -> void:
 		if col.size.x > 0.0:
 			break
 	var pad := result_panel.get_theme_stylebox("panel").get_minimum_size().y
-	var h := minf(820.0, ceilf(col.get_combined_minimum_size().y + pad))
+	# never taller than the canvas (a large interface size shrinks it): the sheet scrolls instead
+	var h := minf(minf(820.0, get_viewport_rect().size.y - 40.0), ceilf(col.get_combined_minimum_size().y + pad))
 	result_panel.custom_minimum_size.y = h
 	result_panel.offset_top = -h * 0.5
 	result_panel.offset_bottom = h * 0.5
@@ -3918,6 +3947,7 @@ func _result_row(cells: Array, widths: Array, style: StyleBox, ink: Color, font_
 		l.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0))
 		l.custom_minimum_size.x = widths[k]
 		l.clip_text = true
+		l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS # a cut cell says so ("…")
 		if k == 2 and swatch != null:
 			var name_row := HBoxContainer.new()
 			name_row.custom_minimum_size.x = widths[k]

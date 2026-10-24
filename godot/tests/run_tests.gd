@@ -19,7 +19,10 @@ const SUITES := [
 	"res://tests/test_world_audio.gd",
 	"res://tests/test_options.gd",
 	"res://tests/test_retro_pipeline.gd",
-	"res://tests/test_open_world.gd"
+	"res://tests/test_fx_particles.gd",
+	"res://tests/test_open_world.gd",
+	"res://tests/test_roadside_props.gd",
+	"res://tests/test_ui_layout.gd"
 ]
 
 const SURROUNDINGS := preload("res://scripts/ui/surroundings.gd")
@@ -36,7 +39,7 @@ func _initialize() -> void:
 		var errors: Array = ["failed to load (compile error above)"]
 		if script and script.can_instantiate():
 			var suite = script.new()
-			var result = suite.run()
+			var result = await suite.run() # a suite may await frames (layout settles at the end of a frame)
 			errors = result if result is Array else []
 			if not suite.get("completed"):
 				errors.append("run() aborted by a script error (see above)")
@@ -56,6 +59,7 @@ static func release(tree: SceneTree) -> void:
 	SURROUNDINGS._tree_meshes.clear()
 	SURROUNDINGS._landmark_meshes.clear()
 	FURNITURE._meshes.clear()
+	preload("res://scripts/ui/roadside_props.gd")._meshes.clear()
 	CAR_VISUAL._shared.clear()
 	WORLD._noise.clear()
 	WORLD._trackside.clear()

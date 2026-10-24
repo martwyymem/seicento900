@@ -91,7 +91,7 @@ func _draw_panel() -> void:
 		return
 	var font := CmrStyle.digits()
 	var size := Vector2(GRAPH_SIZE.x + PAD * 2.0, _lines.size() * LINE_HEIGHT + GRAPH_SIZE.y + PAD * 3.0 + 4.0)
-	_panel.draw_rect(Rect2(Vector2.ZERO, size), Color(0.08, 0.05, 0.13, 0.82))
+	_panel.draw_rect(Rect2(Vector2.ZERO, size), Color(CmrStyle.PLATE, 0.82))
 	_panel.draw_rect(Rect2(Vector2.ZERO, size), CmrStyle.PANEL_EDGE, false, 1.0)
 	for i in _lines.size():
 		var color := CmrStyle.ORANGE_SOFT if i == 0 else CmrStyle.TEXT

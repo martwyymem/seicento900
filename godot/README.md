@@ -268,6 +268,13 @@ wood and railway inside the town limit and some countryside round it, from OpenS
 heights. It is meant to feel like Forza Horizon or The Crew: a festival hub (Seicento Fest at the KS Górnik
 stadium), event beacons, traffic, speed traps, discoveries, a skill chain and a day that turns to night.
 
+The Brzeszcze building models use OSM footprints (© OpenStreetMap contributors, ODbL) with measured
+building heights and roof planes from GUGiK's LoD1 2024 and LoD2 2017 models, plus BDOT10k storeys and
+building functions. GUGiK lists these datasets as free to download and available for any use; the legal
+basis is art. 40a(2) of Poland's Geodetic and Cartographic Law. Elevation is EU-DEM through OpenTopoData.
+Roof-colour sampling from the PZGiK orthophoto is supported by the baker but is omitted from the checked-in
+extract because its source imagery is large and costly to fetch for this build.
+
 - **Stages are beacons where they really start**: the industrial sprint on ul. Dworcowa by KWK Brzeszcze, the
   Bór stage on ul. Bór. The away venues sit on the real roads out of town: Pszczyna west on the DW933, Oświęcim
   east, Bielsko-Biała south on ul. Bielska, Wilamowice down the S1 and Tychy's Fiat track up it. Kraków is the

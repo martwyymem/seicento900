@@ -177,8 +177,10 @@ func step(dt: float, thr: float, brk: float, steer_in: float, shift_up := false,
 
 	_vertical(dt, px, py, mass)
 	_collide(mass)
-	_water(dt)
 	road = map.road_at(car.x, car.y, z)
+	if not road.is_empty() and absf(float(road.height) - z) > 1.2:
+		road = {}
+	_water(dt)
 	surface = map.surface_of(road) if not road.is_empty() and absf(float(road.height) - z) < 1.2 else Physics.SURF_GRASS
 	var n := Vector3(-dz_dx, 1.0, -dz_dy).normalized()
 	tilt = tilt.slerp(Basis(Quaternion(Vector3.UP, n)), minf(1.0, dt * 10.0)) if not airborne else tilt
@@ -226,7 +228,8 @@ func _vertical(dt: float, px: float, py: float, mass: float) -> void:
 
 func _water(dt: float) -> void:
 	var w := map.water_at(Vector2(car.x, car.y))
-	in_water = not is_nan(w) and z <= w + 0.6
+	# a dyke track through the fishponds is road, not water
+	in_water = not is_nan(w) and z <= w + 0.6 and road.is_empty()
 	if in_water:
 		water_t += dt
 		if water_t > WATER_RESPAWN:

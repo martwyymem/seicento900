@@ -60,7 +60,10 @@ vec3 shoulder(vec3 c) {
 void fragment() {
 	vec4 raw = texture(TEXTURE, UV);
 	if (retro_mode == 0) {
-		COLOR = raw;
+		// the base look as rendered, with only a faint lens vignette (about 14% in the corners, 8% at the sides, none over the
+		// middle where the road and the cars are) that draws the eye in the way CMR 2.0 and FH1 do
+		vec2 c = (UV - vec2(0.5)) * vec2(1.0, 0.75);
+		COLOR = vec4(raw.rgb * (1.0 - 0.14 * smoothstep(0.06, 0.39, dot(c, c))), raw.a);
 	} else {
 		vec2 texel = TEXTURE_PIXEL_SIZE;
 		if (texel.x <= 0.0 || texel.y <= 0.0) {

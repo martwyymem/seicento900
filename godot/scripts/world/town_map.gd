@@ -457,7 +457,7 @@ func _load_obstacles() -> void:
 			lo = minf(lo, ground(p.x, p.y))
 		water_rings.append(ring)
 		water_rects.append(r)
-		water_level.append(lo - 0.25)
+		water_level.append(lo - 0.9) # well below the dykes and the tracks along them
 
 func add_post(p: Vector2, radius: float) -> void:
 	var ck := _cell_key(int(floor(p.x / BCELL)), int(floor(p.y / BCELL)))

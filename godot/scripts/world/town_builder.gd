@@ -15,6 +15,7 @@ const BUILDING_SHADER := preload("res://shaders/building.gdshader")
 const FOLIAGE_SHADER := preload("res://shaders/foliage.gdshader")
 const WATER_SHADER := preload("res://shaders/water.gdshader")
 const TOWN_MODELS := "res://models/town.glb"
+const LANDMARK_MODELS := "res://models/brzeszcze_landmarks.glb" ## tools/blender/build_brzeszcze.py
 const LAND_RES := 2.5 ## metres per texel of data/world/<key>_land.png (tools/build_open_world.py)
 
 const TERRAIN_STEP := 10.0
@@ -62,18 +63,21 @@ func _init(town: TownMap, parent: Node3D) -> void:
 	assets = WORLD_ASSETS.new()
 	_load_models()
 
+## The prop kit (town.glb) and the hand-built Brzeszcze landmarks. Both load before build_buildings(), which
+## leaves out the generic mesh of every building a landmark model stands on.
 func _load_models() -> void:
-	if not ResourceLoader.exists(TOWN_MODELS) and not FileAccess.file_exists(TOWN_MODELS):
-		return
-	var scene: Node = WORLD_ASSETS._load_model(TOWN_MODELS)
-	if scene == null:
-		return
-	for mi in scene.find_children("*", "MeshInstance3D", true, false):
-		var m := mi as MeshInstance3D
-		if m.mesh:
-			# bake the node's own transform under the root into the mesh's placement
-			models[String(m.name)] = [m.mesh, _global_of(m, scene)]
-	scene.free()
+	for path in [TOWN_MODELS, LANDMARK_MODELS]:
+		if not ResourceLoader.exists(path) and not FileAccess.file_exists(path):
+			continue
+		var scene: Node = WORLD_ASSETS._load_model(path)
+		if scene == null:
+			continue
+		for mi in scene.find_children("*", "MeshInstance3D", true, false):
+			var m := mi as MeshInstance3D
+			if m.mesh:
+				# bake the node's own transform under the root into the mesh's placement
+				models[String(m.name)] = [m.mesh, _global_of(m, scene)]
+		scene.free()
 
 static func _global_of(n: Node3D, top: Node) -> Transform3D:
 	var xf := n.transform
@@ -637,6 +641,9 @@ func build_buildings() -> void:
 		var ring := map.bld_rings[bi]
 		if ring.size() < 3:
 			continue
+		var extra: Dictionary = b[6] if b.size() > 6 and b[6] is Dictionary else {}
+		if extra.has("lm") and has_model(String(extra.lm)):
+			continue
 		var centre := Vector2.ZERO
 		for p in ring:
 			centre += p
@@ -644,7 +651,7 @@ func build_buildings() -> void:
 		var c := _chunk_of(centre)
 		if not batches.has(c):
 			batches[c] = MeshBatch.new(true, true)
-		_add_building(batches[c], ring, String(b[0]), float(b[1]), String(b[3]), centre)
+		_add_building(batches[c], ring, String(b[0]), float(b[1]), String(b[3]), centre, extra)
 	for c in batches:
 		_add_mesh(group, (batches[c] as MeshBatch).commit(), mat)
 
@@ -714,7 +721,7 @@ static func ring_area(ring: PackedVector2Array) -> float:
 		a += p.x * q.y - q.x * p.y
 	return a * 0.5
 
-func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height: float, roof_shape: String, centre: Vector2) -> void:
+func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height: float, roof_shape: String, centre: Vector2, extra: Dictionary = {}) -> void:
 	var r := ring.duplicate()
 	# counter-clockwise seen from above (x east, z south) means negative shoelace area here
 	if ring_area(r) > 0.0:
@@ -723,6 +730,10 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 	var pal := _palette(kind, seed, centre)
 	var wall: Color = pal[0]
 	var roof: Color = pal[1]
+	if extra.has("wc"):
+		wall = color_lin(String(extra.wc))
+	if extra.has("rc"):
+		roof = color_lin(String(extra.rc))
 	var code: int = KIND_CODE.get(kind, 0)
 	var lo := INF
 	var hi := -INF
@@ -731,16 +742,50 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 		lo = minf(lo, g)
 		hi = maxf(hi, g)
 	var base := lo - 0.5
-	var eave := hi + height
+	var eave_height := float(extra.get("eh", height))
+	var eave := hi + eave_height
+	var roof_surfaces: Array = extra.get("rs", [])
+	if kind == "church" and roof_surfaces.is_empty() and absf(ring_area(r)) < 80.0:
+		eave_height = minf(eave_height, 3.5)
+		eave = hi + eave_height
+		if not extra.has("wc"):
+			wall = color_lin("#dfd9cb")
+		if not extra.has("rc"):
+			roof = color_lin("#38322c")
+	var uv2_wall := Vector2(seed, code)
+	var uv2_roof := Vector2(seed, code + 10.0)
 	# pitched roofs over footprints close to a rectangle
 	var rect := []
-	var pitched := roof_shape in ["hipped", "gabled", "pyramidal"] and height < 18.0
-	if pitched:
+	var pitched := roof_shape in ["hipped", "gabled", "pyramidal", "half_hipped", "mansard"] and height < 18.0
+	if not roof_surfaces.is_empty():
+		# LoD2 roof planes are in local metres, with height relative to their measured ground.
+		for face in roof_surfaces:
+			if not face is Array or face.size() < 9:
+				continue
+			var points := PackedVector2Array()
+			var ys := PackedFloat32Array()
+			for j in range(0, face.size() - 2, 3):
+				points.append(Vector2(float(face[j]), float(face[j + 1])))
+				ys.append(hi + float(face[j + 2]))
+			if points.size() < 3:
+				continue
+			var triangles := Geometry2D.triangulate_polygon(points)
+			for j in range(0, triangles.size(), 3):
+				var ia: int = triangles[j]
+				var ib: int = triangles[j + 1]
+				var ic: int = triangles[j + 2]
+				var p0 := Vector3(points[ia].x, ys[ia], points[ia].y)
+				var p1 := Vector3(points[ib].x, ys[ib], points[ib].y)
+				var p2 := Vector3(points[ic].x, ys[ic], points[ic].y)
+				var normal := (p1 - p0).cross(p2 - p0).normalized()
+				if normal.y < 0.0:
+					normal = -normal
+				mb.flat_tri(p0, p1, p2, normal, points[ia], points[ib], points[ic], roof, uv2_roof)
+		# Use GUGiK roof planes when present; otherwise build the compatible OSM-based roof below.
+	elif pitched:
 		rect = min_rect(r)
 		if rect.is_empty() or absf(ring_area(r)) / maxf(float(rect[4]), 1e-3) < 0.78 or float(rect[3]) > 13.0:
 			pitched = false
-	var uv2_wall := Vector2(seed, code)
-	var uv2_roof := Vector2(seed, code + 10.0)
 	var along := 0.0
 	var n := r.size()
 	for i in n:
@@ -757,13 +802,15 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 		mb.flat_quad(Vector3(a.x, base, a.y), Vector3(b.x, base, b.y), Vector3(b.x, eave, b.y), Vector3(a.x, eave, a.y), out, wall,
 			[Vector2(along, v0), Vector2(along + ln, v0), Vector2(along + ln, v1), Vector2(along, v1)], uv2_wall)
 		along += ln
-	if pitched:
+	if pitched and roof_surfaces.is_empty():
 		var cen: Vector2 = rect[0]
 		var ax: Vector2 = rect[1]
 		var ay := Vector2(-ax.y, ax.x)
 		var hl: float = rect[2] + 0.45 # eaves overhang
 		var hw: float = rect[3] + 0.45
 		var pitch := 0.62 + 0.25 * hash2(centre.x, centre.y, 5.0) # rise per run
+		if extra.has("rh") and float(extra.rh) > eave_height:
+			pitch = clampf((float(extra.rh) - eave_height) / maxf(hw, 0.5), 0.08, 1.4)
 		var rise := hw * pitch
 		var c4 := [cen - ax * hl - ay * hw, cen + ax * hl - ay * hw, cen + ax * hl + ay * hw, cen - ax * hl + ay * hw]
 		var q := []
@@ -779,7 +826,7 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 				if nn.y < 0.0:
 					nn = -nn
 				mb.flat_tri(p0, p1, apex, nn, Vector2(0, 0), Vector2(p0.distance_to(p1), 0), Vector2(p0.distance_to(p1) * 0.5, hw), roof, uv2_roof)
-		elif roof_shape == "hipped":
+		elif roof_shape in ["hipped", "half_hipped", "mansard"]:
 			var r1 := cen - ax * (hl - hw)
 			var r2 := cen + ax * (hl - hw)
 			var R1 := Vector3(r1.x, top, r1.y)
@@ -817,7 +864,7 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 				mb.flat_tri(tri[0], tri[1], tri[2], nn, Vector2(0, eave - hi), Vector2(hw * 2.0, eave - hi), Vector2(hw, eave - hi + rise), wall, uv2_wall)
 		# soffit under the overhang so the eaves don't look paper-thin from below
 		mb.flat_quad(q[0], q[3], q[2], q[1], Vector3.DOWN, wall.darkened(0.35))
-	else:
+	elif roof_surfaces.is_empty():
 		var tris := Geometry2D.triangulate_polygon(r)
 		var parapet := 0.0
 		if kind in ["flats", "industrial", "commercial", "public"]:
@@ -1245,27 +1292,67 @@ static func _fallback_car(kind: String) -> Mesh:
 
 # ============================================================================================ landmarks
 
+## Landmark building footprints reserved by tools/open_world/landmarks.json: [model, ring, ridge height, metadata].
+func landmark_buildings() -> Array:
+	var out: Array = []
+	for bi in map.buildings.size():
+		var b: Array = map.buildings[bi]
+		if b.size() <= 6 or not b[6] is Dictionary or not b[6].has("lm"):
+			continue
+		out.append([String(b[6].lm), map.bld_rings[bi], float(b[6].get("lmh", b[1])), b[6]])
+	return out
+
 func build_landmarks() -> void:
 	var group := _group("Landmarks")
 	var brick := StandardMaterial3D.new()
 	brick.vertex_color_use_as_albedo = true
 	brick.roughness = 0.9
+	# Named building landmarks use their actual OSM footprint for centre, orientation and scale.
+	for record in landmark_buildings():
+		var model_name := String(record[0])
+		# Leave the baker's generic building and the established church-spire fallback in place
+		# when the local landmark GLB has not been imported.
+		if not models.has(model_name):
+			continue
+		var ring: PackedVector2Array = record[1]
+		var rect := min_rect(ring)
+		if rect.is_empty():
+			continue
+		var mesh_xf: Array = models[model_name]
+		var centre: Vector2 = rect[0]
+		var axis: Vector2 = rect[1]
+		var long_half := float(rect[2])
+		var short_half := float(rect[3])
+		var long_is_z := model_name != "DworzecBrzeszcze"
+		var angle := atan2(axis.x, axis.y) if long_is_z else atan2(-axis.y, axis.x)
+		var sx := clampf((long_half if not long_is_z else short_half) * 2.0 / (34.0 if not long_is_z else 20.0 if model_name == "KosciolUrbana" else 16.8), 0.65, 1.5)
+		var sz := clampf((short_half if not long_is_z else long_half) * 2.0 / (14.0 if not long_is_z else 42.1 if model_name == "KosciolUrbana" else 37.0), 0.65, 1.5)
+		var h_model := 39.0 if model_name == "KosciolUrbana" else 23.5 if model_name == "KosciolMarcina" else 10.0
+		var h_target := float(record[2])
+		if model_name == "DworzecBrzeszcze" and h_target < 7.0:
+			h_target = 10.0
+		var sy := clampf(h_target / h_model, 0.7, 1.35)
+		var inst := _add_mesh(group, mesh_xf[0], null, model_name)
+		inst.transform = Transform3D(Basis(Vector3.UP, angle).scaled(Vector3(sx, sy, sz)),
+			Vector3(centre.x, map.ground(centre.x, centre.y), centre.y)) * (mesh_xf[1] as Transform3D)
 	for pl in map.places:
 		var p := Vector2(pl.x, pl.y)
 		var g := map.ground(p.x, p.y)
 		match String(pl.k):
 			"mineshaft":
-				var mesh_xf := _model("Headframe", _fallback_headframe)
+				var shaft_name := String(pl.name)
+				var model_name := "AndrzejV" if shaft_name.contains("V") and not shaft_name.contains("VIII") else "AndrzejI" if shaft_name.ends_with(" I") else "AndrzejII" if shaft_name.ends_with(" II") else "Headframe"
+				var mesh_xf := _model(model_name, _fallback_headframe)
 				var near := map.nearest_road(p, 200.0)
 				var face := 0.0
 				if not near.is_empty():
 					var d: Vector2 = (near.pos as Vector2) - p
 					face = atan2(-d.x, -d.y)
 				var inst := _add_mesh(group, mesh_xf[0], null, String(pl.name))
-				# the model's shaft stands HEADFRAME_SHAFT in front of its origin (the winding house is behind)
-				var shaft := Transform3D(Basis(), Vector3(0, 0, HEADFRAME_SHAFT if models.has("Headframe") else 0.0))
+				# Legacy town.glb headframe model places its shaft forward of the origin.
+				var shaft := Transform3D(Basis(), Vector3(0, 0, HEADFRAME_SHAFT if model_name == "Headframe" and models.has("Headframe") else 0.0))
 				inst.transform = Transform3D(Basis(Vector3.UP, face), Vector3(p.x, g, p.y)) * shaft * (mesh_xf[1] as Transform3D)
-				map.add_post(p, 6.0)
+				if model_name == "Headframe": map.add_post(p, 6.0)
 			"chimney":
 				var h := float(pl.get("h", 45.0))
 				var mb := MeshBatch.new(false, true)
@@ -1279,10 +1366,12 @@ func build_landmarks() -> void:
 				_cylinder(mb, Vector3(p.x, g + 22.0, p.y), 6.0, 6.5, 8.0, 16, Color(0.8, 0.78, 0.72))
 				_add_mesh(group, mb.commit(), brick, "WaterTower")
 				map.add_post(p, 2.4)
-	# a spire on each named church, at the end of the nave nearest the street
+	# Keep the old spire fallback for unlisted churches; detailed listed churches are placed above.
 	for bi in map.buildings.size():
 		var b: Array = map.buildings[bi]
 		if String(b[0]) != "church" or map.bld_rings[bi].size() < 4:
+			continue
+		if b.size() > 6 and b[6] is Dictionary and b[6].has("lm") and models.has(String(b[6].lm)):
 			continue
 		var ring := map.bld_rings[bi]
 		var rect := min_rect(ring)

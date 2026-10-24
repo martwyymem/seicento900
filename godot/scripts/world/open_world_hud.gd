@@ -8,10 +8,20 @@ signal pause_action(action: String)
 signal map_target(index: int)
 
 const MINIMAP_SHADER := preload("res://shaders/minimap.gdshader")
-const ORANGE := Color("#ff7a1a")
-const PURPLE := Color("#8b5cf6")
-const GOLD := Color("#ffd166")
-const INK := Color("#0c0a14")
+## Colours from the live UI skin (CmrStyle, Options / F1): the accent, the route, the reward highlight and
+## the dark plate under cards and banners.
+static var ORANGE: Color:
+	get: return CmrStyle.ORANGE
+static var PURPLE: Color:
+	get: return CmrStyle.VIOLET
+static var GOLD: Color:
+	get: return CmrStyle.ORANGE_SOFT
+static var INK: Color:
+	get: return CmrStyle.INK
+const EDGE := 30.0 ## margin from the canvas edge
+const MINIMAP_S := 250.0
+const BANNERS_W := 500.0
+const CARD_W := 470.0
 
 var map: TownMap
 var map_tex: Texture2D
@@ -54,6 +64,7 @@ var loading: ColorRect
 var loading_label: Label
 var loading_bar: ProgressBar
 var help_label: Label
+var stats_box: VBoxContainer
 var _street := ""
 var _street_t := 0.0
 var _area_t := 0.0
@@ -93,8 +104,8 @@ func _build() -> void:
 	minimap.anchor_top = 1.0
 	minimap.anchor_bottom = 1.0
 	minimap.offset_left = 28
-	minimap.offset_right = 28 + 250
-	minimap.offset_top = -28 - 250
+	minimap.offset_right = 28 + MINIMAP_S
+	minimap.offset_top = -28 - MINIMAP_S
 	minimap.offset_bottom = -28
 	minimap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(minimap)
@@ -118,6 +129,7 @@ func _build() -> void:
 	add_child(speedo)
 	# stats, top left
 	var stats := VBoxContainer.new()
+	stats_box = stats
 	stats.position = Vector2(30, 24)
 	stats.add_theme_constant_override("separation", 0)
 	add_child(stats)
@@ -145,10 +157,11 @@ func _build() -> void:
 	chain_title = _label("", 18, Color.WHITE, 800)
 	chain_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	chain_box.add_child(chain_title)
-	# discovery and result banners, left
+	# discovery and result banners, left, between the stats and the satnav (_trim_banners keeps them there)
 	banners = VBoxContainer.new()
-	banners.position = Vector2(30, 190)
-	banners.custom_minimum_size = Vector2(520, 0)
+	banners.position = Vector2(EDGE, 190)
+	banners.custom_minimum_size = Vector2(BANNERS_W, 0)
+	banners.size = Vector2(BANNERS_W, 0)
 	banners.add_theme_constant_override("separation", 8)
 	banners.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(banners)
@@ -178,8 +191,8 @@ func _build() -> void:
 	card.add_theme_stylebox_override("panel", _card_box())
 	card.anchor_left = 1.0
 	card.anchor_right = 1.0
-	card.offset_left = -500
-	card.offset_right = -30
+	card.offset_left = -EDGE - CARD_W
+	card.offset_right = -EDGE
 	card.offset_top = 150
 	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(card)
@@ -190,15 +203,19 @@ func _build() -> void:
 	col.add_child(card_sub)
 	card_title = _label("", 28, Color.WHITE, 900)
 	card_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	card_title.max_lines_visible = 2 # the card stays clear of the speedometer under it
+	card_title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	col.add_child(card_title)
 	card_body = _label("", 15, Color(1, 1, 1, 0.88), 500)
 	card_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	card_body.max_lines_visible = 6
+	card_body.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	col.add_child(card_body)
 	card_hint = _label("", 18, GOLD, 900)
 	col.add_child(card_hint)
 	card.hide()
 	# controls reminder, faint, bottom centre
-	help_label = _label("W/S drive · A/D steer · R reset · M map · G route to next event · C camera · Esc menu", 12, Color(1, 1, 1, 0.5), 500)
+	help_label = _label("W/S drive · A/D steer · R reset · M map · G route to next event · C camera · Esc menu", 12, Color(1, 1, 1, 0.72), 500)
 	help_label.anchor_left = 0.5
 	help_label.anchor_right = 0.5
 	help_label.anchor_top = 1.0
@@ -209,13 +226,14 @@ func _build() -> void:
 	help_label.offset_bottom = -10
 	help_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	add_child(help_label)
+	resized.connect(_layout)
 	_build_big_map()
 	_build_pause()
 	_build_loading()
 
 func _card_box() -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.05, 0.03, 0.1, 0.86)
+	sb.bg_color = Color(CmrStyle.PLATE, 0.88)
 	sb.border_color = ORANGE
 	sb.border_width_left = 6
 	sb.content_margin_left = 22
@@ -273,7 +291,7 @@ func _build_pause() -> void:
 func _build_loading() -> void:
 	loading = ColorRect.new()
 	loading.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	loading.color = Color(0.05, 0.03, 0.09, 1.0)
+	loading.color = CmrStyle.TINT_HOME
 	add_child(loading)
 	var col := VBoxContainer.new()
 	col.anchor_left = 0.5
@@ -337,6 +355,7 @@ func update_drive(kmh: float, g: int, r: float, r_max: float, pos: Vector2, head
 	if _area_t > 0.0:
 		_area_t -= dt
 		area_label.modulate.a = clampf(minf(_area_t, 3.2 - _area_t) * 2.0, 0.0, 1.0)
+	_fit_card()
 
 func set_stats(fans: int, roads_found: int, roads_total: int, hour: float) -> void:
 	fans_label.text = "%s FANS" % _thousands(fans)
@@ -358,18 +377,82 @@ func set_street(street: String) -> void:
 	_street = street
 	street_label.text = street.to_upper()
 	_street_t = 3.0
+	_layout()
 
 func show_area(name: String) -> void:
 	area_label.text = name.to_upper()
 	_area_t = 3.2
+	_layout()
+
+## Keeps the free-floating labels inside the gaps between the panels at any canvas size (interface size,
+## aspect ratio): the district name between the banners and the event card, the street and key help between
+## the satnav and the speedometer. A label too long for its gap gets a smaller size, then "…".
+func _layout() -> void:
+	var W := size.x
+	if W < 1.0:
+		return
+	var H := size.y
+	var cx := W * 0.5
+	var low := minf(cx - (28.0 + MINIMAP_S + 16.0), (W - 300.0 - 16.0) - cx) # satnav left, speedometer right
+	_fit_label(street_label, low, 24, 16)
+	_fit_label(help_label, low, 12, 10)
+	# the key help on the bottom edge, the street name just above it
+	var help_h := _line_h(help_label)
+	help_label.offset_bottom = -10.0
+	help_label.offset_top = -10.0 - help_h
+	street_label.offset_bottom = help_label.offset_top - 4.0
+	street_label.offset_top = street_label.offset_bottom - _line_h(street_label)
+	var right := W - EDGE - CARD_W - 12.0 if card.visible else W - EDGE
+	var top := minf(cx - (EDGE + BANNERS_W + 12.0), right - cx)
+	_fit_label(area_label, top, 46, 24)
+	# the skill chain between the stats and the right edge
+	var stats_w := stats_box.get_combined_minimum_size().x if is_instance_valid(stats_box) else 300.0
+	var chain_half := clampf(cx - (EDGE + stats_w + 16.0), 160.0, 300.0)
+	chain_box.offset_left = -chain_half
+	chain_box.offset_right = chain_half
+	_fit_label(chain_title, chain_half, 18, 13)
+	_fit_label(chain_points, chain_half, 40, 26)
+	if H > 0.0:
+		_fit_card()
+
+func _line_h(l: Label) -> float:
+	return ceilf(l.get_theme_font("font").get_height(l.get_theme_font_size("font_size")))
+
+## The event card stops above the speedometer: its description loses lines (ending in "…") until it does.
+## (Its size follows a text change a frame later, so this also runs from update_drive.)
+func _fit_card() -> void:
+	if not card.visible or card_body.max_lines_visible <= 2:
+		return
+	var limit := size.y - 230.0 - 12.0
+	var over := card.position.y + card.size.y - limit
+	if over > 0.5:
+		var lh := card_body.get_line_height() + card_body.get_theme_constant("line_spacing")
+		card_body.max_lines_visible = maxi(2, card_body.max_lines_visible - ceili(over / maxf(1.0, lh)))
+
+## Centres l in a band half wide and shrinks its font (down to lo) until the text fits.
+func _fit_label(l: Label, half: float, hi: int, lo: int) -> void:
+	half = maxf(80.0, half)
+	l.offset_left = -half
+	l.offset_right = half
+	l.clip_text = true
+	l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	var f := l.get_theme_font("font")
+	var fs := hi
+	while fs > lo and f.get_string_size(l.text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x + l.get_theme_constant("outline_size") > half * 2.0:
+		fs -= 2
+	l.add_theme_font_size_override("font_size", fs)
+	l.add_theme_constant_override("outline_size", maxi(4, fs / 6))
 
 func set_chain(points: int, label: String) -> void:
 	if points <= 0:
 		chain_points.text = ""
 		chain_title.text = ""
 		return
+	var was := chain_title.text
 	chain_points.text = _thousands(points)
 	chain_title.text = label
+	if label != was:
+		_layout()
 
 func notify(title: String, sub: String, color := ORANGE) -> void:
 	var panel := PanelContainer.new()
@@ -380,7 +463,9 @@ func notify(title: String, sub: String, color := ORANGE) -> void:
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 2)
 	panel.add_child(col)
-	col.add_child(_label(title, 22, Color.WHITE, 900))
+	var head := _label(title, 22, Color.WHITE, 900)
+	head.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART # a long name wraps inside the banner column
+	col.add_child(head)
 	if sub != "":
 		var l := _label(sub, 14, color.lightened(0.35), 700)
 		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -390,6 +475,10 @@ func notify(title: String, sub: String, color := ORANGE) -> void:
 		var old := banners.get_child(0)
 		banners.remove_child(old)
 		old.queue_free()
+	# measured once the new banner is laid out (long lines wrap): a frame on, through a one-shot hook that goes
+	# away with the HUD
+	if is_inside_tree() and not get_tree().process_frame.is_connected(_trim_banners):
+		get_tree().process_frame.connect(_trim_banners, CONNECT_ONE_SHOT)
 	panel.modulate.a = 0.0
 	var tw := panel.create_tween()
 	tw.tween_property(panel, "modulate:a", 1.0, 0.25)
@@ -397,8 +486,33 @@ func notify(title: String, sub: String, color := ORANGE) -> void:
 	tw.tween_property(panel, "modulate:a", 0.0, 0.6)
 	tw.tween_callback(panel.queue_free)
 
+## Drops the oldest banners while the stack would run down into the satnav (long lines wrap, so it is
+## measured once laid out).
+func _trim_banners() -> void:
+	var room := size.y - 28.0 - MINIMAP_S - 16.0 - banners.position.y
+	while banners.get_child_count() > 1 and banners.get_combined_minimum_size().y > room:
+		var old := banners.get_child(0)
+		banners.remove_child(old)
+		old.queue_free()
+
+## CmrStyle.restyle() calls this on a skin change: the card and banner plates follow the new palette.
+func _skin_changed() -> void:
+	for p: PanelContainer in [card, pause_panel]:
+		var sb := p.get_theme_stylebox("panel") as StyleBoxFlat
+		if sb:
+			sb.bg_color = Color(CmrStyle.PLATE, 0.88)
+	for b in banners.get_children():
+		var sb := (b as Control).get_theme_stylebox("panel") as StyleBoxFlat
+		if sb:
+			sb.bg_color = Color(CmrStyle.PLATE, 0.88)
+	loading.color = CmrStyle.TINT_HOME
+	overlay.queue_redraw()
+	speedo.queue_redraw()
+	big_overlay.queue_redraw()
+
 func show_event(sub: String, title: String, body: String, hint: String, color: Color) -> void:
 	card_sub.text = sub
+	card_body.max_lines_visible = 6
 	card_title.text = title
 	card_body.text = body
 	card_hint.text = hint
@@ -406,9 +520,11 @@ func show_event(sub: String, title: String, body: String, hint: String, color: C
 	if sb:
 		sb.border_color = color
 	card.show()
+	_layout()
 
 func hide_event() -> void:
 	card.hide()
+	_layout()
 
 func set_route(points: PackedVector2Array) -> void:
 	route = points
@@ -466,7 +582,7 @@ func _draw_minimap_overlay() -> void:
 			elif not pts.is_empty():
 				break
 		if pts.size() >= 2:
-			overlay.draw_polyline(pts, Color(0.1, 0.05, 0.2, 0.7), 7.0, true)
+			overlay.draw_polyline(pts, Color(CmrStyle.PLATE, 0.7), 7.0, true)
 			overlay.draw_polyline(pts, PURPLE.lightened(0.25), 4.0, true)
 	for m in markers:
 		var q := _mini_xy(m.pos, radius, sz)
@@ -507,7 +623,7 @@ func _draw_big_overlay() -> void:
 		for p in map.boundary:
 			b.append(_big_xy(p))
 		b.append(b[0])
-		big_overlay.draw_polyline(b, Color(1.0, 0.5, 0.2, 0.55), 2.0, true)
+		big_overlay.draw_polyline(b, Color(ORANGE, 0.55), 2.0, true)
 	if route.size() >= 2:
 		var pts := PackedVector2Array()
 		for p in route:
@@ -531,7 +647,7 @@ func _draw_big_overlay() -> void:
 	big_overlay.draw_colored_polygon(arrow, Color.WHITE)
 	var title := "BRZESZCZE · MAP"
 	big_overlay.draw_string(CmrStyle.font(900), Vector2(40, 60), title, HORIZONTAL_ALIGNMENT_LEFT, -1, 34, Color.WHITE)
-	var hint := "◂ ▸ pick an event · Enter set route · M / Esc close"
+	var hint := "← → pick an event · Enter set route · M / Esc close"
 	big_overlay.draw_string(CmrStyle.font(600), Vector2(40, 92), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 1, 1, 0.75))
 	if map_sel >= 0 and map_sel < markers.size():
 		big_overlay.draw_string(CmrStyle.font(800), Vector2(40, big_overlay.size.y - 40), String(markers[map_sel].get("info", "")),
@@ -546,7 +662,7 @@ func _draw_speedo() -> void:
 	speedo.draw_arc(c, r, start, start + sweep, 64, Color(0, 0, 0, 0.45), 14.0, true)
 	var frac := clampf(rpm / maxf(rpm_max, 1.0), 0.0, 1.0)
 	var red := frac > 0.88
-	speedo.draw_arc(c, r, start, start + sweep * frac, 64, Color("#ff3b3b") if red else ORANGE, 10.0, true)
+	speedo.draw_arc(c, r, start, start + sweep * frac, 64, CmrStyle.RED if red else ORANGE, 10.0, true)
 	for k in 8:
 		var a := start + sweep * k / 7.0
 		speedo.draw_line(c + Vector2(cos(a), sin(a)) * (r - 16), c + Vector2(cos(a), sin(a)) * (r - 6), Color(1, 1, 1, 0.6), 2.0)

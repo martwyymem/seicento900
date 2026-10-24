@@ -4,8 +4,11 @@ extends Control
 
 var INK: Color:
 	get: return CmrStyle.INK
-const FILL := Color("#ead3bf")
-const SHADE := Color("#dcc0aa")
+## the sketch's fills, a shade under the panel's paper (cream in CMR, the skin's paper elsewhere)
+var FILL: Color:
+	get: return CmrStyle.PAPER.darkened(0.05)
+var SHADE: Color:
+	get: return CmrStyle.PAPER.darkened(0.11)
 const W := 2.6 ## line width
 
 var part := "Body":

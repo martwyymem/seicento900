@@ -5,3 +5,6 @@ tools/osm_env/
 tools/.tiles/
 # Windows export (godot/export_presets.cfg); the exe goes to GitHub Releases
 build/
+
+# GUGiK raw downloads (tools/gugik_buildings.py); the compact extract next to them is committed
+tools/open_world/cache/gugik/

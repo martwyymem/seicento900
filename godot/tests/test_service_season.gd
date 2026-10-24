@@ -12,7 +12,9 @@ func run() -> Array:
 	var errors: Array[String] = []
 	_check_symptoms(errors)
 	_check_race_effects(errors)
-	var saves := _backup(["championship.json", "campaign.json"])
+	var saves := _backup(["championship.json", "campaign.json", "race_settings.cfg"])
+	# start the menus from defaults: a race picked by hand or by a QA probe must not steer the checks below
+	DirAccess.remove_absolute(SaveData.path("race_settings.cfg"))
 	var game = load("res://ui/game.tscn").instantiate()
 	(Engine.get_main_loop() as SceneTree).root.add_child(game)
 	_check_season(errors, game)

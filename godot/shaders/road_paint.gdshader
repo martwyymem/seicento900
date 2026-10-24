@@ -18,8 +18,8 @@ void fragment() {
 	float dirt = texture(grain, vec2(across * 0.5, s * 0.06) + 0.45).r;
 	vec3 col = paint_color * (0.9 + 0.12 * fine) * mix(1.0, 0.86, smoothstep(0.5, 0.75, dirt));
 	// town paint: worn down to the tarmac in patches and along the wheel scuffs
-	float wear = smoothstep(0.62, 0.3, texture(grain, vec2(across * 2.0, s * 0.35) + 0.7).r) * street;
-	col = mix(col, asphalt_color * (0.9 + 0.2 * fine), wear * 0.75);
+	float wear = smoothstep(0.6, 0.38, texture(grain, vec2(across * 0.6, s * 0.07) + 0.7).r) * street;
+	col = mix(col, asphalt_color * (0.9 + 0.2 * fine), wear * 0.6);
 	col *= mix(1.0, 0.82, wet);
 	if (snow > 0.01) {
 		col = mix(col, vec3(0.92, 0.94, 0.98), snow * 0.85);

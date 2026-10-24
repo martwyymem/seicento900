@@ -32,7 +32,7 @@ func _draw() -> void:
 			_draw_cloud(Rect2(3.0, 5.0, size.x - 6.0, size.y * 0.50))
 			_draw_rain(true)
 		"storm":
-			_draw_cloud(Rect2(3.0, 4.0, size.x - 6.0, size.y * 0.49), Color("#b7aac9"))
+			_draw_cloud(Rect2(3.0, 4.0, size.x - 6.0, size.y * 0.49), CmrStyle.MUTED.darkened(0.15))
 			var bolt := PackedVector2Array([Vector2(27, 29), Vector2(20, 39), Vector2(25, 39), Vector2(21, 49), Vector2(33, 35), Vector2(27, 35)])
 			draw_colored_polygon(bolt, SUN)
 			draw_polyline(bolt + PackedVector2Array([bolt[0]]), INK, 1.5, true)

@@ -23,11 +23,21 @@ var PURPLE: Color:
 	get: return CmrStyle.PLUM
 var BLUE: Color:
 	get: return CmrStyle.VIOLET
-# Colours: shorthands for the CmrStyle palette plus a few HUD-only tints
+# Colours: shorthands for the CmrStyle palette (they follow the skin picked in Options / F1)
 const METER_BG := Color(0, 0, 0, 0.35)
-const CHIP_BG := Color(0.13, 0.08, 0.2, 0.85)
-const BAR_HI := Color(0.97, 0.95, 1.0, 0.9) ## opaque end of the CMR gradient bars
-const BAR_LO := Color(0.55, 0.36, 0.85, 0.35) ## faded end, violet where CMR has blue
+var CHIP_BG: Color:
+	get: return _plate(0.85)
+var BAR_HI: Color: ## opaque end of the CMR gradient bars
+	get: return Color(CmrStyle.TEXT, 0.9)
+var BAR_LO: Color: ## faded end, violet where CMR has blue (the skin's accent elsewhere)
+	get: return Color(CmrStyle.BAR_FADE, 0.35)
+
+## The skin's dark HUD plate at alpha a (dark purple in CMR), and a deeper shade of it for outlines.
+static func _plate(a: float) -> Color:
+	return Color(CmrStyle.PLATE, a)
+
+static func _shade(a: float) -> Color:
+	return Color(CmrStyle.PLATE.darkened(0.4), a)
 # Layout, in pixels on the 1600×900 design canvas
 const REFRESH := 0.12 ## s between redraws of the text panels (about 8 Hz, like the reference)
 const ROW_H := 21.0 ## height of one timing-tower row
@@ -77,6 +87,14 @@ var _overtake_pos := 0
 var _overtake_up := true
 var _overtake_control: Control
 var _help_full := false
+var statusbar: Control ## bottom centre, above the key help: AUTOPILOT, or the co-driver's time warp
+var _status_text := ""
+var _flag := {} ## race control's board for the player this frame (empty: none)
+var _split_beside := true ## the split sits left of the clock (false: no room there, it joins the centre stack)
+var _feed_h := 0.0 ## height the event feed's entries take
+var _reserved: Array[Rect2] = [] ## HUD areas name tags keep out of (see _layout)
+var _help_key := ""
+var _stack_bottom := 0.0 ## where the centre column ended last layout
 var _last_lit := -1
 var _wrong_way_beep_t := 0.0
 var _finished_beep := false
@@ -132,7 +150,7 @@ func _ready() -> void:
 	_font = CmrStyle.font(400)
 	_bold = CmrStyle.font(600)
 	_digits = CmrStyle.digits()
-	_panel_style = CmrStyle.panel(Color(0.13, 0.08, 0.2, 0.8), Color(CmrStyle.VIOLET, 0.5), 0)
+	_panel_style = CmrStyle.panel(_plate(0.8), Color(CmrStyle.VIOLET, 0.5), 0)
 	_lights_style = StyleBoxFlat.new()
 	_lights_style.bg_color = Color("#0b0b0d")
 	_lights_style.border_color = Color("#222222")
@@ -172,21 +190,20 @@ func _ready() -> void:
 
 	_overtake_control = _canvas(_draw_overtake)
 	_place(_overtake_control, 0.5, 0.0, 0.5, 0.0, -170, 192, 170, 234)
+	statusbar = _canvas(_draw_status)
+	_place(statusbar, 0.5, 1.0, 0.5, 1.0, -100, -80, 100, -56)
 
-	var banner_box := VBoxContainer.new()
-	banner_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_place(banner_box, 0.5, 0.3, 0.5, 0.3, -400, -40, 400, 60)
-	banner_box.alignment = BoxContainer.ALIGNMENT_BEGIN
-	add_child(banner_box)
+	# the lights, flag board, split, overtake call, delta bar and banner share one column under the pace
+	# notes: _layout() stacks whichever are showing so no two ever cover each other
 	banner = _banner_label(46)
-	banner_box.add_child(banner)
+	add_child(banner)
 	banner_small = _banner_label(18)
 	banner_small.add_theme_color_override("font_color", CmrStyle.MUTED)
-	banner_box.add_child(banner_small)
+	add_child(banner_small)
 
 	help = PanelContainer.new()
 	help.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var help_style := CmrStyle.box(Color(0.13, 0.08, 0.2, 0.62), Color.TRANSPARENT, 18, 6)
+	var help_style := CmrStyle.box(_plate(0.62), Color.TRANSPARENT, 18, 6)
 	help.add_theme_stylebox_override("panel", help_style)
 	var help_label := Label.new()
 	_help_label = help_label
@@ -194,7 +211,7 @@ func _ready() -> void:
 	help_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	help_label.add_theme_font_override("font", _font)
 	help_label.add_theme_font_size_override("font_size", 12)
-	help_label.add_theme_color_override("font_color", Color("#cfe0f5"))
+	help_label.add_theme_color_override("font_color", CmrStyle.MUTED)
 	help.add_child(help_label)
 	help.anchor_left = 0.5
 	help.anchor_right = 0.5
@@ -204,6 +221,7 @@ func _ready() -> void:
 	help.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	help.offset_bottom = -14
 	add_child(help)
+	_fit_help()
 
 ## Hand the HUD a new race.
 func start(race_: Race, world_: Node3D, audio_: RaceAudio) -> void:
@@ -242,6 +260,10 @@ func start(race_: Race, world_: Node3D, audio_: RaceAudio) -> void:
 	_help_full = false
 	if _help_label:
 		_help_label.text = QUICK_HELP
+	_status_text = ""
+	_flag = {}
+	_feed_h = 0.0
+	_help_key = ""
 	show()
 	update(0.0)
 
@@ -256,6 +278,7 @@ func toggle_help() -> void:
 	else:
 		help.visible = false
 		_help_full = false
+	_fit_help()
 
 func _draw_overtake() -> void:
 	if _overtake_timer <= 0.0:
@@ -263,12 +286,22 @@ func _draw_overtake() -> void:
 	var W := _overtake_control.size.x
 	var H := _overtake_control.size.y
 	var alpha := clampf(_overtake_timer * 2.0, 0.0, 1.0)
-	var bg := Color("#10b981", 0.92 * alpha) if _overtake_up else Color("#f59e0b", 0.85 * alpha)
+	var bg := Color(CmrStyle.GREEN.darkened(0.45), 0.92 * alpha) if _overtake_up else Color(CmrStyle.AMBER, 0.88 * alpha)
+	var ink := Color(1, 1, 1, alpha) if _overtake_up else Color(CmrStyle.INK, alpha)
 	var r := Rect2(0, 0, W, H)
 	_overtake_control.draw_rect(r, bg)
 	_overtake_control.draw_rect(r, Color(1, 1, 1, 0.9 * alpha), false, 2.0)
 	var txt := ("▲ OVERTAKE! P%d" % _overtake_pos) if _overtake_up else ("▼ P%d" % _overtake_pos)
-	_overtake_control.draw_string(_bold, Vector2(0, 27), txt, HORIZONTAL_ALIGNMENT_CENTER, W, 18, Color(1, 1, 1, alpha))
+	_overtake_control.draw_string(_bold, Vector2(0, 27), txt, HORIZONTAL_ALIGNMENT_CENTER, W, 18, ink)
+
+## Whether a change of place may be called out: never under a safety car, a red flag or yellows (nobody may
+## pass there, places only change through the pits or a car stopping), nor while a place must be given back.
+func _overtake_allowed() -> bool:
+	if not race.rc:
+		return true
+	if race.rc.flag != "green":
+		return false
+	return _flag.is_empty() or str(_flag.get("title", "")) == "GREEN FLAG"
 
 ## Call once per frame while a race is on screen.
 func update(dt: float) -> void:
@@ -298,8 +331,11 @@ func update(dt: float) -> void:
 	if _overtake_timer > 0.0:
 		_overtake_timer -= dt
 		_overtake_control.queue_redraw()
+	_flag = race.rc.player_flag() if race.rc and race.phase == "racing" else {}
+	if not _overtake_allowed():
+		_overtake_timer = 0.0 # a call already up goes as the flag comes out
 	var cur_pos: int = race.player.pos if (race and race.player) else -1
-	if race and race.phase == "racing" and _prev_player_pos > 0 and cur_pos > 0 and cur_pos != _prev_player_pos:
+	if race and race.phase == "racing" and _prev_player_pos > 0 and cur_pos > 0 and cur_pos != _prev_player_pos and _overtake_allowed():
 		if cur_pos < _prev_player_pos:
 			_overtake_timer = 2.8
 			_overtake_pos = cur_pos
@@ -343,6 +379,8 @@ func update(dt: float) -> void:
 				audio.beep(1046.5, 3)
 			elif plyr.pos <= 3:
 				audio.beep(880.0, 2)
+	statusbar.queue_redraw()
+	_layout()
 	tags.queue_redraw()
 	_refresh_t -= dt
 	if _refresh_t > 0.0:
@@ -350,7 +388,7 @@ func update(dt: float) -> void:
 	_refresh_t = REFRESH
 	if race.s.qualifying:
 		_sheet = Qualifying.sheet(race)
-	tower.size.y = (_sheet.size() if race.s.qualifying else race.order.size()) * (ROW_H + 2.0)
+	tower.size.y = mini(_sheet.size() if race.s.qualifying else race.order.size(), _tower_rows()) * (ROW_H + 2.0)
 	var pw_h := _pitwall_height()
 	pitwall.offset_top = -14.0 - pw_h
 	tower.queue_redraw()
@@ -362,6 +400,220 @@ func update(dt: float) -> void:
 	pitwall.queue_redraw()
 	_update_banner()
 	_update_event_sounds()
+
+# ---------------- layout ----------------
+const EDGE := 14.0 ## margin from the canvas edge
+const STACK_TOP := 150.0 ## the centre column starts under the pace notes (14..146)
+const STACK_GAP := 6.0
+const PACENOTE_HALF := 150.0
+const SPLIT_W := 238.0
+const LIGHTS_W := 296.0 ## five lamps on their board (see _draw_lights)
+const HELP_FONT := 12
+const STATUS_FONT := 13
+
+## Places everything that can share screen space, from the canvas size and what is showing: the centre
+## column (start lights, flag board, split, overtake call, delta bar, banner) stacks top-down in the band
+## between the left panel and the clock; the event feed stops above the dash; the key help wraps between
+## the pit wall and the dash with the status chip above it. Name tags keep out of the areas noted in
+## _reserved. Called every frame (cheap: a few rects).
+func _layout() -> void:
+	var W := size.x
+	var H := size.y
+	if W < 1.0 or H < 1.0:
+		return
+	_reserved.clear()
+	var cx := W * 0.5
+	var left_w := MODE_W if modepanel.visible else (TOWER_W if tower.visible else 0.0)
+	var band := _band_half()
+	# bottom centre first (the column above must stop over it): the key help, the status chip above it
+	_fit_help()
+	var floor_y := H - EDGE
+	if help.visible:
+		var hr := help_rect()
+		_reserved.append(hr)
+		floor_y = hr.position.y
+	if _status_text != "":
+		var sw := _bold.get_string_size(_status_text, HORIZONTAL_ALIGNMENT_LEFT, -1, STATUS_FONT).x + 36.0
+		_place(statusbar, 0.5, 1.0, 0.5, 1.0, -sw * 0.5, floor_y - H - 8.0 - 26.0, sw * 0.5, floor_y - H - 8.0)
+		_reserved.append(Rect2(cx - sw * 0.5, floor_y - 8.0 - 26.0, sw, 26.0))
+		floor_y -= 8.0 + 26.0
+	floor_y -= 8.0
+	# the split goes left of the clock, as in CMR, when the pace notes leave it room; else into the column
+	_split_beside = W - EDGE - CLOCK_W - 20.0 - SPLIT_W - 12.0 >= cx + PACENOTE_HALF + 12.0
+	if _split_beside:
+		_place(splitbox, 1.0, 0.0, 1.0, 0.0, -EDGE - CLOCK_W - 20 - 250, 32, -EDGE - CLOCK_W - 20 - 12, 90)
+		if _split_showing():
+			_reserved.append(Rect2(W - EDGE - CLOCK_W - 20 - 250, 32, SPLIT_W, 44))
+	# the centre column, most important first; whatever would run into the chip or the help is left out
+	var stack: Array = [] ## [control, width, height]
+	if _lights_showing():
+		stack.append([lights, LIGHTS_W, 68.0])
+	if not _flag.is_empty():
+		stack.append([flagbar, minf(420.0, band * 2.0), 54.0])
+	if not _split_beside and _split_showing():
+		stack.append([splitbox, SPLIT_W, 44.0])
+	if _overtake_timer > 0.0:
+		stack.append([_overtake_control, minf(340.0, band * 2.0), 42.0])
+	if _delta_showing():
+		stack.append([deltabar, minf(DELTA_W, band * 2.0), _delta_height()])
+	for b: Label in [banner, banner_small]:
+		if b.text != "":
+			stack.append([b, band * 2.0, _label_height(b, band * 2.0)])
+	var y := STACK_TOP
+	for item in stack:
+		var c: Control = item[0]
+		var w: float = item[1]
+		var h: float = item[2]
+		if y + h > floor_y:
+			c.self_modulate.a = 0.0
+			continue
+		c.self_modulate.a = 1.0
+		_place(c, 0.5, 0.0, 0.5, 0.0, -w * 0.5, y, w * 0.5, y + h)
+		var used_w := w
+		if c is Label:
+			used_w = minf(w, _label_width(c as Label))
+		_reserved.append(Rect2(cx - used_w * 0.5, y, used_w, h))
+		y += h + STACK_GAP
+	_stack_bottom = y - STACK_GAP
+	_reserved.append(Rect2(cx - PACENOTE_HALF, EDGE, PACENOTE_HALF * 2.0, 132.0))
+	# right column: clock, minimap, then the feed down to just above the dash
+	feed.offset_bottom = maxf(feed.offset_top + 30.0, minf(700.0, H - 190.0 - 10.0))
+	_reserved.append(Rect2(W - EDGE - CLOCK_W, EDGE, CLOCK_W, 208.0))
+	_reserved.append(Rect2(minimap.position, minimap.size))
+	if _feed_h > 0.0:
+		_reserved.append(Rect2(feed.position, Vector2(FEED_W, minf(_feed_h, feed.size.y))))
+	_reserved.append(Rect2(dash.position, dash.size))
+	# left column
+	if tower.visible:
+		_reserved.append(Rect2(tower.position, Vector2(TOWER_W, tower.size.y)))
+	if modepanel.visible:
+		_reserved.append(Rect2(modepanel.position, Vector2(left_w, modepanel.size.y)))
+	if pitwall.visible:
+		_reserved.append(Rect2(pitwall.position, pitwall.size))
+
+## Where the key help sits: the rect its offsets ask for, grown to the panel's real rect (a label can need
+## more height than measured, e.g. another skin's face, and the panel then grows upward over what is above).
+func help_rect() -> Rect2:
+	var r := Rect2(size.x * 0.5 + help.offset_left, size.y + help.offset_top, help.offset_right - help.offset_left, help.offset_bottom - help.offset_top)
+	if help.size.y > 0.0:
+		r = r.merge(Rect2(help.position, help.size))
+	return r
+
+## Half the width of the free band down the centre, between the left column (timing tower or stage panel)
+## and the right one (clock, minimap and the event feed, the widest of them), around the canvas centre.
+func _band_half() -> float:
+	var cx := size.x * 0.5
+	var left_w := MODE_W if modepanel.visible else (TOWER_W if tower.visible else 0.0)
+	var left := EDGE + left_w + 12.0
+	var right := size.x - EDGE - maxf(CLOCK_W, FEED_W) - 12.0
+	return maxf(PACENOTE_HALF, minf(cx - left, right - cx))
+
+## The rows the timing tower may show above the pit wall (the rest are cut, the player's row always kept).
+func _tower_rows() -> int:
+	if not pitwall.visible:
+		return 99
+	var room := size.y - EDGE - _pitwall_height() - 10.0 - EDGE
+	return maxi(4, int(floorf(room / (ROW_H + 2.0))))
+
+func _label_height(l: Label, width: float) -> float:
+	var f := l.get_theme_font("font")
+	var fs := l.get_theme_font_size("font_size")
+	var sz := f.get_multiline_string_size(l.text, HORIZONTAL_ALIGNMENT_CENTER, width, fs)
+	var lines := maxi(1, roundi(sz.y / maxf(1.0, f.get_height(fs))))
+	return ceilf(sz.y + 3.0 * (lines - 1) + l.get_theme_constant("outline_size") * 0.5)
+
+func _label_width(l: Label) -> float:
+	var f := l.get_theme_font("font")
+	return f.get_multiline_string_size(l.text, HORIZONTAL_ALIGNMENT_CENTER, -1, l.get_theme_font_size("font_size")).x + l.get_theme_constant("outline_size")
+
+## The key help, centred at the bottom, wrapped to fit between the pit wall and the dash.
+func _fit_help() -> void:
+	if not _help_label or size.x < 1.0:
+		return
+	var W := size.x
+	var key := "%d|%d|%s|%s" % [int(W), int(size.y), pitwall.visible, _help_label.text.hash()]
+	if key == _help_key:
+		return
+	_help_key = key
+	var left := EDGE + (PITWALL_W if pitwall.visible else 0.0) + 12.0
+	var right := W - EDGE - 346.0 - 12.0 # the dash
+	var room := 2.0 * minf(W * 0.5 - left, right - W * 0.5) - 36.0
+	var natural := _font.get_multiline_string_size(_help_label.text, HORIZONTAL_ALIGNMENT_CENTER, -1, HELP_FONT).x
+	var tw := minf(natural, room)
+	if natural > room:
+		_help_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_help_label.custom_minimum_size.x = tw
+	else:
+		_help_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+		_help_label.custom_minimum_size.x = 0.0
+	var th := _font.get_multiline_string_size(_help_label.text, HORIZONTAL_ALIGNMENT_CENTER, tw + 1.0, HELP_FONT).y
+	var lines := maxi(1, roundi(th / maxf(1.0, _font.get_height(HELP_FONT))))
+	var spacing := _help_label.get_theme_constant("line_spacing")
+	th += spacing * (lines - 1)
+	# the label's own measure where it knows better (its lines as shaped, with the line spacing it draws)
+	if natural <= room:
+		var n := _help_label.text.count("\n") + 1
+		th = maxf(th, n * _help_label.get_line_height() + spacing * (n - 1))
+	help.offset_left = -(tw + 36.0) * 0.5
+	help.offset_right = (tw + 36.0) * 0.5
+	help.offset_top = -EDGE - th - 12.0
+	help.offset_bottom = -EDGE
+
+func _lights_showing() -> bool:
+	return race != null and not race.s.qualifying and (race.phase == "countdown" or race.race_time < 1.2)
+
+func _split_showing() -> bool:
+	return race != null and race.s.mode == "race" and not _split_show.is_empty() and race.race_time <= float(_split_show.until) and warp <= 1
+
+## Whether the delta bar has something to show this frame (see _draw_delta_bar).
+func _delta_showing() -> bool:
+	if not race or race.s.mode == "race" or warp > 1:
+		return false
+	var showing := not _mode_split.is_empty() and _clock < float(_mode_split.until)
+	if race.stage:
+		return showing
+	var tt := race.tt
+	if not tt:
+		return false
+	if showing or tt.out_lap():
+		return true
+	var d = tt.live_delta()
+	if d == null and records:
+		d = records.gap()
+	return d != null and race.phase == "racing"
+
+func _delta_height() -> float:
+	var showing := not _mode_split.is_empty() and _clock < float(_mode_split.until)
+	return 50.0 if race.tt and not showing and race.tt.out_lap() else 84.0
+
+## The chip above the key help: AUTOPILOT, or the co-driver driving with the clock sped up.
+func _draw_status() -> void:
+	if _status_text == "" or not race:
+		return
+	var r := Rect2(Vector2.ZERO, statusbar.size)
+	statusbar.draw_rect(r, _plate(0.82))
+	statusbar.draw_rect(Rect2(0, 0, 5, r.size.y), YELLOW)
+	statusbar.draw_string(_bold, Vector2(5, 18), _status_text, HORIZONTAL_ALIGNMENT_CENTER, r.size.x - 5, STATUS_FONT, TEXT)
+
+## CmrStyle.restyle() calls this on a skin change: the plates and outlines built from the palette are rebuilt.
+func _skin_changed() -> void:
+	_panel_style = CmrStyle.panel(_plate(0.8), Color(CmrStyle.VIOLET, 0.5), 0)
+	if help:
+		help.add_theme_stylebox_override("panel", CmrStyle.box(_plate(0.62), Color.TRANSPARENT, 18, 6))
+	if _help_label:
+		_help_label.add_theme_color_override("font_color", CmrStyle.MUTED)
+	for b in [banner, banner_small]:
+		if b:
+			(b as Label).add_theme_color_override("font_outline_color", _shade(0.9))
+	_dash_size = Vector2.ZERO
+	_dash_key = []
+	_note_key = []
+	_map_key = ""
+	_help_key = ""
+	_fitted.clear()
+	for c in get_children():
+		if c is CanvasItem:
+			(c as CanvasItem).queue_redraw()
 
 # ---------------- helpers ----------------
 func _canvas(fn: Callable) -> Control:
@@ -383,10 +635,12 @@ static func _place(c: Control, al: float, at: float, ar: float, ab: float, ol: f
 
 func _banner_label(size: int) -> Label:
 	var l := Label.new()
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART # a long line wraps inside the free band, never under a panel
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_font_override("font", _bold)
-	l.add_theme_color_override("font_outline_color", Color(0.01, 0.05, 0.12, 0.9))
+	l.add_theme_color_override("font_outline_color", _shade(0.9))
 	l.add_theme_constant_override("outline_size", 12 if size > 20 else 6)
 	return l
 
@@ -492,7 +746,7 @@ func _tri_flush(c: Control) -> void:
 func _q(at: Vector2, s: String, size: int, color: Color, font: Font = null, align := HORIZONTAL_ALIGNMENT_LEFT, width := -1.0, outline := false) -> void:
 	var f := font if font else _bold
 	if outline:
-		_queued.append([maxi(2, size / 9), f, at, s, align, width, size, Color(0.08, 0.03, 0.12, 0.85 * color.a)])
+		_queued.append([maxi(2, size / 9), f, at, s, align, width, size, _shade(0.85 * color.a)])
 	_queued.append([0, f, at, s, align, width, size, color])
 
 ## The queued text, outlines first, grouped by font and size so each group's glyphs batch together.
@@ -587,7 +841,7 @@ func _gap_text(car: RaceCar, leader: RaceCar, i: int) -> String:
 
 ## Qualifying: the time sheet instead of the running order, pole on top.
 func _draw_sheet() -> void:
-	for i in _sheet.size():
+	for i in mini(_sheet.size(), _tower_rows()):
 		var r: Dictionary = _sheet[i]
 		var y := i * (ROW_H + 2.0)
 		if r.is_player:
@@ -613,10 +867,20 @@ func _draw_tower() -> void:
 		return
 	var order := race.order
 	var leader: RaceCar = order[0]
+	# the rows that fit above the pit wall: the top of the order, and the player's row last if it's further down
+	var rows: Array[int] = []
+	var cap := _tower_rows()
+	for i in mini(order.size(), cap):
+		rows.append(i)
+	if order.size() > cap:
+		var mine := order.find(race.player)
+		if mine >= cap:
+			rows[-1] = mine
 	# shapes first, then the badges' discs and rings, then all the text (see _tri_quad)
-	for i in order.size():
+	for k in rows.size():
+		var i := rows[k]
 		var c: RaceCar = order[i]
-		var y := i * (ROW_H + 2.0)
+		var y := k * (ROW_H + 2.0)
 		var fade := 0.45 if c.dnf else 1.0
 		if c.is_player:
 			_tri_gbar(Rect2(0, y, TOWER_W, ROW_H), YELLOW, Color(YELLOW, 0.55))
@@ -659,7 +923,7 @@ func _draw_clock() -> void:
 		var r := Rect2(x0 + k * (sw + 3.0), 0, sw, 12)
 		var fill := clampf(frac * segs - k, 0.0, 1.0)
 		# shapes into the triangle list and text queued, drawn together at the end (see _tri_quad)
-		_tri_rect(r, Color(0.13, 0.08, 0.2, 0.55))
+		_tri_rect(r, _plate(0.55))
 		if fill > 0.0:
 			_tri_rect(Rect2(r.position, Vector2(r.size.x * fill, r.size.y)), YELLOW)
 		_tri_frame(r, Color(1, 1, 1, 0.35))
@@ -728,7 +992,7 @@ func _draw_clock() -> void:
 	var sky := "RAIN" if w.rain > 0.05 else ("DAMP" if w.wet > 0.05 else "DRY")
 	var weather_text := "%s %d%% · %s · %s" % [sky, roundi(w.wet * 100.0), w.forecast(maxf(0.0, race.race_time)), clock_text]
 	var tw := minf(W, _text_w(weather_text, 12) + 16.0)
-	_tri_rect(Rect2(x0 + W - tw, y + 1, tw, 17), Color(0.08, 0.03, 0.12, 0.62))
+	_tri_rect(Rect2(x0 + W - tw, y + 1, tw, 17), _shade(0.62))
 	_q(Vector2(x0, y + 14), weather_text, 12, TEXT, _font, HORIZONTAL_ALIGNMENT_RIGHT, W - 8, true)
 	_tri_flush(clock)
 	_q_flush(clock)
@@ -754,9 +1018,10 @@ func _draw_pacenote() -> void:
 	else:
 		caption = race.track.sector_name(race.player.s).to_upper()
 	if caption != "":
+		caption = _fit(caption, 13, pacenote.size.x - 28.0) # a long corner name ends in "…" inside its plate
 		var tw := minf(pacenote.size.x, _text_w(caption, 13, true) + 28.0)
 		var r := Rect2(cx - tw * 0.5, S + 8, tw, 22)
-		_tri_gbar(r, Color(0.03, 0.08, 0.17, 0.8), Color(0.03, 0.08, 0.17, 0.8))
+		_tri_gbar(r, _plate(0.8), _plate(0.8))
 		_q(Vector2(r.position.x, r.position.y + 16), caption, 13, TEXT, _bold, HORIZONTAL_ALIGNMENT_CENTER, tw)
 
 	# Gran Turismo 4 style dynamic corner BRAKE alert
@@ -942,7 +1207,7 @@ func _draw_lights() -> void:
 func _draw_flag() -> void:
 	if not race or not race.rc or race.phase != "racing":
 		return
-	var f: Dictionary = race.rc.player_flag()
+	var f: Dictionary = _flag
 	if f.is_empty():
 		return
 	var W := flagbar.size.x
@@ -951,13 +1216,13 @@ func _draw_flag() -> void:
 	# the safety-car boards flash like the marshals' lights
 	var flash := title.begins_with("SAFETY CAR") or title == "DOUBLE YELLOW"
 	var a := 0.72 + 0.28 * absf(cos(_clock * PI * 1.5)) if flash else 1.0
-	flagbar.draw_rect(Rect2(0, 0, W, 54), Color(0.01, 0.03, 0.08, 0.72))
+	flagbar.draw_rect(Rect2(0, 0, W, 54), _shade(0.72))
 	flagbar.draw_rect(Rect2(0, 0, 62, 54), Color(col, a))
 	if title == "DOUBLE YELLOW":
 		flagbar.draw_rect(Rect2(31, 0, 2, 54), Color(0, 0, 0, 0.5))
 	flagbar.draw_rect(Rect2(62, 0, W - 62, 3), Color(col, a))
-	_text(flagbar, Vector2(74, 25), title, 20, col.lightened(0.1) if col.get_luminance() > 0.3 else TEXT, true)
-	_text(flagbar, Vector2(74, 44), f.sub, 12, TEXT)
+	_text(flagbar, Vector2(74, 25), _fit(title, 20, W - 84), 20, col.lightened(0.1) if col.get_luminance() > 0.3 else TEXT, true)
+	flagbar.draw_string(_font, Vector2(74, 44), f.sub, HORIZONTAL_ALIGNMENT_LEFT, W - 84, 12, TEXT) # clipped to the board
 
 func _update_banner() -> void:
 	var p := race.player
@@ -1017,8 +1282,11 @@ func _update_banner() -> void:
 	elif p.control == "free" and (absf(p.d) > tr.half + 1.2 or p.stuck_t > 0.8) and absf(p.speed) < 3.5:
 		big = "OFF TRACK"
 		small = "Press Backspace or R to reset car to track"
-	elif p.autopilot:
-		small = "CO-DRIVER · TIME ×%d ( , . )" % warp if warp > 1 else "AUTOPILOT (O)"
+	# the autopilot / time warp note has its own chip at the bottom (_draw_status): over the middle of the
+	# screen it covered the name tags of the cars ahead
+	_status_text = ""
+	if p.autopilot and not p.finished and not p.dnf:
+		_status_text = "CO-DRIVER  ·  TIME ×%d  ( , . )" % warp if warp > 1 else "AUTOPILOT  ·  O"
 	if race.s.qualifying and p.lap >= 1 and p.invalid_lap and small == "" and not p.finished:
 		small = "LAP INVALID — you left the track"
 	banner.text = big
@@ -1026,14 +1294,14 @@ func _update_banner() -> void:
 	var is_alert := big in ["WRONG WAY", "OFF TRACK"]
 	var is_victory := big.begins_with("VICTORY")
 	var is_podium := big.begins_with("PODIUM")
-	var col := RED if is_alert else (Color("#f59e0b") if is_victory else (Color("#38bdf8") if is_podium else (YELLOW if box else TEXT)))
+	var col := RED if is_alert else (CmrStyle.AMBER if is_victory else (Color("#38bdf8") if is_podium else (YELLOW if box else TEXT)))
 	banner.add_theme_color_override("font_color", col)
 	if is_alert:
-		banner_small.add_theme_color_override("font_color", Color("#fed7aa"))
+		banner_small.add_theme_color_override("font_color", CmrStyle.ORANGE_SOFT)
 	else:
 		banner_small.add_theme_color_override("font_color", CmrStyle.MUTED)
-	# BOX BOX and alerts blink
-	banner.visible = (not box and not is_alert) or fmod(_clock, 0.7) < 0.42
+	# BOX BOX and alerts blink (by fading, so the stack under the pace notes keeps its place)
+	banner.modulate.a = 1.0 if (not box and not is_alert) or fmod(_clock, 0.7) < 0.42 else 0.0
 
 func _update_event_sounds() -> void:
 	for e in race.events:
@@ -1066,6 +1334,14 @@ func _draw_feed() -> void:
 		first -= 1
 		shown += 1
 	var y := 0.0
+	# newest at the bottom: drop the oldest that would run past the feed's box (it stops above the dash)
+	while first < race.events.size():
+		var total := 0.0
+		for i in range(first, race.events.size()):
+			total += _font.get_multiline_string_size(race.events[i].text, HORIZONTAL_ALIGNMENT_LEFT, FEED_W - 23.0, 13).y + 14.0
+		if total <= feed.size.y + 4.0:
+			break
+		first += 1
 	for i in range(first, race.events.size()):
 		var e: Dictionary = race.events[i]
 		var fade := minf(1.0, (10.0 - (now - e.t)) / 2.0)
@@ -1074,6 +1350,7 @@ func _draw_feed() -> void:
 		feed.draw_rect(Rect2(FEED_W - 5, y, 5, h), Color(FEED_BORDER.get(e.kind, Color("#666666")), fade))
 		feed.draw_multiline_string(_bold, Vector2(10, y + 18), e.text, HORIZONTAL_ALIGNMENT_RIGHT, FEED_W - 23.0, 13, -1, Color(INK, fade))
 		y += h + 4.0
+	_feed_h = y
 
 func _service() -> Variant:
 	var p := race.player
@@ -1254,7 +1531,7 @@ func _build_dash(W: float, H: float) -> void:
 	_dash_points = PackedVector2Array()
 	_dash_colors = PackedColorArray()
 	_dash_indices = PackedInt32Array()
-	var outline := Color(0.08, 0.03, 0.12, 0.5)
+	var outline := _shade(0.5)
 	var corners: Array[PackedVector2Array] = []
 	for i in n:
 		var t0 := float(i) / n
@@ -1295,7 +1572,7 @@ func _draw_dash() -> void:
 
 	# High-contrast backdrop container (CMR / GT4 style)
 	var bg_rect := Rect2(0, 0, W, H)
-	dash.draw_rect(bg_rect, Color(0.08, 0.04, 0.15, 0.78))
+	dash.draw_rect(bg_rect, _plate(0.78))
 	dash.draw_rect(bg_rect, Color(CmrStyle.VIOLET, 0.35), false, 1.5)
 
 	if _dash_size != dash.size:
@@ -1330,8 +1607,8 @@ func _draw_dash() -> void:
 	# Slipstream drafting badge (NFS style)
 	if drafting:
 		var dw := 110.0
-		dash.draw_rect(Rect2(W - dw - 8, 8, dw, 18), Color(0.18, 0.72, 0.95, 0.85))
-		_q(Vector2(W - dw - 8, 22), ">> DRAFTING <<", 10, Color("#0b0c10"), _bold, HORIZONTAL_ALIGNMENT_CENTER, dw, true)
+		dash.draw_rect(Rect2(W - dw - 8, 8, dw, 18), Color(CmrStyle.VIOLET, 0.9))
+		_q(Vector2(W - dw - 8, 22), ">> DRAFTING <<", 10, CmrStyle.INK, _bold, HORIZONTAL_ALIGNMENT_CENTER, dw)
 
 	_q_flush(dash)
 
@@ -1390,7 +1667,7 @@ func _draw_minimap_base() -> void:
 		return
 	_map_key = _minimap_key()
 	var rect := Rect2(Vector2.ZERO, minimap_base.size)
-	minimap_base.draw_rect(rect, Color(0.03, 0.08, 0.17, 0.72))
+	minimap_base.draw_rect(rect, _plate(0.72))
 	minimap_base.draw_rect(Rect2(0, 0, rect.size.x, 2), Color(CmrStyle.VIOLET, 0.7))
 	if _map_track != race.track or _map_size != minimap.size:
 		_build_map()
@@ -1398,7 +1675,7 @@ func _draw_minimap_base() -> void:
 		minimap_base.draw_colored_polygon(w, Color(0.18, 0.45, 0.72, 0.45))
 	for b_poly in _map_buildings:
 		minimap_base.draw_colored_polygon(b_poly, Color(0.42, 0.48, 0.58, 0.22))
-	_tri_strip(_map_points, 7.0, Color(0.01, 0.05, 0.12, 0.8), true)
+	_tri_strip(_map_points, 7.0, _shade(0.8), true)
 	_tri_strip(_map_points, 3.2, Color("#e8f2ff"), true)
 	_tri_strip(_map_start, 3.0, RED)
 	if race.rc:
@@ -1501,11 +1778,20 @@ func _draw_tags() -> void:
 				if r.intersects(other):
 					r.position.y = other.position.y - 18.0
 					moved = true
+		# a tag never goes under (or over) a HUD panel or banner: it is left out while it would
+		var hidden := false
+		for area in _reserved:
+			if r.intersects(area):
+				hidden = true
+				break
 		placed.append(r)
 		entry.append(label)
 		entry.append(r)
+		entry.append(hidden)
 	# draw far to near so the nearer cars' tags end up on top
 	for i in range(shown.size() - 1, -1, -1):
+		if shown[i][5]:
+			continue
 		var car = shown[i][1]
 		var label: String = shown[i][3]
 		var r: Rect2 = shown[i][4]
@@ -1573,7 +1859,7 @@ func _draw_mode_clock() -> void:
 	for k in segs:
 		var r := Rect2(x0 + k * (sw + 3.0), 0, sw, 12)
 		var fill := clampf(frac * segs - k, 0.0, 1.0)
-		_tri_rect(r, Color(0.13, 0.08, 0.2, 0.55))
+		_tri_rect(r, _plate(0.55))
 		if fill > 0.0:
 			_tri_rect(Rect2(r.position, Vector2(r.size.x * fill, r.size.y)), YELLOW)
 		_tri_frame(r, Color(1, 1, 1, 0.35))
@@ -1636,7 +1922,7 @@ func _draw_stage_panel() -> void:
 	var head := "SS%d" % (st.index + 1) if ev else "SPECIAL STAGE"
 	if ev:
 		head += "  ·  %s" % str(ev.def.get("short", ev.def.get("name", "")))
-	_mt(c, Vector2(18, 28), head, 22, TEXT)
+	_mt(c, Vector2(18, 28), _fit(head, 22, W - 30), 22, TEXT)
 	var sname: String = ev.stage_def(st.index).get("name", "") if ev and st.index >= 0 and st.index < ev.stage_count() else race.track.name
 	var surf := " · GRAVEL" if race.s.surface == "gravel" else ""
 	_mt(c, Vector2(18, 54), _fit(sname.to_upper() + surf, 16, W - 30), 16, MUTED)
@@ -1649,7 +1935,10 @@ func _draw_stage_panel() -> void:
 		var lead := st.leader_at(k)
 		if passed:
 			var t: float = st.split_times[k] + (st.penalty() if k == Rally.SPLITS else 0.0)
-			_mt(c, Vector2(110, y + 29), Race.fmt_time(t), 22, TEXT, _digits)
+			var ts := Race.fmt_time(t)
+			# a long stage's time steps down a size rather than run into the gap box beside it
+			var tfs := 22 if _digits.get_string_size(ts, HORIZONTAL_ALIGNMENT_LEFT, -1, 22).x <= W - 150 - 116 else 18
+			_mt(c, Vector2(110, y + 29), ts, tfs, TEXT, _digits)
 			if not lead.is_empty():
 				var gap := t - float(lead.t)
 				c.draw_rect(Rect2(W - 150, y + 5, 92, 30), AHEAD if gap <= 0.0 else BEHIND)
@@ -1737,7 +2026,7 @@ func _draw_delta_bar() -> void:
 	if not race or race.s.mode == "race" or warp > 1:
 		return
 	var c := deltabar
-	var W := DELTA_W
+	var W := c.size.x
 	var showing := not _mode_split.is_empty() and _clock < float(_mode_split.until)
 	if race.stage:
 		if not showing:

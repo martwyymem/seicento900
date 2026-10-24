@@ -1,6 +1,11 @@
 ## QA probe (dev tool, run windowed): screenshots every UI skin (main menu, quick race set-up, circuit info,
 ## options, in-race HUD) into /tmp/qa_skins/, then the fast circuit-flip / race / menu / same circuit again flow.
 ## godot --path godot --audio-driver Dummy -s tests/_qa_skins.gd
+## PART=overlap (the layout pass, into /tmp/qa_skins/overlap/): every skin's menus and campaign briefing; the
+## race HUD under green with an overtake call, a split, the autopilot chip and the full key help, then with the
+## safety car out and a pass attempted (no overtake call may show); both at 16:9, at the 1.3 interface size
+## and at 4:3; then the open world HUD with banners, the event card, a district name and the skill chain.
+## PART=overlap godot --path godot --audio-driver Dummy -s tests/_qa_skins.gd
 extends SceneTree
 
 var game
@@ -135,7 +140,130 @@ func _initialize() -> void:
 					game._return_to_setup()
 				await _wait(20)
 				print("QA flip back in menu: page %s, race %s, track %s" % [game.active_menu_page, game.race != null, game.TRACK_KEYS[game.track_picker.selected]])
+	if only == "overlap":
+		await _overlap_shots()
 	game.queue_free()
 	await process_frame
 	print("QA done")
 	quit()
+
+const OVERLAP_OUT := "/tmp/qa_skins/overlap"
+## [tag, interface size index (UI_SCALES), aspect index (ASPECTS)]
+const OVERLAP_VIEWS := [["169", 1, 0], ["ui130", 3, 0], ["43", 1, 4]]
+
+func _oshot(tag: String) -> void:
+	await _wait(4)
+	await RenderingServer.frame_post_draw
+	root.get_texture().get_image().save_png("%s/%s.png" % [OVERLAP_OUT, tag])
+	print("QA shot overlap/", tag)
+
+func _view(v: Array) -> void:
+	game._on_ui_scale_selected(v[1])
+	game._on_aspect_selected(v[2])
+	await _wait(10)
+
+func _overlap_shots() -> void:
+	DirAccess.make_dir_recursive_absolute(OVERLAP_OUT)
+	# the pickers save to graphics.cfg: put the player's own choices back at the end
+	var had := [game.graphics_ui_scale, game.graphics_aspect, game.graphics_retro_mode]
+	# menus, the circuit info map and the campaign briefing in every skin and view
+	for v in OVERLAP_VIEWS:
+		await _view(v)
+		for m in MODES:
+			game._on_retro_selected(m)
+			game._show_home()
+			game._home_select(1, false)
+			await _oshot("%s_m%d_1_home" % [v[0], m])
+			game._activate_home_item()
+			await _key(KEY_DOWN)
+			await _oshot("%s_m%d_2_setup" % [v[0], m])
+			game._show_information_page()
+			await _oshot("%s_m%d_3_info" % [v[0], m])
+			game._show_repair_page()
+			await _oshot("%s_m%d_4_service" % [v[0], m])
+			game.is_time_trial_mode = false
+			game.is_rally_mode = false
+			game.is_championship_mode = false
+			game.is_campaign_mode = true
+			game.campaign_stage_index = 6
+			game._update_mode_view()
+			game._show_setup_page()
+			await _wait(8)
+			await _oshot("%s_m%d_5_briefing" % [v[0], m])
+			game.is_campaign_mode = false
+			game._update_mode_view()
+	await _view(OVERLAP_VIEWS[0])
+	# the race HUD
+	game._on_retro_selected(0)
+	game._show_home()
+	game._home_select(1, false)
+	game._activate_home_item()
+	game.opponents_picker.value = 10
+	game.track_picker.select(game.TRACK_KEYS.find("monza"))
+	game._select_track(game.TRACK_KEYS.find("monza"))
+	await _wait(10)
+	for k in 3000:
+		if not game._strategy_pending:
+			break
+		await process_frame
+	game._start_race()
+	if not await _race_ready():
+		print("QA race did not start: ", game.status_label.text)
+		return
+	game.race.set_autopilot(true)
+	var t0 := Time.get_ticks_msec()
+	while game.race.race_time < 20.0 and Time.get_ticks_msec() - t0 < 40000:
+		await _wait(1)
+	var hud: RaceHud = game.hud
+	hud.toggle_help() # the full key help
+	for phase in ["green", "sc"]:
+		if phase == "sc" and game.race.rc:
+			game.race.rc.deploy_sc("QA probe")
+			await _wait(30)
+		for v in OVERLAP_VIEWS:
+			await _view(v)
+			for m in MODES:
+				game._on_retro_selected(m)
+				# a pass: under green it's called, under the safety car it must not be
+				hud._prev_player_pos = game.race.player.pos + 1
+				hud._split_show = {"k": 1, "t": 61.25, "delta": 0.42, "until": game.race.race_time + 4.0}
+				await _wait(3)
+				if phase == "sc" and hud._overtake_timer > 0.0:
+					print("QA FAIL: an overtake was called under the safety car")
+				await _oshot("%s_m%d_hud_%s" % [v[0], m, phase])
+	await _view(OVERLAP_VIEWS[0])
+	game._on_retro_selected(0)
+	game._set_paused(true)
+	game._pause_action("menu")
+	await _wait(20)
+	if game.race:
+		game._return_to_setup()
+	await _wait(10)
+	# the open world HUD with everything up at once
+	if OpenWorld.available():
+		game._start_campaign_mode()
+		for k in 6000:
+			if game.open_world and game.open_world.active and game.open_world.hud and not game.open_world.hud.loading.visible:
+				break
+			await process_frame
+		var ow: OpenWorldHud = game.open_world.hud
+		for v in OVERLAP_VIEWS:
+			await _view(v)
+			for m in MODES:
+				game._on_retro_selected(m)
+				for k in 3:
+					ow.notify("DISCOVERED  ·  KOPALNIA WĘGLA KAMIENNEGO BRZESZCZE", "Szyb Andrzej, the old headframe over the Jawiszowice seam", OpenWorldHud.GOLD)
+				ow.show_event("ACT II · REGIONAL CHAMPIONSHIP", "Stage 7: Kraków Royal Ring under the Wawel walls",
+					"Eleven bots and a tight ring round the Planty. Trams share the road on Basztowa and the cobbles under Wawel are slick in the wet: plan one stop and look after the front tyres.",
+					"ENTER  ▸  START STAGE", OpenWorldHud.ORANGE)
+				ow.show_area("Osiedle Paderewskiego · Brzeszcze-Jawiszowice")
+				ow.set_chain(4321, "DRIFT · NEAR MISS · AIR")
+				await _wait(20)
+				await _oshot("%s_m%d_world" % [v[0], m])
+				ow.hide_event()
+		await _view(OVERLAP_VIEWS[0])
+		game.open_world.suspend()
+		game._show_home()
+	game._on_ui_scale_selected(had[0])
+	game._on_aspect_selected(had[1])
+	game._on_retro_selected(had[2])

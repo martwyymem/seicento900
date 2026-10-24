@@ -9,8 +9,8 @@ render_mode blend_mix, depth_draw_opaque, cull_back;
 uniform float night = 0.0;
 uniform float wet = 0.0;
 uniform sampler2D grain : filter_linear_mipmap, repeat_enable;
-uniform vec3 glass_color : source_color = vec3(0.12, 0.15, 0.18);
-uniform vec3 frame_color : source_color = vec3(0.86, 0.85, 0.82);
+uniform vec3 glass_color : source_color = vec3(0.24, 0.32, 0.42);
+uniform vec3 frame_color : source_color = vec3(0.92, 0.91, 0.88);
 
 varying vec3 world_pos;
 varying flat float v_seed;
@@ -54,6 +54,7 @@ void fragment() {
 	float rough = 0.88;
 	float metal = 0.0;
 	vec3 glow = vec3(0.0);
+	bool is_window = false;
 	int kind = int(v_kind + 0.5);
 	if (v_face > 0.5) {
 		// roofs: tiles or slates in courses, flat roofs with a little grime
@@ -71,6 +72,7 @@ void fragment() {
 		float top = floor(uv.y / 1.0);
 		vec3 w = windows(uv, 6.0, 100.0, 4.6, 1.1, 0.0, 5.2);
 		if (w.x > 0.5 && uv.y < 6.3) {
+			is_window = w.z < 0.5;
 			col = mix(glass_color, frame_color * 0.6, w.z);
 			rough = 0.15;
 			glow = vec3(1.0, 0.92, 0.75) * step(w.y, 0.45) * night * 1.2 * (1.0 - w.z);
@@ -96,10 +98,17 @@ void fragment() {
 			col *= 1.08;
 		}
 		if (w.x > 0.5 && (kind != 4 || w.y < 0.5)) {
+			is_window = w.z < 0.5;
 			bool shutter = kind != 1 && w.y > 0.78;
-			col = shutter ? base * vec3(0.55, 0.62, 0.55) : mix(glass_color * (0.8 + 0.4 * w.y), frame_color, w.z);
+			vec3 win_glass = glass_color * (0.85 + 0.35 * w.y);
+			float sky_fade = smoothstep(0.0, 1.0, fract((uv.y - 0.9) / storey));
+			win_glass = mix(win_glass, win_glass * 1.35 + vec3(0.05, 0.09, 0.15), sky_fade * 0.45);
+			col = shutter ? base * vec3(0.55, 0.62, 0.55) : mix(win_glass, frame_color, w.z);
 			rough = shutter ? 0.8 : 0.12;
 			glow = shutter ? vec3(0.0) : vec3(1.0, 0.85, 0.6) * step(w.y, 0.35) * night * 1.6 * (1.0 - w.z);
+		} else if (v_face < 0.5) {
+			float courses = 0.96 + 0.08 * step(0.05, fract(uv.y * (kind == 1 ? 3.0 : 4.0)));
+			col *= courses;
 		}
 		// the front door on houses and farms
 		float door_x = fract(uv.x / 11.0 + v_seed);
@@ -113,5 +122,6 @@ void fragment() {
 	ALBEDO = col;
 	ROUGHNESS = mix(rough, rough * 0.5, wet);
 	METALLIC = metal;
+	SPECULAR = is_window ? 0.8 : 0.35;
 	EMISSION = glow;
 }
