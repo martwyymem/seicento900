@@ -1297,12 +1297,12 @@ static func _fallback_car(kind: String) -> Mesh:
 
 ## The landmark model a mapped mine shaft gets: the hand-made Andrzej I, II and V, else the generic headframe.
 static func shaft_model(shaft_name: String) -> String:
-	if shaft_name.contains("V") and not shaft_name.contains("VIII"):
-		return "AndrzejV"
-	if shaft_name.ends_with(" I"):
-		return "AndrzejI"
-	if shaft_name.ends_with(" II"):
-		return "AndrzejII"
+	if not shaft_name.contains("Andrzej"):
+		return "Headframe"
+	match shaft_name.get_slice(" ", shaft_name.get_slice_count(" ") - 1):
+		"I": return "AndrzejI"
+		"II": return "AndrzejII"
+		"V": return "AndrzejV"
 	return "Headframe"
 
 const SHAFT_TOWER_H := 25.0 ## m: a measured building this tall over a shaft is its tower, kept instead of a headframe

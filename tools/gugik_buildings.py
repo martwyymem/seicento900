@@ -20,8 +20,9 @@ amended by the act of 16 April 2020). Source: Główny Urząd Geodezji i Kartogr
 
 Downloads are untrusted data: they go to tools/open_world/cache/gugik/ (gitignored, ~700 MB with the orthophoto), are parsed with
 a non-validating XML parser (no DTDs or external entities) and sqlite3, and nothing in them is executed.
-Only the buildings inside the open world's box are kept, in a compact extract that is committed
-(tools/open_world/cache/<key>_gugik.json) so rebuilds run offline:
+Only the buildings inside the open world's box are kept, in a compact extract
+(tools/open_world/cache/<key>_gugik.json, about 11 MB, gitignored: run this once before re-baking the town, or
+build_open_world.py bakes without the measured heights and roofs):
 
     python3 -I tools/gugik_buildings.py [--refetch]     # rebuilds the extract (needs the network once)
 

@@ -366,7 +366,7 @@ bit for bit. Rough costs on an M4 Pro: 57 µs per car-tick of full physics, ~0.5
 Coordinates: the JS/2D x (east) and y (south) map to Godot X and Z; Y is up.
 
 Keyboard: W/↑ throttle, S/↓/Space brake, A/D or ←/→ steer, E/Q shift (manual gearbox), P box this lap,
-[ / ] tyre choice for the next stop, − / = fuel for the next stop, F fuel mix (save / normal), R re-plan, O autopilot, C camera,
+[ / ] tyre choice for the next stop, − / = fuel for the next stop, F fuel mix (save / normal), R / Backspace reset the car, Shift+R re-plan, O autopilot, C camera,
 L racing line, G ghost car, H help, M mute, , / . time warp, Esc pause, Enter skip to results once retired or finished.
 Gamepad: left stick steers, triggers for throttle/brake, X fuel mix, Start pauses.
 

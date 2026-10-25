@@ -961,7 +961,8 @@ func _action_of(event: InputEvent) -> String:
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.physical_keycode:
 			KEY_ESCAPE: return "back"
-			KEY_ENTER, KEY_KP_ENTER, KEY_E: return "accept"
+			KEY_ENTER, KEY_KP_ENTER: return "accept"
+			KEY_E: return "shift_up" # as in a race (E / Q shift a manual gearbox)
 			KEY_M, KEY_TAB: return "map"
 			KEY_G: return "gps"
 			KEY_C: return "camera"

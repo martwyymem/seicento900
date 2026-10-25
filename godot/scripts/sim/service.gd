@@ -149,6 +149,10 @@ static func gearbox(car: RaceCar, top: int, clock: float) -> void:
 		car.gear = top - 1
 	car.fx_gear = car.gear
 
+## Gearbox damage has taken top gear away (gearbox).
+static func top_gear_lost(car: RaceCar) -> bool:
+	return _sev(car.parts, "Gearbox") >= LOST_GEAR_FROM
+
 ## Electrics: the headlights' brightness factor (dim, and flickering when badly damaged). 1 when fine.
 static func lamp(car: RaceCar, clock: float) -> float:
 	var el := _sev(car.parts, "Electrics")

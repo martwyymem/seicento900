@@ -6,5 +6,7 @@ tools/.tiles/
 # Windows export (godot/export_presets.cfg); the exe goes to GitHub Releases
 build/
 
-# GUGiK raw downloads (tools/gugik_buildings.py); the compact extract next to them is committed
+# GUGiK raw downloads (tools/gugik_buildings.py)
 tools/open_world/cache/gugik/
+# GUGiK building extract (tools/gugik_buildings.py, 11 MB): only needed to re-bake the town; kept local
+tools/open_world/cache/brzeszcze_gugik.json

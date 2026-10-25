@@ -1817,6 +1817,8 @@ func auto_shift(car: RaceCar, vF: float, thr: float, brk: float) -> void:
 	var cm := car.model
 	var vp := maxf(0.0, vF)
 	var top := spec.gears.size() - 1
+	if car.fx_on and Service.top_gear_lost(car):
+		top -= 1 # a wrecked gearbox has lost top gear: hold the one below instead of trying it every tick
 	var g := car.gear
 	if vF < 1.0:
 		g = 0
@@ -1891,8 +1893,8 @@ func _held_up(car: RaceCar) -> bool:
 
 ## Instant recovery (Forza Horizon / NFS style): resets the player car onto the racing surface facing forward.
 func reset_player_car() -> bool:
-	if not player or phase != "racing" or player.mode != "race" or player.finished or player.out_of_fuel:
-		return false
+	if not player or phase != "racing" or player.mode != "race" or player.finished or player.dnf or player.out_of_fuel:
+		return false # (a car out of the race, crashed or retired, stays out)
 	var tr := track
 	var lim := tr.half - 1.5
 	player.d = clampf(player.d, -lim, lim)
