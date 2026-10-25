@@ -636,6 +636,7 @@ func build_buildings() -> void:
 	wet_materials.append(mat)
 	night_materials.append(mat)
 	var batches := {}
+	var shafts := shaft_towers()
 	for bi in map.buildings.size():
 		var b: Array = map.buildings[bi]
 		var ring := map.bld_rings[bi]
@@ -643,6 +644,8 @@ func build_buildings() -> void:
 			continue
 		var extra: Dictionary = b[6] if b.size() > 6 and b[6] is Dictionary else {}
 		if extra.has("lm") and has_model(String(extra.lm)):
+			continue
+		if shafts.hidden.has(bi):
 			continue
 		var centre := Vector2.ZERO
 		for p in ring:
@@ -1292,6 +1295,46 @@ static func _fallback_car(kind: String) -> Mesh:
 
 # ============================================================================================ landmarks
 
+## The landmark model a mapped mine shaft gets: the hand-made Andrzej I, II and V, else the generic headframe.
+static func shaft_model(shaft_name: String) -> String:
+	if shaft_name.contains("V") and not shaft_name.contains("VIII"):
+		return "AndrzejV"
+	if shaft_name.ends_with(" I"):
+		return "AndrzejI"
+	if shaft_name.ends_with(" II"):
+		return "AndrzejII"
+	return "Headframe"
+
+const SHAFT_TOWER_H := 25.0 ## m: a measured building this tall over a shaft is its tower, kept instead of a headframe
+var _shaft_towers := {}
+
+## How the mapped shafts meet the buildings over them: {hidden: {building index: true}} for shaft houses a
+## headframe model replaces, {kept: {shaft position: true}} for shafts whose tall tower building stays (no
+## generic headframe is put through it). A hand-made shaft model always replaces the building.
+func shaft_towers() -> Dictionary:
+	if not _shaft_towers.is_empty():
+		return _shaft_towers
+	var hidden := {}
+	var kept := {}
+	for pl in map.places:
+		if String(pl.k) != "mineshaft":
+			continue
+		var sp := Vector2(pl.x, pl.y)
+		var bespoke := shaft_model(String(pl.name)) != "Headframe" and has_model(shaft_model(String(pl.name)))
+		var under: Array[int] = []
+		var tall := false
+		for bi in map.buildings_near(sp, 0.0):
+			if Geometry2D.is_point_in_polygon(sp, map.bld_rings[bi]):
+				under.append(bi)
+				tall = tall or float(map.buildings[bi][1]) >= SHAFT_TOWER_H
+		if tall and not bespoke:
+			kept[sp] = true
+			continue
+		for bi in under:
+			hidden[bi] = true
+	_shaft_towers = {"hidden": hidden, "kept": kept}
+	return _shaft_towers
+
 ## Landmark building footprints reserved by tools/open_world/landmarks.json: [model, ring, ridge height, metadata].
 func landmark_buildings() -> Array:
 	var out: Array = []
@@ -1340,8 +1383,9 @@ func build_landmarks() -> void:
 		var g := map.ground(p.x, p.y)
 		match String(pl.k):
 			"mineshaft":
-				var shaft_name := String(pl.name)
-				var model_name := "AndrzejV" if shaft_name.contains("V") and not shaft_name.contains("VIII") else "AndrzejI" if shaft_name.ends_with(" I") else "AndrzejII" if shaft_name.ends_with(" II") else "Headframe"
+				if shaft_towers().kept.has(Vector2(pl.x, pl.y)):
+					continue # a measured shaft tower building stands there already
+				var model_name := shaft_model(String(pl.name))
 				var mesh_xf := _model(model_name, _fallback_headframe)
 				var near := map.nearest_road(p, 200.0)
 				var face := 0.0
