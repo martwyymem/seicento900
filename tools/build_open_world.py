@@ -674,7 +674,7 @@ def build(check_png=None):
                 nbrs.append((li, i - 1, math.dist(p[i], p[i - 1])))
             if i < len(p) - 1:
                 nbrs.append((li, i + 1, math.dist(p[i], p[i + 1])))
-            for nid_l, idx in junction_of(lines[li]):
+            for idx, nid_l in junction_of(lines[li]):
                 if idx == i:
                     for lj, j in shared.get(nid_l, ()):
                         if (lj, j) != (li, i):
@@ -861,6 +861,11 @@ def build(check_png=None):
         for a, b in zip(r['p'], r['p'][1:]):
             rgrid.add(a, b, i)
 
+    railgrid = SegGrid(30.0)
+    for ri, rail in enumerate(rails):
+        for a, b in zip(rail['p'], rail['p'][1:]):
+            railgrid.add(a, b, ri)
+
     def road_clear(x, y, extra):
         for a, b, i in rgrid.near(x, y, 14.0 + extra):
             if dist_seg(x, y, a, b) < out_roads[i]['w'] / 2 + extra:
@@ -881,6 +886,148 @@ def build(check_png=None):
             if point_in_ring(x, y, ring):
                 return True
         return False
+
+    # ---- mapped and generated plot fences
+    # Records are independent short segments: [ax, ay, bx, by, style]. Keeping the
+    # opening explicit makes these cheap to instance and lets the car collide with them.
+    fences = []
+    for e in els:
+        t = e.get('tags', {})
+        if e['type'] != 'way' or t.get('barrier') not in ('fence', 'wall', 'hedge'):
+            continue
+        pts = [P(q) for q in e.get('geometry', []) if q]
+        style = {'fence': 0, 'wall': 1, 'hedge': 2}[t['barrier']]
+        for a, b in zip(pts, pts[1:]):
+            if math.dist(a, b) < 0.5:
+                continue
+            clear = True
+            for f in (0.1, 0.35, 0.65, 0.9):
+                sx, sy = a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f
+                if not road_clear(sx, sy, 0.6) or not building_clear(sx, sy, 0.5) or \
+                        any(dist_seg(sx, sy, ra, rb) < 2.2 for ra, rb, _ in railgrid.near(sx, sy, 5.0)):
+                    clear = False
+                    break
+            if clear:
+                fences.append((a[0], a[1], b[0], b[1], style))
+
+    # Detached houses stand in fenced plots: a fence along the street in front of them (a gate opposite each
+    # house) and fences between neighbouring plots running back from it. Walking each residential street's
+    # sides finds the frontages, so the fences follow the real street lines rather than the house outlines.
+    hcells = {}
+    house_centres = []
+    for b in buildings:
+        if b[0] != 'house':
+            continue
+        ring = [(b[4][k], b[4][k + 1]) for k in range(0, len(b[4]), 2)]
+        cx, cy = sum(p[0] for p in ring) / len(ring), sum(p[1] for p in ring) / len(ring)
+        hi = len(house_centres)
+        house_centres.append((cx, cy, ring))
+        hcells.setdefault((int(cx // 30), int(cy // 30)), []).append(hi)
+
+    def houses_near(x, y, r):
+        for gx in range(int((x - r) // 30), int((x + r) // 30) + 1):
+            for gy in range(int((y - r) // 30), int((y + r) // 30) + 1):
+                yield from hcells.get((gx, gy), ())
+
+    def fence_clear(p, q, road_extra=1.0):
+        for f in (0.15, 0.5, 0.85):
+            sx, sy = p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f
+            if not road_clear(sx, sy, road_extra) or not building_clear(sx, sy, 0.6):
+                return False
+            if any(dist_seg(sx, sy, ra, rb) < 2.4 for ra, rb, _ in railgrid.near(sx, sy, 5.0)):
+                return False
+        return True
+
+    generated = 0
+    STEP, SETBACK, GATE, DEPTH = 2.5, 2.2, 1.8, 32.0
+    for r in out_roads:
+        if r['kn'] not in ('residential', 'living_street', 'unclassified', 'tertiary') or r['b']:
+            continue
+        pts = r['p']
+        off = r['w'] / 2 + SETBACK
+        for side in (-1.0, 1.0):
+            prev = None  # (edge point, owner)
+            last_side = None  # where the last side fence left the street
+            ptx = pty = None
+            for i in range(len(pts) - 1):
+                a, b = pts[i], pts[i + 1]
+                seg = math.dist(a, b)
+                if seg < 0.3:
+                    continue
+                tx, ty = (b[0] - a[0]) / seg, (b[1] - a[1]) / seg
+                # on a bend the plots fan out: no side fences there
+                bend = ptx is not None and tx * ptx + ty * pty < 0.94
+                ptx, pty = tx, ty
+                nx, ny = -ty * side, tx * side
+                k = 0.0
+                while k < seg:
+                    c = (a[0] + tx * k, a[1] + ty * k)
+                    e = (c[0] + nx * off, c[1] + ny * off)
+                    k += STEP
+                    # the house whose plot this stretch of frontage belongs to
+                    owner, best = None, 1e9
+                    for hi in houses_near(e[0], e[1], 30.0):
+                        hx, hy, _ = house_centres[hi]
+                        back = (hx - e[0]) * nx + (hy - e[1]) * ny
+                        along = (hx - e[0]) * tx + (hy - e[1]) * ty
+                        if 2.0 < back < 30.0 and abs(along) < 13.0:
+                            score = abs(along) + back * 0.35
+                            if score < best:
+                                owner, best = hi, score
+                    if owner is None:
+                        prev = None
+                        continue
+                    hx, hy, _ = house_centres[owner]
+                    style = int(abs(hx * 13 + hy * 7)) % 5
+                    gate = abs((hx - e[0]) * tx + (hy - e[1]) * ty) < GATE
+                    if prev is not None and not gate and math.dist(prev[0], e) < STEP * 1.6 and fence_clear(prev[0], e):
+                        fences.append((r1(prev[0][0]), r1(prev[0][1]), r1(e[0]), r1(e[1]), style))
+                        generated += 1
+                    if prev is not None and prev[1] != owner and not bend and \
+                            (last_side is None or math.dist(last_side, e) > 6.0):
+                        last_side = e
+                        # a boundary between two plots: a side fence back from the street
+                        p0 = e
+                        d = 0.0
+                        while d < DEPTH:
+                            q = (p0[0] + nx * STEP, p0[1] + ny * STEP)
+                            if not fence_clear(p0, q):
+                                break
+                            fences.append((r1(p0[0]), r1(p0[1]), r1(q[0]), r1(q[1]), style))
+                            generated += 1
+                            p0 = q
+                            d += STEP
+                    prev = None if gate else (e, owner)  # the gate leaves a gap in the frontage
+    # a vegetable bed behind some houses
+    garden_beds = []
+    for hx, hy, ring in house_centres:
+        seed = int(abs(hx * 13 + hy * 7))
+        if seed % 3:
+            continue
+        for tries in range(3):
+            gx = hx + (rand01(hx, hy, 41 + tries) - 0.5) * 24.0
+            gy = hy + (rand01(hx, hy, 42 + tries) - 0.5) * 24.0
+            if road_clear(gx, gy, 3.0) and building_clear(gx, gy, 2.5) and not inside_building(gx, gy):
+                garden_beds.append((r1(gx), r1(gy), round(rand01(hx, hy, 43) * math.pi, 2), 2.8 + rand01(hx, hy, 44) * 2.0, 0.9 + rand01(hx, hy, 45) * 0.6))
+                break
+
+    # Narrow soil beds in mapped allotments (ROD) make the shared plots read distinctly.
+    for _, _, kind, ring, holes, _, oid in areas:
+        if kind != 'allotments':
+            continue
+        x0, x1 = min(p[0] for p in ring), max(p[0] for p in ring)
+        y0, y1 = min(p[1] for p in ring), max(p[1] for p in ring)
+        gx = math.floor(x0 / 8.0)
+        while gx * 8.0 < x1:
+            gy = math.floor(y0 / 8.0)
+            while gy * 8.0 < y1:
+                x = (gx + 0.5 + rand01(gx, gy, oid % 983)) * 8.0
+                y = (gy + 0.5 + rand01(gx, gy, oid % 977)) * 8.0
+                if point_in_ring(x, y, ring) and not any(point_in_ring(x, y, h) for h in holes) and \
+                        road_clear(x, y, 1.0) and building_clear(x, y, 1.5):
+                    garden_beds.append((x, y, rand01(gx, gy, oid % 971) * math.pi, 2.2, 0.75))
+                gy += 1
+            gx += 1
 
     # ---- generated trees: woods, parks and gardens
     def fill_trees(ring, holes, cell, prob, kind_code, salt):
@@ -910,12 +1057,12 @@ def build(check_png=None):
         elif kind == 'park' or kind == 'cemetery':
             fill_trees(ring, holes, 13.0, 0.55, 5, oid % 991)
         elif kind == 'residential':
-            fill_trees(ring, holes, 17.0, 0.42, 6, oid % 983)
+            fill_trees(ring, holes, 13.0, 0.52, 6, oid % 983)
         elif kind in ('scrub', 'wetland'):
             fill_trees(ring, holes, 11.0, 0.4, 7, oid % 977)
         elif kind == 'allotments':
-            fill_trees(ring, holes, 10.0, 0.5, 8, oid % 971)
-    print(len(trees), 'trees (', n_wood, 'in woods )')
+            fill_trees(ring, holes, 7.0, 0.62, 8, oid % 971)
+    print(len(trees), 'trees (', n_wood, 'in woods );', len(fences), 'fence segments (', generated, 'generated )')
 
     # ---- generated street lamps along town roads
     def in_town(x, y):
@@ -1085,6 +1232,8 @@ def build(check_png=None):
         'areas': [[kind, flat_pts(ring), [flat_pts(h) for h in holes], extra] for _, _, kind, ring, holes, extra, _ in areas],
         'waterways': [[wd, flat_pts(pts)] for wd, pts in waterways],
         'trees': [v for x, y, c in trees for v in (r1(x), r1(y), c)],
+        'fences': [[r1(x), r1(y), r1(xx), r1(yy), style] for x, y, xx, yy, style in fences],
+        'garden_beds': [[r1(x), r1(y), round(a, 3), l, w] for x, y, a, l, w in garden_beds],
         'lamps': flat_pts(lamps),
         'signals': flat_pts(signals),
         'stops': [[r1(x), r1(y), n] for x, y, n in stops],

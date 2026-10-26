@@ -36,6 +36,7 @@ const LAMP_LIGHTS := 10
 var map: TownMap
 var builder: TownBuilder
 var traffic: Traffic
+var train: Train
 var progress: WorldProgress
 var drive: FreeCar
 var audio = null ## the game's RaceAudio
@@ -221,6 +222,7 @@ func _build_world() -> void:
 	_build_lamp_lights()
 	_build_route_mesh()
 	traffic = Traffic.new(map, world, builder)
+	train = Train.new(map, world, builder)
 	_build_traps()
 	built = true
 	building = false
@@ -775,6 +777,7 @@ func _process(delta: float) -> void:
 		shift_up = false
 		shift_down = false
 		traffic.step(TICK, drive)
+		train.step(TICK)
 		accumulator -= TICK
 		steps += 1
 	if steps >= 24:
@@ -782,6 +785,7 @@ func _process(delta: float) -> void:
 	if drive.wants_respawn:
 		hud.notify("BACK ON THE ROAD", "The Seicento doesn't swim", Color("#4aa3ff"))
 		drive.respawn()
+	builder.update_crossings(delta)
 	hour = fmod(hour + delta * DAY_RATE, 24.0)
 	_apply_time()
 	_sync_car(delta)

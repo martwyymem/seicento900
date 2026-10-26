@@ -19,9 +19,11 @@ const LANDMARK_MODELS := "res://models/brzeszcze_landmarks.glb" ## tools/blender
 const LAND_RES := 2.5 ## metres per texel of data/world/<key>_land.png (tools/build_open_world.py)
 
 const TERRAIN_STEP := 10.0
+const POND_DEPTH := 1.4 ## m: the terrain sinks this far below a pond's surface (FreeCar drives on the same bed)
 const TERRAIN_CHUNK := 32 ## quads per chunk side
 const CHUNK := 256.0 ## m: buildings and street batches
 const TREE_CHUNK := 128.0
+const SMALL_CHUNK := 128.0 ## m: cells of the distance-culled small things (fences, garden beds, parked cars)
 const IMPOSTOR_CHUNK := 512.0
 const TREE_NEAR := 380.0 ## m: full tree meshes this far, impostors beyond
 const TREE_FAR := 1800.0
@@ -94,7 +96,7 @@ func has_model(name: String) -> bool:
 ## The steps in order, for the caller to run one per frame: [label, Callable].
 func steps() -> Array:
 	return [["Terrain", build_terrain], ["Ponds and streams", build_water], ["Streets", build_roads],
-		["Railway", build_rail], ["Buildings", build_buildings], ["Woods and gardens", build_trees],
+		["Railway", build_rail], ["Buildings", build_buildings], ["Woods and gardens", build_trees], ["Garden fences", build_fences],
 		["Street furniture", build_props], ["Landmarks", build_landmarks], ["Horizon", build_horizon]]
 
 static func color_lin(hex: String) -> Color:
@@ -171,7 +173,7 @@ func build_terrain() -> void:
 			var h := map.ground(x, y)
 			var k := j * nx + i
 			if water_mask.has(k):
-				h = minf(h, float(water_mask[k]) - 1.4)
+				h = minf(h, float(water_mask[k]) - POND_DEPTH)
 			hs[k] = h
 	for cj in range(0, ny - 1, TERRAIN_CHUNK):
 		for ci in range(0, nx - 1, TERRAIN_CHUNK):
@@ -520,7 +522,7 @@ func build_rail() -> void:
 		var zs := PackedFloat32Array(r.get("z", []))
 		var gauge := 0.75 if int(r.get("g", 0)) else 1.435
 		var bw := 2.4 if int(r.get("g", 0)) else 3.6
-		rail_lines.append(pts)
+		rail_lines.append([pts, zs])
 		var n := pts.size()
 		var acc := 0.0
 		for i in n - 1:
@@ -600,8 +602,12 @@ func build_rail() -> void:
 
 ## Where a street crosses the railway at grade (for the barriers and the crossing signs).
 func _find_level_crossings(rail_lines: Array) -> void:
-	for pts in rail_lines:
+	for line in rail_lines:
+		var pts: PackedVector2Array = line[0]
+		var zs: PackedFloat32Array = line[1]
 		for i in pts.size() - 1:
+			if not zs.is_empty() and maxf(zs[i], zs[i + 1]) > 0.5:
+				continue # the railway is on a bridge or embankment here: the street passes under it
 			var a: Vector2 = pts[i]
 			var b: Vector2 = pts[i + 1]
 			var mid := (a + b) * 0.5
@@ -761,30 +767,10 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 	var rect := []
 	var pitched := roof_shape in ["hipped", "gabled", "pyramidal", "half_hipped", "mansard"] and height < 18.0
 	if not roof_surfaces.is_empty():
-		# LoD2 roof planes are in local metres, with height relative to their measured ground.
-		for face in roof_surfaces:
-			if not face is Array or face.size() < 9:
-				continue
-			var points := PackedVector2Array()
-			var ys := PackedFloat32Array()
-			for j in range(0, face.size() - 2, 3):
-				points.append(Vector2(float(face[j]), float(face[j + 1])))
-				ys.append(hi + float(face[j + 2]))
-			if points.size() < 3:
-				continue
-			var triangles := Geometry2D.triangulate_polygon(points)
-			for j in range(0, triangles.size(), 3):
-				var ia: int = triangles[j]
-				var ib: int = triangles[j + 1]
-				var ic: int = triangles[j + 2]
-				var p0 := Vector3(points[ia].x, ys[ia], points[ia].y)
-				var p1 := Vector3(points[ib].x, ys[ib], points[ib].y)
-				var p2 := Vector3(points[ic].x, ys[ic], points[ic].y)
-				var normal := (p1 - p0).cross(p2 - p0).normalized()
-				if normal.y < 0.0:
-					normal = -normal
-				mb.flat_tri(p0, p1, p2, normal, points[ia], points[ib], points[ic], roof, uv2_roof)
-		# Use GUGiK roof planes when present; otherwise build the compatible OSM-based roof below.
+		# LoD2 roof planes: map x, y and a height over the building's highest ground
+		if _add_lod2_roof(mb, roof_surfaces, hi, base, roof, wall, uv2_roof, uv2_wall):
+			return
+		roof_surfaces = [] # unusable planes: the OSM walls and a flat roof
 	elif pitched:
 		rect = min_rect(r)
 		if rect.is_empty() or absf(ring_area(r)) / maxf(float(rect[4]), 1e-3) < 0.78 or float(rect[3]) > 13.0:
@@ -898,6 +884,104 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 					Vector3(a.x, eave + parapet, a.y), Vector3(out.x, 0.0, out.y), wall,
 					[Vector2.ZERO, Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)], Vector2(seed, 3.0))
 
+## A measured (GUGiK LoD2) roof: each plane triangulated in its own plane, and walls from the ground up to
+## every roof edge that no other plane shares, so the walls meet the eaves and gables of the roof exactly.
+## False if the planes are unusable (the caller builds the OSM walls and roof instead).
+func _add_lod2_roof(mb: MeshBatch, faces: Array, hi: float, base: float, roof: Color, wall: Color, uv2_roof: Vector2, uv2_wall: Vector2) -> bool:
+	var polys: Array[PackedVector3Array] = []
+	for face in faces:
+		if not face is Array or face.size() < 9:
+			continue
+		var poly := PackedVector3Array()
+		for j in range(0, face.size() - 2, 3):
+			var q := Vector3(float(face[j]), hi + float(face[j + 2]), float(face[j + 1]))
+			if poly.is_empty() or poly[poly.size() - 1].distance_to(q) > 0.01:
+				poly.append(q)
+		if poly.size() > 2 and poly[0].distance_to(poly[poly.size() - 1]) < 0.01:
+			poly.remove_at(poly.size() - 1)
+		if poly.size() >= 3:
+			polys.append(poly)
+	if polys.is_empty():
+		return false
+	var drawn := 0
+	for poly in polys:
+		# Newell normal, then a 2D frame in the plane (a steep plane projected on the ground would fold up)
+		var nrm := Vector3.ZERO
+		for k in poly.size():
+			var a := poly[k]
+			var b := poly[(k + 1) % poly.size()]
+			nrm += Vector3((a.y - b.y) * (a.z + b.z), (a.z - b.z) * (a.x + b.x), (a.x - b.x) * (a.y + b.y))
+		if nrm.length() < 1e-4:
+			continue
+		nrm = nrm.normalized()
+		if nrm.y < 0.0:
+			nrm = -nrm
+		var ax := Vector3.UP.cross(nrm)
+		if ax.length() < 0.05:
+			ax = Vector3.RIGHT
+		ax = ax.normalized()
+		var ay := nrm.cross(ax)
+		var flat := PackedVector2Array()
+		for q in poly:
+			flat.append(Vector2(q.dot(ax), q.dot(ay)))
+		var tris := Geometry2D.triangulate_polygon(flat)
+		if tris.is_empty():
+			tris = Geometry2D.triangulate_delaunay(flat)
+		for j in range(0, tris.size(), 3):
+			var ia: int = tris[j]
+			var ib: int = tris[j + 1]
+			var ic: int = tris[j + 2]
+			var p0 := poly[ia]
+			var p1 := poly[ib]
+			var p2 := poly[ic]
+			if (p1 - p0).cross(p2 - p0).length() < 1e-4:
+				continue
+			mb.flat_tri(p0, p1, p2, nrm, Vector2(p0.x, p0.z), Vector2(p1.x, p1.z), Vector2(p2.x, p2.z), roof, uv2_roof)
+			drawn += 1
+	if drawn == 0:
+		return false
+	# outline edges: an edge whose midpoint lies on another plane's edge is a ridge, hip or valley
+	var along := 0.0
+	for pi in polys.size():
+		var poly := polys[pi]
+		var cen := Vector2.ZERO
+		for q in poly:
+			cen += Vector2(q.x, q.z)
+		cen /= poly.size()
+		for k in poly.size():
+			var a := poly[k]
+			var b := poly[(k + 1) % poly.size()]
+			var a2 := Vector2(a.x, a.z)
+			var b2 := Vector2(b.x, b.z)
+			var ln := a2.distance_to(b2)
+			if ln < 0.05:
+				continue # a vertical edge: the walls either side carry it
+			var mid := (a + b) * 0.5
+			var shared := false
+			for pj in polys.size():
+				if pj == pi:
+					continue
+				var other := polys[pj]
+				for m in other.size():
+					var c := other[m]
+					var d := other[(m + 1) % other.size()]
+					var cp := Geometry3D.get_closest_point_to_segment(mid, c, d)
+					if cp.distance_to(mid) < 0.15:
+						shared = true
+						break
+				if shared:
+					break
+			if shared:
+				continue
+			var t := (b2 - a2) / ln
+			var out := Vector3(t.y, 0.0, -t.x)
+			if Vector2(out.x, out.z).dot((a2 + b2) * 0.5 - cen) < 0.0:
+				out = -out
+			mb.flat_quad(Vector3(a.x, base, a.z), Vector3(b.x, base, b.z), b, a, out, wall,
+				[Vector2(along, base - hi), Vector2(along + ln, base - hi), Vector2(along + ln, b.y - hi), Vector2(along, a.y - hi)], uv2_wall)
+			along += ln
+	return true
+
 # ============================================================================================ trees
 
 ## Tree kinds from the baker: 0 mapped, 1 row, 2 needle wood, 3 broadleaf wood, 4 mixed wood, 5 park,
@@ -968,6 +1052,73 @@ func build_trees() -> void:
 		var imp := _multimesh(group, quad, far[cf][0], far[cf][1], impostor_mat)
 		imp.visibility_range_end = TREE_FAR + IMPOSTOR_CHUNK
 		imp.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+## Plot fences are baked as short independent segments so gaps remain clear for driveways.
+func build_fences() -> void:
+	var group := _group("Garden Fences")
+	var fence := _model("Fence", _fallback_fence)
+	var xfs := []
+	var walls: Array = map.raw.get("fences", [])
+	for w in walls:
+		var a := Vector2(float(w[0]), float(w[1]))
+		var b := Vector2(float(w[2]), float(w[3]))
+		var d := b - a
+		var length := d.length()
+		if length < 0.35:
+			continue
+		var style := int(w[4]) if w.size() > 4 else 0
+		if style == 2:
+			continue # hedge rows use the bush mesh below instead of metal panels
+		var piece := 2.5
+		var count := maxi(1, int(ceil(length / piece)))
+		for i in count:
+			var start := length * float(i) / count
+			var span := length / count
+			var p := a + d.normalized() * start
+			var scale_y := 0.68 if style == 2 else (0.9 if style == 3 else 1.0)
+			var basis := Basis(Vector3.UP, atan2(-d.y, d.x)).scaled_local(Vector3(span / 2.5, scale_y, 1.0)) # the panel runs along +X
+			xfs.append(Transform3D(basis, Vector3(p.x, map.ground(p.x, p.y), p.y)))
+	_place_many(group, "PlotFencePanels", fence, xfs, [], null, 280.0)
+	# Low shrubs on selected boundaries soften the hard edges and make garden rows read from the street.
+	var roadside: Node = WORLD_ASSETS._load_model("res://models/roadside.glb")
+	if roadside:
+		var bush: Mesh = null
+		for mi in roadside.find_children("BushCluster", "MeshInstance3D", true, false):
+			bush = (mi as MeshInstance3D).mesh
+			break
+		if bush:
+			var bushes := []
+			for wi in range(0, walls.size(), 2):
+				var w: Array = walls[wi]
+				if int(w[4]) != 2:
+					continue
+				var a := Vector2(float(w[0]), float(w[1]))
+				var b := Vector2(float(w[2]), float(w[3]))
+				var d := b - a
+				var steps := int(d.length() / 8.0)
+				for j in steps:
+					var p := a + d * ((float(j) + 0.5) / maxf(1.0, float(steps))) + Vector2(-d.y, d.x).normalized() * 0.9
+					var s := 0.7 + hash2(p.x, p.y, 17.0) * 0.45
+					bushes.append(Transform3D(Basis(Vector3.UP, hash2(p.x, p.y, 19.0) * TAU).scaled(Vector3.ONE * s), Vector3(p.x, map.ground(p.x, p.y), p.y)))
+			_multimesh_chunked(group, bush, bushes, [], null, 320.0)
+		roadside.free()
+	# Simple dark soil rectangles inside home gardens and the mapped allotments.
+	var bed_mesh := BoxMesh.new()
+	bed_mesh.size = Vector3.ONE
+	var soil := StandardMaterial3D.new()
+	soil.albedo_color = Color(0.22, 0.14, 0.075)
+	soil.roughness = 1.0
+	var beds := []
+	for bed in map.raw.get("garden_beds", []):
+		var p := Vector2(float(bed[0]), float(bed[1]))
+		var basis := Basis(Vector3.UP, float(bed[2])).scaled_local(Vector3(float(bed[3]), 0.12, float(bed[4])))
+		beds.append(Transform3D(basis, Vector3(p.x, map.ground(p.x, p.y) + 0.05, p.y)))
+	_multimesh_chunked(group, bed_mesh, beds, [], soil, 240.0)
+
+func _fallback_fence() -> Mesh:
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3(2.5, 1.0, 0.12)
+	return mesh
 
 func _multimesh(parent: Node3D, mesh: Mesh, xfs: Array, tints: Array, mat: Material) -> MultiMeshInstance3D:
 	var mm := MultiMesh.new()
@@ -1046,16 +1197,44 @@ func _model(name: String, fallback: Callable) -> Array:
 		return models[name]
 	return [fallback.call(), Transform3D.IDENTITY]
 
-func _place_many(parent: Node3D, name: String, mesh_xf: Array, xfs: Array, tints := [], mat: Material = null) -> MultiMeshInstance3D:
+## With range_end > 0 the instances are split into SMALL_CHUNK cells that each stop drawing past range_end, and
+## the first cell's MultiMeshInstance3D is returned (so don't index instances through it).
+func _place_many(parent: Node3D, name: String, mesh_xf: Array, xfs: Array, tints := [], mat: Material = null, range_end := 0.0) -> MultiMeshInstance3D:
 	if xfs.is_empty():
 		return null
 	var local: Transform3D = mesh_xf[1]
 	var out := []
 	for xf in xfs:
 		out.append(xf * local)
+	if range_end > 0.0:
+		var cells := _multimesh_chunked(parent, mesh_xf[0], out, tints, mat, range_end)
+		for k in cells.size():
+			cells[k].name = name if k == 0 else "%s%d" % [name, k]
+		return cells[0]
 	var mmi := _multimesh(parent, mesh_xf[0], out, tints, mat)
 	mmi.name = name
 	return mmi
+
+## One MultiMesh per SMALL_CHUNK cell, each drawn only while the camera is within range_end of the cell's
+## centre: a single town-wide MultiMesh of small things (fence panels, parked cars) is drawn whole whenever any
+## of it is in view. Things show at least range_end - 91 m away (half a cell's diagonal).
+func _multimesh_chunked(parent: Node3D, mesh: Mesh, xfs: Array, tints: Array, mat: Material, range_end: float) -> Array[MultiMeshInstance3D]:
+	var cells := {}
+	for i in xfs.size():
+		var o: Vector3 = (xfs[i] as Transform3D).origin
+		var c := _chunk_of(Vector2(o.x, o.z), SMALL_CHUNK)
+		if not cells.has(c):
+			cells[c] = [[], []]
+		cells[c][0].append(xfs[i])
+		if not tints.is_empty():
+			cells[c][1].append(tints[i])
+	var out: Array[MultiMeshInstance3D] = []
+	for c in cells:
+		var mmi := _multimesh(parent, mesh, cells[c][0], cells[c][1], mat)
+		mmi.visibility_range_end = range_end
+		mmi.visibility_range_end_margin = 20.0
+		out.append(mmi)
+	return out
 
 func build_props() -> void:
 	var group := _group("Props")
@@ -1075,7 +1254,7 @@ func build_props() -> void:
 			var face := -dir * s # each head faces the traffic coming at it
 			signal_xfs.append(Transform3D(Basis(Vector3.UP, atan2(-face.x, -face.y)), Vector3(q.x, map.ground(q.x, q.y), q.y)))
 			map.add_post(q, 0.15)
-	_place_many(group, "TrafficLights", _model("TrafficLight", _fallback_signal), signal_xfs)
+	_place_many(group, "TrafficLights", _model("TrafficLight", _fallback_signal), signal_xfs, [], null, 500.0)
 	# bus shelters at the stops, back to the pavement, facing the road
 	var stop_xfs := []
 	for s in map.raw.get("stops", []):
@@ -1094,7 +1273,7 @@ func build_props() -> void:
 		var face := -side * sgn
 		stop_xfs.append(Transform3D(Basis(Vector3.UP, atan2(face.x, face.y) + PI), Vector3(q.x, map.ground(q.x, q.y), q.y)))
 		map.add_post(q, 1.1)
-	_place_many(group, "BusShelters", _model("BusShelter", _fallback_shelter), stop_xfs)
+	_place_many(group, "BusShelters", _model("BusShelter", _fallback_shelter), stop_xfs, [], null, 450.0)
 	_build_level_crossings(group)
 	_build_parked_cars(group)
 
@@ -1121,7 +1300,7 @@ func _build_lamps(group: Node3D) -> void:
 	lamp_material.emission_energy_multiplier = 0.0
 	var mesh_xf := _model("Streetlamp", _fallback_lamp)
 	var lamp_mesh := _with_surface_material(mesh_xf[0], "Lamp", lamp_material)
-	_place_many(group, "Streetlamps", [lamp_mesh, mesh_xf[1]], xfs)
+	_place_many(group, "Streetlamps", [lamp_mesh, mesh_xf[1]], xfs, [], null, 900.0)
 
 ## A copy of mesh whose surfaces with the material named material_name use mat instead (a MultiMesh can't
 ## override one surface's material per instance node, so the mesh itself carries it).
@@ -1144,12 +1323,55 @@ func _build_level_crossings(group: Node3D) -> void:
 		var road_dir := (pts[j + 1] - pts[j]).normalized()
 		var side := Vector2(-road_dir.y, road_dir.x)
 		for s: float in [-1.0, 1.0]:
-			# a barrier post on the right of each approach, 5 m back from the rails
+			# a barrier post on the right of each approach, 5 m back from the rails, its boom across the lane
 			var q := p - road_dir * 5.0 * s + side * (half + 0.9) * s
 			var boom_dir := -side * s
-			xfs.append(Transform3D(Basis(Vector3.UP, atan2(-boom_dir.y, boom_dir.x)), Vector3(q.x, map.ground(q.x, q.y), q.y)))
+			var xf := Transform3D(Basis(Vector3.UP, atan2(-boom_dir.y, boom_dir.x)), Vector3(q.x, map.ground(q.x, q.y), q.y))
+			xfs.append(xf)
 			map.add_post(q, 0.2)
+			# the boom reaches across the approach lane (the road's half), not the oncoming one
+			map.booms.append([q, q + boom_dir * minf(6.0, half + 0.9), false, BOOM_UP])
+			_boom_posts.append(xf)
 	_place_many(group, "LevelCrossings", _model("LevelCrossing", _fallback_crossing), xfs)
+	_boom_angle.resize(_boom_posts.size())
+	_boom_angle.fill(BOOM_UP)
+	var boom_xf := []
+	for k in _boom_posts.size():
+		boom_xf.append(_boom_transform(k))
+	if has_model("LevelCrossingBoom"):
+		_boom_local = models["LevelCrossingBoom"][1]
+		_boom_mmi = _place_many(group, "LevelCrossingBooms", models["LevelCrossingBoom"], boom_xf)
+
+const BOOM_UP := 1.45 ## rad: a raised boom (0 lies across the road)
+const BOOM_RATE := 0.35 ## rad/s: a boom takes about 4 s to come down or go up
+const BOOM_HINGE := Vector3(0.0, 1.0, -0.34) ## on the post, in the LevelCrossing model's frame
+var _boom_posts: Array = [] ## each boom's post transform (two per crossing, in crossing_points order)
+var _boom_angle := PackedFloat32Array()
+var _boom_mmi: MultiMeshInstance3D
+var _boom_local := Transform3D.IDENTITY
+
+func _boom_transform(k: int) -> Transform3D:
+	var post: Transform3D = _boom_posts[k]
+	return post * Transform3D(Basis(Vector3(0, 0, 1), _boom_angle[k]), BOOM_HINGE)
+
+## Lowers (closed) or raises the booms of crossing i (an index into crossing_points).
+func set_crossing(i: int, closed: bool) -> void:
+	for k in [2 * i, 2 * i + 1]:
+		if k < map.booms.size():
+			map.booms[k][2] = closed
+
+## Swings the booms towards their state; a boom only stops cars once it is nearly down.
+func update_crossings(delta: float) -> void:
+	if _boom_mmi == null:
+		return
+	for k in _boom_angle.size():
+		var closed: bool = map.booms[k][2]
+		var target := 0.0 if closed else BOOM_UP
+		if is_equal_approx(_boom_angle[k], target):
+			continue
+		_boom_angle[k] = move_toward(_boom_angle[k], target, BOOM_RATE * delta)
+		map.booms[k][3] = _boom_angle[k]
+		_boom_mmi.multimesh.set_instance_transform(k, _boom_transform(k) * _boom_local)
 
 ## Cars parked along the residential streets and in the car parks: mostly the cars Poles drove, all colours.
 func _build_parked_cars(group: Node3D) -> void:
@@ -1195,9 +1417,9 @@ func _build_parked_cars(group: Node3D) -> void:
 		var mesh_xf := _model(k, _fallback_car.bind(k))
 		var mesh: Mesh = mesh_xf[0]
 		if models.has(k):
-			_place_many(group, "Parked" + k, [_with_surface_material(mesh, "Paint", paint), mesh_xf[1]], lists[k][0], lists[k][1])
+			_place_many(group, "Parked" + k, [_with_surface_material(mesh, "Paint", paint), mesh_xf[1]], lists[k][0], lists[k][1], null, 400.0)
 		else:
-			_place_many(group, "Parked" + k, mesh_xf, lists[k][0], lists[k][1], paint)
+			_place_many(group, "Parked" + k, mesh_xf, lists[k][0], lists[k][1], paint, 400.0)
 
 func _add_parked(list: Array, p: Vector2, heading: float) -> void:
 	var basis := Basis(Vector3.UP, -heading - PI / 2.0)

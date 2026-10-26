@@ -40,7 +40,8 @@ Materials (names Godot looks for):
   SignalRed / SignalAmber / SignalGreen  traffic and crossing signal lenses (faint emission)
 
 Props: Headframe, ChurchSpire, Streetlamp, StreetlampPark, TrafficLight, BusShelter, Billboard, FestivalArch,
-FestivalStage, FlagPole, Tent, CarHatch, CarSedan, CarVan, Maluch, Bench, Fence, LevelCrossing, Beacon.
+FestivalStage, FlagPole, Tent, CarHatch, CarSedan, CarVan, Maluch, Bench, Fence, LevelCrossing, LevelCrossingBoom,
+Beacon, TrainCab, TrainCar (a PKP EN57 unit: cab + car + reversed cab, origin at the rail top).
 The script prints each prop's bounding box (Godot axes) and triangle count.
 """
 import bpy
@@ -75,6 +76,8 @@ kit.MATERIALS.update({
 	"SignalRed": (srgb("#d01010"), 0.2, 0.0, {"emit": ((1.0, 0.08, 0.05), 0.6)}),
 	"SignalAmber": (srgb("#e09010"), 0.2, 0.0, {"emit": ((1.0, 0.6, 0.05), 0.6)}),
 	"SignalGreen": (srgb("#10b050"), 0.2, 0.0, {"emit": ((0.1, 1.0, 0.4), 0.6)}),
+	"TrainCream": (srgb("#e8dcb4"), 0.45, 0.1, {}),
+	"TrainBlue": (srgb("#1f3f78"), 0.45, 0.1, {}),
 })
 
 UP = Vector((0, 0, 1))
@@ -546,14 +549,6 @@ def level_crossing():
 	cube(mb, (-0.27, -0.22, 1.2), (0.27, 0.22, 1.28), "Trim")
 	cube(mb, (-0.26, -0.21, 0.15), (0.26, 0.21, 0.4), "Red")
 	mb.tube((0, 0.2, 1.0), (0, 0.32, 1.0), 0.09, "Steel", segs=8)
-	seg = 0.5
-	for k in range(12):
-		x0 = 0.1 + k * seg
-		cube(mb, (x0, 0.3, 0.94), (x0 + seg, 0.38, 1.06), "Red" if k % 2 == 0 else "Sign")
-	cube(mb, (-0.9, 0.27, 0.86), (-0.2, 0.41, 1.14), "Trim")
-	bar(mb, (-0.2, 0.34, 1.0), (0.1, 0.34, 1.0), 0.08, "Trim")
-	for x in (2.0, 4.2, 6.0):
-		mb.disc((x, 0.385, 1.0), 0.045, "SignalRed", normal=(0, 1, 0), segs=8)
 	# St Andrew's cross on its own post behind the barrier
 	px = -1.0
 	mb.tube((px, 0, 0), (px, 0, 3.3), 0.05, "Steel", segs=8)
@@ -570,6 +565,92 @@ def level_crossing():
 	for sx in (-1, 1):
 		mb.disc((px + sx * 0.3, 0.105, 2.02), 0.12, "SignalRed", normal=(0, 1, 0), segs=12)
 		cube(mb, (px + sx * 0.3 - 0.14, 0.1, 2.15), (px + sx * 0.3 + 0.14, 0.25, 2.17), "Trim")
+	return mb
+
+
+def level_crossing_boom():
+	"""The crossing's 6 m red/white boom and its counterweight, origin at the hinge on the post (Blender
+	(0, 0.34, 1.0) of LevelCrossing, i.e. Godot (0, 1.0, -0.34)). It lies down along +X; Godot raises it by
+	turning it about its Z axis."""
+	mb = MB()
+	seg = 0.5
+	for k in range(12):
+		x0 = 0.1 + k * seg
+		cube(mb, (x0, -0.04, -0.06), (x0 + seg, 0.04, 0.06), "Red" if k % 2 == 0 else "Sign")
+	cube(mb, (-0.9, -0.07, -0.14), (-0.2, 0.07, 0.14), "Trim")
+	bar(mb, (-0.2, 0.0, 0.0), (0.1, 0.0, 0.0), 0.08, "Trim")
+	for x in (2.0, 4.2, 6.0):
+		mb.disc((x, 0.045, 0.0), 0.045, "SignalRed", normal=(0, 1, 0), segs=8)
+	return mb
+
+
+# ---------------------------------------------------------------- train
+EN57_L = 20.7  # m over the body; the unit is cab + middle car + reversed cab, 0.5 m apart
+EN57_W = 2.88
+
+
+def en57(cab):
+	"""One car of a PKP EN57 electric unit in cream and blue: origin at the rail top under the car's centre,
+	the cab (if cab) towards +Y (Godot -Z). The middle car carries the pantograph."""
+	mb = MB()
+	L, W = EN57_L, EN57_W
+	hy, hw = L / 2, W / 2
+	z0, z1, zr = 1.15, 3.55, 3.85
+	cube(mb, (-hw, -hy, z0), (hw, hy, z1), "TrainCream")
+	cube(mb, (-hw - 0.01, -hy - 0.01, z0), (hw + 0.01, hy + 0.01, 1.85), "TrainBlue")
+	cube(mb, (-hw - 0.012, -hy, 2.95), (hw + 0.012, hy, 3.05), "TrainBlue")
+	cube(mb, (-hw + 0.1, -hy + 0.1, 0.85), (hw - 0.1, hy - 0.1, z0), "Trim", skip=("+z",))
+	# rounded roof: two stepped slabs
+	cube(mb, (-hw + 0.08, -hy, z1), (hw - 0.08, hy, z1 + 0.15), "Steel", skip=("-z",))
+	cube(mb, (-hw + 0.45, -hy, z1 + 0.15), (hw - 0.45, hy, zr), "Steel", skip=("-z",))
+	# side windows and doors, both sides
+	door_y = (hy - 3.4, -hy + 3.4) if cab else (hy - 2.0, -hy + 2.0)
+	for side in (-1, 1):
+		x = side * (hw + 0.013)
+		n = (side, 0, 0)
+		y = -hy + 1.6
+		while y < hy - 2.0:
+			if all(abs(y + 0.55 - dy) > 1.2 for dy in door_y):
+				mb.quad((x, y, 2.1), (x, y + 1.1, 2.1), (x, y + 1.1, 2.85), (x, y, 2.85), "Glass", n)
+			y += 1.4
+		for dy in door_y:
+			mb.quad((x, dy - 0.65, 1.2), (x, dy + 0.65, 1.2), (x, dy + 0.65, 3.2), (x, dy - 0.65, 3.2), "Trim", n)
+			x2 = x + side * 0.004
+			for k in (-1, 1):
+				cy = dy + k * 0.32
+				mb.quad((x2, cy - 0.22, 2.1), (x2, cy + 0.22, 2.1), (x2, cy + 0.22, 2.95), (x2, cy - 0.22, 2.95), "Glass", n)
+	# bogies with a 2.5 m wheelbase; the wheels are dark discs on both sides
+	for by in (hy - 3.2, -hy + 3.2):
+		cube(mb, (-1.0, by - 1.6, 0.3), (1.0, by + 1.6, 0.85), "Trim")
+		for wy in (by - 1.25, by + 1.25):
+			for side in (-1, 1):
+				mb.disc((side * 1.03, wy, 0.48), 0.48, "Rubber", normal=(side, 0, 0), segs=12)
+	if cab:
+		# the sloped nose: blue apron, raked windscreen, cream brow; lamps low and on the roof
+		ny = hy + 0.35
+		mb.quad((-hw, hy, z0), (hw, hy, z0), (hw, hy, 1.85), (-hw, hy, 1.85), "TrainBlue", (0, 1, 0))
+		mb.quad((-hw, hy, 1.85), (hw, hy, 1.85), (hw, ny, 2.2), (-hw, ny, 2.2), "TrainBlue", (0, 1, 0))
+		mb.quad((-hw, ny, 2.2), (hw, ny, 2.2), (hw, ny - 0.1, 3.15), (-hw, ny - 0.1, 3.15), "Glass", (0, 1, 0.1))
+		mb.quad((-hw, ny - 0.1, 3.15), (hw, ny - 0.1, 3.15), (hw - 0.45, hy, zr), (-hw + 0.45, hy, zr), "TrainCream", (0, 1, 0.4))
+		for side in (-1, 1):
+			mb.quad((side * hw, hy, 1.85), (side * hw, ny, 2.2), (side * hw, ny - 0.1, 3.15), (side * hw, hy, 3.15), "TrainBlue", (side, 0, 0))
+			mb.quad((side * hw, hy, 3.15), (side * hw, ny - 0.1, 3.15), (side * (hw - 0.45), hy, zr), (side * hw, hy, zr), "TrainCream", (side, 0, 0))
+			mb.disc((side * 0.95, hy + 0.012, 1.55), 0.13, "Headlight", normal=(0, 1, 0), segs=10)
+			mb.disc((side * 0.95, hy + 0.012, 1.25), 0.07, "Taillight", normal=(0, 1, 0), segs=8)
+		mb.disc((0, ny - 0.05, 3.45), 0.12, "Headlight", normal=(0, 1, 0.3), segs=10)
+		cube(mb, (-0.25, hy, 0.75), (0.25, hy + 0.5, 1.05), "Trim")  # coupler
+		cube(mb, (-0.5, -hy - 0.2, 1.3), (0.5, -hy, 3.3), "Trim")  # gangway at the inner end
+	else:
+		for sy in (-1, 1):
+			lo, hi_ = sorted((sy * hy, sy * (hy + 0.2)))
+			cube(mb, (-0.5, lo, 1.3), (0.5, hi_, 3.3), "Trim")
+		for k in (-1, 1):
+			cube(mb, (-0.3, k * 1.2 - 0.15, zr), (0.3, k * 1.2 + 0.15, zr + 0.2), "Trim")
+		top = zr + 1.4
+		for x in (-0.6, 0.6):
+			for k in (-1, 1):
+				bar(mb, (x, k * 1.0, zr + 0.2), (x, k * 0.15, top), 0.05, "Steel")
+		bar(mb, (-0.85, 0, top), (0.85, 0, top), 0.06, "Steel")
 	return mb
 
 
@@ -995,14 +1076,21 @@ PIECES = {
 	"FestivalStage": festival_stage, "FlagPole": flag_pole, "Tent": tent,
 	"CarHatch": lambda: car(CAR_HATCH), "CarSedan": lambda: car(CAR_SEDAN), "CarVan": lambda: car(CAR_VAN),
 	"Maluch": lambda: car(MALUCH),
-	"Bench": bench, "Fence": fence, "LevelCrossing": level_crossing, "Beacon": beacon,
+	"Bench": bench, "Fence": fence, "LevelCrossing": level_crossing,
+	"LevelCrossingBoom": level_crossing_boom, "Beacon": beacon,
+	"TrainCab": lambda: en57(True), "TrainCar": lambda: en57(False),
 }
+KEEP_ORIGIN = {"LevelCrossingBoom", "TrainCab", "TrainCar"}  # pivots: neither grounded nor centred
 NOT_CENTRED = {"Fence", "LevelCrossing", "Streetlamp", "StreetlampPark", "TrafficLight", "FlagPole"}
 CARS = {"CarHatch", "CarSedan", "CarVan", "Maluch"}
 
 
 def finish(name, mb):
 	"""Ground the prop (min z = 0) and centre it in plan unless it keeps a custom origin."""
+	if name in KEEP_ORIGIN:
+		lo = Vector((min(p.x for p in mb.v), min(p.y for p in mb.v), min(p.z for p in mb.v)))
+		hi = Vector((max(p.x for p in mb.v), max(p.y for p in mb.v), max(p.z for p in mb.v)))
+		return hi - lo
 	lo = Vector((min(p.x for p in mb.v), min(p.y for p in mb.v), min(p.z for p in mb.v)))
 	hi = Vector((max(p.x for p in mb.v), max(p.y for p in mb.v), max(p.z for p in mb.v)))
 	shift = Vector((0, 0, -lo.z))
@@ -1067,6 +1155,11 @@ def main():
 	# street
 	Y = 250
 	preview_copy(objs["LevelCrossing"], (-17, Y, 0))
+	boom = preview_copy(objs["LevelCrossingBoom"], (-17, Y + 0.34, 1.0))
+	boom.rotation_euler = (0, math.radians(-80), 0)
+	preview_copy(objs["TrainCab"], (-60, Y + 21.2, 0))
+	preview_copy(objs["TrainCar"], (-60, Y, 0))
+	preview_copy(objs["TrainCab"], (-60, Y - 21.2, 0), rot=math.pi)
 	preview_copy(objs["Streetlamp"], (-8, Y, 0))
 	preview_copy(objs["StreetlampPark"], (-5, Y, 0))
 	preview_copy(objs["TrafficLight"], (-2.5, Y, 0))
@@ -1089,6 +1182,8 @@ def main():
 	R("street.png", (2, 262, 3.5), (0, 250, 2.2), 75)
 	R("lamps.png", (2.0, 251.5, 7.0), (-6.5, 251.0, 6.0), 55)
 	R("crossing.png", (-12, 258, 3.0), (-15, 250, 1.6), 55)
+	R("train.png", (-48, 290, 4.5), (-60, 268, 2.0), 55)
+	R("train_side.png", (-30, 250, 3.0), (-60, 250, 2.0), 70)
 	R("maluch.png", (11, 354.5, 1.8), (7.5, Yc, 0.6), 50)
 	R("hatch.png", (-11, 345.5, 1.8), (-7.5, Yc, 0.7), 50)
 	R("cars_front.png", (8, 360, 2.6), (0, Yc, 0.6), 50)

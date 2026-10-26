@@ -60,9 +60,13 @@ var bld_rings: Array[PackedVector2Array] = []
 var bld_rect: Array[Rect2] = []
 var _bld_cells := {} ## int cell -> PackedInt32Array of building ids
 var _post_cells := {} ## int cell -> PackedVector3Array (x, y, radius) of trees, lamps and posts
+var _wall_cells := {} ## int cell -> PackedFloat32Array (ax, ay, bx, by, half thickness)
 var water_rings: Array[PackedVector2Array] = []
 var water_rects: Array[Rect2] = []
 var water_level := PackedFloat32Array()
+var trains: Array = [] ## the train's cars: [Vector2 centre, heading (rad, map frame), half length, half width, height]
+var booms: Array = [] ## level crossing booms: [Vector2 hinge, Vector2 tip, bool closed, float angle
+## (rad, 0 = down)]; TownBuilder swings them
 var areas: Array = []
 var places: Array = []
 var spots := {}
@@ -441,6 +445,9 @@ func _load_obstacles() -> void:
 	var trees: Array = raw.get("trees", [])
 	for k in range(0, trees.size(), 3):
 		add_post(Vector2(trees[k], trees[k + 1]), TREE_RADIUS)
+	for wall in raw.get("fences", []):
+		var style := int(wall[4]) if wall.size() > 4 else 0
+		add_wall(Vector2(wall[0], wall[1]), Vector2(wall[2], wall[3]), 0.48 if style == 2 else 0.12)
 	var lamps := _flat(raw.get("lamps", []))
 	for p in lamps:
 		add_post(p, 0.16)
@@ -464,6 +471,37 @@ func add_post(p: Vector2, radius: float) -> void:
 	if not _post_cells.has(ck):
 		_post_cells[ck] = PackedVector3Array()
 	_post_cells[ck].append(Vector3(p.x, p.y, radius))
+
+## Add a solid wall segment to the spatial hash. Hedges use a wider collision radius than panels.
+func add_wall(a: Vector2, b: Vector2, half_thickness: float) -> void:
+	var lo := a.min(b) - Vector2.ONE * half_thickness
+	var hi := a.max(b) + Vector2.ONE * half_thickness
+	for cx in range(int(floor(lo.x / BCELL)), int(floor(hi.x / BCELL)) + 1):
+		for cy in range(int(floor(lo.y / BCELL)), int(floor(hi.y / BCELL)) + 1):
+			var ck := _cell_key(cx, cy)
+			if not _wall_cells.has(ck):
+				_wall_cells[ck] = PackedFloat32Array()
+			_wall_cells[ck].append_array(PackedFloat32Array([a.x, a.y, b.x, b.y, half_thickness]))
+
+## Wall segments in the cells overlapping a circle around p. A wall can occur in several cells.
+func walls_near(p: Vector2, r: float) -> Array[PackedFloat32Array]:
+	var out: Array[PackedFloat32Array] = []
+	var seen := {}
+	for cx in range(int(floor((p.x - r) / BCELL)), int(floor((p.x + r) / BCELL)) + 1):
+		for cy in range(int(floor((p.y - r) / BCELL)), int(floor((p.y + r) / BCELL)) + 1):
+			var ck := _cell_key(cx, cy)
+			if not _wall_cells.has(ck):
+				continue
+			var walls: PackedFloat32Array = _wall_cells[ck]
+			for k in range(0, walls.size(), 5):
+				var key := "%0.1f,%0.1f,%0.1f,%0.1f" % [walls[k], walls[k + 1], walls[k + 2], walls[k + 3]]
+				if seen.has(key):
+					continue
+				seen[key] = true
+				var wall := PackedFloat32Array([walls[k], walls[k + 1], walls[k + 2], walls[k + 3], walls[k + 4]])
+				if Geometry2D.get_closest_point_to_segment(p, Vector2(wall[0], wall[1]), Vector2(wall[2], wall[3])).distance_to(p) < r + wall[4]:
+					out.append(wall)
+	return out
 
 ## Building ids whose box overlaps the circle.
 func buildings_near(p: Vector2, r: float) -> PackedInt32Array:

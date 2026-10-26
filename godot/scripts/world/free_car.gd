@@ -10,6 +10,7 @@ const HALF_L := 1.68 ## half the Seicento's length (3.34 m) and width (1.51 m)
 const HALF_W := 0.76
 const WALL_STEP := 0.9 ## m: a deck this much above the car is a wall (the side of an embankment), not a ramp
 const UNDER_DECK := 3.6 ## m: a deck this far above the car is a bridge it passes under
+const BOOM_R := 0.12 ## m: half the thickness of a level crossing boom
 const WATER_RESPAWN := 2.2 ## s in deep water before the car is put back on the road
 
 var map: TownMap
@@ -93,6 +94,10 @@ func speed_kmh() -> float:
 ## Height the car would ride at on (x, y), keeping to the deck nearest its current height.
 func support(x: float, y: float) -> float:
 	var g := map.ground(x, y)
+	# a pond's bed, as the terrain mesh sinks it (a dyke track through the fishponds stays up)
+	var w := map.water_at(Vector2(x, y))
+	if not is_nan(w) and map.road_at(x, y).is_empty():
+		g = minf(g, w - TownBuilder.POND_DEPTH)
 	var best := g
 	var best_d := absf(g - z)
 	for d in map.decks_at(x, y, TownMap.DRIVE_REACH):
@@ -279,6 +284,65 @@ func _collide(mass: float) -> void:
 			var n_local := (cl - local).normalized() if d > 1e-4 else Vector2(signf(local.x), 0.0) * -1.0
 			var n_out := n_local.rotated(car.heading)
 			_push(n_out * (post.z - d + 0.01), cl.rotated(car.heading), n_out, mass)
+	# fences, walls and hedges: treat each segment as a thin capsule against the car's box
+	for wall in map.walls_near(c, HALF_L + 1.0):
+		var a := Vector2(wall[0], wall[1])
+		var b := Vector2(wall[2], wall[3])
+		var cp := Geometry2D.get_closest_point_to_segment(c, a, b)
+		var local := (cp - c).rotated(-car.heading)
+		var cl := Vector2(clampf(local.x, -HALF_L, HALF_L), clampf(local.y, -HALF_W, HALF_W))
+		var d := local.distance_to(cl)
+		if d < wall[4]:
+			var n_local := (cl - local).normalized() if d > 1e-4 else Vector2(signf(local.x), 0.0) * -1.0
+			var n_out := n_local.rotated(car.heading)
+			_push(n_out * (wall[4] - d + 0.02), cl.rotated(car.heading), n_out, mass)
+	# the train's cars: boxes that push the car out of them (they don't give way)
+	for tc in map.trains:
+		if tc == null or absf(float(tc[4]) - z) > 3.0:
+			continue
+		var tcen: Vector2 = tc[0]
+		if tcen.distance_to(c) > float(tc[2]) + HALF_L + 2.0:
+			continue
+		var f := Vector2.from_angle(float(tc[1]))
+		var r := Vector2(-f.y, f.x)
+		var hl: float = tc[2]
+		var hw: float = tc[3]
+		var ring := PackedVector2Array([tcen + f * hl + r * hw, tcen + f * hl - r * hw, tcen - f * hl - r * hw, tcen - f * hl + r * hw])
+		for q in corners():
+			var lq := q - tcen
+			var ax := lq.dot(f)
+			var ay := lq.dot(r)
+			if absf(ax) < hl and absf(ay) < hw:
+				# out through the nearer side (a car hits a train side-on, not its buffers, almost always)
+				var dx := hl - absf(ax)
+				var dy := hw - absf(ay)
+				var n_out := f * signf(ax) if dx < dy else r * signf(ay)
+				_push(n_out * (minf(dx, dy) + 0.02), q - c, n_out, mass)
+		_vertex_push(ring, mass)
+	# a level crossing's boom once it is (nearly) down: a thin bar the car's box can't pass
+	for bm in map.booms:
+		if float(bm[3]) > 0.3:
+			continue
+		var cp := Geometry2D.get_closest_point_to_segment(c, bm[0], bm[1])
+		if cp.distance_to(c) > HALF_L + 1.0:
+			continue
+		var local := (cp - c).rotated(-car.heading)
+		var cl := Vector2(clampf(local.x, -HALF_L, HALF_L), clampf(local.y, -HALF_W, HALF_W))
+		var d := local.distance_to(cl)
+		if d >= BOOM_R:
+			continue
+		var n_local: Vector2
+		var depth: float
+		if d > 1e-4:
+			n_local = (cl - local) / d
+			depth = BOOM_R - d
+		else:
+			# the boom is already inside the box (a fast car crossed it in one tick): back out along the car
+			var sx := signf(local.x) if local.x != 0.0 else 1.0
+			n_local = Vector2(-sx, 0.0)
+			depth = HALF_L - absf(local.x) + BOOM_R
+		var n_out := n_local.rotated(car.heading)
+		_push(n_out * (depth + 0.01), cl.rotated(car.heading), n_out, mass)
 	# the edge of the map
 	var b := map.bounds.grow(-1.5)
 	for q in corners():
