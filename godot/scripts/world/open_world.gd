@@ -79,6 +79,10 @@ var night := 0.0
 var events: Array = [] ## [{stage, spot, pos: Vector2, heading, title, ...}]
 var active_event := -1
 var gps_target := -1
+var gps_waypoint := false ## the route runs to the player's own waypoint instead of a stage
+var wp_pos := Vector2.ZERO
+var wp_on := false
+var _reset_armed := false ## RESET CAMPAIGN was pressed once and waits for its confirmation
 var route := PackedVector2Array()
 var _route_t := 0.0
 var traps: Array = [] ## [{id, pos, dir, name}]
@@ -122,6 +126,7 @@ func _ready() -> void:
 	hud = OpenWorldHud.new()
 	add_child(hud)
 	hud.pause_action.connect(_pause_action)
+	hud.waypoint_picked.connect(_set_waypoint)
 	hide()
 
 static func available() -> bool:
@@ -273,6 +278,9 @@ func _build_environment() -> void:
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	sun.directional_shadow_max_distance = 260.0
 	sun.shadow_blur = 1.2
+	# a wall edge-on to the high sun self-shadowed in blocky patches that flipped as the sun crept (TASKS 14)
+	sun.shadow_bias = 0.3
+	sun.shadow_normal_bias = 3.0
 	world.add_child(sun)
 	camera = Camera3D.new()
 	camera.near = 0.25
@@ -464,15 +472,17 @@ func _update_markers() -> void:
 		var st: Dictionary = Campaign.get_stage(e.stage)
 		var info := "%s · %s · %s" % [e.title, SPOT_NOTE.get(e.spot, ""), "Done" if e.done else ("Open" if e.open else "Locked")]
 		list.append({"pos": e.pos, "color": e.color, "label": "%d. %s" % [e.stage + 1, String(st.track).capitalize()], "info": info})
+	if wp_on:
+		list.append({"pos": wp_pos, "color": OpenWorldHud.PURPLE, "label": "WAYPOINT", "info": "Your waypoint"})
 	hud.set_markers(list)
 
+## The first open stage that isn't cleared yet (the unlock cap stays on the last stage once the campaign is
+## finished, so "unlocked" alone would point at stage 9 for ever); -1 when everything is done.
 func _next_open_event() -> int:
-	var prog := Campaign.load_progress()
-	var unlocked := int(prog.get("unlocked", 0))
 	for k in events.size():
-		if events[k].stage == unlocked:
+		if events[k].open and not events[k].done:
 			return k
-	return 0 if not events.is_empty() else -1
+	return -1
 
 func _spawn(spawn) -> void:
 	var p := Vector2.ZERO
@@ -506,7 +516,7 @@ func _spawn(spawn) -> void:
 	cam_pos = _prev_pos - f * 7.0 + Vector3.UP * 2.6
 	cam_vel_dir = Vector2(f.x, f.z)
 	_apply_time()
-	if gps_target < 0:
+	if not gps_waypoint and (gps_target < 0 or gps_target >= events.size() or events[gps_target].done):
 		gps_target = _next_open_event()
 	_recompute_route()
 
@@ -739,17 +749,35 @@ func _add_fans(n: int, banner: String) -> void:
 
 # ================================================================================================ GPS
 
+func _has_target() -> bool:
+	return wp_on if gps_waypoint else (gps_target >= 0 and gps_target < events.size())
+
+func _target_pos() -> Vector2:
+	return wp_pos if gps_waypoint else (events[gps_target].pos as Vector2)
+
 func _recompute_route() -> void:
-	if gps_target < 0 or gps_target >= events.size() or drive == null:
+	if not _has_target() or drive == null:
 		route = PackedVector2Array()
 	else:
-		route = map.route(Vector2(drive.car.x, drive.car.y), events[gps_target].pos)
+		route = map.route(Vector2(drive.car.x, drive.car.y), _target_pos())
 	hud.set_route(route)
 	_update_route_mesh()
 
+## Drops the player's own waypoint (map click or cursor) and routes there.
+func _set_waypoint(pos: Vector2) -> void:
+	wp_pos = pos
+	wp_on = true
+	gps_waypoint = true
+	hud.cursor_on = false
+	_update_markers()
+	_recompute_route()
+	if hud.map_open:
+		hud.toggle_map(false)
+	hud.notify("WAYPOINT SET", "Your own destination", OpenWorldHud.PURPLE)
+
 func _off_route() -> bool:
 	if route.size() < 2:
-		return gps_target >= 0
+		return _has_target()
 	var cp := Vector2(drive.car.x, drive.car.y)
 	var best := INF
 	for i in route.size() - 1:
@@ -808,7 +836,7 @@ func _process(delta: float) -> void:
 	_route_t -= delta
 	if _route_t <= 0.0:
 		_route_t = 0.5
-		if gps_target >= 0 and _off_route():
+		if _has_target() and _off_route():
 			_recompute_route()
 		else:
 			_update_route_mesh()
@@ -921,18 +949,34 @@ func _input(event: InputEvent) -> void:
 	if hud.map_open:
 		match act:
 			"back", "map", "pause":
-				hud.toggle_map(false)
-			"left", "up":
-				hud.map_sel = posmod(hud.map_sel - 1, maxi(events.size(), 1))
-				hud.big_overlay.queue_redraw()
-			"right", "down":
-				hud.map_sel = posmod(hud.map_sel + 1, maxi(events.size(), 1))
-				hud.big_overlay.queue_redraw()
+				if hud.cursor_on and act == "back":
+					hud.toggle_cursor(false)
+				else:
+					hud.cursor_on = false
+					hud.toggle_map(false)
+			"left", "up", "right", "down":
+				if hud.cursor_on:
+					hud.move_cursor({"left": Vector2.LEFT, "right": Vector2.RIGHT, "up": Vector2.UP, "down": Vector2.DOWN}[act])
+				else:
+					var n := maxi(hud.markers.size(), 1)
+					hud.map_sel = posmod(hud.map_sel + (-1 if act in ["left", "up"] else 1), n)
+					hud.big_overlay.queue_redraw()
+			"cursor":
+				hud.toggle_cursor(not hud.cursor_on)
 			"accept":
-				gps_target = hud.map_sel
-				_recompute_route()
-				hud.toggle_map(false)
-				hud.notify("ROUTE SET", String(events[gps_target].title), OpenWorldHud.PURPLE)
+				if hud.cursor_on:
+					_set_waypoint(hud.cursor)
+				elif hud.map_sel >= events.size():
+					gps_waypoint = true
+					_recompute_route()
+					hud.toggle_map(false)
+					hud.notify("ROUTE SET", "Your waypoint", OpenWorldHud.PURPLE)
+				else:
+					gps_waypoint = false
+					gps_target = hud.map_sel
+					_recompute_route()
+					hud.toggle_map(false)
+					hud.notify("ROUTE SET", String(events[gps_target].title), OpenWorldHud.PURPLE)
 		return
 	match act:
 		"pause", "back":
@@ -943,6 +987,7 @@ func _input(event: InputEvent) -> void:
 			hud.map_sel = maxi(gps_target, 0)
 			hud.toggle_map(true)
 		"gps":
+			gps_waypoint = false
 			gps_target = _next_open_event()
 			_recompute_route()
 			if gps_target >= 0:
@@ -969,6 +1014,7 @@ func _action_of(event: InputEvent) -> String:
 			KEY_E: return "shift_up" # as in a race (E / Q shift a manual gearbox)
 			KEY_M, KEY_TAB: return "map"
 			KEY_G: return "gps"
+			KEY_F: return "cursor" if hud.map_open else ""
 			KEY_C: return "camera"
 			KEY_R, KEY_BACKSPACE: return "reset"
 			KEY_T: return "time"
@@ -988,7 +1034,7 @@ func _action_of(event: InputEvent) -> String:
 			JOY_BUTTON_A: return "accept"
 			JOY_BUTTON_BACK: return "map"
 			JOY_BUTTON_Y: return "camera"
-			JOY_BUTTON_X: return "reset"
+			JOY_BUTTON_X: return "cursor" if hud.map_open else "reset"
 			JOY_BUTTON_RIGHT_SHOULDER: return "shift_up"
 			JOY_BUTTON_LEFT_SHOULDER: return "shift_down"
 			JOY_BUTTON_DPAD_UP: return "up" if (paused or hud.map_open) else "gps"
@@ -1004,7 +1050,21 @@ func _set_paused(on: bool) -> void:
 		audio.update_car(null, false)
 
 func _pause_action(action: String) -> void:
+	if action != "reset_campaign":
+		_reset_armed = false
 	match action:
+		"reset_campaign":
+			if not _reset_armed:
+				_reset_armed = true
+				hud.notify("RESET CAMPAIGN?", "Select it again to wipe all stage progress", Color("#ff5a4a"))
+				return
+			_reset_armed = false
+			Campaign.reset_progress()
+			_refresh_events()
+			gps_target = _next_open_event()
+			_recompute_route()
+			_set_paused(false)
+			hud.notify("CAMPAIGN RESET", "Back to stage 1", OpenWorldHud.PURPLE)
 		"resume":
 			_set_paused(false)
 		"map":

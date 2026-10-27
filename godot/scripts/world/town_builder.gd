@@ -18,8 +18,8 @@ const TOWN_MODELS := "res://models/town.glb"
 const LANDMARK_MODELS := "res://models/brzeszcze_landmarks.glb" ## tools/blender/build_brzeszcze.py
 const LAND_RES := 2.5 ## metres per texel of data/world/<key>_land.png (tools/build_open_world.py)
 
-const TERRAIN_STEP := 10.0
-const POND_DEPTH := 1.4 ## m: the terrain sinks this far below a pond's surface (FreeCar drives on the same bed)
+const TERRAIN_STEP := TownMap.BED_STEP
+const POND_DEPTH := TownMap.POND_DEPTH ## m: the terrain sinks this far below a pond's surface (FreeCar drives on the same bed)
 const TERRAIN_CHUNK := 32 ## quads per chunk side
 const CHUNK := 256.0 ## m: buildings and street batches
 const TREE_CHUNK := 128.0
@@ -54,7 +54,6 @@ var window_glow := 0.0
 var lamp_spots := PackedVector3Array() ## lamp head positions, for the pool of real lights
 var lamp_dirs := PackedVector3Array()
 var beacon_nodes := {} ## spot name -> Node3D
-var water_mask := {} ## terrain vertex index -> water surface height (ponds sink the ground under them)
 var festival_pos := Vector3.ZERO
 var crossing_points: Array = [] ## [Vector2 position, road index] where a street crosses the railway at grade
 var models := {} ## town.glb meshes by object name
@@ -96,8 +95,8 @@ func has_model(name: String) -> bool:
 ## The steps in order, for the caller to run one per frame: [label, Callable].
 func steps() -> Array:
 	return [["Terrain", build_terrain], ["Ponds and streams", build_water], ["Streets", build_roads],
-		["Railway", build_rail], ["Buildings", build_buildings], ["Woods and gardens", build_trees], ["Garden fences", build_fences],
-		["Street furniture", build_props], ["Landmarks", build_landmarks], ["Horizon", build_horizon]]
+		["Railway", build_rail], ["Tunnels", build_tunnels], ["Buildings", build_buildings], ["Woods and gardens", build_trees], ["Garden fences", build_fences],
+		["Street furniture", build_props], ["Road ends", build_closures], ["Landmarks", build_landmarks], ["Horizon", build_horizon]]
 
 static func color_lin(hex: String) -> Color:
 	return Color(hex).srgb_to_linear()
@@ -144,7 +143,6 @@ func _group(name: String) -> Node3D:
 # ============================================================================================ terrain
 
 func build_terrain() -> void:
-	_build_water_mask()
 	var group := _group("Terrain")
 	var mat := _surface_material(GROUND_SHADER, "grass")
 	mat.set_shader_parameter("base_color", Color(0.36, 0.52, 0.2))
@@ -172,8 +170,8 @@ func build_terrain() -> void:
 			var y := ex.position.y + j * TERRAIN_STEP
 			var h := map.ground(x, y)
 			var k := j * nx + i
-			if water_mask.has(k):
-				h = minf(h, float(water_mask[k]) - POND_DEPTH)
+			if map.bed_mask.has(k):
+				h = minf(h, float(map.bed_mask[k]) - POND_DEPTH)
 			hs[k] = h
 	for cj in range(0, ny - 1, TERRAIN_CHUNK):
 		for ci in range(0, nx - 1, TERRAIN_CHUNK):
@@ -198,32 +196,6 @@ func build_terrain() -> void:
 					mb.quad(a, a + w, a + w + 1, a + 1)
 			var inst := _add_mesh(group, mb.commit(), mat)
 			inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-
-## Terrain vertices inside ponds (scanline over each water ring at the terrain's resolution).
-func _build_water_mask() -> void:
-	var ex := map.extent
-	var nx := int(ex.size.x / TERRAIN_STEP) + 1
-	for k in map.water_rings.size():
-		var ring := map.water_rings[k]
-		var level := map.water_level[k]
-		var r := map.water_rects[k]
-		var j0 := int(ceil((r.position.y - ex.position.y) / TERRAIN_STEP))
-		var j1 := int(floor((r.end.y - ex.position.y) / TERRAIN_STEP))
-		for j in range(j0 - 1, j1 + 2):
-			var y := ex.position.y + j * TERRAIN_STEP
-			var xs := PackedFloat32Array()
-			for e in ring.size():
-				var a := ring[e]
-				var b := ring[(e + 1) % ring.size()]
-				if (a.y > y) != (b.y > y):
-					xs.append(a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x))
-			xs.sort()
-			for m in range(0, xs.size() - 1, 2):
-				var i0 := int(ceil((xs[m] - ex.position.x) / TERRAIN_STEP)) - 1
-				var i1 := int(floor((xs[m + 1] - ex.position.x) / TERRAIN_STEP)) + 1
-				for i in range(maxi(i0, 0), mini(i1, nx - 1) + 1):
-					var kk := j * nx + i
-					water_mask[kk] = minf(float(water_mask.get(kk, INF)), level)
 
 # ============================================================================================ water
 
@@ -443,7 +415,7 @@ func build_roads() -> void:
 						# underside
 						db.flat_quad(e0 - Vector3.UP * 0.9, e1 - Vector3.UP * 0.9, e1 - Vector3.UP * 0.9 - out * (half * 2.0 + 0.4),
 							e0 - Vector3.UP * 0.9 - out * (half * 2.0 + 0.4), Vector3.DOWN, concrete.darkened(0.3))
-						if side > 0.0 and int(s[i] / 22.0) != int(s[i + 1] / 22.0):
+						if side > 0.0 and map.has_pier(ri, i):
 							var cpt := (left[i] + right[i]) * 0.5
 							db.beam(Vector3(cpt.x, map.ground(cpt.x, cpt.z) - 0.5, cpt.z),
 								Vector3(cpt.x + t2.x * 0.01, 0.0, cpt.z + t2.y * 0.01), 1.4, cpt.y - map.ground(cpt.x, cpt.z) - 0.4, concrete.darkened(0.15))
@@ -579,7 +551,7 @@ func build_rail() -> void:
 					var nn := (e1 - e0).cross(b0 - e0).normalized()
 					if nn.y < 0.0:
 						nn = -nn
-					bank.flat_quad(e0, e1, b1, b0, nn, Color.WHITE)
+					_bank_quad(bank, e0, e1, b1, b0, nn, (a + b) * 0.5)
 	var mat_v := StandardMaterial3D.new()
 	mat_v.vertex_color_use_as_albedo = true
 	mat_v.roughness = 0.95
@@ -599,6 +571,34 @@ func build_rail() -> void:
 		if not (parts[3] as MeshBatch).is_empty():
 			_add_mesh(group, (parts[3] as MeshBatch).commit(), bank_mat)
 	_find_level_crossings(rail_lines)
+
+## One slope of a railway embankment, with the strip a street's tunnel passes through left out of it.
+func _bank_quad(bank: MeshBatch, e0: Vector3, e1: Vector3, b1: Vector3, b0: Vector3, nn: Vector3, mid: Vector2) -> void:
+	var cut := []
+	for t in map.tunnels:
+		if (t.c as Vector2).distance_to(mid) < float(t.half_foot) + 16.0:
+			cut.append(t)
+	if cut.is_empty():
+		bank.flat_quad(e0, e1, b1, b0, nn, Color.WHITE)
+		return
+	var nt := 10
+	var nu := 4
+	for ti in nt:
+		for ui in nu:
+			var corners: Array[Vector3] = []
+			for k in [[0, 0], [1, 0], [1, 1], [0, 1]]:
+				var tt := float(ti + k[0]) / nt
+				var uu := float(ui + k[1]) / nu
+				corners.append(e0.lerp(e1, tt).lerp(b0.lerp(b1, tt), uu))
+			var inside := false
+			for q in corners:
+				for t in cut:
+					var rel := Vector2(q.x, q.z) - (t.c as Vector2)
+					var v: Vector2 = t.v
+					if absf(rel.dot(Vector2(-v.y, v.x))) < float(t.w) * 0.5 + 0.9 and absf(rel.dot(v)) < float(t.half_foot) + 1.0:
+						inside = true
+			if not inside:
+				bank.flat_quad(corners[0], corners[1], corners[2], corners[3], nn, Color.WHITE)
 
 ## Where a street crosses the railway at grade (for the barriers and the crossing signs).
 func _find_level_crossings(rail_lines: Array) -> void:
@@ -628,6 +628,103 @@ func _find_level_crossings(rail_lines: Array) -> void:
 					dup = true
 			if not dup:
 				crossing_points.append([cross, ri, (b - a).normalized(), j])
+
+# ============================================================================================ tunnels
+
+## The underpasses (TownMap.tunnels): the street runs through the railway embankment in a lined concrete bore under the
+## deck, with a portal (a header beam over the opening and wing walls that follow the slope down to the ground) at each end.
+func build_tunnels() -> void:
+	if map.tunnels.is_empty():
+		return
+	var group := _group("Tunnels")
+	var concrete := StandardMaterial3D.new()
+	concrete.vertex_color_use_as_albedo = true
+	concrete.roughness = 0.92
+	concrete.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var lamp_mat := StandardMaterial3D.new()
+	lamp_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	lamp_mat.albedo_color = Color(1.0, 0.9, 0.62)
+	lamp_mat.emission_enabled = true
+	lamp_mat.emission = Color(1.0, 0.82, 0.45)
+	lamp_mat.emission_energy_multiplier = 2.5
+	lamp_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var mb := MeshBatch.new(false, true)
+	var lb := MeshBatch.new()
+	var face := Color(0.64, 0.63, 0.6)
+	var lining := Color(0.27, 0.27, 0.28)
+	for t in map.tunnels:
+		var c: Vector2 = t.c
+		var v: Vector2 = t.v
+		var n := Vector2(-v.y, v.x)
+		var hb: float = t.half_bore
+		var hf: float = t.half_foot
+		var hw: float = float(t.w) * 0.5 + 0.2
+		var gc: float = t.ground
+		var deck_top: float = gc + float(t.z)
+		var roof: float = deck_top - 0.9
+		var sin_t := maxf(absf((t.u as Vector2).cross(v)), 0.35)
+		var at := func(s: float, l: float, y: float) -> Vector3:
+			var q := c + v * s + n * l
+			return Vector3(q.x, y, q.y)
+		var lo := func(s: float, l: float) -> float:
+			var q := c + v * s + n * l
+			return map.ground(q.x, q.y) - 0.3
+		# roof underside and the header beams that close the bore's ends
+		mb.flat_quad(at.call(-hb, -hw - 0.3, roof), at.call(hb, -hw - 0.3, roof), at.call(hb, hw + 0.3, roof),
+			at.call(-hb, hw + 0.3, roof), Vector3.DOWN, lining.darkened(0.3))
+		for e: float in [-1.0, 1.0]:
+			mb.flat_quad(at.call(e * hb, -hw - 0.3, roof), at.call(e * hb, hw + 0.3, roof), at.call(e * hb, hw + 0.3, deck_top),
+				at.call(e * hb, -hw - 0.3, deck_top), Vector3(v.x, 0.0, v.y) * e, face)
+			# a darker band along the lintel: the portal's frame
+			mb.flat_quad(at.call(e * (hb + 0.02), -hw - 0.3, roof), at.call(e * (hb + 0.02), hw + 0.3, roof),
+				at.call(e * (hb + 0.02), hw + 0.3, roof + 0.35), at.call(e * (hb + 0.02), -hw - 0.3, roof + 0.35),
+				Vector3(v.x, 0.0, v.y) * e, face.darkened(0.25))
+		# walls: lining inside the bore, concrete wing walls outside it, rising to the slope of the embankment
+		var steps := [-hf]
+		var k := -hf + 2.0
+		while k < hf - 0.01:
+			if absf(k) < hb - 0.01 or absf(k) > hb + 0.01:
+				steps.append(k)
+			k += 2.0
+		steps.append(-hb)
+		steps.append(hb)
+		steps.append(hf)
+		steps.sort()
+		for sd: float in [-1.0, 1.0]:
+			var l := hw * sd
+			for j in steps.size() - 1:
+				var s0: float = steps[j]
+				var s1: float = steps[j + 1]
+				if s1 - s0 < 0.01:
+					continue
+				var inside := absf((s0 + s1) * 0.5) < hb
+				var top0 := roof
+				var top1 := roof
+				if not inside:
+					var slope := func(s: float) -> float:
+						return deck_top - 0.35 - maxf(absf(s) * sin_t - 2.4, 0.0) / TownMap.EMBANKMENT
+					top0 = maxf(slope.call(s0), lo.call(s0, l) + 0.4)
+					top1 = maxf(slope.call(s1), lo.call(s1, l) + 0.4)
+				var col := lining if inside else face
+				var nrm := Vector3(n.x, 0.0, n.y) * -sd
+				mb.flat_quad(at.call(s0, l, lo.call(s0, l)), at.call(s1, l, lo.call(s1, l)), at.call(s1, l, top1),
+					at.call(s0, l, top0), nrm, col)
+		# strip lights along the roof
+		var ls := -hb + 1.2
+		while ls < hb - 0.5:
+			lb.flat_quad(at.call(ls, -0.5, roof - 0.03), at.call(ls + 0.35, -0.5, roof - 0.03), at.call(ls + 0.35, 0.5, roof - 0.03),
+				at.call(ls, 0.5, roof - 0.03), Vector3.DOWN, Color.WHITE)
+			ls += 2.4
+		var light := OmniLight3D.new()
+		light.name = "TunnelLight"
+		light.light_color = Color(1.0, 0.86, 0.6)
+		light.light_energy = 1.6
+		light.omni_range = maxf(hb, 6.0) + 6.0
+		light.shadow_enabled = false
+		light.position = at.call(0.0, 0.0, roof - 0.5)
+		group.add_child(light)
+	_add_mesh(group, mb.commit(), concrete, "Portals")
+	_add_mesh(group, lb.commit(), lamp_mat, "TunnelLamps", false)
 
 # ============================================================================================ buildings
 
@@ -1067,7 +1164,7 @@ func build_fences() -> void:
 		if length < 0.35:
 			continue
 		var style := int(w[4]) if w.size() > 4 else 0
-		if style == 2:
+		if style == 2 or style == 4:
 			continue # hedge rows use the bush mesh below instead of metal panels
 		var piece := 2.5
 		var count := maxi(1, int(ceil(length / piece)))
@@ -1235,6 +1332,58 @@ func _multimesh_chunked(parent: Node3D, mesh: Mesh, xfs: Array, tints: Array, ma
 		mmi.visibility_range_end_margin = 20.0
 		out.append(mmi)
 	return out
+
+## Barriers where a road meets the edge of the playable area: a striped beam across it on posts with a red sign, or
+## for the S1's turn-around a long row of concrete blocks. The collision comes from the baked style-4 fence segment.
+func build_closures() -> void:
+	var group := _group("Road ends")
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 0.85
+	var xfs := []
+	var tints := []
+	var red := Color(0.78, 0.08, 0.06)
+	var white := Color(0.93, 0.93, 0.9)
+	var grey := Color(0.62, 0.62, 0.6)
+	for c in map.closures:
+		var p := Vector2(float(c[0]), float(c[1]))
+		var h := float(c[2])
+		var w := float(c[3])
+		var turn := int(c[4]) == 1
+		var side := Vector2(-sin(h), cos(h)) # along the barrier
+		var yaw := atan2(-side.y, side.x)
+		var g := map.ground(p.x, p.y)
+		if turn:
+			var n := int(w / 3.0)
+			for i in n:
+				var q: Vector2 = p + side * ((float(i) + 0.5) / n - 0.5) * w
+				xfs.append(Transform3D(Basis(Vector3.UP, yaw).scaled_local(Vector3(3.0, 0.9, 0.5)), Vector3(q.x, map.ground(q.x, q.y) + 0.45, q.y)))
+				tints.append(grey)
+				xfs.append(Transform3D(Basis(Vector3.UP, yaw).scaled_local(Vector3(3.0, 0.2, 0.52)), Vector3(q.x, map.ground(q.x, q.y) + 1.0, q.y)))
+				tints.append(red if i % 2 == 0 else white)
+			continue
+		for end in [-1.0, 1.0]:
+			var q: Vector2 = p + side * end * (w * 0.5)
+			xfs.append(Transform3D(Basis().scaled(Vector3(0.18, 1.5, 0.18)), Vector3(q.x, map.ground(q.x, q.y) + 0.75, q.y)))
+			tints.append(white)
+		var parts := maxi(2, int(w / 1.2) / 2 * 2)
+		for row in 2:
+			for i in parts:
+				var q: Vector2 = p + side * ((float(i) + 0.5) / parts - 0.5) * w
+				var y := map.ground(q.x, q.y) + 0.85 + row * 0.4
+				xfs.append(Transform3D(Basis(Vector3.UP, yaw).scaled_local(Vector3(w / parts, 0.2, 0.08)), Vector3(q.x, y, q.y)))
+				tints.append(red if (i + row) % 2 == 0 else white)
+		# a red board on a post at the middle: the road is closed
+		xfs.append(Transform3D(Basis().scaled(Vector3(0.1, 1.4, 0.1)), Vector3(p.x, g + 0.7, p.y)))
+		tints.append(grey)
+		xfs.append(Transform3D(Basis(Vector3.UP, yaw).scaled_local(Vector3(0.9, 0.9, 0.05)), Vector3(p.x, g + 1.75, p.y)))
+		tints.append(red)
+		xfs.append(Transform3D(Basis(Vector3.UP, yaw).scaled_local(Vector3(0.65, 0.14, 0.06)), Vector3(p.x, g + 1.75, p.y)))
+		tints.append(white)
+	var box := BoxMesh.new()
+	box.size = Vector3.ONE
+	if not xfs.is_empty():
+		_multimesh(group, box, xfs, tints, mat)
 
 func build_props() -> void:
 	var group := _group("Props")

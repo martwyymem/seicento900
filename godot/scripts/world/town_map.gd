@@ -16,6 +16,15 @@ const DEFAULT_LIMIT := {"motorway": 140.0, "trunk": 100.0, "primary": 90.0, "sec
 const TOWN_LIMIT := 50.0 ## km/h inside the built-up area, the Polish default
 const TREE_RADIUS := 0.35
 const DRIVE_REACH := 1.5 ## metres beyond a road's edge where its deck still holds a car up
+const BED_STEP := 10.0 ## metres: the drawn terrain mesh's vertex spacing (TownBuilder), which the car rides on
+const POND_DEPTH := 1.4 ## m: the terrain sinks this far below a pond's surface
+const EMBANKMENT := 1.5 ## horizontal metres per metre of height of a raised road's earth embankment
+const RAMP_GRADE := 0.07 ## slope of a rebuilt approach ramp to a bridge
+const PIER_R := 0.8 ## m: collision radius of a bridge pier (the drawn pier is 1.4 m square)
+const PIER_SPACING := 22.0 ## m along a bridge between piers
+const RAIL_HALF := 2.4 ## m: half the width of the ballast bed a railway runs on, with its kerb
+const TUNNEL_HEADROOM := 4.4 ## m: free height under a railway deck over a street (the bore)
+const PARAPET := 0.4 ## m: a bridge deck holds a car up this far beyond its edge (the parapet), then it drops off
 
 var key := ""
 var name := ""
@@ -23,6 +32,10 @@ var raw: Dictionary = {}
 var bounds := Rect2() ## the drivable area
 var extent := Rect2() ## everything that is drawn
 var boundary := PackedVector2Array() ## the town limit
+var play := PackedVector2Array() ## the playable area's outline (not a rectangle); a hard stop sits just inside it
+var play_inset := PackedVector2Array() ## play, pulled in by EDGE_INSET
+var closures: Array = [] ## road ends at the edge: [x, y, heading out, width m, 1 for the S1 turn-around]
+const EDGE_INSET := 1.5 ## m: how far inside the outline the car stops
 
 # terrain
 var tx0 := 0.0
@@ -60,10 +73,18 @@ var bld_rings: Array[PackedVector2Array] = []
 var bld_rect: Array[Rect2] = []
 var _bld_cells := {} ## int cell -> PackedInt32Array of building ids
 var _post_cells := {} ## int cell -> PackedVector3Array (x, y, radius) of trees, lamps and posts
+var _parapet_cells := {} ## int cell -> PackedFloat32Array (ax, ay, bx, by, half thickness, deck height above sea level)
+var _pier_cells := {} ## int cell -> PackedFloat32Array (x, y, radius, top height above sea level)
+var piers: Array = [] ## [Vector2 position, top height above sea level] of every bridge pier, same ones TownBuilder draws
+var _pier_keys := {} ## road * 100000 + segment -> true where TownBuilder draws a pier
+var tunnels: Array = [] ## underpasses through railway embankments, see _load_tunnels()
+var rail_pts: Array[PackedVector2Array] = []
+var _rail_cells := {} ## int cell -> PackedInt32Array of line * 100000 + point index
 var _wall_cells := {} ## int cell -> PackedFloat32Array (ax, ay, bx, by, half thickness)
 var water_rings: Array[PackedVector2Array] = []
 var water_rects: Array[Rect2] = []
 var water_level := PackedFloat32Array()
+var bed_mask := {} ## terrain vertex index (row-major over extent at BED_STEP) -> water surface height; ponds sink the ground
 var trains: Array = [] ## the train's cars: [Vector2 centre, heading (rad, map frame), half length, half width, height]
 var booms: Array = [] ## level crossing booms: [Vector2 hinge, Vector2 tip, bool closed, float angle
 ## (rad, 0 = down)]; TownBuilder swings them
@@ -97,6 +118,11 @@ func _load(map_key: String) -> bool:
 	var e: Array = raw.extent
 	extent = Rect2(e[0], e[1], e[2] - e[0], e[3] - e[1])
 	boundary = _flat(raw.get("boundary", []))
+	play = _flat(raw.get("play", []))
+	closures = raw.get("closures", [])
+	if play.size() >= 3:
+		var inset := Geometry2D.offset_polygon(play, -EDGE_INSET)
+		play_inset = inset[0] if not inset.is_empty() else play
 	var t: Dictionary = raw.terrain
 	tx0 = t.x0
 	ty0 = t.y0
@@ -105,8 +131,12 @@ func _load(map_key: String) -> bool:
 	tny = int(t.ny)
 	th = PackedFloat32Array(t.h)
 	_load_roads()
+	_ramp_approaches()
 	_load_buildings()
 	_load_obstacles()
+	_load_rails()
+	_load_tunnels()
+	_build_bridge_solids()
 	areas = raw.get("areas", [])
 	places = raw.get("places", [])
 	spots = raw.get("spots", {})
@@ -140,6 +170,54 @@ func ground(x: float, y: float) -> float:
 	return lerpf(lerpf(a, b, u), lerpf(c, d, u), v)
 
 # ---------------------------------------------------------------------------------------------- roads
+
+## The baked data sometimes ends a road at ground level where a bridge or raised road with a deck several metres up
+## begins (the approach ramp is missing on that side): the car then drives under the bridge instead of onto it.
+## Raise the low road's last stretch into a ramp (RAMP_GRADE) up to the deck it meets; the town builder reads the
+## same road_z, so the drawn road follows. Roads that are bridges themselves are left alone.
+func _ramp_approaches() -> void:
+	var ends := {} # rounded end point -> [[road, at start?, deck height there]]
+	for ri in road_pts.size():
+		var pts := road_pts[ri]
+		var z := road_z[ri]
+		for at_start in [true, false]:
+			var p := pts[0] if at_start else pts[pts.size() - 1]
+			var key := Vector2i(roundi(p.x * 10.0), roundi(p.y * 10.0))
+			var h := 0.0
+			if not z.is_empty():
+				h = z[0] if at_start else z[z.size() - 1]
+			if not ends.has(key):
+				ends[key] = []
+			ends[key].append([ri, at_start, h])
+	for key in ends:
+		var list: Array = ends[key]
+		if list.size() < 2:
+			continue
+		var top := 0.0
+		for e in list:
+			top = maxf(top, float(e[2]))
+		if top < 0.5:
+			continue
+		for e in list:
+			var ri: int = e[0]
+			if road_bridge[ri] == 1 or float(e[2]) > top - 0.3:
+				continue
+			var pts := road_pts[ri]
+			var z := road_z[ri]
+			if z.is_empty():
+				z.resize(pts.size())
+				z.fill(0.0)
+			var n := pts.size()
+			var run_len := 0.0
+			for k in n:
+				var idx: int = k if e[1] else n - 1 - k
+				if k > 0:
+					run_len += pts[idx].distance_to(pts[idx - 1 if e[1] else idx + 1])
+				var want := top - run_len * RAMP_GRADE
+				if want <= 0.0:
+					break
+				z[idx] = maxf(z[idx], want)
+			road_z[ri] = z
 
 func _load_roads() -> void:
 	var lanes_default := {"motorway": 2, "secondary": 2, "tertiary": 2, "residential": 2, "unclassified": 2}
@@ -253,13 +331,15 @@ func road_at(x: float, y: float, z_ref := -INF, reach := 0.0) -> Dictionary:
 		best["height"] = ground(x, y) + float(best.deck)
 	return best
 
-## Every road deck under a map point (for the car's vertical contact: it may be on a bridge or under it).
+## Every road deck under a map point (for the car's vertical contact: it may be on a bridge or under it):
+## [road, deck height over ground, distance beyond the edge (< 0 inside), direction, offset from the centreline, bridge].
 func decks_at(x: float, y: float, reach: float) -> Array:
 	var ck := _cell_key(int(floor(x / CELL)), int(floor(y / CELL)))
 	var out := []
 	if not _seg_cells.has(ck):
 		return out
 	var p := Vector2(x, y)
+	var seen := {} # road -> index in out: one deck per road, from its nearest segment (bends overlap their neighbours)
 	for sid in _seg_cells[ck]:
 		var ri := _seg_road[sid]
 		if road_z[ri].is_empty():
@@ -269,10 +349,24 @@ func decks_at(x: float, y: float, reach: float) -> Array:
 		var a := pts[i]
 		var ab := pts[i + 1] - a
 		var l2 := ab.length_squared()
-		var t := 0.0 if l2 < 1e-6 else clampf((p - a).dot(ab) / l2, 0.0, 1.0)
+		var tr := 0.0 if l2 < 1e-6 else (p - a).dot(ab) / l2
+		var t := clampf(tr, 0.0, 1.0)
 		var d := p.distance_to(a + ab * t)
 		if d <= road_w[ri] * 0.5 + reach:
-			out.append([ri, deck_at(ri, i, t), d - road_w[ri] * 0.5, ab.normalized(), (p - (a + ab * t))])
+			var capped := (tr < 0.0 and i == 0) or (tr > 1.0 and i == pts.size() - 2)
+			var entry := [ri, deck_at(ri, i, t), d - road_w[ri] * 0.5, ab.normalized(), (p - (a + ab * t)), road_bridge[ri] == 1, capped]
+			if seen.has(ri):
+				if d - road_w[ri] * 0.5 < float(out[seen[ri]][2]):
+					out[seen[ri]] = entry
+			else:
+				seen[ri] = out.size()
+				out.append(entry)
+	# past the end of a road its last deck height only extends flat: where another road's body covers the spot
+	# (a junction), that one decides, so the car never follows a stub's frozen height
+	if out.size() > 1:
+		var solid := out.filter(func(e: Array) -> bool: return not e[6])
+		if not solid.is_empty():
+			return solid
 	return out
 
 ## Point on road ri at arc length s from its start: [Vector2 position, Vector2 direction, point index].
@@ -319,6 +413,24 @@ func nearest_road(p: Vector2, radius := 60.0, min_rank := 0) -> Dictionary:
 				if d < best_d:
 					best_d = d
 					best = {"road": ri, "i": i, "t": t, "pos": q, "dir": ab.normalized(), "dist": d}
+	return best
+
+## True inside the playable area (the whole rectangle if the map has no outline).
+func in_play(p: Vector2) -> bool:
+	return play_inset.size() < 3 or Geometry2D.is_point_in_polygon(p, play_inset)
+
+## How far to move p to bring it back inside the playable area (zero when it is inside).
+func edge_push(p: Vector2) -> Vector2:
+	if in_play(p):
+		return Vector2.ZERO
+	var best := Vector2.ZERO
+	var best_d := INF
+	for i in play_inset.size():
+		var c := Geometry2D.get_closest_point_to_segment(p, play_inset[i], play_inset[(i + 1) % play_inset.size()])
+		var d := p.distance_squared_to(c)
+		if d < best_d:
+			best_d = d
+			best = c - p
 	return best
 
 func in_town(p: Vector2) -> bool:
@@ -465,6 +577,66 @@ func _load_obstacles() -> void:
 		water_rings.append(ring)
 		water_rects.append(r)
 		water_level.append(lo - 0.9) # well below the dykes and the tracks along them
+	_build_bed_mask()
+
+## Terrain vertices inside (or just outside) ponds, scanned per water ring at the mesh's resolution. TownBuilder
+## sinks exactly these vertices, and terrain() reads them back so the car rides what is drawn.
+func _build_bed_mask() -> void:
+	var nx := int(extent.size.x / BED_STEP) + 1
+	for k in water_rings.size():
+		var ring := water_rings[k]
+		var r := water_rects[k]
+		var j0 := int(ceil((r.position.y - extent.position.y) / BED_STEP))
+		var j1 := int(floor((r.end.y - extent.position.y) / BED_STEP))
+		for j in range(j0 - 1, j1 + 2):
+			var y := extent.position.y + j * BED_STEP
+			var xs := PackedFloat32Array()
+			for e in ring.size():
+				var a := ring[e]
+				var b := ring[(e + 1) % ring.size()]
+				if (a.y > y) != (b.y > y):
+					xs.append(a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x))
+			xs.sort()
+			for m in range(0, xs.size() - 1, 2):
+				var i0 := int(ceil((xs[m] - extent.position.x) / BED_STEP)) - 1
+				var i1 := int(floor((xs[m + 1] - extent.position.x) / BED_STEP)) + 1
+				for i in range(maxi(i0, 0), mini(i1, nx - 1) + 1):
+					var kk := j * nx + i
+					bed_mask[kk] = minf(float(bed_mask.get(kk, INF)), water_level[k])
+
+## Height of the vertex (i, j) of the drawn terrain mesh.
+func _bed_vertex(i: int, j: int, nx: int) -> float:
+	var h := ground(extent.position.x + i * BED_STEP, extent.position.y + j * BED_STEP)
+	var kk := j * nx + i
+	if bed_mask.has(kk):
+		h = minf(h, float(bed_mask[kk]) - POND_DEPTH)
+	return h
+
+## The drawn terrain surface at a map point: the ground, with ponds and river beds sunk the way the mesh sinks them,
+## sloping down the bank over the mesh's own cells (same triangles as TownBuilder.build_terrain).
+func terrain(x: float, y: float) -> float:
+	if bed_mask.is_empty():
+		return ground(x, y)
+	var nx := int(extent.size.x / BED_STEP) + 1
+	var ny := int(extent.size.y / BED_STEP) + 1
+	var fx := (x - extent.position.x) / BED_STEP
+	var fy := (y - extent.position.y) / BED_STEP
+	if fx < 0.0 or fy < 0.0 or fx >= nx - 1 or fy >= ny - 1:
+		return ground(x, y)
+	var i := int(fx)
+	var j := int(fy)
+	if not (bed_mask.has(j * nx + i) or bed_mask.has(j * nx + i + 1) or bed_mask.has((j + 1) * nx + i)
+			or bed_mask.has((j + 1) * nx + i + 1)):
+		return ground(x, y)
+	var u := fx - i
+	var v := fy - j
+	var h00 := _bed_vertex(i, j, nx)
+	var h11 := _bed_vertex(i + 1, j + 1, nx)
+	if v >= u:
+		var h01 := _bed_vertex(i, j + 1, nx)
+		return h00 + (h11 - h01) * u + (h01 - h00) * v
+	var h10 := _bed_vertex(i + 1, j, nx)
+	return h00 + (h10 - h00) * u + (h11 - h10) * v
 
 func add_post(p: Vector2, radius: float) -> void:
 	var ck := _cell_key(int(floor(p.x / BCELL)), int(floor(p.y / BCELL)))
@@ -552,3 +724,146 @@ func surface_of(hit: Dictionary) -> int:
 		2: return Physics.SURF_GRAVEL
 		1: return Physics.SURF_ASPHALT
 	return Physics.SURF_TRACK
+
+# ---------------------------------------------------------------------------------------------- bridges and tunnels
+
+func _load_rails() -> void:
+	for li in raw.get("rail", []).size():
+		var pts := _flat(raw.rail[li].p)
+		rail_pts.append(pts)
+		for i in pts.size():
+			var ck := _cell_key(int(floor(pts[i].x / CELL)), int(floor(pts[i].y / CELL)))
+			if not _rail_cells.has(ck):
+				_rail_cells[ck] = PackedInt32Array()
+			_rail_cells[ck].append((rail_pts.size() - 1) * 100000 + i)
+
+## Distance from p to the nearest railway centreline within r (INF when none).
+func rail_distance(p: Vector2, r: float) -> float:
+	var best := INF
+	for cx in range(int(floor((p.x - r) / CELL)), int(floor((p.x + r) / CELL)) + 1):
+		for cy in range(int(floor((p.y - r) / CELL)), int(floor((p.y + r) / CELL)) + 1):
+			var ck := _cell_key(cx, cy)
+			if not _rail_cells.has(ck):
+				continue
+			for code in _rail_cells[ck]:
+				var li: int = code / 100000
+				var i: int = code % 100000
+				var pts := rail_pts[li]
+				for j in [i - 1, i]:
+					if j >= 0 and j + 1 < pts.size():
+						best = minf(best, Geometry2D.get_closest_point_to_segment(p, pts[j], pts[j + 1]).distance_to(p))
+	return best
+
+## The baker's underpasses (a street that goes through a railway embankment or under a railway bridge) with the
+## geometry TownBuilder and the car need: c centre, u railway direction, v street direction, w street width, z deck
+## height of the railway over the ground (m), half_bore (the roofed length either side of c along the street) and
+## half_foot (where the embankment's slope ends and the wing walls reach the ground). Side walls keep the car in the bore.
+func _load_tunnels() -> void:
+	for t in raw.get("tunnels", []):
+		var u := Vector2(t.u[0], t.u[1])
+		var v := Vector2(t.v[0], t.v[1])
+		var c := Vector2(t.c[0], t.c[1])
+		var sin_t := maxf(absf(u.cross(v)), 0.35)
+		var z := float(t.z)
+		var rec := {"c": c, "u": u, "v": v, "w": float(t.w), "z": z, "road": int(t.road), "tn": int(t.get("tn", 0)),
+			"half_bore": (RAIL_HALF + 0.3) / sin_t, "half_foot": minf((RAIL_HALF + 0.6 + EMBANKMENT * z) / sin_t, 42.0),
+			"ground": ground(c.x, c.y)}
+		tunnels.append(rec)
+		var n := Vector2(-v.y, v.x)
+		var off := float(t.w) * 0.5 + 0.45
+		for side in [-1.0, 1.0]:
+			var a: Vector2 = c - v * float(rec.half_foot) + n * off * side
+			var b: Vector2 = c + v * float(rec.half_foot) + n * off * side
+			add_wall(a, b, 0.25)
+
+## The two portals of a tunnel: [position, heading out of the bore] each.
+func tunnel_portals(t: Dictionary) -> Array:
+	return [[t.c - t.v * float(t.half_bore), -t.v], [t.c + t.v * float(t.half_bore), t.v]]
+
+## Parapets along bridge decks (they stop a car at the deck's edge, only a car at the deck's height) and the piers
+## under them (only a car below the deck), both from the same rule TownBuilder draws them by.
+func _build_bridge_solids() -> void:
+	for ri in road_pts.size():
+		var zs := road_z[ri]
+		if zs.is_empty():
+			continue
+		var pts := road_pts[ri]
+		var n := pts.size()
+		var half := road_w[ri] * 0.5
+		var bridge := road_bridge[ri] == 1
+		var s := 0.0
+		var edge_l := PackedVector2Array()
+		var edge_r := PackedVector2Array()
+		for i in n:
+			var t := (pts[mini(i + 1, n - 1)] - pts[maxi(i - 1, 0)]).normalized()
+			var nrm := Vector2(-t.y, t.x)
+			edge_l.append(pts[i] - nrm * (half + 0.2))
+			edge_r.append(pts[i] + nrm * (half + 0.2))
+		for i in n - 1:
+			var s1 := s + pts[i].distance_to(pts[i + 1])
+			var d0 := zs[i]
+			var d1 := zs[i + 1]
+			if (d0 >= 0.25 or d1 >= 0.25) and (bridge or (d0 > 4.0 and d1 > 4.0)):
+				var mid := (pts[i] + pts[i + 1]) * 0.5
+				var h := ground(mid.x, mid.y) + (d0 + d1) * 0.5
+				_add_parapet(edge_l[i], edge_l[i + 1], h)
+				_add_parapet(edge_r[i], edge_r[i + 1], h)
+				if int(s / PIER_SPACING) != int(s1 / PIER_SPACING):
+					var p := pts[i]
+					var under := road_at(p.x, p.y, -INF, 1.5)
+					var on_road: bool = not under.is_empty() and int(under.road) != ri and float(under.deck) < 0.5
+					if not on_road and rail_distance(p, 4.0) > 3.5:
+						var top := ground(p.x, p.y) + d0
+						piers.append([p, top])
+						_pier_keys[ri * 100000 + i] = true
+						var ck := _cell_key(int(floor(p.x / BCELL)), int(floor(p.y / BCELL)))
+						if not _pier_cells.has(ck):
+							_pier_cells[ck] = PackedFloat32Array()
+						_pier_cells[ck].append_array(PackedFloat32Array([p.x, p.y, PIER_R, top]))
+			s = s1
+
+func has_pier(ri: int, i: int) -> bool:
+	return _pier_keys.has(ri * 100000 + i)
+
+func _add_parapet(a: Vector2, b: Vector2, deck_y: float) -> void:
+	var lo := a.min(b) - Vector2.ONE * 0.3
+	var hi := a.max(b) + Vector2.ONE * 0.3
+	for cx in range(int(floor(lo.x / BCELL)), int(floor(hi.x / BCELL)) + 1):
+		for cy in range(int(floor(lo.y / BCELL)), int(floor(hi.y / BCELL)) + 1):
+			var ck := _cell_key(cx, cy)
+			if not _parapet_cells.has(ck):
+				_parapet_cells[ck] = PackedFloat32Array()
+			_parapet_cells[ck].append_array(PackedFloat32Array([a.x, a.y, b.x, b.y, 0.2, deck_y]))
+
+## Parapet segments near p: [ax, ay, bx, by, half thickness, deck height (sea level)] each.
+func parapets_near(p: Vector2, r: float) -> Array[PackedFloat32Array]:
+	var out: Array[PackedFloat32Array] = []
+	var seen := {}
+	for cx in range(int(floor((p.x - r) / BCELL)), int(floor((p.x + r) / BCELL)) + 1):
+		for cy in range(int(floor((p.y - r) / BCELL)), int(floor((p.y + r) / BCELL)) + 1):
+			var ck := _cell_key(cx, cy)
+			if not _parapet_cells.has(ck):
+				continue
+			var w: PackedFloat32Array = _parapet_cells[ck]
+			for k in range(0, w.size(), 6):
+				var key := "%0.2f,%0.2f,%0.2f,%0.2f" % [w[k], w[k + 1], w[k + 2], w[k + 3]]
+				if seen.has(key):
+					continue
+				seen[key] = true
+				if Geometry2D.get_closest_point_to_segment(p, Vector2(w[k], w[k + 1]), Vector2(w[k + 2], w[k + 3])).distance_to(p) < r + w[k + 4]:
+					out.append(w.slice(k, k + 6))
+	return out
+
+## Bridge piers near p: Vector4(x, y, radius, top height above sea level).
+func piers_near(p: Vector2, r: float) -> Array[Vector4]:
+	var out: Array[Vector4] = []
+	for cx in range(int(floor((p.x - r) / BCELL)), int(floor((p.x + r) / BCELL)) + 1):
+		for cy in range(int(floor((p.y - r) / BCELL)), int(floor((p.y + r) / BCELL)) + 1):
+			var ck := _cell_key(cx, cy)
+			if not _pier_cells.has(ck):
+				continue
+			var w: PackedFloat32Array = _pier_cells[ck]
+			for k in range(0, w.size(), 4):
+				if Vector2(w[k], w[k + 1]).distance_to(p) < r + w[k + 2]:
+					out.append(Vector4(w[k], w[k + 1], w[k + 2], w[k + 3]))
+	return out

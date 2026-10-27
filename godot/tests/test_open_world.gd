@@ -12,6 +12,7 @@ func run() -> Array:
 		completed = true
 		return errors
 	_data(map, errors)
+	_edges(map, errors)
 	_driving(map, errors)
 	_walls(map, errors)
 	_gps(map, errors)
@@ -55,6 +56,60 @@ func _data(map: TownMap, errors: Array[String]) -> void:
 	var field := map.surface_of(map.road_at(map.bounds.position.x + 5.0, map.bounds.position.y + 5.0))
 	if field == Physics.SURF_TRACK:
 		errors.append("the map's corner reads as road")
+
+## The world's edge: a playable outline, a barrier where every road leaves it, the S1 turn-around, and the villages
+## reachable by their real roads.
+func _edges(map: TownMap, errors: Array[String]) -> void:
+	if map.play.size() < 8:
+		errors.append("the playable outline is missing")
+		return
+	if map.closures.size() < 10:
+		errors.append("only %d road ends at the edge" % map.closures.size())
+	var turn := 0
+	for c in map.closures:
+		if int(c[4]) == 1:
+			turn += 1
+		if map.edge_push(Vector2(c[0], c[1])).length() > 6.0:
+			errors.append("a barrier at %s stands outside the playable area" % [c])
+	if turn < 2:
+		errors.append("the S1 needs a turn-around at each end, found %d" % turn)
+	# no road runs out of the playable area
+	var out := 0
+	for pts in map.road_pts:
+		for p in pts:
+			if map.edge_push(p).length() > EDGE_SLACK:
+				out += 1
+	if out > 0:
+		errors.append("%d road points lie beyond the playable edge" % out)
+	# the car is held in
+	var fc := FreeCar.new(map)
+	var lowest := map.play[0]
+	for p in map.play:
+		if p.x < lowest.x:
+			lowest = p
+	fc.place(lowest + Vector2(-60.0, 0.0), 0.0) # outside
+	fc.step(1.0 / 120.0, 0.0, 0.0, 0.0)
+	if not Geometry2D.is_point_in_polygon(Vector2(fc.car.x, fc.car.y), map.play):
+		errors.append("the edge does not hold the car in")
+	# Wola, Góra, Rajsko and Jawiszowice are reached by road from the S1 junction and from Brzeszcze's centre
+	var villages := {"Wola": Vector2(-1897.0, -2886.0), "Gora": Vector2(-2960.0, 1367.0), "Rajsko": Vector2(3190.0, -1920.0),
+		"Jawiszowice": Vector2(-500.0, 3170.0)}
+	var sprint: Array = map.spots.industrial_sprint
+	var north: Array = map.spots.exit_tychy # the S1's north end, just past the Wola/Brzeszcze junction
+	for place in villages:
+		var to: Vector2 = villages[place]
+		for from in [Vector2(sprint[0], sprint[1]), Vector2(north[0], north[1])]:
+			var r := map.route(from, to)
+			if r.size() < 2:
+				errors.append("no road route from %s to %s" % [from, place])
+				continue
+			var length := 0.0
+			for i in range(1, r.size()):
+				length += r[i].distance_to(r[i - 1])
+			if length > from.distance_to(to) * 2.5 + 3000.0:
+				errors.append("the route from %s to %s is %.0f m for %.0f m as the crow flies" % [from, place, length, from.distance_to(to)])
+
+const EDGE_SLACK := 2.0
 
 func _driving(map: TownMap, errors: Array[String]) -> void:
 	var s: Array = map.spots.industrial_sprint
@@ -180,6 +235,27 @@ func _build(map: TownMap, errors: Array[String]) -> void:
 		errors.append("only %d street lamps" % builder.lamp_spots.size())
 	if builder.crossing_points.is_empty():
 		errors.append("no level crossings found on the railway")
+	# the EN57 exists, has its three meshes, and moves along the line
+	var train := Train.new(map, root, builder)
+	if not train.is_running():
+		errors.append("the train has no line to run on (no railway of three train lengths)")
+	else:
+		if train.stop_s >= 0.0:
+			var station: Array = map.spots.station
+			var d0 := (train._cars[1].position as Vector3).distance_to(Vector3(station[0], train._cars[1].position.y, station[1]))
+			if d0 > 700.0:
+				errors.append("the train starts %.0f m from the station: nobody would see it" % d0)
+		var before: Vector3 = train._cars[1].position
+		var moved := 0.0
+		for i in 60 * 40:
+			train.step(1.0 / 60.0)
+			moved = maxf(moved, before.distance_to(train._cars[1].position))
+		if moved < 20.0:
+			errors.append("the train never moved (%.1f m in 40 s)" % moved)
+		for k in train._cars.size():
+			if train._cars[k].mesh == null or train._cars[k].mesh is BoxMesh:
+				errors.append("train car %d has no EN57 model (box stand-in)" % k)
+		print("    train: line %.0f m, moved %.0f m in 40 s, stop at %.0f" % [train.total, moved, train.stop_s])
 	builder.add_beacon("test", Vector2(map.spots.festival[0], map.spots.festival[1]), Color.ORANGE, "TEST")
 	if not builder.beacon_nodes.has("test"):
 		errors.append("add_beacon didn't register the beacon")

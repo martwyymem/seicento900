@@ -157,14 +157,14 @@ func _ready() -> void:
 	# surface, at points and normals measured on models/seicento.glb's Body mesh (doors: centred on the model's
 	# white door panel). Re-measure if the car is rebuilt.
 	var decal_mat := _decal_material()
-	_door_decal_l = _add_decal("DoorDecalL", decal_mat, Vector3(-0.729, 0.62, -0.02), Vector3(-0.999, 0.042, -0.004), Vector3.UP)
-	_door_decal_r = _add_decal("DoorDecalR", decal_mat, Vector3(0.729, 0.62, -0.02), Vector3(0.999, 0.042, -0.004), Vector3.UP)
+	_door_decal_l = _add_decal("DoorDecalL", decal_mat, Vector3(-0.7408, 0.65, -0.02), Vector3(-0.9984, 0.0568, -0.0008), Vector3.UP)
+	_door_decal_r = _add_decal("DoorDecalR", decal_mat, Vector3(0.7408, 0.65, -0.02), Vector3(0.9984, 0.0568, -0.0008), Vector3.UP)
 	# along the top of the windscreen, reading from the front; "up" runs up the glass towards the roof
 	_sunstrip_decal = _add_decal("Sunstrip", decal_mat, Vector3(0.0, 1.25, -0.167), Vector3(0.0, 0.824, -0.566), Vector3(0.0, 0.566, 0.824))
 	# on the bonnet, reading from behind (the chase camera)
-	_hood_decal = _add_decal("HoodDecal", decal_mat, Vector3(0.0, 0.798, -1.22), Vector3(0.0, 0.984, -0.176), Vector3.FORWARD)
-	_sill_decal_l = _add_decal("SillDecalL", decal_mat, Vector3(-0.737, 0.38, 0.25), Vector3(-1.0, 0.014, 0.0), Vector3.UP)
-	_sill_decal_r = _add_decal("SillDecalR", decal_mat, Vector3(0.737, 0.38, 0.25), Vector3(1.0, 0.014, 0.0), Vector3.UP)
+	_hood_decal = _add_decal("HoodDecal", decal_mat, Vector3(0.0, 0.7935, -1.22), Vector3(-0.0176, 0.9848, -0.1729), Vector3.FORWARD)
+	_sill_decal_l = _add_decal("SillDecalL", decal_mat, Vector3(-0.7415, 0.385, 0.25), Vector3(-0.998, -0.065, 0.003), Vector3.UP)
+	_sill_decal_r = _add_decal("SillDecalR", decal_mat, Vector3(0.7415, 0.385, 0.25), Vector3(0.998, -0.065, 0.003), Vector3.UP)
 	_update_decals()
 
 func _add_decal(label: String, mat: StandardMaterial3D, surface: Vector3, normal: Vector3, up: Vector3) -> MeshInstance3D:
@@ -727,7 +727,7 @@ static func _door_plate_mesh(idx: int) -> ArrayMesh:
 	var row := idx / 4
 	var uv_min := Vector2(col * 0.125, row * 0.125)
 	var uv_max := Vector2((col + 1) * 0.125, (row + 1) * 0.125)
-	var m := _decal_quad(Vector2(0.34, 0.34), uv_min, uv_max)
+	var m := _decal_quad(Vector2(0.30, 0.30), uv_min, uv_max)
 	cache[idx] = m
 	sh["door_meshes"] = cache
 	return m
@@ -768,7 +768,7 @@ static func _sill_stack_mesh(variant: int) -> ArrayMesh:
 	var row := variant / 2
 	var uv_min := Vector2(col * 0.5, 0.75 + row * 0.125)
 	var uv_max := Vector2((col + 1) * 0.5, 0.75 + (row + 1) * 0.125)
-	var m := _decal_quad(Vector2(0.48, 0.12), uv_min, uv_max)
+	var m := _decal_quad(Vector2(0.48, 0.09), uv_min, uv_max)
 	cache[variant] = m
 	sh["sill_meshes"] = cache
 	return m

@@ -19,6 +19,62 @@ Every agent and model operating in this repository **MUST read this document bef
 
 ---
 
+## PHASE 0 — FIX WHAT WE GOT (current priority, set 2026-10-26)
+
+The scope outgrew the plan. **Until Phase 0 is done, do not start new features; everything in Pillars 1–9 not listed here is parked** (the "planned in the future, not now" items stay as they are below). **Ask the user when unsure.**
+
+**Budget mode until Friday 2026-10-30 08:00:** Sonnet 5.5 at medium effort for all agents and delegates, no Opus/Fable, no high-effort or council/ultra reviews, headless by default, few subagents.
+
+Work items (numbered by topic, not by order). **Execution order: cheapest first** (estimated effort, lowest first): 2, 1, 6 (done), then 3, 13 (done), 14 (building flicker, blocked on a windowed repro), 8b (menu title loop), 8a (race HUD), 4 (terrain), 9 (car model), 5 (map extent), 7 (performance), 12 (asset consistency), 11 (track personality), 10 (buildings and textures). Re-sort if an estimate turns out wrong.
+
+1. **Campaign state:** there is no way to clear/reset the campaign, and navigation always points at the last raced stage (no. 9). Add a reset (with confirmation) and point navigation at the next unfinished stage.
+2. **Reverse glitch (automatic gearbox):** in reverse, holding throttle *and* holding brake both speed the car up. Throttle must go backwards faster, brake must slow down (then stop/forward). Add a test.
+3. **Train:** reported as not spawning/non-existent (EN57 landed in `f8483c4`; verify in the open world, fix visibility/spawn).
+4. **Open-world terrain:** elevation sometimes flat where it shouldn't be; driving under a bridge puts the car on the bridge deck/ground wrongly; near river banks the car rides an invisible plane over the bank or the water instead of sliding off. Fix height sampling (road/bridge layers vs ground), then rebake if needed.
+5. **Open-world extent and borders (decided 2026-10-26):** the map covers full Brzeszcze, Jawiszowice, Wola and Rajsko, plus part of Góra so the road connects back to Wola and Brzeszcze. Bend reality for a seamless Forza Horizon-style experience: the map is not a square and has no invisible wall. Edges are natural (road ends with barriers, closed or fenced ends). The S1 gets a turn-around point (e.g. a barriered end or loop) instead of continuing into another town. Reachable areas must be reachable by their real routes. Rebake with `tools/build_open_world.py`.
+6. **Waypoint:** let the player place their own map marker as a waypoint.
+7. **Open-world performance:** profile and cut cost (chunking/draw distances landed in `f8483c4`, gain unmeasured). Measure first, windowed only with the user's OK.
+8. **UI (decided 2026-10-26):** it reads as clutter and is hard to explain to test players. Priorities: (a) the race HUD is ugly and out of place, above all the semi-transparent purple box around the speedometer; redesign it clean and readable, matching the active retro skin; (b) the main menu gets an infinite, seamless title loop (e.g. QUIT wraps round to CAMPAIGN with no visible jump); (c) then the remaining screens, fewer elements per screen, clear hierarchy, each skin looking like what it imitates.
+9. **Car model:** closer to reality but still needs work (open list in the thread table: tail, tail lamps, rear plate, bumper lens edges, decal positions, tests on the new model).
+10. **Buildings and textures:** maps feel grey and anonymous, buildings are plain boxes with windows. Add varied materials/textures and facade detail per building type.
+11. **Tracks:** the new street tracks all feel alike. Give each its own character (landmarks, surfaces, elevation, scenery) once 9–10 give the tools.
+13. **Crash repair bug (added 2026-10-27, urgent):** after a crash the car can't be fully repaired; you must finish a race before the service area repairs the rest, while opponents always have 0 % damage. The damage/repair system (`service.gd`, Pillar 8) should apply to **rally mode only**. Fix: in ordinary races, championship and campaign, repairs must be possible in full at any time (no finish-a-race gate) and the damage penalties must not hit the player alone; keep the part-by-part system and carry-over for rally. **Question for user:** should circuit races have no damage effects at all (visual damage only), or should the AI take damage too? Default until answered: no mechanical damage outside rally.
+14. **Building flicker (added 2026-10-27, from a screen recording):** in the open world a block of flats beside the road changes colour from frame to frame (cream, white, beige) with grey smudge patches coming and going, and grey shards poke out of some windows. Suspects: two meshes drawn in the same place (z-fighting) between the wall and the chunked props or the town building mesh, a tint recomputed every frame, or the wall overlapping a second surface. Reproduce at that spot, find the overlapping surfaces, fix, and add a test where one is possible. Also check that the chase camera does not get pushed sideways against walls (the car sat in the corner of the frame).
+12. **Asset quality:** assets feel thrown together ("slop"). Consistent scale, style and naming across the Blender scripts; fix as touched, no big rewrite.
+
+Rules for Phase 0: one item at a time, each ends with `godot --headless --path godot -s tests/run_tests.gd` green (plus `_run_race_test.gd` for race behaviour); update this section's checkboxes/status when done.
+
+- [x] 1 Campaign reset and navigation (2026-10-27: RESET CAMPAIGN in the open-world pause menu; navigation targets the first uncleared open stage)
+- [x] 2 Reverse glitch (2026-10-27: brake drives backwards, throttle brakes; test in `test_dynamics.gd`)
+- [x] 3 Train (2026-10-27: it existed and ran, but started 4 km from the station; now starts 450 m short of it and rolls in; test in `test_open_world.gd`)
+- [x] 4 Terrain, bridges, river banks (2026-10-27: runtime fixes: bridge approach ramps built at load, one deck per road, car follows the drawn pond/bank terrain, deck edges drop at the parapet; `test_open_world_terrain.gd`. Open: baker should bake approach ramps (`tools/build_open_world.py`), terrain relief is genuinely low (40 m grid, smoothed, rivers not carved), no windowed drive-over yet)
+- [x] 5 Open-world borders (2026-10-27: 18-vertex non-square play area covering Brzeszcze, Jawiszowice, Wola, Rajsko and east Góra; roads end in barriers, tree belt, hard edge, S1 turn-around loops at both ends; data 18.5 -> 27 MB; Wola and Rajsko not yet viewed from the ground, build time and framerate untimed)
+- [x] 6 Player waypoint (2026-10-27: click or F/pad X cursor on the big map; needs an on-screen check)
+- [x] 15 Tunnels and bridge collision (2026-10-27: 12 underpasses baked (railway deck lifted to 5.4 m, embankment cut, portals); bridge piers and parapets collide; `test_open_world_bridges.gd`; road stays at ground height (terrain can't be carved); baker approach ramps and the deck-underside look not done; some level crossings may have been removed by the raised railway ramps; AI traffic and daytime bore lighting unchecked)
+- [x] 4b Underpasses and bridge collision (2026-10-27: 12 underpasses through railway embankments with portals and lit bore, bridge piers and parapets are solid, `test_open_world_bridges.gd`; baking the runtime approach ramps still open)
+- [ ] 7 Open-world performance
+- [ ] 8 UI simplification and skins (2026-10-27: 8b main-menu strip loops; 8a race HUD redone in `race_hud.gd`: plate-free dash, compact timing list (leader, you, 2 ahead, 2 behind, interval to the car ahead), pit wall only when a stop is relevant, small start lights, controls strip auto-hides, skinned controls guide; seen in paused windowed shots only, live racing look and a second skin unchecked; race set-up redesigned 2026-10-27: Set Up / Advanced / Car / Strategy pages, Service only for rally and championship damage, Circuit Info tab removed, shots in the `tests/_setup_shots.gd` probe; real gamepad and starting a race via every RACE button unchecked; other screens not simplified)
+- [x] 9 Car model (2026-10-27: tail lamps raised and reshaped, headlight lens cleaned off the bumper ledge, door panel matched to the decal, decals re-measured by raycast in `race_car_visual.gd`; seen in Blender renders and a windowed door shot; hood decal and the menu's lavender plate tint unchecked)
+- [ ] 10 Buildings and textures
+- [ ] 11 Track personality
+- [ ] 12 Asset consistency
+- [x] 13 Crash repair bug / damage in rally only (2026-10-27: the campaign no longer carries damage or stops at the service area; a championship keeps its own Damage & Repairs setting, default Off; in-race crash damage is unchanged and hits every car)
+- [x] 14 Building flicker (2026-10-27: directional shadow acne on walls near edge-on to the high sun, the sun rotating every frame; fixed with `shadow_bias` 0.3 and `shadow_normal_bias` 3.0 in `open_world.gd`; windowed probe `tests/_flicker_probe.gd`: ~11,500 changed samples before, noise floor after. The chase-camera sideways push was not checked)
+
+---
+
+## PHASE 1 — PLANNED, NOT NOW (user list of 2026-10-27; do not start before Phase 0 is done)
+
+1. **Surface handling:** distinct driving for gravel, dirt, tarmac and wet tarmac. Now everything feels like dirt, and the dirt road is actually faster than tarmac. Tune per-surface grip, drag and sound/visual feedback.
+2. **Campaign event variety:** beyond circuit laps: sprint race, knockout race, rally event, drag race, drift event, off-road event.
+3. **More tracks from the open-world map:** e.g. an S1 Sprint and other interesting routes through the baked Brzeszcze map.
+4. **New cars for campaign progression:** Volvo V50 (2009), Hyundai i20, VW Golf 4, Dacia Logan, Dacia Sandero, Ford Focus (2015), Opel Zafira B (2005). Each unlocked along the campaign; model through Blender scripts in `tools/blender/`. **Question for user:** purchase/unlock rules and the order, and any restrictions per event.
+5. **Rally mode uses the map:** several stages named alike (e.g. "Bór") currently reuse the same map over and over; build distinct stages from different parts of the open world.
+6. **Purpose for fans:** fans currently do nothing; give them a use (unlock events, cars or cosmetics). **Question for user:** what should fans buy or unlock?
+7. **Discoverable POIs:** speed traps and other points of interest are not marked beforehand; show them on the map/minimap (discovered vs unknown) and explain them.
+
+---
+
 ## Status board (2026-10-23)
 
 | Area | Status |
@@ -32,6 +88,20 @@ Every agent and model operating in this repository **MUST read this document bef
 | Repairs (Pillar 8) | Per-part effects and carry-over done |
 | Performance (Pillar 9) | Track switch lag in menus being fixed |
 | Night / rain lighting (Pillar 2) | Night in rain looks like a grey day with white glare; being fixed in the QA pass |
+
+## Thread assignments (2026-10-26)
+
+What each T3 thread was given, and where it stands. One checkout (`main`), shared; the review thread commits.
+
+| Thread | Given | Status |
+|---|---|---|
+| Improve Graphics to Match Racing Games | Open-world flaws from the user's screenshots: car floating on ponds, bridges ending in walls, roofs floating over walls, level-crossing booms; then street fences, gardens and foliage (Codex subagent) and a train to close the crossings | Done and committed in `f8483c4`: cars sink in ponds and respawn, bridge ramps rebaked (58 roads), walls rise to measured roofs, booms hinge and block cars, EN57 shuttles the main line with a station stop and closes 4 crossings, 4 false crossings under rail bridges removed, fences along both sides of residential streets with gates |
+| Add Open-World Brzeszcze Campaign Map | Andrzej II block inside the headframe; then an open-world performance pass | Shaft fix in `ce1c862`. Performance: small props are chunked into 128 m MultiMesh cells with draw distances (fences 280 m, hedges 320, garden beds 240, parked cars 400, shelters 450, signals 500, lamps 900), committed in `f8483c4`. Frame-rate gain not yet measured in a window |
+| Improve Model Accuracy and Detail | "Make the models more accurate and more detailed", then "it looks so bad, work harder": the Seicento car | Body, bumpers, lamps, tyres rebuilt from reference photos in `build_seicento.py`, `seicento.glb` rebuilt; this unfinished pass went into `f8483c4`. Stopped at the rate-limit reserve. Open: steeper tail, tail lamps raised, rear plate hidden by the bumper, jagged lens edges at the bumper, decal positions in Godot (door number, bonnet, windscreen strip, sills) must be re-measured, tests not run on the new model |
+| Graphics Thread Ending Behavior | When the graphics thread ends: commit and push everything, build new `.app` and `.exe`, publish them as a GitHub release, make the repository public | Running: committed `f8483c4`; release and visibility change in progress |
+| Review Finished Threads | Review and commit the other threads' work; fix the crash-out reset, lost-top-gear stutter, E key in town, README; WRC content off `main` | Fixes in `4ca9578`. WRC 3DS stages live uncommitted on branch `wrc-stages` (`../Seicento-wrc`), never on `main` (copyrighted). A three-model council review of `4ca9578` was interrupted and has no scores yet |
+
+Still open from earlier threads: the UI second pass (duplicate open-world banners, faint street name, autopilot chip overlapping at 4:3); WRC bugs on its branch (wrong country flags, rally arches by track key in ordinary races, Sardegna gravel in the tarmac event).
 
 ---
 

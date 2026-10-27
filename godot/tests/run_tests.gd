@@ -21,6 +21,8 @@ const SUITES := [
 	"res://tests/test_retro_pipeline.gd",
 	"res://tests/test_fx_particles.gd",
 	"res://tests/test_open_world.gd",
+	"res://tests/test_open_world_terrain.gd",
+	"res://tests/test_open_world_bridges.gd",
 	"res://tests/test_roadside_props.gd",
 	"res://tests/test_ui_layout.gd"
 ]

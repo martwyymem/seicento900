@@ -49,9 +49,17 @@ KEY = 'brzeszcze'
 BOUNDARY_REL = 2762332
 TOWN_BOX = (49.9638723, 19.1099276, 50.0175934, 19.1816713)  # s, w, n, e of the admin boundary
 ORIGIN = ((TOWN_BOX[0] + TOWN_BOX[2]) / 2, (TOWN_BOX[1] + TOWN_BOX[3]) / 2)
-FETCH_MARGIN = 700.0  # m of countryside fetched round the town's box
-DRIVE_MARGIN = 450.0  # m of it that can be driven
+FETCH_MARGIN = 450.0  # m of countryside fetched (and ground drawn) round the playable area's bounding box
+CONTENT_MARGIN = 240.0  # m beyond the playable edge that still gets buildings, trees, lamps (the fading countryside)
 GRID = 40.0  # m, terrain grid spacing
+
+# The playable area, in metres from ORIGIN (x east, y south): not a rectangle. It covers Brzeszcze, Jawiszowice,
+# Wola, Rajsko and the eastern part of Góra with the S1 corridor west of town, so that the DW933 road to Góra and Wola
+# and the S1 junction all lie inside. Every road that leaves it ends in a barrier, the S1 in a turn-around loop, and a
+# belt of trees hides the rest of the edge.
+PLAY_POLY = [(-3300, -4100), (-1000, -4200), (600, -3400), (2300, -3300), (4300, -3000), (4500, -700), (3700, 1300),
+             (3300, 3000), (2600, 4200), (-900, 4520), (-1150, 4000), (-1420, 3640), (-2150, 3600), (-4300, 3300),
+             (-4400, 700), (-4350, -1200), (-4150, -2150), (-3820, -2420)]
 
 KX = 111320 * math.cos(math.radians(ORIGIN[0]))
 KY = 110540
@@ -66,9 +74,12 @@ def unproj(x, y):
 
 
 def box(margin):
-    """(s, w, n, e) of the town's box grown by margin metres."""
-    s, w, n, e = TOWN_BOX
-    return (s - margin / KY, w - margin / KX, n + margin / KY, e + margin / KX)
+    """(s, w, n, e) of the playable area's bounding box grown by margin metres."""
+    xs = [p[0] for p in PLAY_POLY]
+    ys = [p[1] for p in PLAY_POLY]
+    s, w = unproj(min(xs) - margin, max(ys) + margin)
+    n, e = unproj(max(xs) + margin, min(ys) - margin)
+    return (s, w, n, e)
 
 
 # ---------------------------------------------------------------- fetching
@@ -132,20 +143,30 @@ def grid_frame():
 
 
 def fetch_elevation(refetch):
+    """EU-DEM heights on the grid. Nodes already fetched (the cache is keyed by position, so a grown grid reuses
+    them) are kept; only the missing ones are requested, 100 per call."""
     path = os.path.join(CACHE, KEY + '_elevation.json')
     x0, y0, nx, ny = grid_frame()
-    have = json.load(open(path)) if os.path.exists(path) and not refetch else {}
-    if have.get('nx') == nx and have.get('ny') == ny and len(have.get('h', [])) == nx * ny:
-        return have
-    pts = [unproj(x0 + i * GRID, y0 + j * GRID) for j in range(ny) for i in range(nx)]
-    h = have.get('h', []) if have.get('nx') == nx and have.get('ny') == ny else []
-    print(f'fetching elevation {nx}x{ny} = {len(pts)} points ({len(h)} cached)', flush=True)
+    known = {}
+    for src in (path, os.path.join(CACHE, KEY + '_elevation_old.json')):
+        if os.path.exists(src) and not refetch:
+            og = json.load(open(src))
+            for j in range(og['ny']):
+                for i in range(og['nx']):
+                    known[(round(og['x0'] + i * og['step']), round(og['y0'] + j * og['step']))] = og['h'][j * og['nx'] + i]
+    nodes = [(round(x0 + i * GRID), round(y0 + j * GRID)) for j in range(ny) for i in range(nx)]
+    missing = [k for k in nodes if k not in known]
+    print(f'elevation {nx}x{ny} = {len(nodes)} points, {len(missing)} to fetch', flush=True)
     os.makedirs(CACHE, exist_ok=True)
-    while len(h) < len(pts):
-        chunk = pts[len(h):len(h) + 100]
+
+    def save():
+        json.dump({'x0': x0, 'y0': y0, 'step': GRID, 'nx': nx, 'ny': ny, 'h': [round(known.get(k, 0.0), 2) for k in nodes]},
+                  open(path, 'w'))
+    for c in range(0, len(missing), 100):
+        chunk = missing[c:c + 100]
         for attempt in range(8):
             try:
-                res = http_post(TOPO, {'locations': '|'.join(f'{a:.6f},{b:.6f}' for a, b in chunk)}, 60)
+                res = http_post(TOPO, {'locations': '|'.join('%.6f,%.6f' % unproj(x, y) for x, y in chunk)}, 60)
                 if res.get('status') == 'OK':
                     break
             except Exception as err:
@@ -153,14 +174,13 @@ def fetch_elevation(refetch):
             time.sleep(3 + attempt * 4)
         else:
             raise SystemExit('elevation API failed')
-        h += [r['elevation'] if r['elevation'] is not None else 0.0 for r in res['results']]
-        if len(h) % 2000 < 100:
-            print(f'  {len(h)}/{len(pts)}', flush=True)
-            json.dump({'x0': x0, 'y0': y0, 'step': GRID, 'nx': nx, 'ny': ny, 'h': h}, open(path, 'w'))
+        for k, r in zip(chunk, res['results']):
+            known[k] = r['elevation'] if r['elevation'] is not None else 0.0
+        if (c // 100) % 20 == 19:
+            print(f'  {c + 100}/{len(missing)}', flush=True)
         time.sleep(1.05)
-    out = {'x0': x0, 'y0': y0, 'step': GRID, 'nx': nx, 'ny': ny, 'h': [round(v, 2) for v in h]}
-    json.dump(out, open(path, 'w'))
-    return out
+    save()
+    return json.load(open(path))
 
 
 # ---------------------------------------------------------------- building
@@ -180,6 +200,7 @@ UNPAVED = {'unpaved', 'gravel', 'dirt', 'ground', 'grass', 'sand', 'compacted', 
 CLASS_ID = {k: i for i, k in enumerate(DRIVABLE)}
 RAMP_GRADE = 0.06  # embankment ramps up to a road bridge
 RAIL_RAMP_GRADE = 0.02
+UNDERPASS_Z = 5.4  # m: a railway over a road underpass has its deck this high (4.5 m of headroom under the slab)
 CLEARANCE_ROAD = 6.0  # deck height of a bridge with a road or railway under it
 CLEARANCE_WATER = 2.2
 AREA_KINDS = [
@@ -299,6 +320,97 @@ def dist_seg(px, py, a, b):
     l2 = dx * dx + dy * dy
     t = 0.0 if l2 < 1e-9 else max(0.0, min(1.0, ((px - a[0]) * dx + (py - a[1]) * dy) / l2))
     return math.hypot(px - a[0] - dx * t, py - a[1] - dy * t)
+
+
+def poly_dist(x, y, poly):
+    """Distance from (x, y) to the polygon's outline."""
+    return min(dist_seg(x, y, a, b) for a, b in zip(poly, poly[1:] + poly[:1]))
+
+
+def in_zone(x, y, margin=0.0):
+    """Inside the playable polygon, or within margin metres of it."""
+    if point_in_ring(x, y, PLAY_POLY):
+        return True
+    return margin > 0 and poly_dist(x, y, PLAY_POLY) <= margin
+
+
+def edge_hit(a, b, poly):
+    """The point where segment a->b (a inside, b outside the polygon) leaves it: the crossing nearest a."""
+    best = None
+    ax, ay = a
+    dx, dy = b[0] - ax, b[1] - ay
+    for c, d in zip(poly, poly[1:] + poly[:1]):
+        ex, ey = d[0] - c[0], d[1] - c[1]
+        den = dx * ey - dy * ex
+        if abs(den) < 1e-9:
+            continue
+        t = ((c[0] - ax) * ey - (c[1] - ay) * ex) / den
+        u = ((c[0] - ax) * dy - (c[1] - ay) * dx) / den
+        if 0 <= t <= 1 and 0 <= u <= 1 and (best is None or t < best):
+            best = t
+    best = 0.5 if best is None else best
+    return (ax + dx * best, ay + dy * best)
+
+
+_FAKE_IDS = [0]
+
+
+def fake_id():
+    _FAKE_IDS[0] -= 1
+    return _FAKE_IDS[0]
+
+
+def clip_to_play(ids, pts):
+    """Cuts a polyline at the playable polygon. Returns [(ids, pts, cut_start, cut_end)] for the parts inside; a cut
+    end sits exactly on the polygon's edge and carries a fresh id (so it isn't a junction)."""
+    inside = [point_in_ring(x, y, PLAY_POLY) for x, y in pts]
+    if all(inside):
+        return [(ids, pts, False, False)]
+    out, cur_i, cur_p, cs = [], [], [], False
+    for k in range(len(pts)):
+        if inside[k]:
+            if not cur_p and k > 0:
+                cur_i, cur_p, cs = [fake_id()], [edge_hit(pts[k], pts[k - 1], PLAY_POLY)], True
+            cur_i.append(ids[k])
+            cur_p.append(pts[k])
+        elif cur_p:
+            cur_i.append(fake_id())
+            cur_p.append(edge_hit(pts[k - 1], pts[k], PLAY_POLY))
+            out.append((cur_i, cur_p, cs, True))
+            cur_i, cur_p, cs = [], [], False
+    if cur_p:
+        out.append((cur_i, cur_p, cs, False))
+    return [o for o in out if len(o[1]) >= 2 and seg_len(o[1]) > 25.0]
+
+
+def trim_end(ids, pts, length, from_end):
+    """Drops the last (or first) length metres of a polyline; returns (ids, pts) with a fresh vertex at the cut."""
+    if not from_end:
+        i2, p2 = trim_end(ids[::-1], pts[::-1], length, True)
+        return i2[::-1], p2[::-1]
+    length = min(length, seg_len(pts) * 0.5)
+    run, k = 0.0, len(pts) - 1
+    while k > 1 and run + math.dist(pts[k], pts[k - 1]) < length:
+        run += math.dist(pts[k], pts[k - 1])
+        k -= 1
+    a, b = pts[k - 1], pts[k]
+    t = (length - run) / max(math.dist(a, b), 1e-6)
+    cut = (b[0] + (a[0] - b[0]) * t, b[1] + (a[1] - b[1]) * t)
+    return ids[:k] + [fake_id()], pts[:k] + [cut]
+
+
+def u_turn(e_pt, e_dir, s_pt, s_dir, reach):
+    """A cubic Bezier from e_pt (leaving along unit e_dir) to s_pt (arriving along unit s_dir) that bulges forward."""
+    p0, p3 = e_pt, s_pt
+    p1 = (p0[0] + e_dir[0] * reach, p0[1] + e_dir[1] * reach)
+    p2 = (p3[0] - s_dir[0] * reach, p3[1] - s_dir[1] * reach)
+    pts = []
+    for i in range(0, 13):
+        t = i / 12
+        m = 1 - t
+        pts.append((m ** 3 * p0[0] + 3 * m * m * t * p1[0] + 3 * m * t * t * p2[0] + t ** 3 * p3[0],
+                    m ** 3 * p0[1] + 3 * m * m * t * p1[1] + 3 * m * t * t * p2[1] + t ** 3 * p3[1]))
+    return pts
 
 
 def rand01(x, y, salt):
@@ -517,9 +629,8 @@ def build(check_png=None):
         d = hs[(j + 1) * tnx + i + 1]
         return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v
 
-    s_, w_, n_, e_ = box(DRIVE_MARGIN)
-    bx0, by0 = proj(n_, w_)
-    bx1, by1 = proj(s_, e_)
+    bx0, by0 = min(p[0] for p in PLAY_POLY), min(p[1] for p in PLAY_POLY)
+    bx1, by1 = max(p[0] for p in PLAY_POLY), max(p[1] for p in PLAY_POLY)
     fs_, fw_, fn_, fe_ = box(FETCH_MARGIN)
     fx0, fy0 = proj(fn_, fw_)
     fx1, fy1 = proj(fs_, fe_)
@@ -549,9 +660,58 @@ def build(check_png=None):
         pts = [P(p) for p in e['geometry']]
         if len(pts) < 2 or len(ids) != len(pts):
             continue
+        for pi, pp, cs, ce in clip_to_play(ids, pts):
+            roads.append([e, k, t, pi, pp, cs, ce])
+    # ends that leave the playable polygon become barriers (closures); the S1's carriageways turn round instead
+    closures = []
+    s1_out, s1_in = [], []
+    for r in roads:
+        e, k, t, pi, pp, cs, ce = r
+        if k == 'motorway' and (cs or ce):
+            (s1_out if ce else s1_in).append(r)
+    for ro in s1_out:
+        # the inbound carriageway whose start is nearest this outbound end
+        cands = [ri for ri in s1_in if math.dist(ri[4][0], ro[4][-1]) < 90]
+        if not cands:
+            continue
+        ri = min(cands, key=lambda c: math.dist(c[4][0], ro[4][-1]))
+        ro[3], ro[4] = trim_end(ro[3], ro[4], 70.0, True)
+        ri[3], ri[4] = trim_end(ri[3], ri[4], 70.0, False)
+        ro[6], ri[5] = False, False
+        a, b = ro[4][-2], ro[4][-1]
+        d1 = math.dist(a, b) or 1.0
+        ed = ((b[0] - a[0]) / d1, (b[1] - a[1]) / d1)
+        a, b = ri[4][0], ri[4][1]
+        d2 = math.dist(a, b) or 1.0
+        sd = ((b[0] - a[0]) / d2, (b[1] - a[1]) / d2)
+        loop = u_turn(ro[4][-1], ed, ri[4][0], sd, 48.0)
+        loop_ids = [ro[3][-1]] + [fake_id() for _ in loop[1:-1]] + [ri[3][0]]
+        roads.append([{'id': 9000000000 + len(roads), 'tags': {}}, 'motorway_link', {'highway': 'motorway_link', 'name': 'S1'},
+                      loop_ids, loop, False, False])
+        apex = max(loop, key=lambda q: (q[0] - ro[4][-1][0]) * ed[0] + (q[1] - ro[4][-1][1]) * ed[1])
+        closures.append({'x': apex[0] + ed[0] * 14.0, 'y': apex[1] + ed[1] * 14.0, 'h': math.atan2(ed[1], ed[0]),
+                         'w': 26.0, 'kind': 'motorway', 'name': 'S1', 'road': ro[0]['id'], 'turn': True})
+    for e, k, t, ids, pts, cs, ce in roads:
         for nid in ids:
             use[nid] = use.get(nid, 0) + 1
-        roads.append((e, k, t, ids, pts))
+    # a road that ends at (or within a few metres of) the polygon's edge is closed with a barrier across it
+    for e, k, t, ids, pts, cs, ce in roads:
+        if k == 'motorway':
+            continue
+        for end_id, pts_ in ((ids[0], pts), (ids[-1], pts[::-1])):
+            q, nxt = pts_[0], pts_[1]
+            if use[end_id] != 1 or poly_dist(q[0], q[1], PLAY_POLY) > 40.0:
+                continue
+            run, j = 0.0, 0  # the barrier stands a few metres inside
+            while j < len(pts_) - 1 and run < 4.0:
+                run += math.dist(pts_[j], pts_[j + 1])
+                j += 1
+            b0 = pts_[j]
+            if any(math.dist(b0, (c['x'], c['y'])) < 12.0 for c in closures):
+                continue
+            closures.append({'x': b0[0], 'y': b0[1], 'h': math.atan2(q[1] - nxt[1], q[0] - nxt[0]), 'w': 0.0, 'kind': k,
+                             'name': t.get('name', '') or t.get('ref', ''), 'road': e['id'], 'turn': False})
+    roads = [tuple(r[:5]) for r in roads]
     # junctions: nodes on two or more roads (or twice on one), plus road ends
     junction = {nid for nid, c in use.items() if c >= 2}
     out_roads = []
@@ -596,6 +756,13 @@ def build(check_png=None):
                           'p': dense, 'e': marks,
                           'maxspeed': bs.number(t.get('maxspeed')) or 0})
     print(len(out_roads), 'roads,', len(node_xy), 'graph nodes')
+    width_of = {}
+    for r in out_roads:
+        width_of[r['id']] = max(width_of.get(r['id'], 0.0), r['w'])
+    for c in closures:
+        if not c['turn']:
+            c['w'] = round(width_of.get(c['road'], 5.0) + 3.0, 1)
+    print(len(closures), 'closures:', [(c['name'] or c['kind'], round(c['x']), round(c['y'])) for c in closures])
 
     # ---- railways
     rails = []
@@ -604,6 +771,7 @@ def build(check_png=None):
         if e['type'] != 'way' or t.get('railway') not in ('rail', 'narrow_gauge', 'light_rail', 'tram'):
             continue
         pts = densify(bs.simplify([P(p) for p in e['geometry']], 0.3), 10.0)
+        pts = [q for q in pts if in_zone(q[0], q[1], 50.0)]  # lines run into the tree belt and stop
         if len(pts) >= 2:
             rails.append({'p': pts, 'b': 1 if t.get('bridge') in ('yes', 'viaduct') else 0,
                           'g': 1 if t.get('railway') == 'narrow_gauge' else 0,
@@ -649,13 +817,15 @@ def build(check_png=None):
                         best = max(best, CLEARANCE_WATER if item[1] > 3 else 1.0)
         return best
 
-    def relax(lines, grade, junction_of):
+    def relax(lines, grade, junction_of, seeds=()):
         """Spreads each line's deck heights along the network as ramps: z(p) >= z(q) - grade * dist(p, q)."""
         # nodes: (line, idx); links along each line, and between lines at shared OSM nodes
         z = [[0.0] * len(l['p']) for l in lines]
         for li, l in enumerate(lines):
             if l.get('deck', 0.0) > 0.0:
                 z[li] = [l['deck']] * len(l['p'])
+        for li, idx, v in seeds:
+            z[li][idx] = max(z[li][idx], v)
         shared = {}
         for li, l in enumerate(lines):
             for idx, nid in junction_of(l):
@@ -695,6 +865,58 @@ def build(check_png=None):
     for r in rails:
         r['e'] = [(idx, (round(r['p'][idx][0]), round(r['p'][idx][1]))) for idx in (0, len(r['p']) - 1)]
     zl = relax(rails, RAIL_RAMP_GRADE, lambda l: l['e'])
+    # ---- underpasses: a street under a railway that stands on a bridge or an embankment (or any "tunnel=yes" street
+    # crossing a railway) goes through it. The railway's deck is lifted to UNDERPASS_Z there; TownBuilder cuts the
+    # embankment along the street and builds the lined bore with its portals.
+    def cross_pt(a, b, c, d):
+        r = (b[0] - a[0], b[1] - a[1])
+        s2 = (d[0] - c[0], d[1] - c[1])
+        den = r[0] * s2[1] - r[1] * s2[0]
+        t = ((c[0] - a[0]) * s2[1] - (c[1] - a[1]) * s2[0]) / den
+        return (a[0] + r[0] * t, a[1] + r[1] * t)
+
+    road_grid = SegGrid(30.0)
+    for i, r in enumerate(out_roads):
+        if not r['b']:
+            for a, b in zip(r['p'], r['p'][1:]):
+                road_grid.add(a, b, i)
+
+    def find_underpasses(zl):
+        found = {}
+        for li, l in enumerate(rails):
+            if l['sd'] and not l['b']:
+                continue
+            for i, (a, b) in enumerate(zip(l['p'], l['p'][1:])):
+                zz = max(zl[li][i], zl[li][i + 1])
+                mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
+                for c, d, ri in road_grid.near(mx, my, math.dist(a, b) / 2 + 2):
+                    r = out_roads[ri]
+                    if not (zz >= 0.8 or r['tn']) or not seg_cross(a, b, c, d):
+                        continue
+                    if max(zr[ri]) > 1.0 and not r['tn']:
+                        continue  # a raised road: it is a bridge or a ramp of its own
+                    x, y = cross_pt(a, b, c, d)
+                    dl = math.dist(a, b) or 1.0
+                    dr = math.dist(c, d) or 1.0
+                    found[(li, i, ri)] = (x, y, (b[0] - a[0]) / dl, (b[1] - a[1]) / dl, ri, (d[0] - c[0]) / dr, (d[1] - c[1]) / dr)
+        return found
+
+    under = find_underpasses(zl)
+    seeds = [(li, k, UNDERPASS_Z) for (li, i, ri) in under for k in (i, i + 1) if rails[li]['b'] == 0 and zl[li][k] < UNDERPASS_Z]
+    if seeds:
+        zl = relax(rails, RAIL_RAMP_GRADE, lambda l: l['e'], seeds)
+        under = find_underpasses(zl)
+    tunnels = []
+    for (li, i, ri), (x, y, ux, uy, _, vx, vy) in sorted(under.items()):
+        zc = min(zl[li][i], zl[li][i + 1])
+        if zc < UNDERPASS_Z - 0.01 and not rails[li]['b']:
+            continue
+        if any(t['road'] == out_roads[ri]['id'] and math.dist((x, y), t['c']) < 14.0 for t in tunnels):
+            continue  # the second track of a double line
+        r = out_roads[ri]
+        tunnels.append({'c': [r1(x), r1(y)], 'u': [round(ux, 3), round(uy, 3)], 'v': [round(vx, 3), round(vy, 3)],
+                        'w': r['w'], 'z': round(zc, 2), 'road': r['id'], 'tn': r['tn'], 'rail': li})
+    print(len(tunnels), 'underpasses through railway embankments:', [(t['road'], t['z']) for t in tunnels])
     n_raised = sum(1 for zz in zr if max(zz) > 0.3)
     print(n_raised, 'roads raised on bridges or ramps;', sum(1 for zz in zl if max(zz) > 0.3), 'railway lines raised')
 
@@ -716,7 +938,7 @@ def build(check_png=None):
             ring = ring[:-1]
             cx = sum(p[0] for p in ring) / len(ring)
             cy = sum(p[1] for p in ring) / len(ring)
-            if not (fx0 <= cx <= fx1 and fy0 <= cy <= fy1):
+            if not in_zone(cx, cy, CONTENT_MARGIN):
                 continue
             kind, h, lv, roof = building_spec(t, ring)
             extra = conflate_building(ring, e['id'], e['type'], measurements)
@@ -846,13 +1068,17 @@ def build(check_png=None):
             if not g:
                 continue
             x, y = sum(p[0] for p in g) / len(g), sum(p[1] for p in g) / len(g)
-        if not (fx0 <= x <= fx1 and fy0 <= y <= fy1):
+        if not in_zone(x, y, CONTENT_MARGIN):
             continue
         rec = {'k': kind, 'x': r1(x), 'y': r1(y), 'name': name or ''}
         hgt = bs.number(t.get('height'))
         if hgt:
             rec['h'] = hgt
         places.append(rec)
+    trees = [t for t in trees if in_zone(t[0], t[1], CONTENT_MARGIN)]
+    lamps = [q for q in lamps if in_zone(q[0], q[1], CONTENT_MARGIN)]
+    signals = [q for q in signals if in_zone(q[0], q[1], CONTENT_MARGIN)]
+    stops = [q for q in stops if in_zone(q[0], q[1], CONTENT_MARGIN)]
     print(len(places), 'places,', len(lamps), 'mapped lamps,', len(signals), 'signals,', len(stops), 'bus stops')
 
     # ---- road segment hash (for placing things clear of the roads)
@@ -1040,7 +1266,7 @@ def build(check_png=None):
             while gy * cell <= max(ys):
                 x = (gx + 0.15 + 0.7 * rand01(gx, gy, salt)) * cell
                 y = (gy + 0.15 + 0.7 * rand01(gx, gy, salt + 1)) * cell
-                if rand01(gx, gy, salt + 2) < prob and point_in_ring(x, y, ring) and \
+                if rand01(gx, gy, salt + 2) < prob and point_in_ring(x, y, ring) and in_zone(x, y, CONTENT_MARGIN) and \
                         not any(point_in_ring(x, y, h) for h in holes) and road_clear(x, y, 2.0) and \
                         building_clear(x, y, 3.0) and not inside_building(x, y):
                     trees.append((x, y, kind_code))
@@ -1049,6 +1275,10 @@ def build(check_png=None):
             gx += 1
         return made
 
+    for c in closures:
+        nx_, ny_ = -math.sin(c['h']), math.cos(c['h'])
+        hw = c['w'] / 2
+        fences.append((r1(c['x'] - nx_ * hw), r1(c['y'] - ny_ * hw), r1(c['x'] + nx_ * hw), r1(c['y'] + ny_ * hw), 4))
     n_wood = 0
     for _, _, kind, ring, holes, extra, oid in areas:
         if kind == 'forest':
@@ -1062,6 +1292,33 @@ def build(check_png=None):
             fill_trees(ring, holes, 11.0, 0.4, 7, oid % 977)
         elif kind == 'allotments':
             fill_trees(ring, holes, 7.0, 0.62, 8, oid % 971)
+    # the edge of the world: three rows of trees just outside the playable polygon (and a row just inside), broken
+    # only where a road leaves (its barrier stands there) or a building is in the way
+    ponds = [(min(q[0] for q in ring), min(q[1] for q in ring), max(q[0] for q in ring), max(q[1] for q in ring), ring)
+             for _, _, kind, ring, holes, _, _ in areas if kind == 'water']
+
+    def in_water(x, y):
+        return any(x0 <= x <= x1 and y0 <= y <= y1 and point_in_ring(x, y, ring) for x0, y0, x1, y1, ring in ponds)
+    belt = 0
+    for a, b in zip(PLAY_POLY, PLAY_POLY[1:] + PLAY_POLY[:1]):
+        ln = math.dist(a, b)
+        ux, uy = (b[0] - a[0]) / ln, (b[1] - a[1]) / ln
+        for row, off in enumerate((-2.0, 3.0, 8.0, 15.0, 24.0)):
+            n = int(ln / 4.5)
+            for i in range(n):
+                j = rand01(i, row, a[0] + a[1])
+                t = (i + 0.5 + 0.8 * (j - 0.5)) / n
+                nx_, ny_ = uy, -ux  # a normal; flipped to point outward below
+                x, y = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+                if point_in_ring(x + nx_ * 3.0, y + ny_ * 3.0, PLAY_POLY):
+                    nx_, ny_ = -nx_, -ny_
+                o = off + (rand01(i, row, 5.0) - 0.5) * 4.0
+                x, y = x + nx_ * o, y + ny_ * o
+                if road_clear(x, y, 3.0) and building_clear(x, y, 3.0) and not inside_building(x, y) and not in_water(x, y) and \
+                        not any(math.dist((x, y), (c['x'], c['y'])) < c['w'] / 2 + 16 for c in closures):
+                    trees.append((x, y, (2, 3, 4)[int(rand01(i, row, 9.0) * 3) % 3]))
+                    belt += 1
+    print(belt, 'edge trees')
     print(len(trees), 'trees (', n_wood, 'in woods );', len(fences), 'fence segments (', generated, 'generated )')
 
     # ---- generated street lamps along town roads
@@ -1121,38 +1378,42 @@ def build(check_png=None):
         a, b = pts[max(0, i - 1)], pts[min(len(pts) - 1, i + 1)]
         return math.atan2(b[1] - a[1], b[0] - a[0])
 
-    def exit_spot(side, kinds, name=None, near=None):
-        """Where a road (of one of kinds, named name if given) leaves the drivable box on side (N/E/S/W): a
-        spot 70 m back inside along it, heading out. near (a coordinate along that side) picks between several."""
+    def exit_spot(side, kinds, name=None, near=None, pick=None):
+        """Where a road (of one of kinds, named name if given) ends at the playable edge on side (N/E/S/W by its
+        outward heading): a spot 70 m back along it, heading out. near (a coordinate along that side) picks between
+        several; pick (a key function) overrides that."""
         best = None
-        for r in out_roads:
-            if r['kn'] not in kinds or (name and r['n'] != name):
+        for c in closures:
+            if c['kind'] not in kinds or (name and c['name'] != name):
                 continue
-            pts = r['p']
-            ins = [bx0 < x < bx1 and by0 < y < by1 for x, y in pts]
-            for i in range(len(pts) - 1):
-                if ins[i] == ins[i + 1]:
-                    continue
-                k = i if ins[i] else i + 1  # last point inside
-                q = pts[k]
-                sd = min((q[0] - bx0, 'W'), (bx1 - q[0], 'E'), (q[1] - by0, 'N'), (by1 - q[1], 'S'))[1]
-                if sd != side:
-                    continue
-                along = q[1] if side in 'WE' else q[0]
-                score = abs(along - near) if near is not None else 0.0
-                if best is None or score < best[0]:
-                    best = (score, r, k, -1 if ins[i] else 1)  # step back inside
+            sd = ('E' if math.cos(c['h']) > 0 else 'W') if abs(math.cos(c['h'])) >= abs(math.sin(c['h'])) else \
+                ('S' if math.sin(c['h']) > 0 else 'N')
+            if side and sd != side:
+                continue
+            along = c['y'] if sd in 'WE' else c['x']
+            score = pick(c) if pick else (abs(along - near) if near is not None else 0.0)
+            if best is None or score < best[0]:
+                best = (score, c)
         if not best:
             return None
-        _, r, k, back = best
-        pts = r['p']
-        j, run = k, 0.0
-        while 0 <= j + back < len(pts) and run < 70.0:
-            run += math.dist(pts[j], pts[j + back])
-            j += back
-        p, q = pts[j], pts[k]
+        c = best[1]
+        cand = [r for r in out_roads if r['id'] == c['road']]
+        pts = None
+        for r in cand:
+            for pts_ in (r['p'], r['p'][::-1]):
+                if math.dist(pts_[-1], (c['x'], c['y'])) < (120 if c['turn'] else 150) and \
+                        (pts is None or math.dist(pts_[-1], (c['x'], c['y'])) < math.dist(pts[-1], (c['x'], c['y']))):
+                    pts = pts_
+        if not pts:
+            return None
+        j, run = len(pts) - 1, 0.0
+        while j > 0 and run < 70.0:
+            run += math.dist(pts[j], pts[j - 1])
+            j -= 1
+        p, q = pts[j], pts[-1]
         h = math.atan2(q[1] - p[1], q[0] - p[0]) if math.dist(p, q) > 1 else 0.0
-        return [r1(p[0]), r1(p[1]), round(h, 3), r['n'] or r['ref']]
+        r_ = cand[0]
+        return [r1(p[0]), r1(p[1]), round(h, 3), c['name'] or r_['ref']]
 
     spots = {}
     shafts = [pl for pl in places if pl['k'] == 'mineshaft' and 'Andrzej' in pl['name']]
@@ -1167,13 +1428,13 @@ def build(check_png=None):
         _, r, p = bor
         spots['bor_stage'] = [r1(p[0]), r1(p[1]), round(heading_at(r, p), 3), r['n']]
     major = ('secondary', 'primary', 'tertiary', 'trunk')
-    for key, side, kinds, name, near in (('exit_pszczyna', 'W', major, 'Pszczyńska', 2000.0),
-                                         ('exit_oswiecim', 'E', major, 'Pszczyńska', -1800.0),
-                                         ('exit_bielsko', 'S', major, 'Bielska', None),
-                                         ('exit_kety', 'E', major, 'Łęcka', None),
-                                         ('exit_wilamowice', 'S', ('motorway',), None, -1600.0),
-                                         ('exit_tychy', 'W', ('motorway',), None, -1100.0)):
-        sp = exit_spot(side, kinds, name, near)
+    for key, side, kinds, name, near, *pk in (('exit_pszczyna', 'W', major, 'Pszczyńska', 2000.0),
+                                         ('exit_oswiecim', None, major, '44', None, lambda c: c['y'] if c['x'] > 4200 else 1e9),
+                                         ('exit_bielsko', None, major, 'Bielska', None, lambda c: -c['y']),
+                                         ('exit_kety', None, major, 'Łęcka', None, lambda c: -c['x']),
+                                         ('exit_wilamowice', None, ('motorway',), None, None, lambda c: -c['y']),
+                                         ('exit_tychy', None, ('motorway',), None, None, lambda c: c['y'])):
+        sp = exit_spot(side, kinds, name, near, pk[0] if pk else None)
         if sp:
             spots[key] = sp
     station = next((pl for pl in places if pl['k'] == 'station' and pl['name'] == 'Brzeszcze Jawiszowice'), None)
@@ -1224,10 +1485,13 @@ def build(check_png=None):
         'bounds': [r1(bx0), r1(by0), r1(bx1), r1(by1)],
         'extent': [r1(fx0), r1(fy0), r1(fx1), r1(fy1)],
         'boundary': flat_pts(bs.simplify(boundary, 2.0)) if boundary else [],
+        'play': flat_pts(PLAY_POLY),
+        'closures': [[r1(c['x']), r1(c['y']), round(c['h'], 3), c['w'], 1 if c['turn'] else 0] for c in closures],
         'terrain': {'x0': tx0, 'y0': ty0, 'step': tstep, 'nx': tnx, 'ny': tny, 'h': [round(v, 2) for v in hs]},
         'roads': roads_out,
         'nodes': {str(k): list(v) for k, v in node_xy.items()},
         'rail': rails_out,
+        'tunnels': tunnels,
         'buildings': buildings,
         'areas': [[kind, flat_pts(ring), [flat_pts(h) for h in holes], extra] for _, _, kind, ring, holes, extra, _ in areas],
         'waterways': [[wd, flat_pts(pts)] for wd, pts in waterways],
@@ -1345,6 +1609,16 @@ def hud_map(out):
         rank = order.get(r['k'], 1)
         wpx = max(2, int(round((r['w'] + 2.0) / LAND_RES * ss)))
         d.line(px(r['p']), fill=colour[rank], width=wpx, joint='curve')
+    # outside the playable area the satnav picture is dimmed: that is where the world ends
+    mask = Image.new('L', img.size, 0)
+    ImageDraw.Draw(mask).polygon(px(out['play']), fill=255)
+    dark = Image.new('RGBA', img.size, (14, 18, 16, 255))
+    img = Image.composite(img, Image.blend(img, dark, 0.62), mask)
+    d = ImageDraw.Draw(img)
+    d.line(px(out['play'] + out['play'][:2]), fill=(255, 150, 60, 255), width=3 * ss)
+    for c in out['closures']:
+        d.ellipse([px([c[0], c[1]])[0][0] - 5 * ss, px([c[0], c[1]])[0][1] - 5 * ss, px([c[0], c[1]])[0][0] + 5 * ss,
+                   px([c[0], c[1]])[0][1] + 5 * ss], fill=(210, 40, 40, 255))
     img = img.resize((tw, th), Image.LANCZOS)
     path = os.path.join(OUT_DIR, KEY + '_map.png')
     img.save(path, optimize=True)
@@ -1376,6 +1650,7 @@ def check(out, png):
         d.line(px(r['p']), fill=c, width=max(1, int(r['w'] * sc)))
     if out['boundary']:
         d.line(px(out['boundary'] + out['boundary'][:2]), fill=(200, 0, 200), width=2)
+    d.line(px(out['play'] + out['play'][:2]), fill=(255, 0, 0), width=3)
     bx0, by0, bx1, by1 = out['bounds']
     d.rectangle(((bx0 - x0) * sc, (by0 - y0) * sc, (bx1 - x0) * sc, (by1 - y0) * sc), outline=(255, 0, 0), width=2)
     for k, s in out['spots'].items():

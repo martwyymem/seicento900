@@ -322,19 +322,30 @@ func _check_menus(errors: Array[String], tree: SceneTree) -> void:
 			if (c as Control).visible:
 				parts["%s %s" % [c.get_class(), c.get_index()]] = Rect2((c as Control).global_position, (c as Control).size)
 		_no_overlap(errors, tag + " header", parts, canvas)
-		# the circuit info map stays inside its frame, the page inside its box
-		game._show_information_page()
-		await _settle(tree)
+		# the Set Up page: the circuit map stays inside its frame, the left column does not overlap, and the
+		# quick race's core choices fit without scrolling
+		game._show_setup_page()
+		await _settle(tree, 4)
 		var map: Control = game.information_map
 		var frame := map.get_parent() as Control
 		if not Rect2(frame.global_position, frame.size).grow(1.0).encloses(Rect2(map.global_position, map.size)):
 			errors.append("%s: the circuit map leaves its frame" % tag)
 		if not frame.clip_contents and not map.clip_contents:
 			errors.append("%s: the circuit map's frame should clip it" % tag)
-		var column := frame.get_parent() as Control
-		var page: Control = game.information_panel
-		if column.global_position.y + column.get_combined_minimum_size().y > page.global_position.y + page.size.y + 1.0:
-			errors.append("%s: the circuit info column runs past its page into the key hints" % tag)
+		var left := {}
+		for c in [game.menu_car_preview, game.circuit_map_frame, game.menu_car_summary, game.circuit_facts]:
+			left[(c as Control).name] = Rect2((c as Control).global_position, (c as Control).size)
+		_no_overlap(errors, tag + " set-up left column", left, canvas)
+		for pg in ["setup", "advanced", "car"]:
+			match pg:
+				"setup": game._show_setup_page()
+				"advanced": game._show_advanced_page()
+				"car": game._show_car_page()
+			await _settle(tree, 4)
+			var sc: ScrollContainer = game.menu_scroll if pg == "setup" else game.get(("adv_page" if pg == "advanced" else "car_page"))["scroll"]
+			var inner := sc.get_child(0) as Control
+			if canvas.y >= 800.0 and inner.get_combined_minimum_size().y > sc.size.y + 1.0: # (a small canvas scrolls instead)
+				errors.append("%s: the quick race %s page needs %d px, has %d (it should fit without scrolling)" % [tag, pg, inner.get_combined_minimum_size().y, sc.size.y])
 		# the service page's note stays above the key hints
 		game._show_repair_page()
 		await _settle(tree)

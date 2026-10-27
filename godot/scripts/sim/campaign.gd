@@ -206,6 +206,10 @@ static func save_progress(data: Dictionary) -> void:
 	if f:
 		f.store_string(JSON.stringify(data, "  "))
 
+## Wipes the campaign: unlocked stages, results, trophies, failed tries and the carried car.
+static func reset_progress() -> void:
+	save_progress({"unlocked": 0, "best_pos": {}, "trophies": []})
+
 const LEVELS := ["easy", "medium", "hard", "alien"]
 const FAILS_PER_EASE := 1 ## failed tries on a stage before its field drops one difficulty level
 

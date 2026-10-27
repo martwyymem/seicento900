@@ -168,6 +168,26 @@ func run() -> Array:
 	check("a bot wedged facing the wrong way under the safety car is put back", turned_back,
 		"(heading off %.2f, s %.0f)" % [absf(SimUtil.wrap_angle(b.heading - wed.track.heading(b.s))), b.s])
 
+	# reversing: the brake pedal drives backwards, the throttle slows the car (it used to speed it up too)
+	race.phase = "racing"
+	var rcar: RaceCar = race.player
+	var v_thr := 0.0
+	var v_brk := 0.0
+	for pedal in 2:
+		rcar.rev = true
+		rcar.gear = 0
+		rcar.heading = 0.0
+		rcar.vx = -5.0
+		rcar.vy = 0.0
+		for k in 60:
+			race.step_free(rcar, 1.0 / 120.0, 1.0 if pedal == 0 else 0.0, 0.0 if pedal == 0 else 1.0, 0.0, null)
+		if pedal == 0:
+			v_thr = rcar.vx
+		else:
+			v_brk = rcar.vx
+	check("throttle in reverse slows the car", v_thr > -5.0, str(v_thr))
+	check("brake in reverse speeds the car backwards", v_brk < -5.0, str(v_brk))
+
 	race.dispose()
 	scr.dispose()
 	out.dispose()

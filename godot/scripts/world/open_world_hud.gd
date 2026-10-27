@@ -6,6 +6,7 @@ extends Control
 
 signal pause_action(action: String)
 signal map_target(index: int)
+signal waypoint_picked(pos: Vector2) ## a click on the big map: the player's own route destination
 
 const MINIMAP_SHADER := preload("res://shaders/minimap.gdshader")
 ## Colours from the live UI skin (CmrStyle, Options / F1): the accent, the route, the reward highlight and
@@ -35,6 +36,8 @@ var big_map_mat: ShaderMaterial
 var big_overlay: Control
 var map_open := false
 var map_sel := 0
+var cursor_on := false ## the free map cursor (F / pad X) for placing a waypoint anywhere
+var cursor := Vector2.ZERO
 var route := PackedVector2Array()
 var markers: Array = [] ## [{pos: Vector2, color: Color, label: String, kind: String}]
 var car_pos := Vector2.ZERO
@@ -255,7 +258,8 @@ func _build_big_map() -> void:
 	add_child(big_map)
 	big_overlay = Control.new()
 	big_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	big_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	big_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	big_overlay.gui_input.connect(_big_map_input)
 	big_overlay.draw.connect(_draw_big_overlay)
 	big_map.add_child(big_overlay)
 	big_map.hide()
@@ -269,15 +273,15 @@ func _build_pause() -> void:
 	pause_panel.anchor_bottom = 0.5
 	pause_panel.offset_left = -230
 	pause_panel.offset_right = 230
-	pause_panel.offset_top = -210
-	pause_panel.offset_bottom = 210
+	pause_panel.offset_top = -240
+	pause_panel.offset_bottom = 240
 	add_child(pause_panel)
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 10)
 	pause_panel.add_child(col)
 	col.add_child(_label("PAUSED", 30, Color.WHITE, 900))
 	for item in [["resume", "RESUME"], ["map", "MAP"], ["stages", "CAMPAIGN STAGE LIST"], ["reset", "RESET CAR TO ROAD"],
-			["time", "SKIP TO NEXT TIME OF DAY"], ["menu", "MAIN MENU"]]:
+			["reset_campaign", "RESET CAMPAIGN"], ["time", "SKIP TO NEXT TIME OF DAY"], ["menu", "MAIN MENU"]]:
 		var b := Button.new()
 		b.text = item[1]
 		b.custom_minimum_size = Vector2(0, 44)
@@ -615,9 +619,47 @@ func _big_xy(p: Vector2) -> Vector2:
 	o.x /= aspect
 	return sz * 0.5 + o * sz * 0.5
 
+func _big_world(q: Vector2) -> Vector2:
+	var sz := big_overlay.size
+	var centre: Vector2 = big_map_mat.get_shader_parameter("centre")
+	var radius: float = big_map_mat.get_shader_parameter("radius_m")
+	var aspect: float = big_map_mat.get_shader_parameter("aspect")
+	var o := (q - sz * 0.5) / (sz * 0.5)
+	o.x *= aspect
+	return centre + o * radius
+
+func _big_map_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		waypoint_picked.emit(_big_world(event.position))
+	elif event is InputEventMouseMotion and cursor_on:
+		cursor = _big_world(event.position)
+		big_overlay.queue_redraw()
+
+## Opens the free cursor on the map, starting at the car.
+func toggle_cursor(on: bool) -> void:
+	cursor_on = on
+	if on:
+		cursor = car_pos
+	big_overlay.queue_redraw()
+
+## Moves the free cursor by a fraction of the visible map (dir in -1..1 per axis).
+func move_cursor(dir: Vector2) -> void:
+	var radius: float = big_map_mat.get_shader_parameter("radius_m")
+	cursor += dir * radius * 0.06
+	big_overlay.queue_redraw()
+
 func _draw_big_overlay() -> void:
 	if map == null:
 		return
+	if map.play.size() > 2:
+		# the edge of the world: the map picture is dimmed beyond it, and a road ends in a barrier
+		var e := PackedVector2Array()
+		for p in map.play:
+			e.append(_big_xy(p))
+		e.append(e[0])
+		big_overlay.draw_polyline(e, Color(1, 1, 1, 0.35), 2.0, true)
+		for c in map.closures:
+			big_overlay.draw_circle(_big_xy(Vector2(c[0], c[1])), 4.0, Color(0.85, 0.15, 0.12, 0.9))
 	if map.boundary.size() > 2:
 		var b := PackedVector2Array()
 		for p in map.boundary:
@@ -645,9 +687,16 @@ func _draw_big_overlay() -> void:
 	var r := Vector2(-f.y, f.x)
 	var arrow := PackedVector2Array([c + f * 14.0, c - f * 9.0 + r * 9.0, c - f * 4.0, c - f * 9.0 - r * 9.0])
 	big_overlay.draw_colored_polygon(arrow, Color.WHITE)
+	if cursor_on:
+		var q := _big_xy(cursor)
+		big_overlay.draw_line(q - Vector2(16, 0), q + Vector2(16, 0), Color.WHITE, 2.5)
+		big_overlay.draw_line(q - Vector2(0, 16), q + Vector2(0, 16), Color.WHITE, 2.5)
+		big_overlay.draw_arc(q, 9.0, 0.0, TAU, 24, PURPLE.lightened(0.3), 2.5, true)
 	var title := "BRZESZCZE · MAP"
 	big_overlay.draw_string(CmrStyle.font(900), Vector2(40, 60), title, HORIZONTAL_ALIGNMENT_LEFT, -1, 34, Color.WHITE)
-	var hint := "← → pick an event · Enter set route · M / Esc close"
+	var hint := "← → pick an event · Enter set route · click / F place your own waypoint · M / Esc close"
+	if cursor_on:
+		hint = "arrows move the cursor · Enter set waypoint here · F back to events"
 	big_overlay.draw_string(CmrStyle.font(600), Vector2(40, 92), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 1, 1, 0.75))
 	if map_sel >= 0 and map_sel < markers.size():
 		big_overlay.draw_string(CmrStyle.font(800), Vector2(40, big_overlay.size.y - 40), String(markers[map_sel].get("info", "")),

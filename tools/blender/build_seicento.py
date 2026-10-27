@@ -132,8 +132,8 @@ ZSH = Curve([(0.0, 0.52), (0.05, 0.545), (0.08, 0.595), (0.11, 0.64), (0.16, 0.6
 ZT = Curve([(0.0, 0.54), (0.04, 0.555), (0.075, 0.615), (0.105, 0.668), (0.15, 0.705), (0.25, 0.742), (0.4, 0.772),
 	(0.6, 0.808), (0.85, 0.858), (1.05, 0.90), (S_COWL, 0.915), (1.30, 1.058), (1.50, 1.20), (1.70, 1.33),
 	(S_WS_TOP, 1.374), (1.90, 1.400), (2.1, 1.414), (2.5, 1.42), (2.8, 1.412), (2.93, 1.395), (2.965, 1.375),
-	(3.0, 1.34), (3.06, 1.215), (3.135, 1.03), (3.17, 0.96), (3.2, 0.87), (3.23, 0.75), (3.26, 0.66),
-	(3.29, 0.615), (LENGTH, 0.59)])
+	(3.0, 1.34), (3.06, 1.215), (3.135, 1.03), (3.17, 0.96), (3.2, 0.87), (3.235, 0.75), (3.255, 0.665),
+	(3.268, 0.628), (3.29, 0.612), (LENGTH, 0.595)])
 ZB = Curve([(0.0, 0.25), (0.06, 0.215), (0.2, 0.205), (0.35, 0.22), (1.0, 0.235), (2.5, 0.235), (3.1, 0.225),
 	(3.25, 0.23), (LENGTH, 0.27)])
 WR = Curve([(0.0, 0.40), (0.05, 0.47), (0.1, 0.535), (0.2, 0.595), (0.6, 0.62), (S_COWL, 0.625), (1.45, 0.598),
@@ -849,8 +849,10 @@ def build_bumpers(pj, mb):
 	us = spread(-RB_SPAN, RB_SPAN, 1.5, (-22, -21, -20, 20, 21, 22))
 	vs = sorted(set([r[0] for r in rows] + [0.30, 0.355, 0.361, 0.42, 0.479, 0.485, 0.55]))
 	pj.band(mb, us, vs, r_off, r_mat, rp, caps=True)
-	pj.star(mb, rounded_rect(-0.258, 0.258, 0.366, 0.474, 0.006), rear_proj, "Plate", offset=0.012, rings=1,
-		samples=2, skirt=0.006)
+	pj.star(mb, rounded_rect(-0.262, 0.262, 0.364, 0.476, 0.008), rear_proj, "Trim", offset=0.029, rings=1,
+		samples=2, skirt=0.01)
+	pj.star(mb, rounded_rect(-0.255, 0.255, 0.369, 0.471, 0.006), rear_proj, "Plate", offset=0.031, rings=1,
+		samples=2, skirt=0.0)
 
 
 # ---------------------------------------------------------------- details & cabin
@@ -858,8 +860,14 @@ HEADLAMP = [(2.5, 0.556), (0.0, 0.567), (-1.0, 0.592), (0.0, 0.618), (2.5, 0.638
 	(27.0, 0.687), (37.0, 0.68), (45.0, 0.663), (50.0, 0.636), (49.5, 0.604), (45.0, 0.58), (34.0, 0.562),
 	(18.0, 0.553), (8.0, 0.552)]
 HEAD_AMBER = [(38.5, 0.679), (45.0, 0.663), (50.0, 0.636), (49.5, 0.604), (45.0, 0.58), (34.0, 0.562)]
-TAILLAMP = [(-0.5, 0.636), (-1.0, 0.68), (0.5, 0.722), (14.0, 0.737), (32.0, 0.739), (44.0, 0.729), (51.0, 0.706),
-	(53.0, 0.676), (50.0, 0.648), (40.0, 0.634), (20.0, 0.630)]
+def _hv(v):  # lift the lens's lower edge clear of the bumper ledge (0.556) so no jagged intersection shows
+	return 0.576 + (v - 0.552) * (0.687 - 0.576) / (0.687 - 0.552)
+
+
+HEADLAMP = [(u, _hv(v)) for u, v in HEADLAMP]
+HEAD_AMBER = [(u, _hv(v)) for u, v in HEAD_AMBER]
+TAILLAMP = [(1.5, 0.80), (0.2, 0.87), (1.5, 0.945), (8.0, 0.975), (22.0, 0.985), (36.0, 0.975), (46.0, 0.95),
+	(52.0, 0.915), (53.0, 0.875), (50.0, 0.83), (42.0, 0.805), (28.0, 0.79), (12.0, 0.788)]
 
 
 def build_details(body):
@@ -876,22 +884,22 @@ def build_details(body):
 		pj, pj_all = pj_body, pj
 		# Headlamps: the long rounded lamp on each nose corner with the amber indicator at its outer end
 		hp = corner_proj(0.30, 0.62, side, False)
-		pj.star(mb, HEADLAMP, hp, "Gasket", offset=0.002, rings=1, samples=3, skirt=0.004)
-		inner = [(lerp(u, 21.0, 0.06), lerp(v, 0.628, 0.12)) for u, v in HEADLAMP]
+		pj.star(mb, HEADLAMP, hp, "Gasket", offset=0.003, rings=2, samples=3, skirt=0.0)
+		inner = [(lerp(u, 21.0, 0.06), lerp(v, _hv(0.628), 0.12)) for u, v in HEADLAMP]
 		pj.star(mb, inner, hp, "Headlight", offset=0.006, bulge=0.006, rings=3, samples=3, skirt=0.0)
-		pj.star(mb, [(lerp(u, 43.0, 0.1), lerp(v, 0.63, 0.12)) for u, v in HEAD_AMBER], hp, "Indicator",
+		pj.star(mb, [(lerp(u, 43.0, 0.1), lerp(v, _hv(0.63), 0.12)) for u, v in HEAD_AMBER], hp, "Indicator",
 			offset=0.0105, rings=2, samples=3, skirt=0.0)
 		# the round main-beam reflector glinting through the lens
-		pj.star(mb, ellipse(10.0, 0.628, 5.5, 0.03, 16), hp, "Chrome", offset=0.0095, bulge=0.003, rings=2,
+		pj.star(mb, ellipse(10.0, _hv(0.628), 5.5, 0.026, 16), hp, "Chrome", offset=0.0095, bulge=0.003, rings=2,
 			samples=1, skirt=0.0)
 
 		# Tail lamps: horizontal, wrapping round the rear corners on the bumper ledge; two round clear lenses
 		tp = corner_proj(0.30, 2.85, side, True)
-		pj.star(mb, TAILLAMP, tp, "Gasket", offset=0.002, rings=1, samples=3, skirt=0.004)
-		pj.star(mb, [(lerp(u, 26.0, 0.05), lerp(v, 0.68, 0.12)) for u, v in TAILLAMP], tp, "Taillight",
+		pj.star(mb, TAILLAMP, tp, "Gasket", offset=0.003, rings=2, samples=3, skirt=0.0)
+		pj.star(mb, [(lerp(u, 26.0, 0.05), lerp(v, 0.885, 0.12)) for u, v in TAILLAMP], tp, "Taillight",
 			offset=0.006, bulge=0.005, rings=3, samples=3, skirt=0.0)
 		for cu in (9.0, 21.0):
-			pj.star(mb, ellipse(cu, 0.679, 4.6, 0.036, 16), tp, "LampClear", offset=0.0105, bulge=0.004, rings=2,
+			pj.star(mb, ellipse(cu, 0.885, 4.6, 0.04, 16), tp, "LampClear", offset=0.0105, bulge=0.004, rings=2,
 				samples=1, skirt=0.0)
 
 		pj = pj_all
@@ -910,7 +918,7 @@ def build_details(body):
 		pj.band(mb, spread(s0, s1, 0.03, S_DOOR), [r[0] for r in strip_rows], rub, lambda u, v: "Trim", sp)
 
 		# Race number panel on the door
-		pj.star(mb, rounded_rect(1.50, 1.94, 0.50, 0.80, 0.05), sp, "Plate", offset=0.0022, rings=2, samples=2,
+		pj.star(mb, rounded_rect(1.57, 1.87, 0.50, 0.80, 0.03), sp, "Plate", offset=0.0022, rings=2, samples=2,
 			skirt=0.003)
 
 		# Door pull handle in its recess, with the lock barrel ahead of it

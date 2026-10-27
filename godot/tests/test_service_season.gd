@@ -201,17 +201,12 @@ func _check_carry_over(errors: Array[String], game) -> void:
 	if game._service_due() or not game._carried_car().is_empty():
 		errors.append("With damage off the championship car should be rebuilt for every round")
 	game.champ_data["config"]["damage"] = 1
-	# the campaign keeps its car from stage to stage
+	# damage is for rally (and a championship that turns it on): the campaign never carries a car or stops at the service area
 	game.is_championship_mode = false
 	game.is_campaign_mode = true
 	CampaignData.save_car({"parts": {"Suspension": 0.7}, "pull": 0.03, "used": 0, "serviced": false})
-	if not game._service_due() or game._service_allocation() != Service.ALLOCATION:
-		errors.append("The campaign car should come to the service area between stages")
-	game._show_repair_page()
-	game._select_repair_part(Service.PARTS.keys().find("Suspension"))
-	game._repair_selected()
-	if CampaignData.load_car().parts.has("Suspension") or game._service_due():
-		errors.append("Repairs in the campaign's service area should be saved with its progress")
+	if game._service_due() or not game._carried_car().is_empty() or game._servicing():
+		errors.append("The campaign should start every stage with a sound car and no service stop")
 	race.dispose()
 	game.is_campaign_mode = false
 
@@ -254,23 +249,30 @@ func _check_pad_menus(errors: Array[String], game) -> void:
 	game._input(_pad(JOY_BUTTON_DPAD_DOWN))
 	if game.get_viewport().gui_get_focus_owner() == game.track_picker:
 		errors.append("D-pad down should move to the next setting")
-	# the essentials up front, the rest folded away
+	# the essentials up front, the rest in titled groups on the Advanced and Car pages
 	for key in ["race", "driving", "driver", "car", "strategy", "rules"]:
-		if not game.setup_folds.has(key) or not String(game.setup_folds[key].title).begins_with("ADVANCED"):
-			errors.append("'%s' should be a folded ADVANCED section" % key)
+		if not game.setup_folds.has(key) or not game.setup_folds[key].get("fixed", false):
+			errors.append("'%s' should be a titled group, not a folded section" % key)
 	for c in [game.track_picker, game.laps_picker, game.opponents_picker, game.difficulty_picker, game.weather_picker]:
 		var up: Node = c
 		while up and up != game.setup_column:
 			for key in game.setup_folds:
 				if game.setup_folds[key].body == up:
-					errors.append("%s should be up front, not in the %s section" % [c.get_class(), key])
+					errors.append("%s should be up front, not in the %s group" % [c.get_class(), key])
 			up = up.get_parent()
 	game._input(_pad(JOY_BUTTON_RIGHT_SHOULDER))
-	if game.active_menu_page != "information":
-		errors.append("RB should switch to Circuit Info")
+	if game.active_menu_page != "advanced":
+		errors.append("RB should switch to Advanced")
 	game._input(_pad(JOY_BUTTON_RIGHT_SHOULDER))
-	if game.active_menu_page != "repair":
-		errors.append("RB again should switch to Car & Service")
+	if game.active_menu_page != "car":
+		errors.append("RB again should switch to Car")
+	game._input(_pad(JOY_BUTTON_RIGHT_SHOULDER))
+	if game.active_menu_page != "strategy":
+		errors.append("RB again should switch to Strategy")
+	game._input(_pad(JOY_BUTTON_RIGHT_SHOULDER))
+	if game.active_menu_page != "strategy" or (game.menu_tab_buttons["Service"] as Control).visible:
+		errors.append("A quick race has no Service page: RB on Strategy should stay put")
+	game._show_repair_page() # a service area (as after a championship round) still works
 	var part: int = game.repair_selected
 	game._input(_pad(JOY_BUTTON_DPAD_DOWN))
 	if game.repair_selected != mini(part + 1, Service.PARTS.size() - 1):

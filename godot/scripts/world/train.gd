@@ -50,7 +50,8 @@ func _init(town: TownMap, parent: Node3D, b: TownBuilder) -> void:
 		var s := _project(builder.crossing_points[i][0], 4.0)
 		if s >= 0.0:
 			_crossing_s.append([i, s])
-	tail = total * 0.35
+	# a visitor should meet it: it starts a few hundred metres short of the station and rolls in
+	tail = total * 0.35 if stop_s < 0.0 else clampf(stop_s - LENGTH * 0.5 - 450.0, 0.0, total - LENGTH)
 	for k in CARS:
 		var name := "TrainCar" if k == 1 else "TrainCab"
 		var inst := MeshInstance3D.new()

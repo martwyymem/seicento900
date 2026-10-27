@@ -1712,10 +1712,8 @@ func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float,
 		car.rev = true
 		car.gear = 0
 	elif car.rev and thr > 0.05:
-		if vF < -0.5:
-			brk = thr
-			thr = 0.0
-		else:
+		# still rolling backwards: the pedals stay swapped below, so throttle brakes (never speeds up reverse)
+		if vF >= -0.5:
 			car.rev = false
 	if car.rev:
 		var t := thr

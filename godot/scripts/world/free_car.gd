@@ -94,14 +94,21 @@ func speed_kmh() -> float:
 ## Height the car would ride at on (x, y), keeping to the deck nearest its current height.
 func support(x: float, y: float) -> float:
 	var g := map.ground(x, y)
-	# a pond's bed, as the terrain mesh sinks it (a dyke track through the fishponds stays up)
-	var w := map.water_at(Vector2(x, y))
-	if not is_nan(w) and map.road_at(x, y).is_empty():
-		g = minf(g, w - TownBuilder.POND_DEPTH)
+	# the drawn terrain: ponds and river beds slope down their banks (a dyke track through the fishponds stays up)
+	if map.road_at(x, y).is_empty():
+		g = map.terrain(x, y)
 	var best := g
 	var best_d := absf(g - z)
 	for d in map.decks_at(x, y, TownMap.DRIVE_REACH):
-		var h: float = g + float(d[1])
+		var over := maxf(float(d[2]), 0.0)
+		var deck: float = d[1]
+		if d[5]:
+			if over > TownMap.PARAPET:
+				continue # off the side of a bridge: the parapet ends here, nothing holds the car up
+		else:
+			# beyond a raised road's edge the earth embankment falls away, it is no plane at deck height
+			deck = maxf(0.0, deck - over / TownMap.EMBANKMENT)
+		var h: float = g + deck
 		if h - z > UNDER_DECK:
 			continue # a bridge overhead
 		var dd := absf(h - z)
@@ -132,10 +139,8 @@ func step(dt: float, thr: float, brk: float, steer_in: float, shift_up := false,
 		car.rev = true
 		car.gear = 0
 	elif car.rev and thr > 0.05:
-		if vF < -0.5:
-			brk = thr
-			thr = 0.0
-		else:
+		# still rolling backwards: the pedals stay swapped below, so throttle brakes (never speeds up reverse)
+		if vF >= -0.5:
 			car.rev = false
 	if car.rev:
 		var t := thr
@@ -252,6 +257,30 @@ func corners() -> PackedVector2Array:
 	return PackedVector2Array([c + f * HALF_L + r * HALF_W, c + f * HALF_L - r * HALF_W,
 		c - f * HALF_L - r * HALF_W, c - f * HALF_L + r * HALF_W])
 
+## Push the car out of a round post (a tree, a lamp, a pier).
+func _post_push(pc: Vector2, radius: float, mass: float) -> void:
+	var c := Vector2(car.x, car.y)
+	var local := (pc - c).rotated(-car.heading)
+	var cl := Vector2(clampf(local.x, -HALF_L, HALF_L), clampf(local.y, -HALF_W, HALF_W))
+	var d := local.distance_to(cl)
+	if d < radius:
+		var n_local := (cl - local).normalized() if d > 1e-4 else Vector2(signf(local.x), 0.0) * -1.0
+		var n_out := n_local.rotated(car.heading)
+		_push(n_out * (radius - d + 0.01), cl.rotated(car.heading), n_out, mass)
+
+## Push the car out of a thin wall segment [ax, ay, bx, by, half thickness, ...].
+func _wall_push(c: Vector2, wall: PackedFloat32Array, mass: float) -> void:
+	var a := Vector2(wall[0], wall[1])
+	var b := Vector2(wall[2], wall[3])
+	var cp := Geometry2D.get_closest_point_to_segment(c, a, b)
+	var local := (cp - c).rotated(-car.heading)
+	var cl := Vector2(clampf(local.x, -HALF_L, HALF_L), clampf(local.y, -HALF_W, HALF_W))
+	var d := local.distance_to(cl)
+	if d < wall[4]:
+		var n_local := (cl - local).normalized() if d > 1e-4 else Vector2(signf(local.x), 0.0) * -1.0
+		var n_out := n_local.rotated(car.heading)
+		_push(n_out * (wall[4] - d + 0.02), cl.rotated(car.heading), n_out, mass)
+
 func _collide(mass: float) -> void:
 	var c := Vector2(car.x, car.y)
 	if airborne and z > map.ground(car.x, car.y) + 5.0:
@@ -276,26 +305,18 @@ func _collide(mass: float) -> void:
 		_vertex_push(ring, mass)
 	# trees, lamp posts and the like
 	for post in map.posts_near(c, HALF_L + 0.6):
-		var pc := Vector2(post.x, post.y)
-		var local := (pc - c).rotated(-car.heading)
-		var cl := Vector2(clampf(local.x, -HALF_L, HALF_L), clampf(local.y, -HALF_W, HALF_W))
-		var d := local.distance_to(cl)
-		if d < post.z:
-			var n_local := (cl - local).normalized() if d > 1e-4 else Vector2(signf(local.x), 0.0) * -1.0
-			var n_out := n_local.rotated(car.heading)
-			_push(n_out * (post.z - d + 0.01), cl.rotated(car.heading), n_out, mass)
+		_post_push(Vector2(post.x, post.y), post.z, mass)
+	# bridge piers hold up the deck: solid to a car beneath it, not to one driving over
+	for pier in map.piers_near(c, HALF_L + 0.6):
+		if z < pier.w - 2.0:
+			_post_push(Vector2(pier.x, pier.y), pier.z, mass)
+	# bridge parapets: a wall along the deck edge for a car on that deck (not one under it or far below)
+	for wall in map.parapets_near(c, HALF_L + 1.0):
+		if absf(z - wall[5]) < 2.5:
+			_wall_push(c, wall, mass)
 	# fences, walls and hedges: treat each segment as a thin capsule against the car's box
 	for wall in map.walls_near(c, HALF_L + 1.0):
-		var a := Vector2(wall[0], wall[1])
-		var b := Vector2(wall[2], wall[3])
-		var cp := Geometry2D.get_closest_point_to_segment(c, a, b)
-		var local := (cp - c).rotated(-car.heading)
-		var cl := Vector2(clampf(local.x, -HALF_L, HALF_L), clampf(local.y, -HALF_W, HALF_W))
-		var d := local.distance_to(cl)
-		if d < wall[4]:
-			var n_local := (cl - local).normalized() if d > 1e-4 else Vector2(signf(local.x), 0.0) * -1.0
-			var n_out := n_local.rotated(car.heading)
-			_push(n_out * (wall[4] - d + 0.02), cl.rotated(car.heading), n_out, mass)
+		_wall_push(c, wall, mass)
 	# the train's cars: boxes that push the car out of them (they don't give way)
 	for tc in map.trains:
 		if tc == null or absf(float(tc[4]) - z) > 3.0:
@@ -344,17 +365,8 @@ func _collide(mass: float) -> void:
 		var n_out := n_local.rotated(car.heading)
 		_push(n_out * (depth + 0.01), cl.rotated(car.heading), n_out, mass)
 	# the edge of the map
-	var b := map.bounds.grow(-1.5)
 	for q in corners():
-		var push := Vector2.ZERO
-		if q.x < b.position.x:
-			push.x = b.position.x - q.x
-		elif q.x > b.end.x:
-			push.x = b.end.x - q.x
-		if q.y < b.position.y:
-			push.y = b.position.y - q.y
-		elif q.y > b.end.y:
-			push.y = b.end.y - q.y
+		var push := map.edge_push(q)
 		if push != Vector2.ZERO:
 			_push(push, q - Vector2(car.x, car.y), push.normalized(), mass)
 
