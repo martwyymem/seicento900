@@ -23,6 +23,8 @@ var _rng := RandomNumberGenerator.new()
 var _paint_cache := {}
 var _spawn_t := 0.0
 var _edges := [] ## [from node, edge] usable by traffic
+var monster := false ## CarMods' Monster Truck: every traffic car stands on giant wheels
+static var _tyre_mesh: CylinderMesh
 
 func _init(town: TownMap, parent: Node3D, b: TownBuilder) -> void:
 	map = town
@@ -124,6 +126,21 @@ func _spawn(from_node: String, e: Array, pts: PackedVector2Array, s: float) -> v
 	_place(c)
 	cars.append(c)
 
+## Dev menu: a parked car `gap` metres ahead of the player, along the way the player faces (it stays until it is knocked off).
+func spawn_ahead(player: FreeCar, kind: String, gap := 22.0) -> void:
+	var dir := Vector2(cos(player.car.heading), sin(player.car.heading))
+	var start := Vector2(player.car.x, player.car.y) + dir * gap
+	var pts := PackedVector2Array([start, start + dir * 60.0])
+	var ri: int = int(player.road.road) if not player.road.is_empty() else 0
+	var paint := Color(TownBuilder.CAR_PAINTS[_rng.randi() % TownBuilder.CAR_PAINTS.size()])
+	var node := _car_node(kind, paint)
+	root.add_child(node)
+	var c := {"node": node, "from": "", "edge": ["", ri], "pts": pts, "len": 60.0, "s": 0.0,
+		"v": 0.0, "want": 0.0, "pos": Vector2.ZERO, "dir": dir, "heading": 0.0, "knock": 0.0, "push": Vector2.ZERO,
+		"spin": 0.0, "near": false, "kind": kind, "y": 0.0}
+	_place(c)
+	cars.append(c)
+
 func _car_node(kind: String, paint: Color) -> Node3D:
 	var node := Node3D.new()
 	var mesh_xf := builder._model(kind, TownBuilder._fallback_car.bind(kind))
@@ -148,7 +165,42 @@ func _car_node(kind: String, paint: Color) -> Node3D:
 	if not painted:
 		inst.material_override = _paint_cache[key]
 	node.add_child(inst)
+	if monster:
+		_add_monster_wheels(node, inst)
 	return node
+
+## Switches the giant wheels on or off; the cars on the road go and new ones spawn in the new style.
+func set_monster(on: bool) -> void:
+	if on != monster:
+		monster = on
+		clear()
+
+## Four big tyres at the corners of the car's mesh, the body lifted over them.
+func _add_monster_wheels(node: Node3D, inst: MeshInstance3D) -> void:
+	if _tyre_mesh == null:
+		_tyre_mesh = CylinderMesh.new()
+		_tyre_mesh.top_radius = 0.62
+		_tyre_mesh.bottom_radius = 0.62
+		_tyre_mesh.height = 0.5
+		_tyre_mesh.radial_segments = 16
+		var m := StandardMaterial3D.new()
+		m.albedo_color = Color(0.06, 0.06, 0.065)
+		m.roughness = 0.9
+		_tyre_mesh.material = m
+	var box := inst.transform * inst.mesh.get_aabb()
+	var lift := _tyre_mesh.top_radius * 1.35
+	inst.position.y += lift
+	var hx := box.size.x * 0.5 + 0.15
+	var hz := box.size.z * 0.5 * 0.68
+	var cx := box.get_center().x
+	var cz := box.get_center().z
+	for sx: float in [-1.0, 1.0]:
+		for sz: float in [-1.0, 1.0]:
+			var t := MeshInstance3D.new()
+			t.mesh = _tyre_mesh
+			t.position = Vector3(cx + sx * hx, _tyre_mesh.top_radius, cz + sz * hz)
+			t.rotation.z = PI / 2.0
+			node.add_child(t)
 
 ## Lateral offset of the lane (right of travel on a two-way road; the middle of a one-way one).
 func _lane(ri: int) -> float:
@@ -274,8 +326,8 @@ func _contact(player: FreeCar) -> void:
 				touched = true
 				var n_local := (cl - local).normalized() if d > 1e-4 else Vector2(-1, 0)
 				var n_out := n_local.rotated(car.heading) # from the traffic car towards the player
-				var v := player.bump(n_out, (RADIUS - d) * 0.6, cl.rotated(car.heading), CAR_MASS)
-				c.push = (c.push as Vector2) - n_out * (RADIUS - d) * 0.4
+				var v := player.bump(n_out, (RADIUS - d) * (0.15 if player.monster else 0.6), cl.rotated(car.heading), CAR_MASS)
+				c.push = (c.push as Vector2) - n_out * (RADIUS - d) * (1.2 if player.monster else 0.4)
 				if v > 2.0:
 					c.knock = 2.5
 					c.spin = float(c.spin) + clampf(v * 0.03, 0.0, 0.6) * signf(n_out.cross(dir))

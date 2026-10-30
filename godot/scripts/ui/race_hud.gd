@@ -52,13 +52,13 @@ var FEED_BORDER: Dictionary:
 	"purple": PURPLE, "ai": Color("#2ec4b6"), "rc": Color("#ffcc00")}
 const QUICK_HELP := "W Throttle  ·  S Brake  ·  A / D Steer  ·  R Reset  ·  H Controls"
 const QUICK_HELP_SECS := 7.0 ## s of racing the key strip stays up
-const GUIDE := [["W / ↑", "Throttle"], ["S / ↓ / Space", "Brake, reverse"], ["A / D / ← →", "Steer"], ["E / Q", "Gear (manual)"],
-	["R / Backspace", "Reset car"], ["C", "Camera"], ["L", "Racing line"], ["V", "Speed limiter"], ["O", "Autopilot"],
+const GUIDE := [["W / ↑", "Throttle"], ["S / ↓", "Brake, reverse"], ["Space · pad A", "Handbrake"], ["A / D / ← →", "Steer"], ["E / Q", "Gear (manual)"],
+	["R / Backspace", "Reset car"], ["C · L", "Camera · line"], ["V", "Speed limiter"], ["O", "Autopilot"],
 	["G", "Ghost car"], ["M", "Mute"], ["P", "Request box"], ["[ ]  − =  F", "Tyre · fuel · mix"], ["Esc", "Pause"]]
 var _guide: Control
 var _feed_cache: Array = []
 var _feed_cache_n := -1
-const HELP_TEXT := "DRIVING:  W / ↑ Throttle  ·  S / ↓ / Space Brake/Reverse  ·  A / D / ← → Steer  ·  Backspace / R Reset Car  ·  E / Q Gear (Manual)\nVIEW & AIDS:  C Camera  ·  L Racing Line  ·  V Speed Limiter  ·  O Autopilot  ·  G Ghost Car  ·  M Mute  ·  Esc Pause\nPIT & STRATEGY:  P Request Box  ·  [ ] Next Tyre  ·  − / = Fuel  ·  F Fuel Mix  ·  Shift+R Replan  ·  H Toggle Help"
+const HELP_TEXT := "DRIVING:  W / ↑ Throttle  ·  S / ↓ Brake  ·  Space Handbrake  ·  A / D / ← → Steer  ·  Backspace / R Reset Car  ·  E / Q Gear (Manual)\nVIEW & AIDS:  C Camera  ·  L Racing Line  ·  V Speed Limiter  ·  O Autopilot  ·  G Ghost Car  ·  M Mute  ·  Esc Pause\nPIT & STRATEGY:  P Request Box  ·  [ ] Next Tyre  ·  − / = Fuel  ·  F Fuel Mix  ·  Shift+R Replan  ·  H Toggle Help"
 
 var race: Race
 var records: LapRecords ## the player's lap record here, for the gap to it (null: no record row)
@@ -150,9 +150,24 @@ var _queued: Array = [] ## [outline size (0 plain), font, at, text, align, width
 var _badges: Array = [] ## [centre, radius, hole / radius, colour] for _flush_badges
 var _round_textures := {}
 
+var _nitro_label: Label ## the Nitrous modifier's bottle (CarMods), only while it is switched on
+
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_nitro_label = Label.new()
+	_nitro_label.add_theme_font_override("font", CmrStyle.font(800))
+	_nitro_label.add_theme_font_size_override("font_size", 16)
+	_nitro_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
+	_nitro_label.add_theme_constant_override("outline_size", 4)
+	_nitro_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
+	_nitro_label.offset_top = -64
+	_nitro_label.offset_bottom = -40
+	_nitro_label.offset_left = -120
+	_nitro_label.offset_right = 120
+	_nitro_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_nitro_label.hide()
+	add_child(_nitro_label)
 	visibility_changed.connect(func(): if not visible: CoDriver.silence())
 	_font = CmrStyle.font(400)
 	_bold = CmrStyle.font(600)
@@ -323,6 +338,11 @@ func update(dt: float) -> void:
 	if not race:
 		return
 	_clock += dt
+	_nitro_label.visible = race.mods.has("nitro") and visible
+	if _nitro_label.visible:
+		var bars := int(round(race.nitro * 10.0))
+		_nitro_label.text = "N2O  " + "█".repeat(bars) + "░".repeat(10 - bars)
+		_nitro_label.add_theme_color_override("font_color", Color("#7fe8ff") if race.nitro_burning else Color("#3aa8ff"))
 	var dash_key := _dash_state()
 	if dash_key != _dash_key:
 		_dash_key = dash_key
@@ -1304,20 +1324,20 @@ func _update_banner() -> void:
 		small = "Last lap %s" % Race.fmt_time(p.last_lap) if p.lap > 1 else "Push!"
 	elif p.dnf and p.wrecked:
 		big = "CRASHED OUT"
-		small = "Enter — skip to results"
+		small = "Enter / Ⓐ — skip to results"
 	elif p.dnf:
 		big = "RETIRED"
-		small = "Enter — skip to results"
+		small = "Enter / Ⓐ — skip to results"
 	elif p.finished:
 		if p.pos == 1:
 			big = "VICTORY! P1"
-			small = "Winner! Enter — skip to results"
+			small = "Winner! Enter / Ⓐ — skip to results"
 		elif p.pos <= 3:
 			big = "PODIUM! P%d" % p.pos
-			small = "Top 3 Finish! Enter — skip to results"
+			small = "Top 3 Finish! Enter / Ⓐ — skip to results"
 		else:
 			big = "FINISHED P%d" % p.pos
-			small = "Enter — skip to results"
+			small = "Enter / Ⓐ — skip to results"
 	elif p.mode == "pit" and p.pit and p.pit.phase == "service":
 		big = "PIT STOP %.1f s" % p.pit.left
 	elif p.out_of_fuel:

@@ -62,7 +62,7 @@ func sim_lap(track: Track, mu: float, mass: float, record := false, pace := 1.0,
 		dts.resize(n)
 		vs.resize(n)
 	var RDS := track.RDS
-	var PROF := track.PROF
+	var PROF := track.profile_for(car)
 	var GRADE := track.GRADE
 	var RK := track.RK
 	var eff := car.spec.efficiency
@@ -128,8 +128,13 @@ func pit_lane_loss(track: Track, ref: Dictionary, mass: float) -> float:
 ## Per-track calibration, cached on the track: {m_ref, mu_grid [[mu, time]], mass_exp, T0, fuel_per_lap,
 ## pit_drive_loss, top_speed, vs (the reference lap's speed at each sample), mix {mix: {time, fuel} factors}}.
 func calibrate(track: Track) -> Dictionary:
-	if not track.cal.is_empty():
+	# the stock Seicento's calibration lives on track.cal; another car (a duplicated spec) keeps its own
+	var stock := car.spec.resource_path == "res://data/seicento.tres"
+	var alt_id := car.spec.get_instance_id()
+	if stock and not track.cal.is_empty():
 		return track.cal
+	if not stock and track.cal_alt.has(alt_id):
+		return track.cal_alt[alt_id]
 	var m_ref := car.mass_with_fuel(15.0)
 	var mu_grid := []
 	var mu := 0.4
@@ -147,7 +152,7 @@ func calibrate(track: Track) -> Dictionary:
 	for m in MIXES:
 		var lap := ref if m == "normal" else sim_lap(track, 1.0, m_ref, false, 1.0, m)
 		mix[m] = {"time": lap.time / ref.time, "fuel": lap.fuel / ref.fuel}
-	track.cal = {
+	var result := {
 		"m_ref": m_ref,
 		"mu_grid": mu_grid,
 		"mass_exp": mass_exp,
@@ -158,7 +163,11 @@ func calibrate(track: Track) -> Dictionary:
 		"vs": ref.vs,
 		"mix": mix,
 	}
-	return track.cal
+	if stock:
+		track.cal = result
+	else:
+		track.cal_alt[alt_id] = result
+	return result
 
 static func lap_time(cal: Dictionary, mu_eff: float, mass: float) -> float:
 	var g: Array = cal.mu_grid

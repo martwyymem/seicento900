@@ -68,6 +68,8 @@ LANDMARKS = {
     'monza': {('way', 219396377): 'MonzaPodio'},
     'lemans': {('way', 256129642): 'TyreBridge'},  # the Dunlop (now Goodyear) footbridge
     'monaco': {('way', 161769674): 'Casino'},
+    'krakow': {('relation', 13562708): 'Barbakan', ('way', 39357538): 'FloriaGate'},
+    'pszczyna': {('way', 172583260): 'PszczynaCastle'},
 }
 WATER_AREAS = {('natural', 'water'), ('landuse', 'reservoir'), ('landuse', 'basin'), ('waterway', 'riverbank'),
                ('waterway', 'dock')}

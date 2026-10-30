@@ -10,11 +10,39 @@ func run() -> Array:
 	var saved_levels: Dictionary = AudioSettings.levels.duplicate()
 	_volumes(errors)
 	_routing(errors)
+	_presets(errors)
 	_game_options(errors)
 	AudioSettings.levels = saved_levels
 	AudioSettings.apply()
 	completed = true
 	return errors
+
+func _presets(errors: Array[String]) -> void:
+	for i in GraphicsPresets.PRESETS.size():
+		var p: Dictionary = GraphicsPresets.preset(i)
+		if GraphicsPresets.match_index(p) != i:
+			errors.append("preset %s should recognise itself, got %d" % [GraphicsPresets.NAMES[i], GraphicsPresets.match_index(p)])
+		var tweaked := p.duplicate()
+		tweaked.shadows = not p.shadows
+		if GraphicsPresets.match_index(tweaked) != GraphicsPresets.CUSTOM:
+			errors.append("switching shadows off the %s preset should read as Custom" % GraphicsPresets.NAMES[i])
+	var high := GraphicsPresets.preset(2).duplicate()
+	high.upscale_preset = 3 # no upscaler on: the render-resolution step means nothing
+	if GraphicsPresets.match_index(high) != 2:
+		errors.append("High should not care about the render-resolution step while the upscaler is off")
+	var low := GraphicsPresets.preset(0).duplicate()
+	low.upscale_preset = 1
+	if GraphicsPresets.match_index(low) != GraphicsPresets.CUSTOM:
+		errors.append("Low with a different render resolution should read as Custom")
+	var costs := []
+	for p in GraphicsPresets.PRESETS:
+		costs.append(float(p.quality) + (1.0 if p.reflections > 0 else 0.0) + (1.0 if p.upscaler == 0 else 0.0))
+	for i in range(1, costs.size()):
+		if costs[i] < costs[i - 1] or GraphicsPresets.preset(i).ow_shadow_distance <= GraphicsPresets.preset(i - 1).ow_shadow_distance:
+			errors.append("each preset should cost at least as much as the one below")
+	var defaults := GraphicsPresets.preset(2)
+	if defaults.upscaler != 0 or not defaults.ssao or not defaults.shadows or defaults.reflections != 0 or defaults.antialiasing != 0:
+		errors.append("High should equal the game's defaults")
 
 func _volumes(errors: Array[String]) -> void:
 	if AudioSettings.db(100) != 0.0:
@@ -127,6 +155,22 @@ func _game_options(errors: Array[String]) -> void:
 		errors.append("the volumes should load back: %s" % [AudioSettings.levels])
 	if absf(AudioServer.get_bus_volume_db(0) - linear_to_db(0.7)) > 0.001:
 		errors.append("loading should apply the volumes to the buses")
+
+	# graphics presets: picking one sets what it covers, changing one of those by hand reads as Custom
+	game._on_preset_selected(0)
+	if game.graphics_preset != 0 or game.preset_picker.selected != 0 or game.graphics_upscaler != 1 or game.graphics_ssao \
+			or game.graphics_antialiasing != 1 or game.graphics_quality != 0:
+		errors.append("picking Low should set FSR 1, FXAA, no ambient occlusion and level 0: preset %d" % game.graphics_preset)
+	if is_instance_valid(game.world_view) and game.world_view.quality != 0:
+		errors.append("picking Low should lower the world's rendering level")
+	game._on_ssao_toggled(true)
+	if game.graphics_preset != GraphicsPresets.CUSTOM or game.preset_picker.selected != GraphicsPresets.CUSTOM:
+		errors.append("turning ambient occlusion back on should leave the picker on Custom")
+	game._on_preset_selected(3)
+	game._load_graphics_settings()
+	if game.graphics_preset != 3 or game.graphics_reflections != 1:
+		errors.append("Ultra should survive a save and load: preset %d" % game.graphics_preset)
+	game._on_preset_selected(2)
 
 	# fullscreen: the resolution is the 3D view's render target, fitted inside it; windowed leaves it alone
 	game.graphics_display_mode = 1

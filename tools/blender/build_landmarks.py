@@ -25,6 +25,13 @@ towards the circuit by Godot), Z up, origin on the ground at the footprint's cen
   Casino           Monaco: the Casino de Monte-Carlo and its Opera (60 x 160 m), the front with the twin
                    towers on the short side to -Y
   SilverstoneWing  Silverstone: the Wing pit and paddock building under its wing roof (374 x 32.6 m)
+  Barbakan         Kraków: the brick barbican on ul. Basztowa, a round bastion (24 m across, 10 m walls
+                   with a crenellated top) carrying seven turrets with spires, and the neck that led
+                   to the Floriańska gate along +X (38 x 31.5 m footprint with the neck)
+  FloriaGate       Kraków: the Brama Floriańska, a stone gate tower (10 x 9.2 m, 26 m tall) with a pointed
+                   helmet and four corner turrets, a pointed arch through the ground floor along Y
+  PszczynaCastle   Pszczyna: the castle (58 x 45 m): a long front block to -Y with a clock tower, two
+                   wings back to +Y round the court, hipped slate roofs, cream plaster
   Yacht_S/M/L      motor yachts of 14, 28 and 50 m for Monaco's harbour, bow to +X, waterline at z=0
 """
 import bpy
@@ -56,6 +63,9 @@ kit.MATERIALS.update({
 	"Gold": (srgb("#c9a050"), 0.35, 0.8, {}),
 	"Teak": (srgb("#9a6f45"), 0.75, 0.0, {}),
 	"ClearGlass": (srgb("#b9d0d8"), 0.08, 0.3, {"alpha": 0.4}),
+	"Brick": (srgb("#ffffff"), 0.9, 0.0, {}),
+	"Plaster": (srgb("#ffffff"), 0.9, 0.0, {}),
+	"Roof": (srgb("#ffffff"), 0.75, 0.0, {}),
 })
 
 
@@ -415,6 +425,212 @@ def castle_wall():
 	return mb
 
 
+# --------------------------------------------------------------------------- Kraków
+
+BRICK = ["#8e4632", "#9a5038", "#844030", "#a0563c", "#8a4a36"]
+
+
+def barbakan():
+	"""The Barbakan: a round brick bastion with a crenellated top, seven spired turrets and the neck to the gate."""
+	mb = MB()
+	r = rnd(21)
+	cx, R, H, T = -3.5, 12.2, 10.0, 3.0  # body centre on X, outer radius, wall height, wall thickness
+	segs = 40
+	neck_half = math.asin(4.6 / R)  # the neck joins the body over this half angle round +X
+
+	def ring_pt(a, rad, z):
+		return (cx + rad * math.cos(a), rad * math.sin(a), z)
+	for k in range(segs):
+		a0, a1 = 2 * math.pi * k / segs, 2 * math.pi * (k + 1) / segs
+		mb.colour = srgb(BRICK[(k * 3 + r.randrange(5)) % 5])
+		# a slightly battered (sloping) foot, then the straight wall
+		mb.poly([ring_pt(a0, R + 0.5, 0), ring_pt(a1, R + 0.5, 0), ring_pt(a1, R, 2.0), ring_pt(a0, R, 2.0)], "Brick",
+			lambda q: Vector((q.x - cx, q.y, 0)))
+		mb.poly([ring_pt(a0, R, 2.0), ring_pt(a1, R, 2.0), ring_pt(a1, R, H), ring_pt(a0, R, H)], "Brick",
+			lambda q: Vector((q.x - cx, q.y, 0)))
+		# the wall walk, the inner face and the courtyard floor
+		mb.poly([ring_pt(a0, R, H), ring_pt(a1, R, H), ring_pt(a1, R - T, H), ring_pt(a0, R - T, H)], "Brick", (0, 0, 1))
+		mb.poly([ring_pt(a0, R - T, H), ring_pt(a1, R - T, H), ring_pt(a1, R - T, 0.1), ring_pt(a0, R - T, 0.1)], "Brick",
+			lambda q: Vector((cx - q.x, -q.y, 0)))
+		mb.colour = srgb("#6d655a")
+		mb.poly([(cx, 0, 0.1), ring_pt(a0, R - T, 0.1), ring_pt(a1, R - T, 0.1)], "Stone", (0, 0, 1))
+		# merlons on alternate segments
+		if k % 2 == 0:
+			mb.colour = srgb(BRICK[(k + 2) % 5])
+			mb.poly([ring_pt(a0, R, H), ring_pt(a1, R, H), ring_pt(a1, R, H + 1.3), ring_pt(a0, R, H + 1.3)], "Brick",
+				lambda q: Vector((q.x - cx, q.y, 0)))
+			mb.poly([ring_pt(a1, R - 0.7, H), ring_pt(a0, R - 0.7, H), ring_pt(a0, R - 0.7, H + 1.3), ring_pt(a1, R - 0.7, H + 1.3)],
+				"Brick", lambda q: Vector((cx - q.x, -q.y, 0)))
+			mb.poly([ring_pt(a0, R, H + 1.3), ring_pt(a1, R, H + 1.3), ring_pt(a1, R - 0.7, H + 1.3), ring_pt(a0, R - 0.7, H + 1.3)],
+				"Brick", (0, 0, 1))
+			for a, sgn in ((a0, -1), (a1, 1)):
+				t = Vector((-math.sin(a), math.cos(a), 0)) * sgn
+				mb.poly([ring_pt(a, R, H), ring_pt(a, R - 0.7, H), ring_pt(a, R - 0.7, H + 1.3), ring_pt(a, R, H + 1.3)], "Brick", t)
+		# two rows of loopholes
+		mb.colour = srgb("#1d1b18")
+		am = (a0 + a1) * 0.5
+		if abs(math.atan2(math.sin(am), math.cos(am))) > neck_half + 0.1:
+			n = Vector((math.cos(am), math.sin(am), 0))
+			tn = Vector((-math.sin(am), math.cos(am), 0))
+			for z in (3.4, 6.6) if k % 2 else (5.0,):
+				c = Vector(ring_pt(am, R + 0.03, z))
+				mb.poly([c - tn * 0.18, c + tn * 0.18, c + tn * 0.18 + Vector((0, 0, 0.9)), c - tn * 0.18 + Vector((0, 0, 0.9))], "Slate", n)
+	# seven turrets on the wall, none over the neck
+	for i in range(7):
+		a = neck_half + 0.35 + (2 * math.pi - 2 * neck_half - 0.7) * i / 6
+		tx, ty = cx + (R - 0.6) * math.cos(a), (R - 0.6) * math.sin(a)
+		mb.colour = srgb(BRICK[i % 5])
+		tr, z0, z1 = 1.5, H - 0.5, H + 4.2
+		mb.tube(Vector((tx, ty, z0)), Vector((tx, ty, z1)), tr, "Brick", segs=10)
+		# a band of dark windows, then the spire
+		mb.colour = srgb("#1d1b18")
+		mb.tube(Vector((tx, ty, z1 - 1.6)), Vector((tx, ty, z1 - 0.9)), tr + 0.02, "Slate", segs=10, caps=False)
+		mb.colour = srgb("#3d4a44")
+		ring = [(tx + (tr + 0.25) * math.cos(2 * math.pi * j / 10), ty + (tr + 0.25) * math.sin(2 * math.pi * j / 10), z1) for j in range(10)]
+		tip = (tx, ty, z1 + 4.6)
+		for j in range(10):
+			mb.poly([ring[j], ring[(j + 1) % 10], tip], "Copper", lambda q, tx=tx, ty=ty: Vector((q.x - tx, q.y - ty, 0.4)))
+		mb.colour = srgb("#c9a050")
+		mb.tube(Vector(tip), Vector((tx, ty, tip[2] + 0.9)), 0.06, "Gold", segs=4)
+	# the neck: two walls to +X with a gateway at the end
+	mb.colour = srgb(BRICK[1])
+	x0, x1, w, nh = cx + R - 1.2, 19.0, 4.6, 8.0
+	mb.box((x0, -w, 0), (x1, -w + 1.4, nh), "Brick")
+	mb.box((x0, w - 1.4, 0), (x1, w, nh), "Brick")
+	mb.box((x1 - 1.6, -w, 4.6), (x1, w, nh), "Brick")
+	mb.colour = srgb("#1d1b18")
+	mb.quad((x1 + 0.02, -1.8, 0), (x1 + 0.02, 1.8, 0), (x1 + 0.02, 1.8, 4.6), (x1 + 0.02, -1.8, 4.6), "Slate", (1, 0, 0))
+	# the gateway into the bastion facing away from the neck (the barbican's own gate)
+	mb.colour = srgb("#1d1b18")
+	gx = cx - R - 0.02
+	mb.quad((gx, 1.6, 0), (gx, -1.6, 0), (gx, -1.6, 4.2), (gx, 1.6, 4.2), "Slate", (-1, 0, 0))
+	return mb
+
+
+def hip_block(mb, x0, x1, y0, y1, z0, z1, rise, wall, roof, wall_mat="Plaster", windows_every=3.4, win_rows=(1.4,), win_h=1.7):
+	"""A plastered box from z0 to z1 under a hipped roof `rise` high, with a row of windows on every side."""
+	mb.colour = srgb(wall)
+	mb.box((x0, y0, z0), (x1, y1, z1), wall_mat, skip=("+z",))
+	mb.colour = srgb("#2a2f36")
+	for row in win_rows:
+		z = z0 + row
+		n = max(1, int((x1 - x0) / windows_every))
+		for k in range(n):
+			x = x0 + (k + 0.5) * (x1 - x0) / n
+			for y, nrm in ((y0 - 0.02, (0, -1, 0)), (y1 + 0.02, (0, 1, 0))):
+				mb.quad((x - 0.55, y, z), (x + 0.55, y, z), (x + 0.55, y, z + win_h), (x - 0.55, y, z + win_h), "Slate", nrm)
+		m = max(1, int((y1 - y0) / windows_every))
+		for k in range(m):
+			y = y0 + (k + 0.5) * (y1 - y0) / m
+			for x, nrm in ((x0 - 0.02, (-1, 0, 0)), (x1 + 0.02, (1, 0, 0))):
+				mb.quad((x, y - 0.55, z), (x, y + 0.55, z), (x, y + 0.55, z + win_h), (x, y - 0.55, z + win_h), "Slate", nrm)
+	mb.colour = srgb(roof)
+	o = 0.5  # eaves overhang
+	a, b, c, d = (x0 - o, y0 - o, z1), (x1 + o, y0 - o, z1), (x1 + o, y1 + o, z1), (x0 - o, y1 + o, z1)
+	hw = min((x1 - x0), (y1 - y0)) / 2
+	if (x1 - x0) >= (y1 - y0):
+		r1, r2 = (x0 + hw, (y0 + y1) / 2, z1 + rise), (x1 - hw, (y0 + y1) / 2, z1 + rise)
+	else:
+		r1, r2 = ((x0 + x1) / 2, y0 + hw, z1 + rise), ((x0 + x1) / 2, y1 - hw, z1 + rise)
+	for q, ctr in (((a, b, r2, r1), (0, -1, 1)), ((b, c, r2), (1, 0, 1)), ((c, d, r1, r2), (0, 1, 1)), ((d, a, r1), (-1, 0, 1))):
+		mb.poly(list(q), "Roof", Vector(ctr))
+	# soffit
+	mb.poly([a, d, c, b], "Roof", (0, 0, -1))
+
+
+def pointed_arch(mb, x, y, nrm, half_w, h, mat="Slate"):
+	"""A dark pointed arch opening in a wall facing nrm (a unit (x, y) vector), standing at (x, y) on the ground."""
+	n3 = Vector((nrm[0], nrm[1], 0))
+	t = Vector((-nrm[1], nrm[0], 0))
+	c = Vector((x, y, 0)) + n3 * 0.03
+	spring = h * 0.6
+	steps = 6
+	left = [c - t * half_w * math.cos(math.pi / 2 * k / steps) + Vector((0, 0, spring + (h - spring) * math.sin(math.pi / 2 * k / steps)))
+		for k in range(steps + 1)]
+	right = [c + t * half_w * math.cos(math.pi / 2 * k / steps) + Vector((0, 0, spring + (h - spring) * math.sin(math.pi / 2 * k / steps)))
+		for k in range(steps + 1)]
+	mb.poly([c - t * half_w, c + t * half_w] + right[:-1] + [left[-1]] + list(reversed(left[:-1])), mat, n3)
+
+
+def floria_gate():
+	"""The Brama Floriańska: a stone tower, an arch through it, four turrets and a copper helmet."""
+	mb = MB()
+	H, w, d = 21.0, 5.0, 4.6
+	mb.colour = srgb("#bfb7a4")
+	mb.box((-w, -d, 0), (w, d, H), "Plaster")
+	# a lighter plinth, a dark band under the roof, and stone window slits
+	mb.colour = srgb("#9c9482")
+	mb.box((-w - 0.15, -d - 0.15, 0), (w + 0.15, d + 0.15, 2.0), "Plaster")
+	mb.colour = srgb("#8b8576")
+	mb.box((-w - 0.3, -d - 0.3, H - 1.2), (w + 0.3, d + 0.3, H), "Plaster")
+	mb.colour = srgb("#1d1b18")
+	for z in (9.0, 14.0):
+		for x in (-2.0, 2.0):
+			for y, nrm in ((-d - 0.03, (0, -1, 0)), (d + 0.03, (0, 1, 0))):
+				mb.quad((x - 0.35, y, z), (x + 0.35, y, z), (x + 0.35, y, z + 1.8), (x - 0.35, y, z + 1.8), "Slate", nrm)
+	mb.colour = srgb("#1d1b18")
+	pointed_arch(mb, 0, -d, (0, -1), 2.2, 5.2)
+	pointed_arch(mb, 0, d, (0, 1), 2.2, 5.2)
+	# machicolation balcony round the top, with four small corner turrets
+	mb.colour = srgb("#a39c88")
+	for sx in (-1, 1):
+		for sy in (-1, 1):
+			tx, ty = sx * (w - 0.2), sy * (d - 0.2)
+			mb.tube(Vector((tx, ty, H - 0.5)), Vector((tx, ty, H + 3.2)), 0.95, "Plaster", segs=8)
+			mb.colour = srgb("#3d6e5c")
+			ring = [(tx + 1.15 * math.cos(2 * math.pi * j / 8), ty + 1.15 * math.sin(2 * math.pi * j / 8), H + 3.2) for j in range(8)]
+			for j in range(8):
+				mb.poly([ring[j], ring[(j + 1) % 8], (tx, ty, H + 6.2)], "Copper", lambda q, tx=tx, ty=ty: Vector((q.x - tx, q.y - ty, 0.4)))
+			mb.colour = srgb("#a39c88")
+	# the central helmet: a copper octagon with a lantern and a spire
+	mb.colour = srgb("#3d6e5c")
+	base = [(3.4 * math.cos(2 * math.pi * j / 8 + math.pi / 8), 3.0 * math.sin(2 * math.pi * j / 8 + math.pi / 8), H) for j in range(8)]
+	mid = [(2.0 * math.cos(2 * math.pi * j / 8 + math.pi / 8), 1.8 * math.sin(2 * math.pi * j / 8 + math.pi / 8), H + 3.0) for j in range(8)]
+	top = [(0.9 * math.cos(2 * math.pi * j / 8 + math.pi / 8), 0.9 * math.sin(2 * math.pi * j / 8 + math.pi / 8), H + 5.4) for j in range(8)]
+	for j in range(8):
+		k = (j + 1) % 8
+		mb.poly([base[j], base[k], mid[k], mid[j]], "Copper", lambda q: Vector((q.x, q.y, 0.5)))
+		mb.poly([mid[j], mid[k], top[k], top[j]], "Copper", lambda q: Vector((q.x, q.y, 0.5)))
+		mb.poly([top[j], top[k], (0, 0, H + 8.4)], "Copper", lambda q: Vector((q.x, q.y, 0.5)))
+	mb.colour = srgb("#c9a050")
+	mb.tube(Vector((0, 0, H + 8.4)), Vector((0, 0, H + 10.2)), 0.07, "Gold", segs=4)
+	return mb
+
+
+def pszczyna_castle():
+	"""Pszczyna castle: a long front block, a clock tower, two back wings round the court, slate hipped roofs."""
+	mb = MB()
+	cream, slate = "#e3d9bf", "#4a4f55"
+	# front block along X to -Y; wings along Y at both ends
+	hip_block(mb, -29.0, 29.0, -22.6, -9.0, 0, 9.0, 4.6, cream, slate, win_rows=(1.4, 5.2))
+	for sx in (-1, 1):
+		x0, x1 = (-29.0, -16.0) if sx < 0 else (16.0, 29.0)
+		hip_block(mb, x0, x1, -9.0, 22.6, 0, 8.0, 4.0, cream, slate, win_rows=(1.4, 4.8))
+	# the clock tower on the front: a square shaft, a clock face and a copper onion
+	mb.colour = srgb(cream)
+	mb.box((-4.2, -25.6, 0), (4.2, -17.4, 17.0), "Plaster")
+	mb.colour = srgb("#e8e2cf")
+	mb.box((-4.6, -25.9, 12.0), (4.6, -17.1, 12.6), "Plaster")
+	mb.colour = srgb("#f1efe6")
+	c = Vector((0, -25.65, 14.8))
+	ring = [c + Vector((1.6 * math.cos(2 * math.pi * j / 16), 0, 1.6 * math.sin(2 * math.pi * j / 16))) for j in range(16)]
+	mb.poly(ring, "White", (0, -1, 0))
+	mb.colour = srgb("#26282c")
+	mb.quad((-0.07, -25.67, 14.8), (0.07, -25.67, 14.8), (0.07, -25.67, 16.1), (-0.07, -25.67, 16.1), "Slate", (0, -1, 0))
+	mb.quad((0.0, -25.67, 14.73), (1.0, -25.67, 14.73), (1.0, -25.67, 14.87), (0.0, -25.67, 14.87), "Slate", (0, -1, 0))
+	mb.colour = srgb("#3d6e5c")
+	prof = [(4.6, 17.0), (4.9, 17.9), (3.6, 19.8), (1.9, 21.2), (2.3, 22.4), (0.5, 24.5), (0.0, 27.5)]
+	for j in range(12):
+		a0, a1 = 2 * math.pi * j / 12, 2 * math.pi * (j + 1) / 12
+		for (r0, z0), (r1, z1) in zip(prof, prof[1:]):
+			p = [(r0 * math.cos(a0), -21.5 + r0 * math.sin(a0), z0), (r0 * math.cos(a1), -21.5 + r0 * math.sin(a1), z0),
+				(r1 * math.cos(a1), -21.5 + r1 * math.sin(a1), z1), (r1 * math.cos(a0), -21.5 + r1 * math.sin(a0), z1)]
+			mb.poly(p, "Copper", lambda q: Vector((q.x, q.y + 21.5, 0.3)))
+	# the entrance: a dark portal at the foot of the tower
+	pointed_arch(mb, 0, -25.62, (0, -1), 1.7, 4.4)
+	return mb
+
+
 # --------------------------------------------------------------------------- Monaco
 
 def casino():
@@ -662,7 +878,7 @@ PIECES = {
 	"IndyPagoda": indy_pagoda, "ScoringPylon": scoring_pylon, "FerrisWheel": ferris_wheel,
 	"TyreBridge": tyre_bridge, "MonzaPodio": monza_podio, "CastleKeep": castle_keep, "CastleTower": castle_tower,
 	"CastleWall": castle_wall, "Casino": casino, "SilverstoneWing": silverstone_wing,
-	"Yacht_S": lambda: yacht(14.0), "Yacht_M": lambda: yacht(28.0), "Yacht_L": lambda: yacht(50.0),
+	"Barbakan": barbakan, "FloriaGate": floria_gate, "PszczynaCastle": pszczyna_castle, "Yacht_S": lambda: yacht(14.0), "Yacht_M": lambda: yacht(28.0), "Yacht_L": lambda: yacht(50.0),
 }
 
 
@@ -691,6 +907,9 @@ def main():
 			"Casino": ((70, -150, 40), (0, -30, 12), 50),
 			"SilverstoneWing": ((90, -140, 45), (60, 0, 10), 55),
 			"Yacht_L": ((50, -55, 18), (0, 0, 3), 50),
+			"Barbakan": ((40, -55, 22), (0, 0, 7), 50),
+			"FloriaGate": ((28, -55, 26), (0, 0, 15), 45),
+			"PszczynaCastle": ((60, -95, 30), (0, -6, 8), 50),
 		}
 		for ob in objs.values():
 			ob.hide_render = True

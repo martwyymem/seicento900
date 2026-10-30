@@ -170,8 +170,12 @@ func run() -> Array:
 					if near[2] < c_tr.half + c_def.runoff or near[2] > c_tr.half + c_def.runoff + 12.0:
 						errors.append("%s: road blockage %s should stand just off the stage (%.1f m)" % [c_key, b, near[2]])
 						break
-				if not (s_env.get("stands", []) as Array).is_empty() or not (s_env.get("landmarks", []) as Array).is_empty():
-					errors.append("%s: no grandstands or landmark models on a street stage" % c_key)
+				# landmark models only for real buildings drawn on their own OSM footprint (build_surroundings.py LANDMARKS)
+				var lm_ok := true
+				for lm in s_env.get("landmarks", []):
+					lm_ok = lm_ok and String(lm[0]) in ["Barbakan", "FloriaGate", "PszczynaCastle"]
+				if not (s_env.get("stands", []) as Array).is_empty() or not lm_ok:
+					errors.append("%s: no grandstands, and no landmark models but real buildings, on a street stage" % c_key)
 				if (s_env.get("buildings", []) as Array).size() < exp[4]:
 					errors.append("%s: expected the real buildings from OpenStreetMap" % c_key)
 			# the pit lane stays clear of every side-road barrier

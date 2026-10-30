@@ -16,8 +16,8 @@ extends RefCounted
 
 const G := 9.81 ## gravity, m/s²
 const SECTOR_LEN := 200.0 ## roughly one marshal post per 200 m
-const DMG_FLOOR := 1.2 ## m/s of impact a car shrugs off
-const DMG_SPAN := 8.5 ## further m/s that wreck it in one hit
+const DMG_FLOOR := 3.0 ## m/s of impact a car shrugs off (nudges, scrapes, kerb strikes)
+const DMG_SPAN := 6.7 ## further m/s that wreck it in one hit (still a 9.7 m/s wreck point)
 const REPAIR_TIME := 24.0 ## s of pit work to straighten a car on the verge of being wrecked
 const REPAIR_AT := 0.3 ## damage at which a team calls the car in for repairs
 const YELLOW_PACE := [1.0, 0.9, 0.72] ## bots' pace in a clear / yellow / double-yellow sector
@@ -138,19 +138,37 @@ func hurt(car: RaceCar, dv: float, into_barrier := false, f := 0.0) -> bool:
 	var x := (dv - DMG_FLOOR) / DMG_SPAN
 	var add := x * x
 	var before := car.damage
+	var parts_before: Dictionary = car.parts.duplicate()
 	car.damage = minf(1.0, car.damage + add)
+	var side := Service.zone(f)
+	if side == "side":
+		side = "left" if (car.id + int(car.damage * 997.0)) % 2 == 0 else "right" # no RNG draw: the sim stays reproducible
+	car.dents[side] = minf(1.0, float(car.dents[side]) + add * 3.0)
 	Service.spread(car, car.damage - before, f)
 	if add > 0.02:
 		car.dmg_pull = clampf(car.dmg_pull + (race.rng.next() - 0.5) * 0.12 * add, -0.05, 0.05)
 	if car.damage >= 1.0:
 		wreck(car, dv, into_barrier)
 		return true
-	if car.is_player and add > 0.04:
+	if car.is_player and add > 0.004:
 		var hint := " — box for repairs" if car.damage >= REPAIR_AT and race.s.mode == "race" else ""
-		log_rc("Damage: %d%% (steering pull, less power)%s" % [roundi(car.damage * 100.0), hint], "bad")
+		log_rc("%s hit: %s damaged. Car now %d%% damaged%s" % [Service.zone(f).capitalize(), _hurt_parts(car, parts_before), roundi(car.damage * 100.0), hint], "bad")
 	elif not car.is_player and before < 0.15 and car.damage >= 0.15 and _near_player(car):
 		log_rc("%s is damaged and limping" % car.name, "info")
 	return false
+
+## The parts one impact hurt most, e.g. "Body +6%, Engine +3%".
+func _hurt_parts(car: RaceCar, parts_before: Dictionary) -> String:
+	var rises := []
+	for part in car.parts:
+		var d: float = float(car.parts[part]) - float(parts_before.get(part, 0.0))
+		if d >= 0.005:
+			rises.append([d, part])
+	rises.sort_custom(func(a, b): return a[0] > b[0])
+	var out := PackedStringArray()
+	for r in rises.slice(0, 3):
+		out.append("%s +%d%%" % [r[1], maxi(1, roundi(r[0] * 100.0))])
+	return ", ".join(out) if not out.is_empty() else "bodywork"
 
 func wreck(car: RaceCar, dv: float, into_barrier: bool) -> void:
 	car.wrecked = true
@@ -182,6 +200,7 @@ func repair_time(car: RaceCar) -> float:
 func repaired(car: RaceCar) -> void:
 	car.damage = 0.0
 	car.dmg_pull = 0.0
+	car.dents = {"front": 0.0, "rear": 0.0, "left": 0.0, "right": 0.0}
 	car.parts = {}
 	Service.sync(car)
 	car.repair_asked = false

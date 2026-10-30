@@ -24,7 +24,7 @@ extends Resource
 @export_enum("grass", "gravel", "asphalt") var runoff_surface := "grass"
 @export var runoff_paved := 0.0 ## metres of tarmac along the track edge in the run-off (widest on the outside of the bends), the rest is runoff_surface
 @export var runoff_paved_color := Color(0.3, 0.31, 0.32)
-@export_enum("armco", "tyres", "armco+fence", "safer") var barrier := "armco" ## tyres: tyre walls round the bends, armco between them
+@export_enum("armco", "tyres", "armco+fence", "safer", "guardrail", "plastic", "jersey") var barrier := "armco" ## tyres: tyre walls round the bends, armco between them; guardrail, plastic, jersey: street-stage looks (W-beam on posts, red-white water blocks, bannered concrete)
 @export var barrier_color := Color(0, 0, 0, 0) ## the barrier's colour; transparent for the usual (galvanised armco, dark wall, grey SAFER)
 @export_range(0.0, 35.0, 0.1, "suffix:°") var banking := 0.0 ## banking in the turns; the outside edge is higher
 @export var bank_zones := PackedVector3Array() ## banked turns one by one, instead of `banking`: (from s, to s, degrees), s from the start line
@@ -50,6 +50,7 @@ extends Resource
 ## across the side roads. No circuit furniture: no start gantry (a painted line), TV towers, floodlights,
 ## grandstands, pit building, marshal posts, braking boards, hoardings, tyre walls or paddock.
 @export var street_stage := false
+@export var cobbles := PackedVector2Array() ## street stages: lap distances (from, to) of cobbled stretches, drawn in road.gdshader
 
 @export_group("Names")
 @export var osm_names := false ## use the section names from OpenStreetMap

@@ -121,14 +121,14 @@ func _initialize() -> void:
 	await _pad(JOY_BUTTON_B)
 	await _shot("10_home_after_B")
 	# TIME TRIAL via keyboard
-	game._home_select(2, false)
+	game._home_select(3, false)
 	await _key(KEY_ENTER)
 	await _wait(10)
 	await _shot("11_time_trial_setup")
 	print("QA time trial opponents: ", game.opponents_picker.value, " title ", game.setup_title_label.text)
 	await _key(KEY_ESCAPE)
 	# CHAMPIONSHIP
-	game._home_select(3, false)
+	game._home_select(4, false)
 	await _key(KEY_ENTER)
 	await _wait(10)
 	await _shot("12_champ_setup")
@@ -139,14 +139,14 @@ func _initialize() -> void:
 		await _key(KEY_DOWN)
 	await _shot("14_champ_setup_down24")
 	await _key(KEY_ESCAPE)
-	# CAMPAIGN
-	game._home_select(0, false)
+	# RALLY
+	game._home_select(2, false)
 	await _key(KEY_ENTER)
 	await _wait(10)
-	await _shot("15_campaign_brief")
+	await _shot("15_rally_setup")
 	await _key(KEY_ESCAPE)
 	# OPTIONS
-	game._home_select(4, false)
+	game._home_select(5, false)
 	await _pad(JOY_BUTTON_A)
 	await _wait(10)
 	await _shot("16_options")

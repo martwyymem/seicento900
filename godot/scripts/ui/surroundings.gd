@@ -20,6 +20,7 @@ const LANDMARKS_PATH := "res://models/landmarks.glb"
 const LANDMARK_SIZE := {
 	"IndyPagoda": Vector2(57.5, 33.4), "SilverstoneWing": Vector2(374.0, 32.6), "Casino": Vector2(60.0, 160.0),
 	"CastleKeep": Vector2(9.5, 9.5), "CastleTower": Vector2(6.0, 6.0), "CastleWall": Vector2(1.0, 1.8),
+	"Barbakan": Vector2(38.0, 31.5), "FloriaGate": Vector2(10.0, 9.2), "PszczynaCastle": Vector2(58.0, 45.2),
 }
 const WATER_SHADER := preload("res://shaders/water.gdshader")
 const CHUNK := 256.0 ## metres: trees, canopy and buildings are split into tiles of this size for culling
@@ -45,7 +46,7 @@ const PALETTES := {
 }
 const COUNTRY := {"gp": "de", "nordschleife": "de", "spa": "be", "monaco": "mc", "lemans": "fr", "monza": "it",
 	"silverstone": "uk", "suzuka": "jp", "zandvoort": "nl", "indy": "us", "fiat": "pl",
-	"tokyo": "jp", "bielsko": "pl", "krakow": "pl", "oswiecim": "pl", "wilamowice": "pl", "brzeszcze": "pl", "pszczyna": "pl", "bor": "pl"}
+	"tokyo": "jp", "bielsko": "pl", "krakow": "pl", "oswiecim": "pl", "wilamowice": "pl", "brzeszcze": "pl", "pszczyna": "pl", "bor": "pl", "goliath": "pl"}
 ## The trees of each country (models/trees.glb): [conifers, broadleaves, street and garden trees], each a
 ## species -> weight mix.
 const SPECIES := {

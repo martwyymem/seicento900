@@ -23,6 +23,16 @@ const TY_B := 13.0
 const TY_C := 1.6
 const TY_E := 0.1
 
+# handbrake: rear brake torque (times the rear brake bias), the rear grip it leaves and how fast that grip returns
+const HB_TORQUE := 0.45
+const HB_GRIP_MIN := 0.7
+# drift assist: slide angle (between the nose and the velocity) left to the driver, then a yaw acceleration (rad/s² per rad past it)
+# that turns the nose back along the velocity, and a damping on the yaw rate (1/s)
+const DRIFT_BETA_MAX := 0.5
+const DRIFT_RESTORE := 14.0
+const DRIFT_DAMP := 2.5
+const HB_GRIP_RECOVER := 1.5 ## per second
+
 ## Everything the car needs from the world for one step.
 class Env:
 	var mu := 1.0
@@ -35,12 +45,15 @@ class Env:
 	var tc_on := true
 	var esc_on := true
 	var surface: Callable ## (x, y) -> SURF_* id
+	var drift_assist := 0.0 ## 0..1: how hard the car helps the driver keep a slide in check (yaw restoring and damping past DRIFT_BETA_MAX)
+	var rear_grip := 1.0 ## extra factor on the rear tyres' grip (open-world modifiers; 1.0 everywhere else)
 
 ## Driver input, with throttle/brake already routed for reverse.
 class Controls:
 	var throttle := 0.0
 	var brake := 0.0
 	var steer := 0.0
+	var handbrake := 0.0 ## 0..1: locks the rear wheels and lets the rear end go
 
 var spec: CarSpec
 var car_model: CarModel
@@ -181,6 +194,8 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 	var cd_a := spec.cd_a
 	var zeta := spec.susp_zeta
 	var clutch_cap := spec.clutch_capacity
+	var awd := spec.awd
+	var n_driven := 4.0 if spec.awd else 2.0
 	var kpk := KPK
 	var tapk := TAPK
 	var fuel_w := 0.0
@@ -190,6 +205,7 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 	var slide_v := 0.0
 	var v0 := sqrt(car.vx * car.vx + car.vy * car.vy)
 	var delta := input.steer * max_steer(v0, env.mu)
+	var drift_k := env.drift_assist
 	car.steer = delta
 	# Ackermann: the inside wheel turns tighter
 	var dW := _dW
@@ -229,6 +245,9 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 	var drag_mul := env.drag_mul
 	var power := env.power
 	var shifting := car.shift_t > 0.0
+	var hb := input.handbrake
+	var hb_grip := ph.hb_grip
+	var rear_grip := env.rear_grip
 	# body and drivetrain state, written back after the substeps
 	var c_heading := car.heading
 	var c_vx := car.vx
@@ -266,6 +285,8 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 		fz[2] = maxf(0.0, rear / 2 + d_lat_r)
 		fz[3] = maxf(0.0, rear / 2 - d_lat_r)
 		var fz0 := W / 4
+		if hb > 0.0 or hb_grip < 1.0:
+			hb_grip += clampf((HB_GRIP_MIN if hb > 0.0 else 1.0) - hb_grip, -h * 8.0, h * HB_GRIP_RECOVER)
 
 		# ---- per-wheel kinematics, surface and grip
 		for i in 4:
@@ -278,11 +299,15 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 				drag[i] = crr + SURF_DRAG[surf[i]] * offroad
 			var sens := clampf(1.0 - load_sens * (fz[i] / fz0 - 1.0), 0.75, 1.15)
 			mu[i] = env_mu * grip_k * SURF_GRIP[surf[i]] * sens
+			if i >= 2:
+				mu[i] *= hb_grip * rear_grip
 
 		# ---- driver aids
 		var thr := thr_in
 		# traction control trims the throttle in proportion to how far the driven wheels are past peak slip
 		var spin := maxf(rho_a[0], rho_a[1])
+		if awd:
+			spin = maxf(spin, maxf(rho_a[2], rho_a[3]))
 		var tc_want := 1.0
 		if tc_on and vx > 1.0 and p_fx0 > 0.0 and spin > 1.1:
 			tc_want = maxf(0.35, 1.0 - (spin - 1.1) * 1.5)
@@ -318,7 +343,7 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 		esc[1] = 0.0
 		esc[2] = 0.0
 		esc[3] = 0.0
-		if esc_on and vx > 5.0:
+		if esc_on and vx > 5.0 and hb_grip > 0.95:
 			# reference: the neutral-steer yaw rate, capped at what the grip allows
 			var lim := env_mu * G * 1.1 / vx
 			var target := clampf(vx * delta / wb, -lim, lim)
@@ -360,24 +385,31 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 				abs_k[i] = maxf(0.1, abs_k[i] - h * 30.0)
 			else:
 				abs_k[i] = minf(1.0, abs_k[i] + h * 10.0)
-			var tb := (brk * (brake_f if i < 2 else brake_r) + esc[i]) * abs_k[i]
+			var tb := (brk * (brake_f if i < 2 else brake_r) + esc[i]) * abs_k[i] + (hb * brake_r * HB_TORQUE if i >= 2 else 0.0)
 			var roll := drag[i] * fzi * R
 			var w0 := 1.5
 			var sgn := clampf(wi / w0, -1.0, 1.0)
 			cw[i] = R * fl0 + (tb + roll) * sgn
 			dw[i] = wheel_i / h + R * kx + ((tb + roll) / w0 if absf(wi) < w0 else 0.0)
 		var tau := 0.0
-		var ad := ratio * eff / 2
+		var ad := ratio * eff / n_driven
 		if p_clutch > 0.001:
 			# clutch torque that would lock engine and differential together this substep, limited by capacity
-			var lhs := h / eng_i + (ratio / 2) * ad * (1.0 / dw[0] + 1.0 / dw[1])
-			var rhs := p_we + h * te / eng_i - (ratio / 2) * (w[0] + w[1]) + (ratio / 2) * (cw[0] / dw[0] + cw[1] / dw[1])
+			var inv_dw := 1.0 / dw[0] + 1.0 / dw[1]
+			var w_sum := w[0] + w[1]
+			var cw_dw := cw[0] / dw[0] + cw[1] / dw[1]
+			if awd:
+				inv_dw += 1.0 / dw[2] + 1.0 / dw[3]
+				w_sum += w[2] + w[3]
+				cw_dw += cw[2] / dw[2] + cw[3] / dw[3]
+			var lhs := h / eng_i + (ratio / n_driven) * ad * inv_dw
+			var rhs := p_we + h * te / eng_i - (ratio / n_driven) * w_sum + (ratio / n_driven) * cw_dw
 			var cap := p_clutch * clutch_cap
 			tau = clampf(rhs / lhs, -cap, cap)
 		p_we += h * (te - tau) / eng_i
 		p_we = clampf(p_we, 600.0 * PI / 30.0, (limiter + 250.0) * PI / 30.0)
 		for i in 4:
-			w[i] += ((tau * ad if i < 2 else 0.0) - cw[i]) / dw[i]
+			w[i] += ((tau * ad if (i < 2 or awd) else 0.0) - cw[i]) / dw[i]
 		p_fx0 = tau * ratio
 		fuel_w += maxf(0.0, te) * p_we * h
 
@@ -428,6 +460,11 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 		c_vx += (axB * ch - ayB * sh + gx) * h
 		c_vy += (axB * sh + ayB * ch + gy) * h
 		c_yaw += mz / iz * h
+		if drift_k > 0.0 and vx > 3.0:
+			var slide_beta := atan2(vy, vx)
+			var over_beta := absf(slide_beta) - DRIFT_BETA_MAX
+			if over_beta > 0.0:
+				c_yaw += (signf(slide_beta) * DRIFT_RESTORE * over_beta - DRIFT_DAMP * c_yaw) * drift_k * h
 		# parked with the brakes on: stop creeping
 		if brk > 0.2 and v2 < 0.01 and absf(c_yaw) < 0.05:
 			c_vx *= 0.9
@@ -452,6 +489,7 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 	ph.ax_d = ax_d
 	ph.ay_d = ay_d
 	ph.tc = p_tc
+	ph.hb_grip = hb_grip
 	ph.clutch = p_clutch
 	ph.we = p_we
 	ph.fx0 = p_fx0

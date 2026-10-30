@@ -15,6 +15,9 @@ Scene objects (Godot looks them up by name):
            and the cabin liner (vertex colours carry the panel gaps; the Paint surface is re-coloured per car)
   Details  bumpers, segmented lamps, fog lights, mirrors, wipers, badges, wheel wells, exhaust, tow hooks
   Stripes  twin bonnet/roof stripes (toggled per car)
+  Martini  Martini Racing livery: bonnet/roof stripes, flank swoosh and roundels (shown for the Martini finish)
+  Abarth   Abarth kit: black sill band with a red pinstripe, ABARTH lettering and a bonnet shield (over any paint)
+  Marlboro Marlboro livery: red chevrons on the bonnet and flanks with the lettering (over a white car)
   Cabin    sculpted dashboard, instrument binnacle, tachometer pod, center console, gear shifter,
            handbrake, drilled pedals, rearview mirror, bucket seat with 5-point harness, fire extinguisher,
            and multi-point roll cage (Godot hides it on distant cars)
@@ -29,6 +32,10 @@ import os
 import sys
 from mathutils import Matrix, Vector
 from mathutils.bvhtree import BVHTree
+
+sys.path.insert(0, os.path.dirname(__file__))
+import kit
+from kit import arg, lerp, newell
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 OUT_GLB = os.path.join(ROOT, "godot", "models", "seicento.glb")
@@ -56,13 +63,6 @@ S_DOOR = (1.06, 2.335)
 FRIT = 0.015
 PILLAR = 0.07
 
-ARGS = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-
-
-def arg(name):
-	return ARGS[ARGS.index(name) + 1] if name in ARGS else None
-
-
 def bl(x, s, z):
 	return Vector((x, Y0 - s, z))
 
@@ -70,10 +70,6 @@ def bl(x, s, z):
 def smoothstep(a, b, x):
 	t = min(1.0, max(0.0, (x - a) / (b - a)))
 	return t * t * (3.0 - 2.0 * t)
-
-
-def lerp(a, b, t):
-	return a + (b - a) * t
 
 
 class Curve:
@@ -299,8 +295,8 @@ MATERIALS = {
 	"Chrome": ((0.85, 0.86, 0.88), 0.12, 1.0, {}),
 	"Exhaust": ((0.75, 0.76, 0.78), 0.16, 0.95, {}),
 	"Headlight": ((0.42, 0.43, 0.44), 0.04, 0.85, {"emit": ((1.0, 0.95, 0.84), 0.2)}),
-	"Indicator": ((1.0, 0.42, 0.04), 0.1, 0.0, {"emit": ((1.0, 0.4, 0.02), 0.1)}),
-	"Taillight": ((0.30, 0.0, 0.01), 0.08, 0.0, {"emit": ((1.0, 0.05, 0.03), 0.15)}),
+	"Indicator": ((1.0, 0.42, 0.04), 0.1, 0.0, {"emit": ((1.0, 0.35, 0.02), 0.7)}),
+	"Taillight": ((0.42, 0.01, 0.015), 0.08, 0.0, {"emit": ((1.0, 0.05, 0.03), 0.15)}),
 	"LampClear": ((0.85, 0.80, 0.80), 0.08, 0.0, {}),
 	"Plate": ((0.94, 0.93, 0.89), 0.45, 0.0, {}),
 	"Seat": ((0.03, 0.03, 0.035), 0.9, 0.0, {}),
@@ -316,60 +312,32 @@ MATERIALS = {
 	"Yellow": ((0.95, 0.76, 0.06), 0.35, 0.0, {}),
 	"BadgeBlue": ((0.03, 0.12, 0.35), 0.25, 0.2, {}),
 	"Stripe": ((1.0, 1.0, 1.0), 0.4, 0.0, {}),
+	"TailBulb": ((0.9, 0.25, 0.08), 0.2, 0.0, {"emit": ((1.0, 0.2, 0.05), 0.4)}),
+	"TailGlass": ((0.55, 0.015, 0.02), 0.03, 0.0, {"alpha": 0.5}),
+	"LampGlass": ((0.86, 0.92, 1.0), 0.02, 0.0, {"alpha": 0.08}),
+	"MartiniDark": ((0.015, 0.05, 0.24), 0.3, 0.0, {"coat": 1.0}),
+	"MartiniLight": ((0.05, 0.36, 0.78), 0.3, 0.0, {"coat": 1.0}),
+	"MartiniRed": ((0.72, 0.03, 0.05), 0.3, 0.0, {"coat": 1.0}),
+	"MartiniWhite": ((0.95, 0.95, 0.93), 0.3, 0.0, {"coat": 1.0}),
+	"MartiniGold": ((0.78, 0.58, 0.16), 0.3, 0.3, {"coat": 1.0}),
+	"AbarthBlack": ((0.02, 0.02, 0.022), 0.35, 0.0, {"coat": 1.0}),
+	"AbarthRed": ((0.75, 0.03, 0.04), 0.3, 0.0, {"coat": 1.0}),
+	"AbarthYellow": ((0.95, 0.72, 0.04), 0.3, 0.0, {"coat": 1.0}),
+	"AbarthWhite": ((0.94, 0.94, 0.92), 0.3, 0.0, {"coat": 1.0}),
+	"MarlboroRed": ((0.80, 0.02, 0.03), 0.3, 0.0, {"coat": 1.0}),
+	"MarlboroWhite": ((0.96, 0.96, 0.95), 0.3, 0.0, {"coat": 1.0}),
 }
 
 
 def material(name):
-	m = bpy.data.materials.get(name)
-	if m:
-		return m
-	col, rough, metal, extra = MATERIALS[name]
-	m = bpy.data.materials.new(name)
-	m.use_nodes = True
-	m.use_backface_culling = "alpha" not in extra
-	bsdf = m.node_tree.nodes.get("Principled BSDF")
-	bsdf.inputs["Base Color"].default_value = (*col, 1.0)
-	bsdf.inputs["Roughness"].default_value = rough
-	bsdf.inputs["Metallic"].default_value = metal
-	if "coat" in extra:
-		bsdf.inputs["Coat Weight"].default_value = extra["coat"]
-		bsdf.inputs["Coat Roughness"].default_value = 0.05
-	if "emit" in extra:
-		bsdf.inputs["Emission Color"].default_value = (*extra["emit"][0], 1.0)
-		bsdf.inputs["Emission Strength"].default_value = extra["emit"][1]
-	if "alpha" in extra:
-		bsdf.inputs["Alpha"].default_value = extra["alpha"]
-		if hasattr(m, "surface_render_method"):
-			m.surface_render_method = "BLENDED"
-		else:
-			m.blend_method = "BLEND"
-	if name == "Paint":
-		attr = m.node_tree.nodes.new("ShaderNodeVertexColor")
-		attr.layer_name = "Col"
-		mix = m.node_tree.nodes.new("ShaderNodeMix")
-		mix.data_type = "RGBA"
-		mix.blend_type = "MULTIPLY"
-		mix.name = "Tint"
-		sock = {s.identifier: s for s in mix.inputs}
-		sock["Factor_Float"].default_value = 1.0
-		sock["A_Color"].default_value = (*col, 1.0)
-		m.node_tree.links.new(attr.outputs["Color"], sock["B_Color"])
-		out = {s.identifier: s for s in mix.outputs}
-		m.node_tree.links.new(out["Result_Color"], bsdf.inputs["Base Color"])
-	return m
+	"""kit.material over this script's MATERIALS: Paint is tinted by the vertex colours, the rest are plain."""
+	if name not in kit.MATERIALS:
+		col, rough, metal, extra = MATERIALS[name]
+		kit.MATERIALS[name] = (col, rough, metal, extra if name == "Paint" else {**extra, "plain": True})
+	return kit.material(name)
 
 
 # ---------------------------------------------------------------- mesh builder
-def newell(pts):
-	n = Vector((0.0, 0.0, 0.0))
-	for i in range(len(pts)):
-		a, b = pts[i], pts[(i + 1) % len(pts)]
-		n.x += (a.y - b.y) * (a.z + b.z)
-		n.y += (a.z - b.z) * (a.x + b.x)
-		n.z += (a.x - b.x) * (a.y + b.y)
-	return n
-
-
 class MB:
 	def __init__(self):
 		self.v = []
@@ -866,8 +834,20 @@ def _hv(v):  # lift the lens's lower edge clear of the bumper ledge (0.556) so n
 
 HEADLAMP = [(u, _hv(v)) for u, v in HEADLAMP]
 HEAD_AMBER = [(u, _hv(v)) for u, v in HEAD_AMBER]
-TAILLAMP = [(1.5, 0.80), (0.2, 0.87), (1.5, 0.945), (8.0, 0.975), (22.0, 0.985), (36.0, 0.975), (46.0, 0.95),
-	(52.0, 0.915), (53.0, 0.875), (50.0, 0.83), (42.0, 0.805), (28.0, 0.79), (12.0, 0.788)]
+TAILLAMP = [(-0.5, 0.648), (-1.0, 0.69), (0.5, 0.73), (14.0, 0.745), (32.0, 0.747), (44.0, 0.737), (51.0, 0.714),
+	(53.0, 0.685), (50.0, 0.658), (40.0, 0.645), (20.0, 0.641)]
+
+
+def lamp_bulb(mb, pj, proj, u, v, r, bulb_mat):
+	"""A real bulb in a reflector cup: a chrome rim, a dark floor, a socket and a domed glass bulb standing proud."""
+	loc, n = pj.hit(*proj(u, v))
+	helper = Vector((1, 0, 0)) if abs(n.x) < 0.9 else Vector((0, 1, 0))
+	bx = n.cross(helper).normalized()
+	basis = Matrix((bx, n.cross(bx), n)).transposed()
+	mb.ring(loc + n * 0.0095, r * 0.74, r, "Chrome", normal=n, segs=24)
+	mb.disc(loc + n * 0.0055, r * 0.78, "Seat", normal=n, segs=24)
+	mb.tube(loc + n * 0.0055, loc + n * 0.0095, r * 0.2, "Chrome", segs=10)
+	mb.blob(loc + n * 0.0098, (r * 0.5, r * 0.5, r * 0.3), bulb_mat, e=0.9, basis=basis, nu=6, nv=14)
 
 
 def build_details(body):
@@ -890,17 +870,20 @@ def build_details(body):
 		pj.star(mb, [(lerp(u, 43.0, 0.1), lerp(v, _hv(0.63), 0.12)) for u, v in HEAD_AMBER], hp, "Indicator",
 			offset=0.0105, rings=2, samples=3, skirt=0.0)
 		# the round main-beam reflector glinting through the lens
-		pj.star(mb, ellipse(10.0, _hv(0.628), 5.5, 0.026, 16), hp, "Chrome", offset=0.0095, bulge=0.003, rings=2,
-			samples=1, skirt=0.0)
+		lamp_bulb(mb, pj, hp, 10.0, _hv(0.628), 0.034, "LampClear")
+		# the clear polycarbonate lens over the whole lamp
+		pj.star(mb, [(lerp(u, 21.0, 0.03), lerp(v, _hv(0.628), 0.06)) for u, v in HEADLAMP], hp, "LampGlass",
+			offset=0.0135, bulge=0.009, rings=3, samples=3, skirt=0.0)
 
 		# Tail lamps: horizontal, wrapping round the rear corners on the bumper ledge; two round clear lenses
 		tp = corner_proj(0.30, 2.85, side, True)
 		pj.star(mb, TAILLAMP, tp, "Gasket", offset=0.003, rings=2, samples=3, skirt=0.0)
-		pj.star(mb, [(lerp(u, 26.0, 0.05), lerp(v, 0.885, 0.12)) for u, v in TAILLAMP], tp, "Taillight",
+		pj.star(mb, [(lerp(u, 26.0, 0.05), lerp(v, 0.69, 0.12)) for u, v in TAILLAMP], tp, "Taillight",
 			offset=0.006, bulge=0.005, rings=3, samples=3, skirt=0.0)
 		for cu in (9.0, 21.0):
-			pj.star(mb, ellipse(cu, 0.885, 4.6, 0.04, 16), tp, "LampClear", offset=0.0105, bulge=0.004, rings=2,
-				samples=1, skirt=0.0)
+			lamp_bulb(mb, pj, tp, cu, 0.69, 0.04, "TailBulb")
+		pj.star(mb, [(lerp(u, 26.0, 0.03), lerp(v, 0.69, 0.06)) for u, v in TAILLAMP], tp, "TailGlass",
+			offset=0.0135, bulge=0.009, rings=3, samples=3, skirt=0.0)
 
 		pj = pj_all
 		sp = side_proj(side)
@@ -980,10 +963,8 @@ def build_details(body):
 	mb.tube(bl(-0.35, LENGTH - 0.05, 0.25), bl(-0.35, LENGTH + 0.03, 0.25), 0.012, "TowHook", segs=8)
 	mb.ring(bl(-0.35, LENGTH + 0.03, 0.25), 0.020, 0.034, "TowHook", normal=(0, 1, 0), segs=16)
 
-	# Third brake light at the top of the rear glass
-	pj.star(mb, rounded_rect(-0.10, 0.10, 1.30, 1.328, 0.006), rear_proj, "Gasket", offset=0.002, rings=1, samples=2)
-	pj.star(mb, rounded_rect(-0.092, 0.092, 1.304, 1.324, 0.005), rear_proj, "Taillight", offset=0.0045, bulge=0.002,
-		rings=2, samples=2)
+	# Third brake light: a lamp on the parcel shelf, seen through the bottom of the rear glass
+	pj.star(mb, rounded_rect(-0.092, 0.092, 1.045, 1.067, 0.005), rear_proj, "Taillight", offset=-0.04, rings=1, samples=2)
 
 	# Scuttle washer jets
 	for x in (-0.25, 0.25):
@@ -1156,6 +1137,143 @@ def build_stripes(pj):
 	return mb
 
 
+MARTINI_STRIPES = ((-0.20, -0.15, "MartiniDark"), (-0.15, -0.10, "MartiniLight"), (-0.10, 0.10, "MartiniRed"),
+	(0.10, 0.15, "MartiniLight"), (0.15, 0.20, "MartiniDark"))
+
+
+def text_polys(text, width):
+	"""Outline-filled text as (x, y) polygons centred on the origin, scaled to the given width."""
+	cu = bpy.data.curves.new("txt", "FONT")
+	cu.body = text
+	cu.align_x = "CENTER"
+	cu.align_y = "CENTER"
+	cu.resolution_u = 3
+	cu.fill_mode = "FRONT"
+	ob = bpy.data.objects.new("txt", cu)
+	bpy.context.scene.collection.objects.link(ob)
+	me = ob.evaluated_get(bpy.context.evaluated_depsgraph_get()).to_mesh()
+	xs = [v.co.x for v in me.vertices]
+	k = width / max(1e-6, max(xs) - min(xs))
+	polys = [[(me.vertices[i].co.x * k, me.vertices[i].co.y * k) for i in p.vertices] for p in me.polygons if p.normal.z > 0]
+	bpy.data.objects.remove(ob)
+	return polys
+
+
+def martini_roundel(pj, mb, proj, cu, cv, scale, flip):
+	"""The Martini badge: a red disc behind a dark banner with white lettering, gold-edged."""
+	def at(x, y):
+		return (cu + flip * x * scale, cv + y * scale)
+
+	def plate(pts, mat, off):
+		pj.star(mb, [at(x, y) for x, y in pts], proj, mat, offset=off, rings=2, samples=2, skirt=0.0)
+	plate(ellipse(0.0, 0.0, 0.58, 0.58, 28), "MartiniGold", 0.0030)
+	plate(ellipse(0.0, 0.0, 0.54, 0.54, 28), "MartiniRed", 0.0036)
+	plate([(-1.2, -0.30), (1.2, -0.30), (1.2, 0.32), (-1.2, 0.32)], "MartiniGold", 0.0042)
+	plate([(-1.16, -0.26), (1.16, -0.26), (1.16, 0.28), (-1.16, 0.28)], "MartiniDark", 0.0048)
+	for poly in text_polys("MARTINI", 2.0):
+		pts = [at(x, y + 0.01) for x, y in poly]
+		locs = [pj.hit(*proj(*p)) for p in pts]
+		ref = sum((n for _, n in locs), Vector())
+		mb.poly([l + n * 0.0056 for l, n in locs], "MartiniWhite", ref)
+
+
+def build_martini(pj):
+	mb = MB()
+	# bonnet and roof stripes, nose to scuttle and windscreen header to tail
+	for x0, x1, mat in MARTINI_STRIPES:
+		pj.strip(mb, 0.17, S_SCUTTLE - 0.01, x0, x1, 40, 1, top_proj, mat, offset=0.0035)
+		pj.strip(mb, S_WS_TOP + 0.02, S_RG0 - 0.012, x0, x1, 30, 1, top_proj, mat, offset=0.0035)
+	# the swoosh along each flank: three bands dipping towards the tail
+	def belt(u):
+		return 0.80 - 0.10 * smoothstep(1.3, 3.1, u)
+	us = [lerp(0.95, 3.05, i / 90) for i in range(91)]
+	vs = [-0.075, -0.05, -0.025, 0.045]
+	for side in (1, -1):
+		sp = side_proj(side)
+		pj.band(mb, us, vs, lambda u, v: 0.0045, lambda u, v: "MartiniDark" if v < -0.04 else "MartiniLight" if v < -0.01 else "MartiniRed",
+			lambda u, v, sp=sp: sp(u, v + belt(u)))
+		martini_roundel(pj, mb, sp, 1.78, 0.52, 0.12, -side)
+	martini_roundel(pj, mb, top_proj, 0.80, 0.0, 0.1, 1)
+	return mb
+
+
+def text_decal(pj, mb, proj, text, cu, cv, width, mat, off, flip):
+	"""Lettering laid on the body at (cu, cv) of proj, reading along u (flip -1 mirrors it for the other side)."""
+	for poly in text_polys(text, width):
+		locs = [pj.hit(*proj(cu + flip * x, cv + y)) for x, y in poly]
+		ref = sum((n for _, n in locs), Vector())
+		mb.poly([l + n * off for l, n in locs], mat, ref)
+
+
+def build_abarth(pj):
+	mb = MB()
+	# a black band low along each flank between the arches, a red pinstripe above it, ABARTH in white
+	for side in (1, -1):
+		sp = side_proj(side)
+		pj.strip(mb, 1.0, 2.48, 0.40, 0.49, 40, 2, sp, "AbarthBlack", offset=0.0035)
+		pj.strip(mb, 1.0, 2.48, 0.497, 0.509, 40, 1, sp, "AbarthRed", offset=0.0035)
+		text_decal(pj, mb, sp, "ABARTH", 1.74, 0.445, 0.62, "AbarthWhite", 0.0050, -side)
+	# the shield on the bonnet, its point towards the nose: white edge, red field, yellow band at the top
+	def plate(pts, mat, off, k=0.15, cu=0.52):
+		pj.star(mb, [(cu + x * k, y * k) for x, y in pts], top_proj, mat, offset=off, rings=2, samples=2, skirt=0.0)
+	plate([(-0.66, 0.0), (-0.12, 0.56), (0.60, 0.56), (0.60, -0.56), (-0.12, -0.56)], "AbarthWhite", 0.0030)
+	plate([(-0.58, 0.0), (-0.10, 0.49), (0.53, 0.49), (0.53, -0.49), (-0.10, -0.49)], "AbarthRed", 0.0036)
+	plate([(0.22, 0.49), (0.53, 0.49), (0.53, -0.49), (0.22, -0.49)], "AbarthYellow", 0.0042)
+	text_decal(pj, mb, top_proj, "ABARTH", 0.52 + 0.375 * 0.15, 0.0, 0.11, "AbarthBlack", 0.0048, 1)
+	return mb
+
+
+def build_marlboro(pj):
+	mb = MB()
+	# the chevron on the bonnet: red from the nose, a white V cut into it from the scuttle
+	pj.star(mb, [(0.26, -0.48), (0.26, 0.48), (0.98, 0.48), (0.58, 0.0), (0.98, -0.48)], top_proj, "MarlboroRed",
+		offset=0.005, rings=8, samples=14, skirt=0.0)
+	# the same chevron along each flank, pointing back, with the lettering on the red
+	for side in (1, -1):
+		sp = side_proj(side)
+		pj.star(mb, [(0.98, 0.42), (0.98, 0.80), (2.25, 0.80), (1.78, 0.61), (2.25, 0.42)], sp, "MarlboroRed",
+			offset=0.005, rings=8, samples=14, skirt=0.0)
+		text_decal(pj, mb, sp, "Marlboro", 1.34, 0.61, 0.56, "MarlboroWhite", 0.0065, -side)
+	return mb
+
+
+def _nz(p, a):
+	return math.sin(p.x * 23.0 + p.y * 17.0 + a) * math.sin(p.y * 29.0 - p.z * 19.0 + a * 1.7)
+
+
+def dent_delta(key, p):
+	"""How far a crash moves the point p (Blender coords) at full damage on one side: the front or rear crumples
+	back and sags, a flank folds in round the door. The same function deforms the body, lamps and decals."""
+	s = Y0 - p.y
+	d = Vector()
+	if key == "front":
+		w = smoothstep(1.05, 0.0, s)
+		d.y = -0.26 * w ** 1.2 * (1.0 + 0.25 * _nz(p, 0.3))
+		d.z = -0.07 * w * (1.0 + _nz(p, 1.1)) + 0.05 * w * w * smoothstep(0.55, 0.75, p.z)
+		d.x = 0.05 * w * _nz(p, 2.4)
+	elif key == "rear":
+		w = smoothstep(LENGTH - 0.85, LENGTH, s)
+		d.y = 0.20 * w ** 1.2 * (1.0 + 0.25 * _nz(p, 0.9))
+		d.z = -0.05 * w * (1.0 + _nz(p, 2.0))
+		d.x = 0.04 * w * _nz(p, 3.1)
+	else:
+		side = -1.0 if key == "left" else 1.0
+		if p.x * side > 0.2:
+			g = math.exp(-((s - 1.65) / 0.55) ** 2 - ((p.z - 0.62) / 0.28) ** 2)
+			d.x = -side * 0.10 * g * (1.0 + 0.3 * _nz(p, 4.2))
+			d.z = -0.02 * g * _nz(p, 5.0)
+	return d
+
+
+def add_damage_keys(ob):
+	ob.shape_key_add(name="Basis")
+	for key in ("front", "rear", "left", "right"):
+		sk = ob.shape_key_add(name="dent_" + key, from_mix=False)
+		sk.value = 0.0
+		for i, v in enumerate(ob.data.vertices):
+			sk.data[i].co = v.co + dent_delta(key, v.co)
+
+
 def build_wheel():
 	"""13" steel wheel with 145/70 R13 tyre; axle along X, outer face towards +X."""
 	mb = MB()
@@ -1231,38 +1349,10 @@ def build_wheel():
 
 # ---------------------------------------------------------------- previews
 def setup_preview(paint):
-	scene = bpy.context.scene
-	for eng in ("BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"):
-		try:
-			scene.render.engine = eng
-			break
-		except TypeError:
-			continue
-	scene.render.resolution_x = 1200
-	scene.render.resolution_y = 800
-	scene.render.film_transparent = False
-	world = bpy.data.worlds.new("World")
-	world.use_nodes = True
-	bg = world.node_tree.nodes["Background"]
-	bg.inputs["Color"].default_value = (0.55, 0.62, 0.72, 1)
-	bg.inputs["Strength"].default_value = 0.9
-	scene.world = world
-	sun = bpy.data.objects.new("Sun", bpy.data.lights.new("Sun", "SUN"))
-	sun.data.energy = 3.5
-	sun.rotation_euler = (math.radians(50), math.radians(10), math.radians(35))
-	scene.collection.objects.link(sun)
-	ground = bpy.data.meshes.new("Ground")
-	ground.from_pydata([(-20, -20, 0), (20, -20, 0), (20, 20, 0), (-20, 20, 0)], [], [(0, 1, 2, 3)])
-	gm = bpy.data.materials.new("GroundMat")
-	gm.use_nodes = True
-	gm.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (0.25, 0.25, 0.25, 1)
-	ground.materials.append(gm)
-	scene.collection.objects.link(bpy.data.objects.new("Ground", ground))
+	"""kit's preview scene (40 m grey ground), with the Paint tint set to the livery colour."""
+	cam = kit.setup_preview(size=(1200, 800), ground=40.0, ground_colour=(0.25, 0.25, 0.25))
 	tint = bpy.data.materials["Paint"].node_tree.nodes["Tint"]
 	next(s for s in tint.inputs if s.identifier == "A_Color").default_value = (*paint, 1)
-	cam = bpy.data.objects.new("Cam", bpy.data.cameras.new("Cam"))
-	scene.collection.objects.link(cam)
-	scene.camera = cam
 	return cam
 
 
@@ -1279,6 +1369,7 @@ def render_views(cam, out_dir):
 		# the angles of the reference photos: low front-left and rear-left, at a standing eye height
 		"ref_front": ((-2.9, 5.0, 1.35), 36, (0.0, 0.2, 0.62)),
 		"ref_rear": ((-2.6, -5.0, 1.45), 36, (0.0, -0.3, 0.7)),
+		"side_l": ((-7.5, 0.0, 0.75), 30, None),
 		"nose": ((-1.2, 3.4, 0.95), 30, (-0.15, Y0 - 0.15, 0.55)),
 		"tail": ((1.0, -3.2, 1.0), 30, (0.15, Y0 - LENGTH + 0.1, 0.6)),
 	}
@@ -1288,7 +1379,7 @@ def render_views(cam, out_dir):
 		d = target - Vector(pos)
 		cam.rotation_euler = d.to_track_quat("-Z", "Y").to_euler()
 		cam.data.angle = math.radians(lens_deg)
-		if name == "side" or name == "front" or name == "rear" or name == "top":
+		if name in ("side", "side_l") or name == "front" or name == "rear" or name == "top":
 			cam.data.type = "ORTHO"
 			cam.data.ortho_scale = 4.0 if name != "top" else 3.8
 			if name == "top":
@@ -1306,27 +1397,39 @@ def main():
 	details, pj, cabin_mb = build_details(body)
 	liner = build_liner(body)
 	stripes = build_stripes(pj)
+	martini = build_martini(pj)
+	abarth = build_abarth(pj)
+	marlboro = build_marlboro(pj)
 	wheel = build_wheel()
 	body.extend(liner)
+	# road grime: the paint darkens towards the sills and bumpers, and mottles slightly, so a flat colour reads as a worn panel
+	for i, v in enumerate(body.v):
+		low = 1.0 - smoothstep(0.20, 0.62, v.z)
+		mottle = 0.5 + 0.5 * math.sin(v.x * 17.0 + v.y * 9.0) * math.sin(v.y * 13.0 - v.z * 11.0)
+		body.col[i] *= 1.0 - 0.30 * low * (0.65 + 0.35 * mottle) - 0.025 * mottle
 	objs = [body.emit("Body", sharp_deg=55, colors=True), details.emit("Details", sharp_deg=40),
-		stripes.emit("Stripes"), wheel.emit("Wheel", sharp_deg=40), cabin_mb.emit("Cabin", sharp_deg=40)]
-	for name, ob in (("Body", objs[0]), ("Details", objs[1]), ("Stripes", objs[2]), ("Wheel", objs[3]), ("Cabin", objs[4])):
+		stripes.emit("Stripes"), wheel.emit("Wheel", sharp_deg=40), cabin_mb.emit("Cabin", sharp_deg=40),
+		martini.emit("Martini", sharp_deg=60), abarth.emit("Abarth", sharp_deg=60), marlboro.emit("Marlboro", sharp_deg=60)]
+	for name, ob in (("Body", objs[0]), ("Details", objs[1]), ("Stripes", objs[2]), ("Wheel", objs[3]), ("Cabin", objs[4]),
+			("Martini", objs[5]), ("Abarth", objs[6]), ("Marlboro", objs[7])):
 		print("%-8s %6d tris" % (name, sum(len(p.vertices) - 2 for p in ob.data.polygons)))
+	for i in (0, 1, 2, 5, 6, 7):
+		add_damage_keys(objs[i])
 	os.makedirs(os.path.dirname(OUT_GLB), exist_ok=True)
-	kw = dict(filepath=OUT_GLB, export_format="GLB", use_selection=False, export_apply=True, export_yup=True,
-		export_texcoords=False, export_normals=True, export_tangents=False, export_cameras=False,
-		export_lights=False, export_extras=False)
-	props = bpy.ops.export_scene.gltf.get_rna_type().properties.keys()
-	if "export_vertex_color" in props:
-		kw["export_vertex_color"] = "ACTIVE"
-	elif "export_colors" in props:
-		kw["export_colors"] = True
-	bpy.ops.export_scene.gltf(**kw)
-	print("wrote", OUT_GLB)
+	kit.export_glb(OUT_GLB, texcoords=False)
 	if arg("--blend"):
 		bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(arg("--blend")))
 	if arg("--renders"):
-		cam = setup_preview((0.75, 0.05, 0.04))
+		if "--damage" in sys.argv:
+			for i in (0, 1, 2, 5, 6, 7):
+				for kb in objs[i].data.shape_keys.key_blocks[1:]:
+					kb.value = 0.8 if kb.name != "dent_left" else 0.0
+		# --martini, --abarth or --marlboro previews that livery instead of the twin stripes
+		view = next((k for k in ("martini", "abarth", "marlboro") if "--" + k in sys.argv), "")
+		cam = setup_preview((0.92, 0.92, 0.9) if view in ("martini", "marlboro") else (0.75, 0.05, 0.04))
+		objs[2].hide_render = view in ("martini", "marlboro")
+		for i, k in ((5, "martini"), (6, "abarth"), (7, "marlboro")):
+			objs[i].hide_render = view != k
 		for sx in (1, -1):
 			for sc in (FRONT_AXLE_S, REAR_AXLE_S):
 				w = bpy.data.objects.new("W", objs[3].data)

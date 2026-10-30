@@ -19,6 +19,8 @@ extends Resource
 @export var gears := PackedFloat64Array([3.909, 2.158, 1.345, 0.974, 0.784])
 @export var final_drive := 4.923
 @export var efficiency := 0.88
+@export var shift_hold := 0.0 ## s the automatic gearbox waits after an upshift before it may drop a gear (0 = no wait)
+@export var awd := false ## drives all four wheels through open differentials (the default is front-wheel drive)
 @export var idle_rpm := 850.0
 @export var redline := 6100.0
 @export var limiter := 6300.0
