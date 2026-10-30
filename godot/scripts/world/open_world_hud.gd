@@ -46,7 +46,10 @@ var speed := 0.0
 var gear := 0
 var rpm := 0.0
 var rpm_max := 6500.0
+var nitro := -1.0 ## the Nitrous bottle, 0..1 (-1: the modifier is off)
+var nitro_burning := false
 var fans_label: Label
+var level_label: Label
 var roads_label: Label
 var clock_label: Label
 var street_label: Label
@@ -63,6 +66,11 @@ var card_hint: Label
 var pause_panel: PanelContainer
 var pause_buttons: Array[Button] = []
 var pause_index := 0
+var pause_col: VBoxContainer
+var pause_title: Label
+const PAUSE_ITEMS := [["resume", "RESUME"], ["car", "CAR: SEICENTO"], ["mods", "MODIFIERS"], ["map", "MAP"],
+	["stages", "CAMPAIGN STAGE LIST"], ["reset", "RESET CAR TO ROAD"], ["reset_campaign", "RESET CAMPAIGN"],
+	["time", "SKIP TO NEXT TIME OF DAY"], ["menu", "MAIN MENU"]]
 var loading: ColorRect
 var loading_label: Label
 var loading_bar: ProgressBar
@@ -140,6 +148,8 @@ func _build() -> void:
 	stats.add_child(brand)
 	fans_label = _label("0 FANS", 30, Color.WHITE, 900)
 	stats.add_child(fans_label)
+	level_label = _label("", 14, GOLD, 800)
+	stats.add_child(level_label)
 	roads_label = _label("", 14, Color(1, 1, 1, 0.8), 600)
 	stats.add_child(roads_label)
 	clock_label = _label("", 14, Color(1, 1, 1, 0.8), 600)
@@ -218,7 +228,7 @@ func _build() -> void:
 	col.add_child(card_hint)
 	card.hide()
 	# controls reminder, faint, bottom centre
-	help_label = _label("W/S drive · A/D steer · R reset · M map · G route to next event · C camera · Esc menu", 12, Color(1, 1, 1, 0.72), 500)
+	help_label = _label("W/S drive · A/D steer · Space handbrake · R reset · M map · G route to next event · C camera · Esc menu", 12, Color(1, 1, 1, 0.72), 500)
 	help_label.anchor_left = 0.5
 	help_label.anchor_right = 0.5
 	help_label.anchor_top = 1.0
@@ -273,24 +283,45 @@ func _build_pause() -> void:
 	pause_panel.anchor_bottom = 0.5
 	pause_panel.offset_left = -230
 	pause_panel.offset_right = 230
-	pause_panel.offset_top = -240
-	pause_panel.offset_bottom = 240
+	pause_panel.offset_top = -260
+	pause_panel.offset_bottom = 260
+	pause_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
 	add_child(pause_panel)
-	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 10)
-	pause_panel.add_child(col)
-	col.add_child(_label("PAUSED", 30, Color.WHITE, 900))
-	for item in [["resume", "RESUME"], ["map", "MAP"], ["stages", "CAMPAIGN STAGE LIST"], ["reset", "RESET CAR TO ROAD"],
-			["reset_campaign", "RESET CAMPAIGN"], ["time", "SKIP TO NEXT TIME OF DAY"], ["menu", "MAIN MENU"]]:
+	pause_col = VBoxContainer.new()
+	pause_col.add_theme_constant_override("separation", 8)
+	pause_panel.add_child(pause_col)
+	pause_title = _label("PAUSED", 30, Color.WHITE, 900)
+	pause_col.add_child(pause_title)
+	set_pause_page("PAUSED", PAUSE_ITEMS)
+	pause_panel.hide()
+
+## Fills the pause panel with one page of buttons: [[action, text, (disabled)]]. The main page is PAUSE_ITEMS; the
+## MODIFIERS page lists CarMods with "mod:<id>" actions and a "mods_back".
+func set_pause_page(title: String, items: Array) -> void:
+	pause_title.text = title
+	for b in pause_buttons:
+		b.queue_free()
+	pause_buttons.clear()
+	for item in items:
 		var b := Button.new()
 		b.text = item[1]
-		b.custom_minimum_size = Vector2(0, 44)
+		b.custom_minimum_size = Vector2(0, 42)
 		b.add_theme_font_override("font", CmrStyle.font(800))
-		b.add_theme_font_size_override("font_size", 18)
-		b.pressed.connect(func(): pause_action.emit(item[0]))
-		col.add_child(b)
+		b.add_theme_font_size_override("font_size", 17)
+		if item.size() > 2 and item[2]:
+			b.modulate = Color(1, 1, 1, 0.45)
+		var action: String = item[0]
+		b.pressed.connect(func(): pause_action.emit(action))
+		pause_col.add_child(b)
 		pause_buttons.append(b)
-	pause_panel.hide()
+	pause_index = 0
+	if pause_panel.visible:
+		pause_buttons[0].grab_focus()
+
+## Relabels one button on the page shown (a modifier switched on or off) and keeps the focus on it.
+func set_pause_text(index: int, text: String) -> void:
+	if index >= 0 and index < pause_buttons.size():
+		pause_buttons[index].text = text
 
 func _build_loading() -> void:
 	loading = ColorRect.new()
@@ -337,6 +368,13 @@ func show_loading(text: String, fraction: float) -> void:
 func hide_loading() -> void:
 	loading.hide()
 
+## The Nitrous bottle under the speedometer; a negative level hides it.
+func set_nitro(level: float, burning: bool) -> void:
+	if absf(level - nitro) > 0.004 or burning != nitro_burning:
+		nitro = level
+		nitro_burning = burning
+		speedo.queue_redraw()
+
 func update_drive(kmh: float, g: int, r: float, r_max: float, pos: Vector2, heading: float, dt: float) -> void:
 	speed = kmh
 	gear = g
@@ -363,6 +401,9 @@ func update_drive(kmh: float, g: int, r: float, r_max: float, pos: Vector2, head
 
 func set_stats(fans: int, roads_found: int, roads_total: int, hour: float) -> void:
 	fans_label.text = "%s FANS" % _thousands(fans)
+	var lv := FanLevels.level(fans)
+	var left := FanLevels.to_next(fans)
+	level_label.text = "LEVEL %d · %s%s" % [lv, FanLevels.title(lv).to_upper(), "" if left < 0 else "  ·  %s TO NEXT" % _thousands(left)]
 	roads_label.text = "ROADS DRIVEN  %d / %d" % [roads_found, roads_total]
 	var h := int(hour) % 24
 	clock_label.text = "%02d:%02d" % [h, int(fmod(hour, 1.0) * 60.0)]
@@ -551,17 +592,33 @@ func toggle_map(on: bool) -> void:
 		big_map_mat.set_shader_parameter("aspect", aspect)
 		big_overlay.queue_redraw()
 
+## The pause menu's CAR button shows which car is fitted.
+func set_car_label(hyper: bool, unlocked: bool) -> void:
+	for b in pause_buttons:
+		if b.text.begins_with("CAR:"):
+			b.text = "CAR: HYPERCAR SEICENTO" if hyper else ("CAR: SEICENTO" if unlocked else "CAR: SEICENTO  (HYPERCAR AT LEVEL 10)")
+
 func show_pause(on: bool) -> void:
+	if on and not pause_panel.visible:
+		set_pause_page("PAUSED", PAUSE_ITEMS)
 	pause_panel.visible = on
 	if on:
 		pause_index = 0
-		pause_buttons[0].grab_focus()
+		if not pause_buttons.is_empty():
+			pause_buttons[0].grab_focus()
 
 func move_pause(d: int) -> void:
+	if pause_buttons.is_empty():
+		return
 	pause_index = posmod(pause_index + d, pause_buttons.size())
 	pause_buttons[pause_index].grab_focus()
 
 func press_pause() -> void:
+	if pause_buttons.is_empty():
+		return
+	for i in pause_buttons.size():
+		if pause_buttons[i].has_focus():
+			pause_index = i
 	pause_buttons[pause_index].pressed.emit()
 
 # ------------------------------------------------------------------------------------------ drawing
@@ -721,3 +778,8 @@ func _draw_speedo() -> void:
 	speedo.draw_string(CmrStyle.font(800), c + Vector2(-90, 44), "KM/H", HORIZONTAL_ALIGNMENT_CENTER, 180, 14, Color(1, 1, 1, 0.7))
 	var g := "R" if gear < 0 else str(gear + 1)
 	speedo.draw_string(CmrStyle.font(900), c + Vector2(-90, 82), g, HORIZONTAL_ALIGNMENT_CENTER, 180, 30, GOLD)
+	if nitro >= 0.0:
+		var bar := Rect2(c + Vector2(-r - 14, r + 4), Vector2(2.0 * r + 28, 8))
+		speedo.draw_rect(bar, Color(0, 0, 0, 0.5))
+		speedo.draw_rect(Rect2(bar.position, Vector2(bar.size.x * nitro, bar.size.y)), Color("#7fe8ff") if nitro_burning else Color("#3aa8ff"))
+		speedo.draw_string(CmrStyle.font(800), bar.position + Vector2(0, -4), "N2O", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.75))

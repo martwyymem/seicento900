@@ -16,6 +16,8 @@ var traps := {} ## trap id -> best km/h
 var fans := 0
 var best_chain := 0
 var odometer := 0.0
+var car_class := 0 ## 0 the stock Seicento, 1 the Hypercar Seicento (once unlocked)
+var mods := {} ## CarMods switched on (id -> true)
 
 static func load_progress() -> WorldProgress:
 	var w := WorldProgress.new()
@@ -41,6 +43,9 @@ static func load_progress() -> WorldProgress:
 	w.fans = int(data.get("fans", 0))
 	w.best_chain = int(data.get("best_chain", 0))
 	w.odometer = float(data.get("odometer", 0.0))
+	w.car_class = int(data.get("car_class", 0))
+	for id in data.get("mods", []):
+		w.mods[str(id)] = true
 	return w
 
 func save() -> void:
@@ -56,4 +61,6 @@ func save() -> void:
 		"fans": fans,
 		"best_chain": best_chain,
 		"odometer": snappedf(odometer, 1.0),
+		"car_class": car_class,
+		"mods": mods.keys(),
 	}))

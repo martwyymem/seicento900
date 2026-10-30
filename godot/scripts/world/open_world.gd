@@ -20,7 +20,7 @@ const WORLD := preload("res://scripts/ui/race_world.gd")
 ## Campaign track -> the map spot its beacon stands at (tools/build_open_world.py names the spots)
 const STAGE_SPOTS := {"wilamowice": "exit_wilamowice", "brzeszcze": "industrial_sprint", "bor": "bor_stage",
 	"pszczyna": "exit_pszczyna", "bielsko": "exit_bielsko", "oswiecim": "exit_oswiecim", "krakow": "station",
-	"fiat": "exit_tychy", "tokyo": "festival"}
+	"fiat": "exit_tychy", "tokyo": "festival", "goliath": "festival"}
 const SPOT_NOTE := {"exit_wilamowice": "South on the S1 towards Wilamowice", "industrial_sprint": "ul. Dworcowa by KWK Brzeszcze",
 	"bor_stage": "ul. Bór, Brzeszcze-Bór", "exit_pszczyna": "West on the DW933 to Pszczyna",
 	"exit_bielsko": "South on ul. Bielska to Bielsko-Biała", "exit_oswiecim": "East on the DW933 to Oświęcim",
@@ -50,6 +50,7 @@ var view: TextureRect
 var world: Node3D
 var camera: Camera3D
 var sun: DirectionalLight3D
+var quality := 2 ## graphics preset level (GraphicsPresets): 0 Low .. 3 Ultra
 var env: Environment
 var sky_mat: ShaderMaterial
 var car_visual: Node3D
@@ -66,6 +67,7 @@ var paused := false
 var accumulator := 0.0
 var throttle := 0.0
 var brake := 0.0
+var handbrake := 0.0 ## Space or the pad's A button
 var steer := 0.0
 var shift_up := false
 var shift_down := false
@@ -157,14 +159,18 @@ func open(spawn = "", opts := {}) -> void:
 	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	if not built:
 		await _build_world()
+	apply_graphics(int(opts.get("quality", quality)), bool(opts.get("ssao", true)))
 	if drive:
 		drive.gearbox = gearbox
 		drive.assists = assists
-		if car_visual:
-			car_visual.set_paint(paint)
-			car_visual.car_number = car_number
 	_refresh_events()
 	_spawn(spawn)
+	if progress.car_class == 1 and not FanLevels.hypercar_unlocked(progress.fans):
+		progress.car_class = 0
+	if _fitted_class != progress.car_class:
+		_fit_car()
+	else:
+		_apply_look()
 	accumulator = 0.0
 	throttle = 0.0
 	brake = 0.0
@@ -234,6 +240,17 @@ func _build_world() -> void:
 	hud.hide_loading()
 
 # ================================================================================================ environment
+
+## Applies a graphics preset's open-world parts: how far and how finely the sun's shadows reach, and ambient occlusion.
+func apply_graphics(level: int, ssao := true) -> void:
+	quality = clampi(level, 0, GraphicsPresets.PRESETS.size() - 1)
+	var p := GraphicsPresets.preset(quality)
+	if sun:
+		sun.directional_shadow_max_distance = p.ow_shadow_distance
+		sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS if int(p.ow_shadow_splits) <= 2 \
+			else DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+	if env:
+		env.ssao_enabled = ssao
 
 func _build_environment() -> void:
 	var we := WorldEnvironment.new()
@@ -450,7 +467,7 @@ func _refresh_events() -> void:
 		if spot.is_empty():
 			continue
 		var done: bool = st.trophy in trophies
-		var open_ := i <= unlocked
+		var open_ := Campaign.is_unlocked(i, progress.fans) if st.get("fan_lock", false) else i <= unlocked
 		var colour := OpenWorldHud.GOLD if done else (OpenWorldHud.ORANGE if open_ else Color(0.5, 0.5, 0.55))
 		var pos := Vector2(spot[0], spot[1])
 		# two stages on one spot stand a little apart
@@ -535,9 +552,11 @@ func _check_events() -> void:
 	var ev: Dictionary = events[found]
 	var st: Dictionary = Campaign.get_stage(ev.stage)
 	var target := "Win the race" if int(st.target_pos) == 1 else "Finish P%d or better" % int(st.target_pos)
-	var body := "%s\n\n%s · %d laps · %s · %d rivals (%s)\nTarget: %s · Trophy: %s" % [st.desc, SPOT_NOTE.get(ev.spot, ""),
-		int(st.laps), String(st.weather).capitalize(), int(st.opponents), String(st.difficulty).capitalize(), target, st.trophy]
-	var hint := "ENTER  ▸  START STAGE" if ev.open else "LOCKED · clear the stages before it first"
+	var body := "%s\n\n%s · %d laps · %s · %d rivals (%s)\nTarget: %s · Trophy: %s\nFan level %d recommended (you are level %d) · up to %s fans on a first clear" % [st.desc, SPOT_NOTE.get(ev.spot, ""),
+		int(st.laps), String(st.weather).capitalize(), int(st.opponents), String(st.difficulty).capitalize(), target, st.trophy,
+		FanLevels.stage_level(int(ev.stage)), FanLevels.level(progress.fans),
+		OpenWorldHud._thousands(FanLevels.stage_reward(int(ev.stage), 1, int(st.target_pos), true))]
+	var hint := "ENTER / B  ▸  START STAGE" if ev.open else "LOCKED · clear the stages before it first"
 	hud.show_event(String(st.act_name).to_upper(), String(st.title), body, hint, ev.color)
 
 func _start_active_event() -> void:
@@ -692,6 +711,7 @@ func _skill(points: float, label: String) -> void:
 		_chain_events = 0
 		chain_mult = 1.0
 	chain_points += points
+	nitro = minf(1.0, nitro + points * CarMods.NITRO_REFILL)
 	chain_idle = 0.0
 	chain_label = label
 
@@ -699,6 +719,15 @@ func _skill_event(points: float, label: String) -> void:
 	_skill(points, label)
 	_chain_events += 1
 	chain_mult = minf(5.0, 1.0 + _chain_events / 3.0)
+
+var _fitted_class := -1 ## the car class currently on the player's car
+var mods := {} ## CarMods switched on and unlocked (id -> true)
+var _time_rate := 1.0 ## bullet time's simulation speed
+var _rainbow_t := 0.0
+var nitro := 1.0 ## CarMods' Nitrous: the bottle, 0..1
+var nitro_on := false ## the boost button is held
+var _drift_t := 0.0 ## seconds the current slide has lasted
+var _drift_paid := 0.0
 
 func _update_skills(dt: float) -> void:
 	var car := drive.car
@@ -708,6 +737,16 @@ func _update_skills(dt: float) -> void:
 		var slip := absf(wrapf(vel_h - car.heading, -PI, PI))
 		if slip > 0.26 and slip < 1.9:
 			_skill(dt * v * 3.6 * slip * 6.0, "DRIFT")
+			_drift_t += dt
+			if _drift_t > 1.0 and absf(_drift_t - _drift_paid) >= 1.0:
+				_drift_paid = floorf(_drift_t) # every second of a held slide adds to the chain's multiplier
+				_skill_event(150.0 * _drift_paid, "LONG DRIFT  %.0f s" % _drift_paid)
+		else:
+			_drift_t = 0.0
+			_drift_paid = 0.0
+	else:
+		_drift_t = 0.0
+		_drift_paid = 0.0
 	if v * 3.6 > 105.0:
 		_skill(dt * 50.0, "SPEED")
 	if drive.landed > 0.0:
@@ -733,7 +772,7 @@ func _update_skills(dt: float) -> void:
 		chain_mult = 1.0
 	chain_idle += dt
 	if chain_points > 0.0 and chain_idle > CHAIN_IDLE:
-		var banked := int(chain_points * chain_mult)
+		var banked := int(chain_points * chain_mult * (CarMods.DRIFT_FANS if mods.has("drift") else 1.0))
 		_add_fans(banked, "SKILL CHAIN" if banked >= 500 else "")
 		progress.best_chain = maxi(progress.best_chain, banked)
 		chain_points = 0.0
@@ -742,9 +781,22 @@ func _update_skills(dt: float) -> void:
 	var shown := int(chain_points * chain_mult)
 	hud.set_chain(shown, "%s  ×%.1f" % [chain_label, chain_mult] if shown > 0 else "")
 
+## Nitrous: the held button opens the bottle for extra engine output until it runs dry; skills refill it.
+func _update_nitro(dt: float) -> void:
+	var has := mods.has("nitro")
+	var burning := has and nitro_on and nitro > 0.0 and throttle > 0.1
+	if burning:
+		nitro = maxf(0.0, nitro - CarMods.NITRO_BURN * dt)
+	drive.power_mul = CarMods.NITRO_POWER if burning else 1.0
+	hud.set_nitro(nitro if has else -1.0, burning)
+
 func _add_fans(n: int, banner: String) -> void:
+	var before := FanLevels.level(progress.fans)
 	progress.fans += n
-	if banner != "":
+	var after := FanLevels.level(progress.fans)
+	if after > before:
+		hud.notify("FAN LEVEL %d" % after, FanLevels.title(after).to_upper(), OpenWorldHud.GOLD)
+	elif banner != "":
 		hud.notify("+%s FANS" % OpenWorldHud._thousands(n), banner, OpenWorldHud.GOLD)
 
 # ================================================================================================ GPS
@@ -762,6 +814,86 @@ func _recompute_route() -> void:
 		route = map.route(Vector2(drive.car.x, drive.car.y), _target_pos())
 	hud.set_route(route)
 	_update_route_mesh()
+
+## Swaps between the stock Seicento and, once the top fan level has unlocked it, the Hypercar Seicento (AF Corse's no. 83).
+func _toggle_car() -> void:
+	if progress.car_class == 0 and not FanLevels.hypercar_unlocked(progress.fans):
+		hud.notify("HYPERCAR LOCKED", "Reach fan level %d: %s" % [FanLevels.THRESHOLDS.size(), FanLevels.title(FanLevels.THRESHOLDS.size()).to_upper()], Color("#ff5a4a"))
+		return
+	progress.car_class = 1 - progress.car_class
+	_fit_car()
+	hud.notify("HYPERCAR SEICENTO" if progress.car_class == 1 else "STOCK SEICENTO", "Fitted", OpenWorldHud.GOLD)
+
+## Puts the chosen car's model and livery on the player's car.
+func _fit_car() -> void:
+	var hyper := progress.car_class == 1
+	_fitted_class = progress.car_class
+	drive.fit_model(Hypercar.model() if hyper else CarModel.new())
+	_apply_look()
+
+## The fitted car's livery and the modifiers switched on (CarMods), on the visual and the physics.
+func _apply_look() -> void:
+	var hyper := progress.car_class == 1
+	mods = CarMods.active(progress.mods, progress.fans)
+	CarMods.apply_to(drive, mods)
+	if traffic:
+		traffic.set_monster(mods.has("monster"))
+	if car_visual:
+		car_visual.set_paint(Hypercar.PAINT if hyper else paint)
+		car_visual.car_number = Hypercar.NUMBER if hyper else car_number
+		car_visual.set_wheel_scale(CarMods.MONSTER_WHEELS if mods.has("monster") else 1.0)
+	hud.set_car_label(hyper, FanLevels.hypercar_unlocked(progress.fans))
+
+## The pause menu's MODIFIERS page: one switch per CarMods entry, locked ones name their fan level.
+func _show_mods_page() -> void:
+	var items := []
+	for m in CarMods.LIST:
+		items.append(["mod:" + m[0], _mod_text(m), not CarMods.unlocked(m[0], progress.fans)])
+	items.append(["mods_back", "BACK"])
+	hud.set_pause_page("MODIFIERS", items)
+
+func _mod_text(m: Array) -> String:
+	if not CarMods.unlocked(m[0], progress.fans):
+		return "%s  ·  LEVEL %d" % [m[2], m[1]]
+	return "%s  ·  %s" % [m[2], "ON" if progress.mods.get(m[0], false) else "OFF"]
+
+func _toggle_mod(id: String) -> void:
+	var i := -1
+	for k in CarMods.LIST.size():
+		if CarMods.LIST[k][0] == id:
+			i = k
+	if i < 0:
+		return
+	var m: Array = CarMods.LIST[i]
+	if not CarMods.unlocked(id, progress.fans):
+		hud.notify("%s LOCKED" % m[2], "Reach fan level %d: %s" % [m[1], FanLevels.title(m[1]).to_upper()], Color("#ff5a4a"))
+		return
+	if progress.mods.get(id, false):
+		progress.mods.erase(id)
+	else:
+		progress.mods[id] = true
+	_apply_look()
+	hud.set_pause_text(i, _mod_text(m))
+	hud.notify(m[2], m[3] if progress.mods.has(id) else "Off", OpenWorldHud.GOLD)
+
+## Dev menu: teleport to a named map spot, set the hour, park a car ahead.
+func dev_teleport(spot_name: String) -> void:
+	var sp: Array = map.spots.get(spot_name, [])
+	if sp.size() >= 3:
+		drive.place(Vector2(sp[0], sp[1]), float(sp[2]))
+		drive.respawn()
+
+func dev_set_hour(h: float) -> void:
+	hour = h
+	_apply_time()
+
+func dev_spawn(kind: String) -> void:
+	traffic.spawn_ahead(drive, kind)
+
+## Fans earned outside the open world (a campaign stage's result): added, announced and saved.
+func award_fans(n: int) -> void:
+	_add_fans(n, "")
+	_save()
 
 ## Drops the player's own waypoint (map click or cursor) and routes there.
 func _set_waypoint(pos: Vector2) -> void:
@@ -795,13 +927,16 @@ func _process(delta: float) -> void:
 		_update_camera(delta)
 		hud.update_drive(drive.speed_kmh(), _gear_shown(), drive.car.rpm, drive.model.spec.limiter, Vector2(drive.car.x, drive.car.y), drive.car.heading, delta)
 		return
+	nitro_on = false
 	_read_input(delta)
-	accumulator += minf(delta, 0.1)
+	var slow := mods.has("bullet") and (drive.airborne or _drift_t > 0.3)
+	_time_rate = move_toward(_time_rate, CarMods.BULLET_RATE if slow else 1.0, delta * 3.0)
+	accumulator += minf(delta, 0.1) * _time_rate
 	var steps := 0
 	while accumulator >= TICK and steps < 24:
 		_prev_pos = Vector3(drive.car.x, drive.z, drive.car.y)
 		_prev_heading = drive.car.heading
-		drive.step(TICK, throttle, brake, steer, shift_up, shift_down)
+		drive.step(TICK, throttle, brake, steer, shift_up, shift_down, handbrake)
 		shift_up = false
 		shift_down = false
 		traffic.step(TICK, drive)
@@ -818,7 +953,8 @@ func _process(delta: float) -> void:
 	_apply_time()
 	_sync_car(delta)
 	_update_camera(delta)
-	_update_skills(delta)
+	_update_skills(delta * _time_rate)
+	_update_nitro(delta * _time_rate) # simulation time, so bullet time doesn't farm drift points
 	_check_events()
 	_check_traps()
 	_disc_t -= delta
@@ -858,7 +994,17 @@ func _sync_car(delta: float) -> void:
 	var h := _prev_heading + wrapf(drive.car.heading - _prev_heading, -PI, PI) * a
 	car_visual.position = p
 	car_visual.basis = drive.tilt * Basis(Vector3.UP, -h - PI / 2.0)
+	if mods.has("tiny"):
+		car_visual.basis = car_visual.basis * Basis.from_scale(Vector3.ONE * CarMods.TINY_SCALE)
 	car_visual.sync(drive.car, delta, 0.0, night, false)
+	if mods.has("rainbow"):
+		var before := int(_rainbow_t * 12.0)
+		_rainbow_t += delta
+		if int(_rainbow_t * 12.0) != before:
+			car_visual.set_paint(Color.from_hsv(fmod(_rainbow_t * 0.12, 1.0), 0.85, 0.92))
+	elif _rainbow_t > 0.0:
+		_rainbow_t = 0.0
+		_apply_look()
 
 func _update_camera(delta: float) -> void:
 	if drive == null:
@@ -908,15 +1054,20 @@ func _read_input(dt: float) -> void:
 		var st_pad := signf(raw) * dead * dead
 		var thr_pad := clampf(Input.get_joy_axis(gamepad_device, JOY_AXIS_TRIGGER_RIGHT), 0.0, 1.0)
 		var brk_pad := clampf(Input.get_joy_axis(gamepad_device, JOY_AXIS_TRIGGER_LEFT), 0.0, 1.0)
-		if absf(st_pad) > 0.02 or thr_pad > 0.02 or brk_pad > 0.02:
+		var hb_pad := Input.is_joy_button_pressed(gamepad_device, JOY_BUTTON_A)
+		nitro_on = Input.is_joy_button_pressed(gamepad_device, JOY_BUTTON_LEFT_STICK)
+		if absf(st_pad) > 0.02 or thr_pad > 0.02 or brk_pad > 0.02 or hb_pad:
 			steer = st_pad
 			throttle = thr_pad
 			brake = brk_pad
+			handbrake = 1.0 if hb_pad else 0.0
 			return
 	var up := Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP)
-	var down := Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN) or Input.is_physical_key_pressed(KEY_SPACE)
+	var down := Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN)
 	var left := Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT)
 	var right := Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT)
+	handbrake = 1.0 if Input.is_physical_key_pressed(KEY_SPACE) else 0.0
+	nitro_on = nitro_on or Input.is_physical_key_pressed(KEY_SHIFT)
 	var st := (1.0 if right else 0.0) - (1.0 if left else 0.0)
 	var back := st == 0.0 or signf(st) != signf(steer)
 	var kmh := drive.speed_kmh()
@@ -938,7 +1089,10 @@ func _input(event: InputEvent) -> void:
 	if paused:
 		match act:
 			"back", "pause":
-				_set_paused(false)
+				if hud.pause_title.text == "MODIFIERS":
+					_pause_action("mods_back")
+				else:
+					_set_paused(false)
 			"up":
 				hud.move_pause(-1)
 			"down":
@@ -1030,8 +1184,8 @@ func _action_of(event: InputEvent) -> String:
 	elif event is InputEventJoypadButton and event.pressed:
 		match event.button_index:
 			JOY_BUTTON_START: return "pause"
-			JOY_BUTTON_B: return "back" if (paused or hud.map_open) else ""
-			JOY_BUTTON_A: return "accept"
+			JOY_BUTTON_B: return "back" if (paused or hud.map_open) else "accept" # A is the handbrake while driving
+			JOY_BUTTON_A: return "accept" if (paused or hud.map_open) else ""
 			JOY_BUTTON_BACK: return "map"
 			JOY_BUTTON_Y: return "camera"
 			JOY_BUTTON_X: return "cursor" if hud.map_open else "reset"
@@ -1046,12 +1200,17 @@ func _action_of(event: InputEvent) -> String:
 func _set_paused(on: bool) -> void:
 	paused = on
 	hud.show_pause(on)
+	if on:
+		hud.set_car_label(progress.car_class == 1, FanLevels.hypercar_unlocked(progress.fans))
 	if on and audio:
 		audio.update_car(null, false)
 
 func _pause_action(action: String) -> void:
 	if action != "reset_campaign":
 		_reset_armed = false
+	if action.begins_with("mod:"):
+		_toggle_mod(action.substr(4))
+		return
 	match action:
 		"reset_campaign":
 			if not _reset_armed:
@@ -1067,6 +1226,13 @@ func _pause_action(action: String) -> void:
 			hud.notify("CAMPAIGN RESET", "Back to stage 1", OpenWorldHud.PURPLE)
 		"resume":
 			_set_paused(false)
+		"car":
+			_toggle_car()
+		"mods":
+			_show_mods_page()
+		"mods_back":
+			hud.set_pause_page("PAUSED", OpenWorldHud.PAUSE_ITEMS)
+			hud.set_car_label(progress.car_class == 1, FanLevels.hypercar_unlocked(progress.fans))
 		"map":
 			_set_paused(false)
 			hud.map_sel = maxi(gps_target, 0)

@@ -39,7 +39,7 @@ const HOUSE_ROOFS := ["#8f3f2a", "#6b3e2e", "#4a4d52", "#36393d", "#3f4a3d", "#a
 const FLATS_WALLS := ["#efe6d2", "#f3e1b8", "#e9d6c0", "#dfe8cf", "#f4eab0", "#efd2c4", "#ece8dc", "#e6dccb"] ## the bloki, repainted warm
 const INDUSTRIAL_WALLS := ["#c9ccd0", "#aeb4b8", "#8d9ba6", "#d8dadc", "#b8b09c", "#8e4b3a", "#9a5840"]
 const INDUSTRIAL_ROOFS := ["#7a7f84", "#8a8e92", "#6a6e72", "#5c4a3f"]
-const KIND_CODE := {"house": 0, "flats": 1, "commercial": 1, "public": 1, "industrial": 2, "garage": 3, "shed": 3,
+const KIND_CODE := {"house": 0, "flats": 1, "commercial": 7, "public": 1, "industrial": 2, "garage": 3, "shed": 3,
 	"farm": 4, "church": 5}
 const CAR_PAINTS := ["#c62828", "#f5f5f5", "#1e3a5f", "#2e7d32", "#9e9e9e", "#212121", "#f9a825", "#5d4037",
 	"#1565c0", "#ad1457", "#b0bec5", "#e65100", "#00695c", "#8d6e63"]

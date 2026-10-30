@@ -14,7 +14,7 @@ const POLISH := {haze = 1.35, warmth = 0.9, fill = Color("#a8c2dc"), saturation 
 
 const PRESETS := {
 	"bor": POLISH, "bielsko": POLISH, "brzeszcze": POLISH, "krakow": POLISH, "oswiecim": POLISH,
-	"pszczyna": POLISH, "wilamowice": POLISH, "fiat": POLISH,
+	"pszczyna": POLISH, "goliath": POLISH, "wilamowice": POLISH, "fiat": POLISH,
 	"monaco": {haze = 1.1, warmth = 1.15, fill = Color("#a4c2ea"), saturation = 1.2},
 	"monza": {haze = 1.15, warmth = 1.1, fill = Color("#a9c3e6"), saturation = 1.18},
 	"tokyo": {haze = 1.45, warmth = 0.95, fill = Color("#a6bfe0"), saturation = 1.12},

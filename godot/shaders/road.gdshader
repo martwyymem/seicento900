@@ -20,6 +20,9 @@ uniform float detail : hint_range(0.0, 1.0) = 0.0;
 // town tarmac (street stages): many patch repairs with seams, alligator cracks, polished wheel tracks in each lane
 // and faded paint, against the smoother circuit asphalt
 uniform float street : hint_range(0.0, 1.0) = 0.0;
+// cobbled stretches (street stages): lap distances (from, to) in x, y of up to four zones
+uniform vec4 cobble_zones[4];
+uniform int cobble_count = 0;
 
 uniform sampler2D grain : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D grain_normal : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
@@ -138,6 +141,33 @@ void fragment() {
 	float seam = patch_mask * (1.0 - smoothstep(0.03, 0.03 + px * 1.5, min(to_rim.x, to_rim.y))) * detail;
 	crack *= 1.0 - patch_mask; // a patch is newer than the cracks round it
 
+	// granite setts in staggered rows, dark joints, no paint or tar seams on them
+	float cob = 0.0;
+	for (int i = 0; i < cobble_count; i++) {
+		vec2 z = cobble_zones[i].xy;
+		cob = max(cob, smoothstep(z.x, z.x + 5.0, s) * (1.0 - smoothstep(z.y - 5.0, z.y, s)));
+	}
+	if (cob > 0.0) {
+		float sett = 0.13;
+		float row = floor(s / sett);
+		vec2 cell = vec2(d / sett + 0.5 * mod(row, 2.0) + 40.0, s / sett);
+		vec2 f = fract(cell);
+		vec2 id = floor(cell);
+		float tone = hash12(id + 3.7);
+		float edge_d = min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y));
+		float fade = 1.0 - smoothstep(0.12, 0.4, px / sett); // setts finer than a pixel blend to their mean
+		float joint = (1.0 - smoothstep(0.05, 0.16, edge_d)) * fade;
+		vec3 stone = mix(vec3(0.17, 0.165, 0.16), vec3(0.23, 0.2, 0.165), step(0.6, hash12(id + 9.1)));
+		vec3 sett_col = mix(vec3(0.2, 0.19, 0.18), stone * (0.75 + 0.5 * tone) * (0.9 + 0.2 * broad), fade);
+		sett_col = mix(sett_col, vec3(0.1, 0.095, 0.09), joint * 0.8);
+		col = mix(col, sett_col, cob);
+		rough = mix(rough, 0.78, cob);
+		vec2 g = (f - 0.5) * 2.0 * fade;
+		nmap = mix(nmap, vec3(0.5 + 0.2 * g.x, 0.5 + 0.2 * g.y, 1.0), cob);
+		seam *= 1.0 - cob;
+		tar *= 1.0 - cob;
+		crack *= 1.0 - cob;
+	}
 	// rubber laid down on the racing line
 	float rl = UV2.x;
 	float line = exp(-rl * rl / 1.8) * rubber;
@@ -170,7 +200,7 @@ void fragment() {
 	float edge_line = mix(smoothstep(0.09, 0.03, edge_dist), smoothstep(0.06 + line_aa, 0.06 - line_aa, edge_dist), step(0.001, detail)) * (1.0 - w * 0.35);
 	// town paint: faded, scuffed through by the wheels, and gone where the road was patched
 	float paint_wear = mix(1.0, (0.4 + 0.6 * smoothstep(0.3, 0.62, texture(grain, vec2(d * 2.0, s * 0.35) + 0.7).r)) * (1.0 - patch_mask * 0.85), street);
-	edge_line *= paint_wear;
+	edge_line *= paint_wear * (1.0 - cob);
 	col = mix(col, vec3(0.92, 0.94, 0.96) * (0.85 + 0.15 * fine), edge_line * 0.9);
 	rough = mix(rough, 0.42, edge_line * 0.9);
 
@@ -178,7 +208,7 @@ void fragment() {
 	if (half_width >= 3.2 && half_width <= 4.2) {
 		float dash_pattern = step(0.45, fract(s / 5.5));
 		float center_dist = abs(d);
-		float center_line = smoothstep(0.065, 0.02, center_dist) * dash_pattern * (1.0 - w * 0.4) * paint_wear;
+		float center_line = smoothstep(0.065, 0.02, center_dist) * dash_pattern * (1.0 - w * 0.4) * paint_wear * (1.0 - cob);
 		col = mix(col, vec3(0.90, 0.91, 0.88) * (0.85 + 0.15 * fine), center_line * 0.75);
 		rough = mix(rough, 0.45, center_line * 0.75);
 	}

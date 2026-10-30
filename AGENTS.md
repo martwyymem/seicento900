@@ -3,7 +3,6 @@
 > ⚠️ **MANDATORY INSTRUCTION FOR ALL AI AGENTS & MODELS**:
 > Every agent and model **MUST read [`TASKS.md`](TASKS.md) before planning or running any tasks**. `TASKS.md` is the authoritative bible and roadmap for all new game features (dynamic weathers, retro shaders, Polish & Tokyo city tracks, campaign mode, and streamlined menus). Always consult and align with `TASKS.md` before writing or modifying code.
 
-> 💸 **TEMPORARY BUDGET MODE (until Friday 2026-10-30, 08:00)**: the weekly usage must last. Use **Sonnet 5.5 at medium effort** for the main agent and every subagent or delegate; no Opus/Fable, no high/xhigh/max effort, no `max`/`ultra` reviews, no council runs. Prefer headless runs, small surgical edits and few subagents. Work only on **Phase 0 (FIX WHAT WE GOT)** in `TASKS.md` (done so far: 1, 2, 3, 6, 13, 14; 8a and 8b are in but unseen on screen; next 4, 9, 5, 7, 12, 11, 10); **Phase 1** (surfaces, event types, new cars, rally stages, fans, POIs) is planned but parked. Remove this note after the deadline.
 
 ## Current game
 

@@ -23,9 +23,19 @@ static var _shared := {}
 var paint_material: StandardMaterial3D
 var stripe_material: StandardMaterial3D
 var tail_material: StandardMaterial3D
+var bulb_material: StandardMaterial3D
+const BRAKE_LIGHT_ENERGY := 2.0
+var _brake_light: SpotLight3D
 var body_pivot: Node3D
 var number_label: Label3D
 var stripes_node: MeshInstance3D
+var martini_node: MeshInstance3D
+var livery := 0 ## 0 gloss, 1 metallic flake, 2 Martini Racing, 3 Abarth, 4 Marlboro
+## The sponsor livery meshes by livery number (martini_node is the 2)
+var livery_nodes := {}
+## Liveries painted over a white car, without the twin stripes or the racing number decals
+const WHITE_LIVERIES := [2, 4]
+const LIVERY_MESHES := {2: "Martini", 3: "Abarth", 4: "Marlboro"}
 var steer_pivots: Array[Node3D] = []
 var wheels: Array[Node3D] = []
 var _door_decal_l: MeshInstance3D
@@ -54,6 +64,8 @@ var _previous_throttle := 0.0
 var _light_bar: Array[StandardMaterial3D] = [] ## safety car only: left and right lamps
 var _beacon: OmniLight3D
 var _shell: MeshInstance3D
+var _details_node: MeshInstance3D
+var _dents_shown := {"front": 0.0, "rear": 0.0, "left": 0.0, "right": 0.0}
 var _fx_near := false ## this car shows effects: in a race, not a ghost, and the player or near the camera
 var _world: Node = null ## the RaceWorld this car races in (effects only there, not for menus or the ghost)
 var _fx_checked := false
@@ -71,6 +83,12 @@ func _ready() -> void:
 	paint_material.clearcoat_enabled = true
 	paint_material.clearcoat = 1.0
 	paint_material.clearcoat_roughness = 0.03
+	# orange peel: a fine, subtle triplanar bump that breaks up the sky reflection on flat panels
+	paint_material.normal_enabled = true
+	paint_material.normal_texture = _shared_resources().peel
+	paint_material.normal_scale = 0.12
+	paint_material.uv1_triplanar = true
+	paint_material.uv1_scale = Vector3(22.0, 22.0, 22.0)
 	paint_material.rim_enabled = true
 	paint_material.rim = 0.18
 	paint_material.rim_tint = 0.65
@@ -80,11 +98,19 @@ func _ready() -> void:
 	stripe_material.clearcoat = 0.8
 	stripe_material.clearcoat_roughness = 0.05
 	tail_material = StandardMaterial3D.new()
-	tail_material.albedo_color = Color("#4a0a0a")
-	tail_material.roughness = 0.08
+	tail_material.albedo_color = Color("#3c0404")
+	tail_material.roughness = 0.12
+	tail_material.metallic_specular = 0.25
 	tail_material.emission_enabled = true
-	tail_material.emission = Color("#ff1a0c")
+	tail_material.emission = Color(1.0, 0.0, 0.0)
 	tail_material.emission_energy_multiplier = 0.35
+
+	bulb_material = StandardMaterial3D.new()
+	bulb_material.albedo_color = Color(0.9, 0.2, 0.06)
+	bulb_material.roughness = 0.15
+	bulb_material.emission_enabled = true
+	bulb_material.emission = Color(1.0, 0.12, 0.03)
+	bulb_material.emission_energy_multiplier = 0.3
 
 	body_pivot = Node3D.new()
 	body_pivot.name = "SuspendedBody"
@@ -103,7 +129,10 @@ func _ready() -> void:
 	details.mesh = sh.details
 	details.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	details.set_surface_override_material(sh.tail_surface, tail_material)
+	if sh.bulb_surface >= 0:
+		details.set_surface_override_material(sh.bulb_surface, bulb_material)
 	body_pivot.add_child(details)
+	_details_node = details
 
 	var cabin := MeshInstance3D.new()
 	cabin.name = "Cabin"
@@ -119,6 +148,15 @@ func _ready() -> void:
 	stripes_node.material_override = stripe_material
 	stripes_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	body_pivot.add_child(stripes_node)
+	for k in LIVERY_MESHES:
+		var node := MeshInstance3D.new()
+		node.name = LIVERY_MESHES[k]
+		node.mesh = sh.liveries[k]
+		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		node.visible = false
+		body_pivot.add_child(node)
+		livery_nodes[k] = node
+	martini_node = livery_nodes[2]
 
 	for spot in WHEEL_SPOTS:
 		var pivot := Node3D.new()
@@ -179,26 +217,88 @@ func _add_decal(label: String, mat: StandardMaterial3D, surface: Vector3, normal
 	body_pivot.add_child(d)
 	return d
 
+## The open world's Monster Truck modifier: k times the wheel size, a slightly wider track and the body lifted
+## so the bigger tyres still stand on the ground. 1.0 puts the stock wheels back.
+func set_wheel_scale(k: float) -> void:
+	for i in steer_pivots.size():
+		var spot: Vector3 = WHEEL_SPOTS[i]
+		steer_pivots[i].scale = Vector3.ONE * k
+		steer_pivots[i].position = Vector3(spot.x * (1.0 + (k - 1.0) * 0.4), spot.y * k, spot.z)
+	body_pivot.position.y = WHEEL_RADIUS * (k - 1.0)
+
 func set_paint(color: Color) -> void:
 	if not paint_material:
 		return
 	_paint = color
-	# silver, grey and gunmetal liveries are metallic paints: the flakes catch the sun under the coat
-	var metal := color.s < 0.3 and color.v > 0.25 and color.v < 0.85
-	paint_material.metallic = 0.65 if metal else 0.0
-	paint_material.roughness = 0.42 if metal else 0.36
-	paint_material.normal_enabled = metal
-	if metal:
+	_apply_finish()
+	_apply_paint()
+
+## The base coat: Martini Racing and Marlboro cars are always white, whatever paint was picked.
+func _base_paint() -> Color:
+	return Color("#f1f1ec") if livery in WHITE_LIVERIES else _paint
+
+## Gloss, metallic flake or a sponsor livery (Martini Racing, Abarth, Marlboro). Silver, grey and gunmetal paints
+## are metallic whatever the choice (the flakes catch the sun under the coat); the metallic finish gives every
+## colour a deep flake. The Abarth kit goes over the picked paint and keeps the stripes and door numbers.
+func set_livery(value: int) -> void:
+	livery = clampi(value, 0, 4)
+	if not paint_material:
+		return
+	_apply_finish()
+	_apply_paint()
+	_show_livery()
+	if is_instance_valid(stripes_node) and livery in WHITE_LIVERIES:
+		stripes_node.visible = false
+
+## The livery mesh and the racing decals the livery leaves room for.
+func _show_livery() -> void:
+	for k in livery_nodes:
+		(livery_nodes[k] as MeshInstance3D).visible = livery == k and not _ghost
+	if is_instance_valid(_door_decal_l):
+		var shown := not _ghost and _decal_material().albedo_texture != null
+		for d in [_door_decal_l, _door_decal_r]:
+			d.visible = shown and livery not in WHITE_LIVERIES
+		for d in [_hood_decal, _sill_decal_l, _sill_decal_r]: # the Abarth shield and sill band sit where these go
+			d.visible = shown and livery < 2
+
+func _apply_finish() -> void:
+	var color := _base_paint()
+	var grey := color.s < 0.3 and color.v > 0.25 and color.v < 0.85
+	var flake := grey or livery == 1
+	paint_material.metallic = (0.85 if livery == 1 else 0.65) if flake else 0.0
+	paint_material.roughness = (0.3 if livery == 1 else 0.42) if flake else 0.36
+	paint_material.normal_enabled = true
+	paint_material.normal_texture = _shared_resources().peel
+	paint_material.normal_scale = 0.12
+	if flake:
 		paint_material.normal_texture = _shared_resources().flakes
-		paint_material.normal_scale = 0.35
+		paint_material.normal_scale = 0.55 if livery == 1 else 0.35
 		paint_material.uv1_triplanar = true
 		paint_material.uv1_scale = Vector3(14.0, 14.0, 14.0)
-	_apply_paint()
 	stripe_material.albedo_color = Color.WHITE if color.get_luminance() < 0.42 else Color("#202124")
+
+## Crumples the body, lamps and decals with the model's dent_* blend shapes, easing towards the car's dents.
+func _show_dents(target: Dictionary, dt: float) -> void:
+	var changed := false
+	for k in _dents_shown:
+		var goal: float = target.get(k, 0.0)
+		var now: float = _dents_shown[k]
+		if absf(goal - now) > 0.002:
+			_dents_shown[k] = move_toward(now, goal, maxf(dt, 0.001) * 1.5)
+			changed = true
+	if not changed:
+		return
+	for mi in [_shell, _details_node, stripes_node] + livery_nodes.values():
+		if not is_instance_valid(mi):
+			continue
+		for k in _dents_shown:
+			var idx: int = mi.find_blend_shape_by_name("dent_" + k)
+			if idx >= 0:
+				mi.set_blend_shape_value(idx, _dents_shown[k])
 
 ## Crash damage dulls and darkens the paint (scuffs, dirt and bent panels at a glance).
 func _apply_paint() -> void:
-	var c := _paint.lerp(Color("#3a3632"), _damage_shown * 0.8)
+	var c := _base_paint().lerp(Color("#3a3632"), _damage_shown * 0.8)
 	c.a = 0.55 if _ghost else 1.0
 	paint_material.albedo_color = c
 	paint_material.clearcoat = 1.0 - 0.9 * _damage_shown
@@ -206,7 +306,7 @@ func _apply_paint() -> void:
 	if _shell:
 		# Scale clear-coat horizon band per car: richer/darker cars take full reflection,
 		# while bright liveries are toned down to preserve highlight headroom and avoid blowout
-		var lum := _paint.get_luminance()
+		var lum := _base_paint().get_luminance()
 		var coat_scale: float = lerpf(1.15, 0.6, smoothstep(0.2, 0.8, lum)) * (1.0 - 0.85 * _damage_shown)
 		_shell.set_instance_shader_parameter("coat", coat_scale)
 
@@ -254,7 +354,7 @@ func make_safety_car() -> void:
 
 func set_stripes(enabled: bool) -> void:
 	if is_instance_valid(stripes_node):
-		stripes_node.visible = enabled
+		stripes_node.visible = enabled and livery not in WHITE_LIVERIES
 
 ## Headlight glow is the same for every car, so it lives on the shared material.
 static func set_night(night: float) -> void:
@@ -300,26 +400,35 @@ func sync(car: RaceCar, dt: float, curvature: float, night: float, ghost: bool) 
 	steer_pivots[1].rotation.y = -steer_angle
 
 	# brake lights well over the glow threshold so they bloom; the running lights stay a lit-lens red
-	var tail := (4.2 + 1.8 * night) if car.brake_on else (0.35 + 1.4 * night)
+	var tail := (0.6 + 0.2 * night) if car.brake_on else (0.05 + 0.15 * night)
 	if absf(tail - _tail_energy) > 0.01:
 		_tail_energy = tail
 		tail_material.emission_energy_multiplier = tail
+		bulb_material.emission_energy_multiplier = (4.0 + 1.5 * night) if car.brake_on else (0.35 + 0.8 * night)
+	if is_player and not _ghost:
+		if _brake_light == null:
+			# a spot behind the bumper shining away from the car, so it lights the road and not the cabin
+			_brake_light = SpotLight3D.new()
+			_brake_light.light_color = Color(1.0, 0.04, 0.02)
+			_brake_light.spot_range = 7.0
+			_brake_light.spot_angle = 55.0
+			_brake_light.shadow_enabled = false
+			_brake_light.transform = Transform3D(Basis.looking_at(Vector3(0.0, -0.3, 1.0).normalized()), Vector3(0.0, 0.5, 2.1))
+			body_pivot.add_child(_brake_light)
+		_brake_light.light_energy = BRAKE_LIGHT_ENERGY if car.brake_on else 0.0 # one power: the sun drowns it by day, the dark shows it
 
 	if ghost != _ghost:
 		_ghost = ghost
 		paint_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA if ghost else BaseMaterial3D.TRANSPARENCY_DISABLED
 		_apply_paint()
+		_show_livery()
 		if is_instance_valid(_door_decal_l):
-			_door_decal_l.visible = not ghost
-			_door_decal_r.visible = not ghost
-			_hood_decal.visible = not ghost
 			_sunstrip_decal.visible = not ghost
-			_sill_decal_l.visible = not ghost
-			_sill_decal_r.visible = not ghost
 	if car.damage - _damage_shown > 0.035 and _fx_near:
 		var q: int = _world.quality
 		FxParticles.burst(self, "debris", global_position + Vector3(0.0, 0.35, 0.0), 14, q)
 		FxParticles.burst(self, "sparks", global_position + Vector3(0.0, 0.25, 0.0), 10, q)
+	_show_dents(car.dents, dt)
 	if absf(car.damage - _damage_shown) > 0.02:
 		_damage_shown = car.damage
 		_apply_paint()
@@ -468,21 +577,59 @@ static func _shared_resources() -> Dictionary:
 
 	# Glass and headlights are the same on every car, so they live on the shared meshes.
 	var glass := StandardMaterial3D.new()
-	glass.albedo_color = Color(0.05, 0.065, 0.075, 0.38)
+	glass.albedo_color = Color(0.03, 0.04, 0.05, 0.6)
 	glass.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	glass.cull_mode = BaseMaterial3D.CULL_DISABLED
 	glass.roughness = 0.02
 	glass.metallic_specular = 1.0
 	var head := StandardMaterial3D.new()
 	head.albedo_color = Color("#d8dcdc")
-	head.metallic = 0.6
-	head.roughness = 0.08
+	head.metallic = 0.9
+	head.roughness = 0.1
 	head.emission_enabled = true
 	head.emission = Color("#fff3d6")
 	head.emission_energy_multiplier = 0.08
 	var glass_surface := _surface(shell, "Glass")
 	if glass_surface >= 0:
 		shell.surface_set_material(glass_surface, glass)
+	var lens := StandardMaterial3D.new() # the clear polycarbonate cover over the lamps: a hard sheen, barely tinted
+	lens.albedo_color = Color(0.86, 0.92, 1.0, 0.045)
+	lens.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	lens.roughness = 0.02
+	lens.metallic_specular = 1.0
+	lens.clearcoat_enabled = true
+	lens.clearcoat = 1.0
+	lens.clearcoat_roughness = 0.0
+	lens.rim_enabled = true
+	lens.rim = 0.0
+	lens.rim_tint = 0.2
+	var lens_surface := _surface(details, "LampGlass")
+	if lens_surface >= 0:
+		details.surface_set_material(lens_surface, lens)
+	var red_glass := StandardMaterial3D.new() # the tail lamps' red lens: glossy, so it picks up the sky and the lights
+	red_glass.albedo_color = Color(0.55, 0.015, 0.02, 0.5)
+	red_glass.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	red_glass.roughness = 0.04
+	red_glass.metallic_specular = 1.0
+	red_glass.clearcoat_enabled = true
+	red_glass.clearcoat = 1.0
+	red_glass.clearcoat_roughness = 0.0
+	var tail_glass_surface := _surface(details, "TailGlass")
+	if tail_glass_surface >= 0:
+		details.surface_set_material(tail_glass_surface, red_glass)
+	var liveries := {}
+	for k in LIVERY_MESHES:
+		var lm: Mesh = meshes.get(LIVERY_MESHES[k], ArrayMesh.new())
+		for i in lm.get_surface_count():
+			var mm := lm.surface_get_material(i) as StandardMaterial3D
+			if mm:
+				mm = mm.duplicate()
+				mm.clearcoat_enabled = true
+				mm.clearcoat = 0.8
+				mm.clearcoat_roughness = 0.05
+				mm.roughness = 0.35
+				lm.surface_set_material(i, mm)
+		liveries[k] = lm
 	var head_surface := _surface(details, "Headlight")
 	if head_surface >= 0:
 		details.surface_set_material(head_surface, head)
@@ -508,10 +655,10 @@ static func _shared_resources() -> Dictionary:
 	contact_mat.albedo_color = Color.WHITE
 	contact.material = contact_mat
 
-	_shared = {"shell": shell, "details": details, "cabin": cabin, "flakes": _flake_texture(), "coat": _coat_material(),
-		"puff": _puff_mesh(), "fx": _fx_materials(), "stripes": meshes.get("Stripes", BoxMesh.new()),
+	_shared = {"shell": shell, "details": details, "cabin": cabin, "flakes": _flake_texture(), "peel": _peel_texture(), "coat": _coat_material(),
+		"puff": _puff_mesh(), "fx": _fx_materials(), "stripes": meshes.get("Stripes", BoxMesh.new()), "liveries": liveries,
 		"wheel": meshes.get("Wheel", BoxMesh.new()), "contact": contact, "head": head,
-		"paint_surface": maxi(0, _surface(shell, "Paint")), "tail_surface": maxi(0, _surface(details, "Taillight"))}
+		"paint_surface": maxi(0, _surface(shell, "Paint")), "tail_surface": maxi(0, _surface(details, "Taillight")), "bulb_surface": _surface(details, "TailBulb")}
 	return _shared
 
 ## The clear coat's sharp horizon reflection, the line of light that runs along a glossy car's flanks (the
@@ -553,6 +700,20 @@ static func _coat_material() -> ShaderMaterial:
 	return m
 
 ## Metallic flake: a fine bumpy normal map, tiled triplanar (the model has no UVs) at a few millimetres a flake.
+static func _peel_texture() -> NoiseTexture2D:
+	var noise := FastNoiseLite.new()
+	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	noise.frequency = 0.05
+	noise.fractal_octaves = 3
+	var tex := NoiseTexture2D.new()
+	tex.width = 256
+	tex.height = 256
+	tex.seamless = true
+	tex.as_normal_map = true
+	tex.bump_strength = 3.0
+	tex.noise = noise
+	return tex
+
 static func _flake_texture() -> NoiseTexture2D:
 	var noise := FastNoiseLite.new()
 	noise.noise_type = FastNoiseLite.TYPE_CELLULAR

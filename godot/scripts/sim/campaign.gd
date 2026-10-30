@@ -185,6 +185,28 @@ const STAGES := [
 		"trophy": "Tokyo Midnight Emperor",
 		"desc": "The international grand finale! Midnight underground racing through the Shuto C1 Expressway's neon viaducts and the Yaesu tunnel.",
 		"tip": "Narrow barriers leave zero room for error. Watch for the blind apex at Miyakezaka."
+	},
+	{
+		"id": "stage_10",
+		"act": 4,
+		"act_name": "Finale: Seicento Legend",
+		"title": "Stage 10: The Goliath",
+		"track": "goliath",
+		"laps": 1,
+		"weather": "dry",
+		"time_of_day": 18.5,
+		"start_hour": 18.5,
+		"wear_mult": 1.0,
+		"fuel_mult": 1.0,
+		"opponents": 11,
+		"difficulty": "hard",
+		"target_pos": 1,
+		"grid": "pole",
+		"trophy": "The Goliath Crown",
+		"car_class": "hypercar",
+		"fan_lock": true,
+		"desc": "One lap, 27 km, the whole of Brzeszcze closed for the night: the town, the S1 flat out, the villages and the Bór ponds, and back down the east side. Twelve Hypercar Seicentos in AF Corse yellow, and you on pole with eleven Legends behind you for 27 km.",
+		"tip": "The S1 is where races are won: 340 km/h, then the hardest stop of the lap into the junction. Save the tyres in town."
 	}
 ]
 
@@ -234,7 +256,11 @@ static func get_stage(index: int) -> Dictionary:
 		st["fuel_mult"] = 1.0
 	return st
 
-static func is_unlocked(stage_idx: int) -> bool:
+## fans: the player's fan total (read from the open-world save when not given). A "fan_lock" stage (the Goliath)
+## opens at the top fan level instead of after the stage before it.
+static func is_unlocked(stage_idx: int, fans := -1) -> bool:
+	if stage_idx >= 0 and stage_idx < STAGES.size() and STAGES[stage_idx].get("fan_lock", false):
+		return FanLevels.hypercar_unlocked(fans if fans >= 0 else WorldProgress.load_progress().fans)
 	var prog := load_progress()
 	return stage_idx <= int(prog.get("unlocked", 0))
 
@@ -254,11 +280,13 @@ static func record_result(stage_idx: int, pos: int) -> Dictionary:
 	var success: bool = pos <= target_pos
 	var newly_unlocked := false
 	
+	var first_clear := false
 	if success:
 		var t_name: String = stage.trophy
 		if t_name not in trophies:
 			trophies.append(t_name)
-		if stage_idx == unlocked and unlocked < STAGES.size() - 1:
+			first_clear = true
+		if stage_idx == unlocked and unlocked < STAGES.size() - 1 and not STAGES[unlocked + 1].get("fan_lock", false):
 			unlocked += 1
 			newly_unlocked = true
 			
@@ -277,7 +305,9 @@ static func record_result(stage_idx: int, pos: int) -> Dictionary:
 		"success": success,
 		"newly_unlocked": newly_unlocked,
 		"unlocked_stage": unlocked,
-		"trophy": stage.trophy if success else ""
+		"trophy": stage.trophy if success else "",
+		"first_clear": first_clear,
+		"fans": FanLevels.stage_reward(stage_idx, pos, target_pos, first_clear),
 	}
 
 ## The car carried from one stage to the next ({parts, pull, used, serviced}, see Service): what the crew

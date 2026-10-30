@@ -7,8 +7,8 @@ const RaceHud = preload("res://scripts/ui/race_hud.gd")
 
 ## Circuits offered in the menus, in menu order; each key needs data/tracks/<key>.tres and .json.
 ## TRACK_NAMES is the display name for the key at the same index.
-const TRACK_KEYS := ["gp", "nordschleife", "monaco", "indy", "lemans", "monza", "silverstone", "spa", "suzuka", "zandvoort", "fiat", "tokyo", "bielsko", "krakow", "oswiecim", "wilamowice", "brzeszcze", "pszczyna", "bor"]
-const TRACK_NAMES := ["Nürburgring GP", "Nordschleife", "Monaco", "Indianapolis", "Le Mans", "Monza", "Silverstone", "Spa-Francorchamps", "Suzuka", "Zandvoort", "Fiat Track", "Tokyo C1 Expressway", "Bielsko-Biała Szyndzielnia", "Kraków Royal Ring", "Oświęcim Riverfront", "Wilamowice Country Loop", "Brzeszcze Industrial Sprint", "Pszczyna Castle Grounds", "Bór Forest Stage"]
+const TRACK_KEYS := ["gp", "nordschleife", "monaco", "indy", "lemans", "monza", "silverstone", "spa", "suzuka", "zandvoort", "fiat", "tokyo", "bielsko", "krakow", "oswiecim", "wilamowice", "brzeszcze", "pszczyna", "bor", "goliath"]
+const TRACK_NAMES := ["Nürburgring GP", "Nordschleife", "Monaco", "Indianapolis", "Le Mans", "Monza", "Silverstone", "Spa-Francorchamps", "Suzuka", "Zandvoort", "Fiat Track", "Tokyo C1 Expressway", "Bielsko-Biała Szyndzielnia", "Kraków Royal Ring", "Oświęcim Riverfront", "Wilamowice Country Loop", "Brzeszcze Industrial Sprint", "Pszczyna Castle Grounds", "Bór Forest Stage", "The Seicento Goliath"]
 
 ## Championship rounds in order (track keys)
 const CHAMPIONSHIP_CALENDAR := ["monza", "silverstone", "spa", "gp", "monaco", "indy", "lemans", "nordschleife"]
@@ -79,10 +79,13 @@ const TRACK_DEFAULTS := {
 	"brzeszcze": {"laps": 8, "wear": 2.0},
 	"pszczyna": {"laps": 6, "wear": 2.0},
 	"bor": {"laps": 7, "wear": 2.0},
+	"goliath": {"laps": 1, "wear": 1.0},
 }
 
-## Stock paints ◂ ▸ steps through on the set-up page (Enter on the swatch still mixes any colour)
-const PAINTS := ["#b3121d", "#f2f2f2", "#16181d", "#f5c400", "#ff7a00", "#1f4fa8", "#2e7d32", "#00a3b4", "#6a1b9a", "#8e9aa6"]
+## Stock paints: ◂ ▸ steps through them on the set-up page (Enter on the swatch opens the mixer for any colour)
+## and they fill the mixer's swatches: reds, pink, orange to green, blues, purple, then the earthy and neutral shades
+const PAINTS := ["#b3121d", "#e53935", "#7b1e2b", "#e91e8c", "#ff7a00", "#f5c400", "#d4e157", "#2e7d32", "#1b4d2e",
+	"#00a3b4", "#4fc3f7", "#1f4fa8", "#0d1b4c", "#6a1b9a", "#6d4c33", "#d9cfb4", "#f2f2f2", "#8e9aa6", "#555b62", "#16181d"]
 ## Pages the header tabs switch between with Q/E (PgUp/PgDn, the shoulder buttons)
 const MENU_PAGES := ["Set Up", "Advanced", "Car", "Strategy", "Service"] ## (Strategy: quick race and time trial; Service: where a car is serviced between events)
 const MENU_PAGE_IDS := ["setup", "advanced", "car", "strategy", "repair"] ## active_menu_page of each of MENU_PAGES
@@ -256,6 +259,10 @@ var graphics_upscale_preset := 1 ## index into UPSCALE_PRESETS
 var graphics_sharpening := 2 ## index into SHARPENING
 var graphics_reflections := 0 ## 0 off, 1 screen-space, 2 ray-traced
 var graphics_ssao := true
+var graphics_quality := 2 ## the world's rendering level, set by the graphics presets (GraphicsPresets)
+var graphics_preset := 2 ## index into GraphicsPresets.NAMES, or GraphicsPresets.CUSTOM
+var preset_picker: MenuSelector
+var preset_note: Label
 var graphics_shadows := true
 var codriver_voice := true ## Options → Co-driver voice: the pace notes are read aloud
 var graphics_ui_scale := 1 ## index into UI_SCALES
@@ -269,6 +276,7 @@ var loading_screen: LoadingScreen
 var result_panel: PanelContainer
 var result_scroll: ScrollContainer
 var pause_panel: PanelContainer
+var pause_dim: ColorRect ## darkens the race and its HUD behind the pause menu, so the menu is all you read
 var pause_buttons: Array[Button] = []
 var skipping := false
 var quali_session := false ## the session on screen is a qualifying run, not a race
@@ -325,6 +333,10 @@ var player_name_edit: LineEdit
 var player_number_picker: SpinBox
 var player_color_picker: ColorPickerButton
 var player_stripes_toggle: CheckButton
+var player_finish_picker: MenuSelector
+var car_class_picker: MenuSelector
+var _hyper_model: CarModel
+var _hyper_strategy: Strategy
 var setup_format_row: Control
 var setup_conditions_row: Control
 var setup_driving_row: HBoxContainer
@@ -334,7 +346,7 @@ var setup_column: VBoxContainer ## the settings in the set-up page's scroll, in 
 var setup_race_button: Button
 var setup_hint: Label ## under RACE: what the focused setting does, and the menu keys
 var setup_folds := {} ## section key -> {head, body, title, summary}
-var setup_open := {"driving": false, "race": false, "driver": false, "car": false, "strategy": false, "rules": false, "plan": false, "calendar": false} ## folded sections start shut
+var setup_open := {"driving": false, "race": false, "driver": false, "car": false, "strategy": false, "rules": false, "plan": false, "calendar": false, "mods": false} ## folded sections start shut
 var is_time_trial_mode := false ## main menu → TIME TRIAL: the quick-race page for a solo run (no field)
 var is_rally_mode := false ## main menu → RALLY: an event of special stages (Rally / RallyEvent)
 var rally_event: RallyEvent = null ## the rally being run (saved to user://rally.json between stages)
@@ -408,6 +420,10 @@ var _loading_settings := false
 # Player Inputs
 var throttle := 0.0
 var brake := 0.0
+var handbrake := 0.0 ## Space or the pad's A button
+var nitro_held := false ## the Nitrous modifier's button: Shift or the pad's L3
+var _time_rate := 1.0 ## the Bullet Time modifier's simulation speed
+var mod_toggles := {} ## CarMods id -> CheckButton on the Car page
 var steer := 0.0
 var shift_up := false
 var shift_down := false
@@ -428,6 +444,9 @@ func _ready() -> void:
 	_load_championship()
 	_build_audio()
 	add_child(DevHud.new())
+	var dev_menu := DevMenu.new()
+	dev_menu.game = self
+	add_child(dev_menu)
 	_build_viewport()
 	_build_setup()
 	_build_repair_page()
@@ -538,10 +557,12 @@ func _process(delta: float) -> void:
 	# under time warp the co-driver drives
 	if race.warp > 1 and not p.autopilot and p.mode == "race" and not p.finished and not p.dnf:
 		race.set_autopilot(true)
-	accumulator += minf(delta, 0.1) * race.warp
+	accumulator += minf(delta, 0.1) * race.warp * _bullet_rate(delta)
 	var input := _player_input
 	input.throttle = throttle
 	input.brake = brake
+	input.handbrake = handbrake
+	input.nitro = nitro_held
 	input.steer = steer
 	input.shift_up = shift_up
 	input.shift_down = shift_down
@@ -590,13 +611,16 @@ func _tick() -> float:
 ## Keyboard driving: pedals and steering ease in and out like the reference instead of snapping.
 func _update_input(dt: float) -> void:
 	var up := Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP)
-	var down := Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN) or Input.is_physical_key_pressed(KEY_SPACE)
+	var down := Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN)
 	var left := Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT)
 	var right := Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT)
-	if up or down or left or right:
+	var hand := Input.is_physical_key_pressed(KEY_SPACE)
+	if up or down or left or right or hand:
 		gamepad_active = false
 	if gamepad_active:
 		return
+	handbrake = 1.0 if hand else 0.0
+	nitro_held = Input.is_physical_key_pressed(KEY_SHIFT)
 	var st := (1.0 if right else 0.0) - (1.0 if left else 0.0)
 	var back := st == 0.0 or signf(st) != signf(steer)
 	var v_kmh := absf(race.player.speed) * 3.6 if (race and race.player) else 0.0
@@ -650,6 +674,7 @@ func _poll_gamepad() -> void:
 		gamepad_device = -1
 		throttle = 0.0
 		brake = 0.0
+		handbrake = 0.0
 		steer = 0.0
 		return
 	var raw_steer := Input.get_joy_axis(gamepad_device, JOY_AXIS_LEFT_X)
@@ -657,6 +682,8 @@ func _poll_gamepad() -> void:
 	steer = signf(raw_steer) * deadband * deadband
 	throttle = clampf(Input.get_joy_axis(gamepad_device, JOY_AXIS_TRIGGER_RIGHT), 0.0, 1.0)
 	brake = clampf(Input.get_joy_axis(gamepad_device, JOY_AXIS_TRIGGER_LEFT), 0.0, 1.0)
+	handbrake = 1.0 if Input.is_joy_button_pressed(gamepad_device, JOY_BUTTON_A) else 0.0
+	nitro_held = Input.is_joy_button_pressed(gamepad_device, JOY_BUTTON_LEFT_STICK)
 
 ## The 3D views are drawn through TextureRects rather than stretching SubViewportContainers: the UI is laid
 ## out on a 1600×900 canvas that the window scales (canvas_items stretch), but the 3D renders at the
@@ -940,6 +967,7 @@ func _build_setup() -> void:
 	var season_body := _group(adv_left, "season", "SEASON SET-UP")
 	var calendar_body := _group(adv_right, "calendar", "CALENDAR · TICK THE CIRCUITS")
 	_build_season_box(season_body, calendar_body)
+	_build_mods_box(_fold_section(adv_right, "mods", "MODIFIERS · FAN LEVEL REWARDS"))
 	var race_row := HBoxContainer.new()
 	race_row.add_theme_constant_override("separation", 14)
 	_group(adv_left, "race", "FORMAT & START TIME").add_child(race_row)
@@ -971,6 +999,7 @@ func _build_setup() -> void:
 	driver.add_child(profile_row)
 	var name_col := VBoxContainer.new()
 	name_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_col.size_flags_stretch_ratio = 2.0
 	profile_row.add_child(name_col)
 	_field_label(name_col, "DRIVER NAME")
 	player_name_edit = LineEdit.new()
@@ -987,9 +1016,26 @@ func _build_setup() -> void:
 	player_color_picker = ColorPickerButton.new()
 	player_color_picker.color = Color("#b3121d")
 	player_color_picker.custom_minimum_size = Vector2(76, 40)
-	player_color_picker.tooltip_text = "◂ ▸ step through the stock paints; Enter mixes your own"
+	player_color_picker.tooltip_text = "◂ ▸ step through the stock paints; Enter picks a swatch or mixes your own"
+	for c in PAINTS:
+		player_color_picker.get_picker().add_preset(Color(c))
 	paint_col.add_child(player_color_picker)
-	player_stripes_toggle = _check_field(profile_row, "Twin stripes", true)
+	# the car, its finish and the stripes get a row of their own so the pickers have room for their names
+	var livery_row := HBoxContainer.new()
+	livery_row.add_theme_constant_override("separation", 14)
+	driver.add_child(livery_row)
+	car_class_picker = _option_field(livery_row, "CAR", ["Seicento 900", "Hypercar Seicento"])
+	car_class_picker.tooltip_text = "The Hypercar Seicento (a Seicento with a Ferrari 499P's power, AWD, in AF Corse's no. 83 yellow) opens at the top fan level"
+	car_class_picker.item_selected.connect(_on_car_class_selected)
+	player_finish_picker = _option_field(livery_row, "FINISH", ["Gloss", "Metallic", "Martini Racing", "Abarth", "Marlboro"])
+	var stripes_col := VBoxContainer.new()
+	stripes_col.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	livery_row.add_child(stripes_col)
+	_field_label(stripes_col, "STRIPES")
+	player_stripes_toggle = _check_field(stripes_col, "Twin stripes", true)
+	player_stripes_toggle.custom_minimum_size.y = 40
+	player_finish_picker.tooltip_text = "Metallic flake paint, or a sponsor livery: Martini Racing or Marlboro on a white car, the Abarth kit over your paint"
+	player_finish_picker.item_selected.connect(func(_index: int) -> void: _update_menu_car_summary())
 	player_color_picker.color_changed.connect(func(_color: Color) -> void: _update_menu_car_summary())
 	player_stripes_toggle.toggled.connect(func(_enabled: bool) -> void: _update_menu_car_summary())
 	player_name_edit.text_changed.connect(func(_text: String) -> void: _update_driver_summary())
@@ -1636,8 +1682,12 @@ func _queue_strategy_refresh(reset_choice := true) -> void:
 	_refresh_strategy.call_deferred()
 
 func _refresh_strategy() -> void:
+	var hyper := is_instance_valid(car_class_picker) and car_class_picker.selected == 1 and _hypercar_open()
+	var models: Dictionary = _models_for("hypercar" if hyper else "stock")
+	var strat: Strategy = models.strategy
+	var cm: CarModel = models.car_model
 	var track := Race.get_track(TRACK_KEYS[track_picker.selected])
-	if track.cal.is_empty():
+	if not hyper and track.cal.is_empty():
 		# the first plan on a circuit simulates reference laps (up to a couple of seconds)
 		strategy_info.text = "Working out lap times at %s…" % track.name
 		current_plan = null
@@ -1655,20 +1705,20 @@ func _refresh_strategy() -> void:
 			_queue_strategy_refresh(false)
 			return
 	_strategy_pending = false
-	var cal := strategy.calibrate(track)
+	var cal := strat.calibrate(track)
 	var laps := _race_laps(track)
 	var po := _plan_opts(track, laps, wear_picker.value)
 	var plan_opts := po.duplicate()
 	plan_opts["diverse"] = true
-	strategy_options = strategy.plan(plan_opts).slice(0, 7)
+	strategy_options = strat.plan(plan_opts).slice(0, 7)
 	var fpl: float = cal.fuel_per_lap * fuel_picker.value
-	var tank: float = car_model.spec.tank
-	var lap := Strategy.lap_time(cal, tyre_model.compound_grip("M", po.wet) * 0.95 * 0.95, car_model.mass_with_fuel(10.0))
+	var tank: float = cm.spec.tank
+	var lap := Strategy.lap_time(cal, tyre_model.compound_grip("M", po.wet) * 0.95 * 0.95, cm.mass_with_fuel(10.0))
 	var stop: float = cal.pit_drive_loss + Strategy.service_time(po.crew, po.parallel, true, fpl * 3.0 if refuel_toggle.button_pressed else 0.0)
 	var lives := []
 	var all_short := true
 	for c in Tyres.KEYS:
-		var life := strategy.tyre_life_laps(track, c, po.wet, wear_picker.value)
+		var life := strat.tyre_life_laps(track, c, po.wet, wear_picker.value)
 		all_short = all_short and life < 1.0
 		lives.append("%s %.1f" % [c, life])
 	var info := "Lap ≈ %s · fuel %.2f L/lap (tank %d L = %.1f laps) · pit stop ≈ %d s\nTyre life (laps): %s" % [
@@ -1946,8 +1996,126 @@ func _race_setting_controls() -> Dictionary:
 		"race_control": race_control_toggle, "dynamic_running": dynamic_toggle, "draft": draft_toggle,
 		"auto_strategist": strategist_toggle, "parallel": parallel_toggle, "crew": crew_picker,
 		"ai_learning": ai_learning_picker, "bot_physics": bot_physics_picker, "player_name": player_name_edit,
-		"player_number": player_number_picker, "player_color": player_color_picker, "stripes": player_stripes_toggle,
+		"player_number": player_number_picker, "player_color": player_color_picker, "stripes": player_stripes_toggle, "finish": player_finish_picker, "car_class": car_class_picker,
 	}
+
+## The dev menu's actions (§ + 1) for whatever is on screen: [{section, label, do: Callable, close: bool}].
+func _dev_entries() -> Array:
+	var out: Array = []
+	var add := func(section: String, label: String, fn: Callable, close := false) -> void:
+		out.append({"section": section, "label": label, "do": fn, "close": close})
+	for n in [10000, 100000, 1000000]:
+		add.call("FANS & UNLOCKS", "+%s fans" % OpenWorldHud._thousands(n), func() -> void: _dev_fans(n))
+	add.call("FANS & UNLOCKS", "Unlock everything (hypercar, final race, modifiers): %s" % ("ON" if FanLevels.dev_unlock else "off"),
+		func() -> void: FanLevels.dev_unlock = not FanLevels.dev_unlock)
+	add.call("FANS & UNLOCKS", "Fans now: %s (level %d)" % [OpenWorldHud._thousands(_fan_total()), FanLevels.level(_fan_total())], func() -> void: pass)
+	if open_world != null and open_world.active:
+		for spot in open_world.map.spots.keys():
+			add.call("OPEN WORLD · TELEPORT", String(spot), func() -> void: open_world.dev_teleport(String(spot)), true)
+		for h in [6.0, 12.0, 18.5, 22.0]:
+			add.call("OPEN WORLD · TIME", "%02d:%02d" % [int(h), int(fmod(h, 1.0) * 60.0)], func() -> void: open_world.dev_set_hour(h))
+		for kind in ["CarHatch", "CarSedan", "CarVan", "Maluch"]:
+			add.call("OPEN WORLD · SPAWN", "Park a %s 22 m ahead" % kind.trim_prefix("Car"), func() -> void: open_world.dev_spawn(kind), true)
+		add.call("OPEN WORLD · CAR", "Put the car back on the road", func() -> void: open_world.drive.respawn(), true)
+	elif race != null and not menu_tint.visible:
+		for w in [["Dry", 0.0, 0.0], ["Rain", 0.7, 0.85], ["Storm", 1.0, 1.0]]:
+			add.call("RACE · WEATHER", String(w[0]), func() -> void:
+				race.weather.rain = float(w[1])
+				race.weather.wet = float(w[2]))
+		add.call("RACE · CAR", "Repair the car", func() -> void: Service.fit(race.player, {}, 0.0))
+		add.call("RACE · CAR", "Fill the tank", func() -> void: race.player.fuel = race.spec.tank)
+		add.call("RACE · RACE", "Finish the race now (projected from the field's pace)", func() -> void:
+			race.approximate_finish()
+			_show_results(), true)
+	return out
+
+func _dev_fans(n: int) -> void:
+	if open_world != null and open_world.progress != null:
+		open_world.award_fans(n)
+	else:
+		var wp := WorldProgress.load_progress()
+		wp.fans += n
+		wp.save()
+
+## The fans the player has earned in the open world (the live game, or the save).
+func _fan_total() -> int:
+	if open_world != null and open_world.progress != null:
+		return open_world.progress.fans
+	return WorldProgress.load_progress().fans
+
+## The open-world save holds the modifiers switched on (the open world's own copy while it is loaded).
+func _world_progress() -> WorldProgress:
+	if open_world != null and open_world.progress != null:
+		return open_world.progress
+	return WorldProgress.load_progress()
+
+## The modifiers switched on that the fans unlock: every mode uses them on the player's car.
+func _active_mods() -> Dictionary:
+	var wp := _world_progress()
+	return CarMods.active(wp.mods, wp.fans)
+
+## Bullet Time: the race runs slow while the player's car is sliding.
+func _bullet_rate(delta: float) -> float:
+	var slow := false
+	if race and race.mods.has("bullet") and race.player and race.player.control == "free":
+		var p := race.player
+		var v := Vector2(p.vx, p.vy).length()
+		slow = v > 8.0 and absf(wrapf(atan2(p.vy, p.vx) - p.heading, -PI, PI)) > 0.3
+	_time_rate = move_toward(_time_rate, CarMods.BULLET_RATE if slow else 1.0, delta * 3.0)
+	return _time_rate
+
+## One switch per CarMods entry on the Car page; locked ones name the fan level that opens them.
+func _build_mods_box(box: VBoxContainer) -> void:
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 14)
+	box.add_child(grid)
+	for m in CarMods.LIST:
+		var chk := _check_field(grid, m[2], false)
+		chk.tooltip_text = m[3]
+		chk.toggled.connect(_on_mod_toggled.bind(m[0]))
+		mod_toggles[m[0]] = chk
+	_refresh_mod_toggles()
+
+func _refresh_mod_toggles() -> void:
+	var wp := _world_progress()
+	for m in CarMods.LIST:
+		var chk: CheckButton = mod_toggles.get(m[0])
+		if chk == null:
+			continue
+		var open := CarMods.unlocked(m[0], wp.fans)
+		chk.disabled = not open
+		chk.text = m[2] if open else "%s · LEVEL %d" % [m[2], m[1]]
+		chk.set_pressed_no_signal(open and wp.mods.has(m[0]))
+
+func _on_mod_toggled(on: bool, id: String) -> void:
+	var wp := _world_progress()
+	if on and CarMods.unlocked(id, wp.fans):
+		wp.mods[id] = true
+	else:
+		wp.mods.erase(id)
+	wp.save()
+	_refresh_mod_toggles()
+
+func _hypercar_open() -> bool:
+	return FanLevels.hypercar_unlocked(_fan_total())
+
+func _on_car_class_selected(index: int) -> void:
+	if index == 1 and not _hypercar_open():
+		car_class_picker.select(0)
+		status_label.text = "The Hypercar Seicento opens at fan level %d (%s): earn fans in the open world and the campaign." % [FanLevels.THRESHOLDS.size(), FanLevels.title(FanLevels.THRESHOLDS.size())]
+		status_label.modulate = DANGER
+	_update_menu_car_summary()
+	_queue_strategy_refresh()
+
+## The car model and strategist a race runs on: the Hypercar Seicento for a hypercar race, else the stock Seicento.
+func _models_for(car_class: String) -> Dictionary:
+	if car_class != "hypercar":
+		return {"car_model": car_model, "tyres": tyre_model, "strategy": strategy}
+	if _hyper_model == null:
+		_hyper_model = Hypercar.model()
+		_hyper_strategy = Strategy.new(_hyper_model, tyre_model)
+	return {"car_model": _hyper_model, "tyres": tyre_model, "strategy": _hyper_strategy}
 
 func _load_race_settings() -> void:
 	var cfg := ConfigFile.new()
@@ -2225,6 +2393,7 @@ func _update_menu_car_summary() -> void:
 	var current_track: Track = Race.get_track(_menu_track_key())
 	if is_instance_valid(player_color_picker) and is_instance_valid(menu_preview_car):
 		menu_preview_car.call("set_paint", player_color_picker.color)
+		menu_preview_car.call("set_livery", player_finish_picker.selected)
 		menu_preview_car.call("set_stripes", player_stripes_toggle.button_pressed)
 		menu_preview_car.set("car_number", int(player_number_picker.value))
 	var race_label := "%d LAPS" % int(laps_picker.value)
@@ -2716,6 +2885,18 @@ func _build_options_page() -> void:
 	options_column = column
 	_title(column, "OPTIONS", "DISPLAY, GRAPHICS, AUDIO & CO-DRIVER")
 	_menu_rule(column)
+	_field_label(column, "GRAPHICS")
+	var preset_row := HBoxContainer.new()
+	preset_row.add_theme_constant_override("separation", 22)
+	column.add_child(preset_row)
+	preset_picker = _option_field(preset_row, "GRAPHICS PRESET", GraphicsPresets.NAMES + ["Custom"])
+	preset_picker.item_selected.connect(_on_preset_selected)
+	preset_note = _label("", 14, MUTED)
+	preset_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	preset_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	preset_note.size_flags_stretch_ratio = 2.0
+	preset_row.add_child(preset_note)
+	_menu_rule(column)
 	_field_label(column, "DISPLAY")
 	var display_row := HBoxContainer.new()
 	display_row.add_theme_constant_override("separation", 22)
@@ -2747,61 +2928,20 @@ func _build_options_page() -> void:
 	column.add_child(frame_row)
 	fps_limit_picker = _option_field(frame_row, "FRAME RATE LIMIT", FPS_LIMITS.map(func(l): return l.name))
 	fps_limit_picker.item_selected.connect(_on_fps_limit_selected)
-	var frame_note := _label("A lower limit runs cooler and saves battery. Menus only draw the interface, so they are cheap at any limit; pause and results hold a still image at 30 fps.", 14, MUTED)
+	var frame_note := _label("A lower limit runs cooler and saves battery.", 14, MUTED)
 	frame_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	frame_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	frame_row.add_child(frame_note)
 	frame_note.size_flags_stretch_ratio = 2.0
 	_menu_rule(column)
-	_field_label(column, "3D UPSCALING")
-	var upscaling_row := HBoxContainer.new()
-	upscaling_row.add_theme_constant_override("separation", 22)
-	column.add_child(upscaling_row)
-	upscaler_picker = _option_field(upscaling_row, "UPSCALER", [])
-	for i in UPSCALERS.size():
-		if _upscaler_available(i):
-			upscaler_picker.add_item(UPSCALERS[i].name, i)
-	upscaler_picker.item_selected.connect(_on_upscaler_selected)
-	upscale_preset_picker = _option_field(upscaling_row, "RENDER RESOLUTION", UPSCALE_PRESETS.map(func(p): return p.name))
-	upscale_preset_picker.item_selected.connect(_on_upscale_preset_selected)
-	sharpening_picker = _option_field(upscaling_row, "FSR SHARPENING", SHARPENING.map(func(s): return s.name))
-	sharpening_picker.item_selected.connect(_on_sharpening_selected)
-	var explanation := _label("Upscalers render the 3D scene at a lower resolution, then rebuild it for your display: lower presets run faster with a softer image. The temporal ones (FSR 2, MetalFX Temporal) also replace anti-aliasing, and at 100% act as a high-quality anti-aliaser.", 14, MUTED)
-	explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	column.add_child(explanation)
-	var image_row := HBoxContainer.new()
-	image_row.add_theme_constant_override("separation", 22)
-	column.add_child(image_row)
-	antialiasing_picker = _option_field(image_row, "NATIVE ANTI-ALIASING", ["SMAA", "FXAA", "Off"])
-	antialiasing_picker.item_selected.connect(_on_antialiasing_selected)
-	_grid_spacers(image_row, 2)
-	_menu_rule(column)
-	_field_label(column, "LIGHTING & REFLECTIONS")
-	var effects_row := HBoxContainer.new()
-	effects_row.add_theme_constant_override("separation", 22)
-	column.add_child(effects_row)
-	ssao_toggle = _check_field(effects_row, "Ambient occlusion", graphics_ssao)
-	ssao_toggle.toggled.connect(_on_ssao_toggled)
-	shadows_toggle = _check_field(effects_row, "Dynamic shadows", graphics_shadows)
-	shadows_toggle.toggled.connect(_on_shadows_toggled)
-	var reflections_row := HBoxContainer.new()
-	reflections_row.add_theme_constant_override("separation", 22)
-	column.add_child(reflections_row)
-	reflections_picker = _option_field(reflections_row, "REFLECTIONS", ["Off", "Screen-space", "Ray-traced"])
-	reflections_picker.item_selected.connect(_on_reflections_selected)
-	_grid_spacers(reflections_row, 2)
-	var lighting_note := _label("Ray-traced reflections trace the whole circuit and every car on the GPU, so wet tarmac, puddles and paintwork also mirror what's off screen. Godot doesn't expose Metal's ray-tracing hardware yet, so they run in compute shaders. Screen-space reflections are cheaper but only show what's already on screen.", 14, MUTED)
-	lighting_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	column.add_child(lighting_note)
-	_menu_rule(column)
-	_field_label(column, "RETRO GRAPHICS & NOSTALGIA SHADERS (F1)")
+	_field_label(column, "LOOK")
 	var retro_row := HBoxContainer.new()
 	retro_row.add_theme_constant_override("separation", 22)
 	column.add_child(retro_row)
-	retro_picker = _option_field(retro_row, "GRAPHIC STYLE", RetroPipeline.MODE_NAMES)
+	retro_picker = _option_field(retro_row, "RETRO STYLE", RetroPipeline.MODE_NAMES)
 	retro_picker.item_selected.connect(_on_retro_selected)
 	_grid_spacers(retro_row, 2)
-	var retro_note := _label("Relive the golden age of racing games with authentic PS1/PS2 post-processing: PS1 15-bit dithered downscaling, NFS Most Wanted golden amber bloom, GTA San Andreas heat shimmer, NFS Carbon midnight blue, Colin McRae Rally 2.0 broadcast contrast, or Forza Horizon 1 warmth. Toggle anytime with F1.", 14, MUTED)
+	var retro_note := _label("Pick a look from a classic racing game. F1 cycles styles in a race.", 14, MUTED)
 	retro_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	column.add_child(retro_note)
 	_menu_rule(column)
@@ -2816,7 +2956,7 @@ func _build_options_page() -> void:
 		picker.select(AudioSettings.level(ch.key) / 10)
 		picker.item_selected.connect(_on_volume_selected.bind(ch.key))
 		audio_pickers[ch.key] = picker
-	var audio_note := _label("Off mutes a sound; 100% is the full mix. Engine is your car's engine, Effects everything else in the race (kerbs, gravel, hits, other cars, crowd, rain, pit crews). The co-driver speaks through your system's text-to-speech, which Master and Co-driver voice also turn down. M mutes it all in a race.", 14, MUTED)
+	var audio_note := _label("Off mutes a sound; 100% is the full mix. M mutes everything in a race.", 14, MUTED)
 	audio_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	audio_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	audio_note.size_flags_stretch_ratio = 2.0
@@ -2828,11 +2968,53 @@ func _build_options_page() -> void:
 	column.add_child(codriver_row)
 	codriver_voice_toggle = _check_field(codriver_row, "Read the pace notes aloud", codriver_voice)
 	codriver_voice_toggle.toggled.connect(_on_codriver_voice_toggled)
-	var codriver_note := _label("As in Colin McRae Rally 2.0, the co-driver calls each corner before you reach it: how tight it is (flat, fast, easy, medium, tight, square, hairpin), long, tightens or opens, over crest, caution, and \"into\", \"and\" or the distance to the next one. The calls also come up as arrows at the top of the screen. The voice is your system's text-to-speech (a British English one if installed); M mutes it with the engine.", 14, MUTED)
+	var codriver_note := _label("The co-driver calls each corner before you reach it, in your system voice.", 14, MUTED)
 	codriver_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	codriver_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	codriver_note.size_flags_stretch_ratio = 2.0
 	codriver_row.add_child(codriver_note)
+	var adv_col := _fold_section(column, "gfx_adv", "ADVANCED GRAPHICS", true)
+	_set_section_summary("gfx_adv", "UPSCALING, ANTI-ALIASING, SHADOWS, REFLECTIONS")
+	_field_label(adv_col, "3D UPSCALING")
+	var upscaling_row := HBoxContainer.new()
+	upscaling_row.add_theme_constant_override("separation", 22)
+	adv_col.add_child(upscaling_row)
+	upscaler_picker = _option_field(upscaling_row, "UPSCALER", [])
+	for i in UPSCALERS.size():
+		if _upscaler_available(i):
+			upscaler_picker.add_item(UPSCALERS[i].name, i)
+	upscaler_picker.item_selected.connect(_on_upscaler_selected)
+	upscale_preset_picker = _option_field(upscaling_row, "RENDER RESOLUTION", UPSCALE_PRESETS.map(func(p): return p.name))
+	upscale_preset_picker.item_selected.connect(_on_upscale_preset_selected)
+	sharpening_picker = _option_field(upscaling_row, "FSR SHARPENING", SHARPENING.map(func(s): return s.name))
+	sharpening_picker.item_selected.connect(_on_sharpening_selected)
+	var explanation := _label("Lower presets run faster with a softer image.", 14, MUTED)
+	explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	adv_col.add_child(explanation)
+	var image_row := HBoxContainer.new()
+	image_row.add_theme_constant_override("separation", 22)
+	adv_col.add_child(image_row)
+	antialiasing_picker = _option_field(image_row, "NATIVE ANTI-ALIASING", ["SMAA", "FXAA", "Off"])
+	antialiasing_picker.item_selected.connect(_on_antialiasing_selected)
+	_grid_spacers(image_row, 2)
+	_menu_rule(adv_col)
+	_field_label(adv_col, "LIGHTING & REFLECTIONS")
+	var effects_row := HBoxContainer.new()
+	effects_row.add_theme_constant_override("separation", 22)
+	adv_col.add_child(effects_row)
+	ssao_toggle = _check_field(effects_row, "Ambient occlusion", graphics_ssao)
+	ssao_toggle.toggled.connect(_on_ssao_toggled)
+	shadows_toggle = _check_field(effects_row, "Dynamic shadows", graphics_shadows)
+	shadows_toggle.toggled.connect(_on_shadows_toggled)
+	var reflections_row := HBoxContainer.new()
+	reflections_row.add_theme_constant_override("separation", 22)
+	adv_col.add_child(reflections_row)
+	reflections_picker = _option_field(reflections_row, "REFLECTIONS", ["Off", "Screen-space", "Ray-traced"])
+	reflections_picker.item_selected.connect(_on_reflections_selected)
+	_grid_spacers(reflections_row, 2)
+	var lighting_note := _label("Ray-traced reflections also mirror what is off screen; screen-space is cheaper.", 14, MUTED)
+	lighting_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	adv_col.add_child(lighting_note)
 	var back := _button("BACK TO MENU", ACCENT)
 	back.pressed.connect(_show_home)
 	column.add_child(back)
@@ -2850,6 +3032,7 @@ func _build_options_page() -> void:
 	shadows_toggle.button_pressed = graphics_shadows
 	reflections_picker.select(graphics_reflections)
 	retro_picker.select(graphics_retro_mode)
+	_show_preset_state()
 	_apply_upscaling()
 
 func _on_retro_selected(index: int) -> void:
@@ -2961,9 +3144,9 @@ func _update_resolution_note() -> void:
 	if not is_instance_valid(resolution_note):
 		return
 	if graphics_display_mode == 1:
-		resolution_note.text = "Fullscreen keeps your desktop's resolution (macOS never lets a game change it): the 3D view is drawn at this size and scaled to fill the screen, while menus and HUD stay sharp. 3D upscaling then works from it."
+		resolution_note.text = "In fullscreen the 3D view is drawn at this size and scaled up; menus stay sharp."
 	else:
-		resolution_note.text = "Sets the window's size in pixels (Native fills the desktop). A ratio other than Auto adds black bars to keep the picture, menus and HUD in that shape."
+		resolution_note.text = "Window size; a fixed ratio adds black bars."
 
 func _on_resolution_selected(index: int) -> void:
 	if index < 0 or index >= _resolution_choices.size():
@@ -3097,6 +3280,7 @@ func _load_graphics_settings() -> void:
 		graphics_reflections = (1 if reflections else 0) if reflections is bool else int(reflections)
 		graphics_reflections = clampi(graphics_reflections, 0, 2)
 		graphics_ssao = bool(config.get_value("graphics", "ssao", true))
+		graphics_quality = clampi(int(config.get_value("graphics", "quality", graphics_quality)), 0, GraphicsPresets.PRESETS.size() - 1)
 		graphics_shadows = bool(config.get_value("graphics", "shadows", true))
 		if config.has_section_key("graphics", "upscaler"):
 			graphics_upscaler = clampi(int(config.get_value("graphics", "upscaler", 0)), 0, UPSCALERS.size() - 1)
@@ -3119,6 +3303,7 @@ func _load_graphics_settings() -> void:
 		CmrStyle.apply_skin(CmrStyle.skin_for_mode(graphics_retro_mode)) # before the pages are built
 	if not _upscaler_available(graphics_upscaler):
 		graphics_upscaler = 0
+	graphics_preset = GraphicsPresets.match_index(_graphics_snapshot())
 	get_window().content_scale_factor = UI_SCALES[graphics_ui_scale]
 	if graphics_display_mode == 1:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
@@ -3130,7 +3315,46 @@ func _load_graphics_settings() -> void:
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED if graphics_vsync else DisplayServer.VSYNC_DISABLED)
 	_apply_upscaling()
 
+## The settings a graphics preset covers, as GraphicsPresets.match_index reads them.
+func _graphics_snapshot() -> Dictionary:
+	return {"quality": graphics_quality, "upscaler": graphics_upscaler, "upscale_preset": graphics_upscale_preset,
+		"antialiasing": graphics_antialiasing, "ssao": graphics_ssao, "shadows": graphics_shadows, "reflections": graphics_reflections}
+
+## Options → Graphics preset: sets every setting the preset covers, then applies them.
+func _on_preset_selected(index: int) -> void:
+	if index >= GraphicsPresets.PRESETS.size():
+		return # Custom: leave the settings as they are
+	var p := GraphicsPresets.preset(index)
+	graphics_quality = p.quality
+	graphics_upscaler = p.upscaler
+	graphics_upscale_preset = p.upscale_preset
+	graphics_antialiasing = p.antialiasing
+	graphics_ssao = p.ssao
+	graphics_shadows = p.shadows
+	graphics_reflections = p.reflections
+	upscaler_picker.select(upscaler_picker.get_item_index(graphics_upscaler))
+	upscale_preset_picker.select(graphics_upscale_preset)
+	antialiasing_picker.select(graphics_antialiasing)
+	ssao_toggle.set_pressed_no_signal(graphics_ssao)
+	shadows_toggle.set_pressed_no_signal(graphics_shadows)
+	reflections_picker.select(graphics_reflections)
+	if is_instance_valid(world_view):
+		world_view.apply_graphics(graphics_quality)
+	_apply_upscaling()
+	_apply_world_graphics_settings()
+	if open_world != null:
+		open_world.apply_graphics(graphics_quality, graphics_ssao)
+	_save_graphics_settings()
+
+func _show_preset_state() -> void:
+	if is_instance_valid(preset_picker):
+		preset_picker.select(graphics_preset)
+	if is_instance_valid(preset_note):
+		preset_note.text = GraphicsPresets.describe(graphics_preset)
+
 func _save_graphics_settings() -> void:
+	graphics_preset = GraphicsPresets.match_index(_graphics_snapshot())
+	_show_preset_state()
 	var config := ConfigFile.new()
 	config.load(SaveData.read_path("graphics.cfg"))
 	if config.has_section_key("graphics", "render_scale"):
@@ -3145,6 +3369,7 @@ func _save_graphics_settings() -> void:
 	config.set_value("graphics", "reflections", graphics_reflections)
 	config.set_value("graphics", "ssao", graphics_ssao)
 	config.set_value("graphics", "shadows", graphics_shadows)
+	config.set_value("graphics", "quality", graphics_quality)
 	config.set_value("graphics", "ui_scale", graphics_ui_scale)
 	config.set_value("graphics", "resolution", graphics_resolution)
 	config.set_value("graphics", "aspect", graphics_aspect)
@@ -3316,6 +3541,7 @@ func _show_advanced_page() -> void:
 	_select_menu_tab("Advanced")
 	(adv_page.race as Control).visible = setup_race_button.visible
 	(adv_page.scroll as ScrollContainer).scroll_vertical = 0
+	_refresh_mod_toggles()
 	_refresh_prompts()
 	_focus_setup_default.call_deferred()
 
@@ -3474,6 +3700,12 @@ func _build_hud() -> void:
 	_build_pause_menu()
 
 func _build_pause_menu() -> void:
+	pause_dim = ColorRect.new()
+	pause_dim.color = Color(0, 0, 0, 0.6)
+	pause_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	pause_dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	pause_dim.hide()
+	add_child(pause_dim)
 	pause_panel = _sheet(Vector2(380, 0))
 	pause_panel.anchor_left = 0.5
 	pause_panel.anchor_right = 0.5
@@ -3499,6 +3731,7 @@ func _set_paused(on: bool) -> void:
 		return
 	paused = on
 	pause_panel.visible = on
+	pause_dim.visible = on
 	pause_buttons[1].text = "RESTART QUALIFYING" if quali_session else "RESTART RACE"
 	pause_buttons[2].text = "END SESSION" if quali_session else "RETIRE & SEE RESULTS"
 	if on:
@@ -3717,33 +3950,30 @@ func _set_up_race() -> void:
 		settings.format = "time" if format_picker.selected == 1 else "laps"
 		settings.hours = hours_picker.value
 		settings.start_hour = start_hour_picker.value
-
-	await _open_loading_screen(settings, quali_run)
-	if quali_run:
-		plan = {} # the session builds its own one-run plan
-	elif is_championship_mode or is_campaign_mode:
-		# every round is planned by the strategist for that circuit's race length, tyre wear and fuel use
-		var opts := _plan_opts(Race.get_track(settings.track), settings.laps, settings.wear_mult, settings.weather if is_campaign_mode or is_championship_mode else "")
-		opts.fuel_mult = settings.fuel_mult
-		var options := strategy.plan(opts)
-		plan = options[0] if options.size() else null
-
-	if not is_campaign_mode and not is_championship_mode:
 		settings.opponents = 0 if is_time_trial_mode else int(opponents_picker.value)
 		settings.difficulty = ["easy", "medium", "hard", "alien"][difficulty_picker.selected]
 		settings.weather = ["dry", "wet", "snow", "hail", "fog", "variable"][weather_picker.selected]
+		settings.wear_mult = wear_picker.value
+		settings.fuel_mult = fuel_picker.value
+
 	settings.gearbox = "manual" if gearbox_picker.selected == 1 else "auto"
 	settings.player_name = player_name_edit.text.strip_edges() if not player_name_edit.text.strip_edges().is_empty() else "You"
 	settings.player_number = int(player_number_picker.value)
 	settings.player_color = player_color_picker.color
 	settings.stripes = player_stripes_toggle.button_pressed
+	settings.finish = player_finish_picker.selected
+	var stage_class := str(CampaignData.get_stage(campaign_stage_index).get("car_class", "")) if is_campaign_mode else ""
+	settings.car_class = "hypercar" if (stage_class == "hypercar" or car_class_picker.selected == 1) and _hypercar_open() else "stock"
+	if settings.car_class == "hypercar":
+		# AF Corse's Le Mans winner: yellow, black stripes, no. 83
+		settings.player_color = Hypercar.PAINT
+		settings.player_number = Hypercar.NUMBER
+		settings.stripes = true
+		settings.finish = 0
 	settings.ai_learning = "off" if ai_learning_picker.selected == 1 else "on"
 	settings.bot_physics = ["on", "off", "near"][bot_physics_picker.selected]
 	settings.grid = str(CampaignData.get_stage(campaign_stage_index).get("grid", "middle")) if is_campaign_mode else ["pole", "middle", "back", "random"][grid_picker.selected] # a stage sets its own grid
 	settings.assists = ["full", "abs", "off"][assists_picker.selected]
-	if not is_championship_mode and not is_campaign_mode:
-		settings.wear_mult = wear_picker.value
-		settings.fuel_mult = fuel_picker.value
 	settings.mandatory_stop = mandatory_stop_toggle.button_pressed
 	settings.two_compounds = two_compounds_toggle.button_pressed
 	settings.refuel = refuel_toggle.button_pressed
@@ -3765,6 +3995,16 @@ func _set_up_race() -> void:
 		TimeTrial.configure(settings, tt_start_picker.selected == 1)
 		plan = {}
 
+	await _open_loading_screen(settings, quali_run)
+	if quali_run or is_time_trial_mode or is_rally_mode:
+		plan = {} # the session builds its own one-run plan
+	elif is_championship_mode or is_campaign_mode or settings.car_class == "hypercar":
+		# every round is planned by the strategist for that circuit's race length, tyre wear and fuel use
+		var opts := _plan_opts(Race.get_track(settings.track), settings.laps, settings.wear_mult, settings.weather if is_campaign_mode or is_championship_mode else "")
+		opts.fuel_mult = settings.fuel_mult
+		var options: Array = _models_for(settings.car_class).strategy.plan(opts)
+		plan = options[0] if options.size() else null
+
 	if plan == null:
 		if is_campaign_mode:
 			plan = {"stints": [{"c": "soft" if settings.weather == "dry" else ("wet" if settings.weather in ["wet", "snow", "hail"] else "soft"), "laps": settings.laps}]}
@@ -3775,7 +4015,8 @@ func _set_up_race() -> void:
 			return
 	_save_race_settings()
 	await _loading_progress(0.35)
-	race = Race.new(settings, (plan as Dictionary).duplicate(true), -1, {"car_model": car_model, "tyres": tyre_model, "strategy": strategy})
+	race = Race.new(settings, (plan as Dictionary).duplicate(true), -1, _models_for(settings.car_class))
+	race.set_mods(_active_mods())
 	quali_session = quali_run
 	if is_rally_mode:
 		_rally().begin_stage(race) # the damage carried in, the rivals' runs (the lap model's calibration, once per circuit)
@@ -3795,6 +4036,7 @@ func _set_up_race() -> void:
 		sim_race.dispose()
 		return
 	await _loading_progress(0.6)
+	world_view.mods = race.mods
 	world_view.set_race(race)
 	lap_records = LapRecords.new(race)
 	lap_ghost.start(world_view, lap_records)
@@ -3816,6 +4058,7 @@ func _set_up_race() -> void:
 	_hide_front_end()
 	result_panel.hide()
 	pause_panel.hide()
+	pause_dim.hide()
 	get_viewport().gui_release_focus()
 	hud.voice_on = codriver_voice
 	hud.start(race, world_view, audio)
@@ -3874,6 +4117,7 @@ func _show_results() -> void:
 		return
 	hud.hide()
 	pause_panel.hide()
+	pause_dim.hide()
 	if is_instance_valid(audio):
 		audio.update_car(race.player, false)
 	result_panel.show()
@@ -3899,14 +4143,16 @@ func _show_results() -> void:
 		sub += " · Fastest lap %s %s" % [fast.car.name, Race.fmt_time(fast.t)]
 	col.add_child(_label("CHEQUERED FLAG · %s" % title, 26, INK))
 	if is_campaign_mode and me.car.dnf:
-		CampaignData.record_result(campaign_stage_index, 999) # a retirement counts as a failed try
+		var dnf_res := CampaignData.record_result(campaign_stage_index, 999) # a retirement counts as a failed try
 		col.add_child(_label("OBJECTIVE FAILED — you did not finish. Retry to advance!", 14, DANGER))
+		col.add_child(_label(_award_stage_fans(int(dnf_res.fans)), 13, CmrStyle.AMBER))
 	elif is_campaign_mode:
 		var c_res := CampaignData.record_result(campaign_stage_index, me.pos)
 		campaign_cleared = c_res.success
 		var c_box := VBoxContainer.new()
 		c_box.add_theme_constant_override("separation", 3)
 		col.add_child(c_box)
+		var fan_line := _award_stage_fans(int(c_res.fans))
 		if c_res.success:
 			c_box.add_child(_label("★ STAGE OBJECTIVE COMPLETED! ★", 18, CmrStyle.GREEN))
 			c_box.add_child(_label("🏆 Trophy Awarded: %s" % c_res.trophy, 14, CmrStyle.AMBER))
@@ -3916,6 +4162,7 @@ func _show_results() -> void:
 		else:
 			var req_pos: int = CampaignData.get_stage(campaign_stage_index).target_pos
 			c_box.add_child(_label("OBJECTIVE FAILED — Finished P%d (Target: P%d or better). Retry to advance!" % [me.pos, req_pos], 14, DANGER))
+		c_box.add_child(_label(fan_line, 13, CmrStyle.AMBER))
 	var sub_label := _label(sub, 13, MUTED)
 	sub_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	col.add_child(sub_label)
@@ -3949,6 +4196,16 @@ func _show_results() -> void:
 	if is_champ:
 		headers.append("PTS")
 		widths.append(46)
+	# leave out the columns that say nothing this time: no lap set (a short race finished on projection), nobody pitted
+	var keep: Array[int] = []
+	var any_best := rows.any(func(r) -> bool: return (r.car as RaceCar).best_lap != null and float((r.car as RaceCar).best_lap) > 0.0)
+	var any_stops := rows.any(func(r) -> bool: return (r.car as RaceCar).stops > 0)
+	for k in headers.size():
+		if (k == 5 and not any_best) or ((k == 6 or k == 7) and not any_stops):
+			continue
+		keep.append(k)
+	headers = keep.map(func(k: int) -> Variant: return headers[k])
+	widths = keep.map(func(k: int) -> Variant: return widths[k])
 	# classification as CMR-style slanted bars: a dark header strip, light rows, the player's in lime
 	var table := VBoxContainer.new()
 	table.add_theme_constant_override("separation", 3)
@@ -3968,10 +4225,11 @@ func _show_results() -> void:
 			Race.fmt_time(car.best_lap), str(car.stops), tyres]
 		if is_champ:
 			cells.append("+%d" % _round_points(r))
+		cells = keep.map(func(k: int) -> Variant: return cells[k])
 		var fill: Color = CmrStyle.ORANGE if car.is_player else (CmrStyle.FIELD if r.pos % 2 == 1 else CmrStyle.FIELD_DIM)
 		var row := _result_row(cells, widths, CmrStyle.box(fill, Color.TRANSPARENT, 14, 3), CmrStyle.INK, 15, car.color)
-		if fast and fast.car == car:
-			(row.get_child(0).get_child(5) as Label).add_theme_color_override("font_color", CmrStyle.PLUM)
+		if fast and fast.car == car and keep.has(5):
+			(row.get_child(0).get_child(keep.find(5)) as Label).add_theme_color_override("font_color", CmrStyle.PLUM)
 		table.add_child(row)
 
 	var buttons := HBoxContainer.new()
@@ -4036,6 +4294,7 @@ func _round_quali() -> Dictionary:
 func _show_quali_sheet(qrace: Race, rows: Array, simulated: bool) -> void:
 	hud.hide()
 	pause_panel.hide()
+	pause_dim.hide()
 	result_panel.show()
 	for child in result_scroll.get_children():
 		child.queue_free()
@@ -4230,6 +4489,7 @@ func _return_to_setup(to_service := false) -> void:
 	skipping = false
 	hud.hide()
 	pause_panel.hide()
+	pause_dim.hide()
 	get_viewport().gui_release_focus()
 	if is_instance_valid(audio):
 		audio.update_car(null, false)
@@ -4312,7 +4572,32 @@ func _enter_open_world(spawn) -> void:
 		"retro_material": retro_pipeline.material if retro_pipeline else null,
 		"source_viewport": render_viewport,
 		"audio": audio,
+		"quality": graphics_quality,
+		"ssao": graphics_ssao,
 	})
+
+## Pays a campaign result's fans into the open-world progress (live if the world is loaded, else the save) and
+## returns the line the results show: the fans and the level they brought.
+func _award_stage_fans(fans: int) -> String:
+	var before := 0
+	var after := 0
+	if open_world != null and open_world.progress != null:
+		before = open_world.progress.fans
+		open_world.award_fans(fans)
+		after = open_world.progress.fans
+	else:
+		var wp := WorldProgress.load_progress()
+		before = wp.fans
+		wp.fans += fans
+		wp.save()
+		after = wp.fans
+	var lv := FanLevels.level(after)
+	var line := "+%s FANS" % OpenWorldHud._thousands(fans)
+	if lv > FanLevels.level(before):
+		line += "  ·  FAN LEVEL UP: LEVEL %d, %s" % [lv, FanLevels.title(lv).to_upper()]
+	else:
+		line += "  ·  LEVEL %d, %s" % [lv, FanLevels.title(lv).to_upper()]
+	return line
 
 ## A beacon in the open world starts its campaign stage; the results bring the car back to it.
 func _on_world_stage(index: int) -> void:
@@ -4343,15 +4628,16 @@ func _populate_campaign_stages() -> void:
 	var trophies: Array = prog.get("trophies", [])
 	for i in CampaignData.STAGES.size():
 		var st: Dictionary = CampaignData.STAGES[i]
-		var is_un := i <= unlocked
-		var completed: bool = (st.trophy in trophies) or (best_pos.has(str(i)) and int(best_pos[str(i)]) <= int(st.target_pos)) or (i < unlocked)
-		var prefix := "★ " if completed else ("▶ " if i == unlocked else "🔒 ")
+		var fan_lock: bool = st.get("fan_lock", false)
+		var is_un := CampaignData.is_unlocked(i, _fan_total()) if fan_lock else i <= unlocked
+		var completed: bool = (st.trophy in trophies) or (best_pos.has(str(i)) and int(best_pos[str(i)]) <= int(st.target_pos)) or (i < unlocked and not fan_lock)
+		var prefix := "★ " if completed else ("▶ " if (i == unlocked or fan_lock) and is_un else "🔒 ")
 		campaign_stage_picker.add_item("%s%s" % [prefix, st.title])
 		campaign_stage_picker.set_item_disabled(i, not is_un)
 	campaign_stage_picker.selected = campaign_stage_index
 
 func _select_campaign_stage(index: int) -> void:
-	if CampaignData.is_unlocked(index):
+	if CampaignData.is_unlocked(index, _fan_total()):
 		_apply_campaign_stage(index)
 	else:
 		campaign_stage_picker.select(campaign_stage_index) # ◂ ▸ can land on a locked stage: stay put
@@ -4917,6 +5203,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			JOY_BUTTON_START: _set_paused(not paused)
 			JOY_BUTTON_B:
 				if paused: _set_paused(false) # B backs out of the pause menu
+			JOY_BUTTON_A: # the pad's Enter: once you're home or out, skip to the results
+				if race and not paused and not skipping and race.phase != "finished" and (race.player.finished or race.player.dnf):
+					_begin_skip()
 		return
 
 func _unhandled_key_input(event: InputEvent) -> void:
@@ -5363,6 +5652,7 @@ func _show_rally_results() -> void:
 	var rows := _record_rally_stage()
 	hud.hide()
 	pause_panel.hide()
+	pause_dim.hide()
 	if is_instance_valid(audio):
 		audio.update_car(race.player, false)
 	result_panel.show()

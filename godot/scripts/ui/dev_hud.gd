@@ -1,4 +1,4 @@
-## Developer overlay toggled with the ~ key (the key left of 1, whatever the layout prints on it): fps, frame
+## Developer overlay toggled by tapping the ~ key (the key left of 1, whatever the layout prints on it): fps, frame
 ## times over the last few seconds with a frame-time graph, CPU process/physics time, render counters and
 ## memory. It sits above every page, menus and pause included, and costs nothing while hidden.
 class_name DevHud
@@ -37,15 +37,24 @@ func _ready() -> void:
 	_adapter = RenderingServer.get_video_adapter_name()
 	set_process(false)
 
+static func _is_toggle_key(key: InputEventKey) -> bool:
+	return key.physical_keycode == KEY_QUOTELEFT or key.physical_keycode == KEY_SECTION or key.keycode == KEY_SECTION
+
 func _unhandled_key_input(event: InputEvent) -> void:
 	var key := event as InputEventKey
-	if key and key.pressed and not key.echo and key.physical_keycode == KEY_QUOTELEFT:
-		visible = not visible
-		set_process(visible)
-		_filled = 0
-		_head = 0
-		_refresh_left = 0.0
-		get_viewport().set_input_as_handled()
+	if key == null or key.echo or not _is_toggle_key(key):
+		return
+	if key.pressed:
+		DevMenu.chord_used = false # a new press: a chord with 1 (DevMenu) will set it again
+		return
+	if DevMenu.chord_used:
+		return # § + 1 opened the dev menu, not this overlay
+	visible = not visible
+	set_process(visible)
+	_filled = 0
+	_head = 0
+	_refresh_left = 0.0
+	get_viewport().set_input_as_handled()
 
 func _process(delta: float) -> void:
 	_frames[_head] = delta * 1000.0

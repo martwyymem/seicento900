@@ -55,6 +55,9 @@ def material(name):
 	bsdf = nt.nodes.get("Principled BSDF")
 	bsdf.inputs["Roughness"].default_value = rough
 	bsdf.inputs["Metallic"].default_value = metal
+	if "coat" in extra:  # a clear coat (car paint)
+		bsdf.inputs["Coat Weight"].default_value = extra["coat"]
+		bsdf.inputs["Coat Roughness"].default_value = 0.05
 	if "emit" in extra:
 		bsdf.inputs["Emission Color"].default_value = (*extra["emit"][0], 1.0)
 		bsdf.inputs["Emission Strength"].default_value = extra["emit"][1]
@@ -64,6 +67,9 @@ def material(name):
 			m.surface_render_method = "BLENDED"
 		else:
 			m.blend_method = "BLEND"
+	if extra.get("plain"):  # the base colour alone, vertex colours ignored
+		bsdf.inputs["Base Color"].default_value = (*col, 1.0)
+		return m
 	# base colour x vertex colour, the pattern the glTF exporter writes as baseColorFactor + COLOR_0
 	attr = nt.nodes.new("ShaderNodeVertexColor")
 	attr.layer_name = "Col"
@@ -332,13 +338,14 @@ def text_mesh(mb, text, origin, size, mat, axis_u=(1, 0, 0), axis_v=(0, 0, 1), a
 
 
 # ---------------------------------------------------------------- export and previews
-def export_glb(path, objects):
+def export_glb(path, objects=None, texcoords=True):
+	"""Writes the given objects (or the whole scene when objects is None) as a GLB."""
 	os.makedirs(os.path.dirname(path), exist_ok=True)
 	bpy.ops.object.select_all(action="DESELECT")
-	for ob in objects:
+	for ob in objects or []:
 		ob.select_set(True)
-	kw = dict(filepath=path, export_format="GLB", use_selection=True, export_apply=True, export_yup=True,
-		export_texcoords=True, export_normals=True, export_tangents=False, export_cameras=False,
+	kw = dict(filepath=path, export_format="GLB", use_selection=objects is not None, export_apply=True, export_yup=True,
+		export_texcoords=texcoords, export_normals=True, export_tangents=False, export_cameras=False,
 		export_lights=False, export_extras=False)
 	props = bpy.ops.export_scene.gltf.get_rna_type().properties.keys()
 	if "export_vertex_color" in props:

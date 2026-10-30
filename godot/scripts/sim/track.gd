@@ -35,12 +35,15 @@ var RY := PackedFloat64Array()
 var RDS := PackedFloat64Array() ## path length from sample i to i+1 along the racing line
 var RK := PackedFloat64Array() ## racing-line curvature
 var CORNER := PackedFloat64Array() ## cornering speed limit at mu = 1
+var _stock_prof := PackedFloat64Array() ## PROF as built, for the stock Seicento (a race may swap PROF, see profile_for)
+var _prof_alt := {} ## profile_for() results for other cars, by CarSpec instance id
 var PROF := PackedFloat64Array() ## max speed at mu = 1: cornering limit + braking envelope
 var BANK := PackedFloat64Array() ## cross slope (rise per metre towards +d); banked turns rise to the outside
 var rl_length := 0.0
 var sectors: Array = [] ## [[sample index, name]] sorted by index
 var bounds := PackedFloat64Array() ## [min_x, min_y, max_x, max_y]
-var cal: Dictionary = {} ## strategy calibration, filled lazily by Strategy
+var cal: Dictionary = {} ## strategy calibration for the stock Seicento, filled lazily by Strategy
+var cal_alt := {} ## the same for any other car (the Hypercar Seicento), by CarSpec instance id
 
 static func load_def(track_key: String) -> TrackDef:
 	return load("res://data/tracks/%s.tres" % track_key)
@@ -238,6 +241,35 @@ func build_profile() -> void:
 			if p[q] > lim:
 				p[q] = lim
 	PROF = p
+	_stock_prof = p
+
+## The speed profile for a car: the stock Seicento's own (PROF as built), or for another car (the Hypercar Seicento)
+## one from its grip, downforce and top speed. Race puts its car's profile in PROF for the race.
+func profile_for(cm: CarModel) -> PackedFloat64Array:
+	if cm == null or cm.spec.resource_name != "hypercar":
+		return _stock_prof
+	var id := cm.spec.get_instance_id()
+	if _prof_alt.has(id):
+		return _prof_alt[id]
+	var gr := cm.spec.grip_k / 1.4 # relative to the stock tyre calibration (CarSpec.grip_k)
+	var aero := gr * 0.5 * 1.225 * maxf(0.0, -cm.spec.lift_a) / cm.mass_with_fuel(cm.spec.tank * 0.5) # downforce, m/s² per (m/s)²
+	var vcap := 100.0
+	var p := PackedFloat64Array()
+	p.resize(n)
+	for i in n:
+		var t := absf(BANK[i])
+		var k := maxf(absf(RK[i]), 1e-5)
+		var a0 := G * gr * (1.0 + t) / (1.0 - t)
+		p[i] = vcap if k <= aero else minf(vcap, sqrt(a0 / (k - aero)))
+	for pass_ in 2:
+		for q in range(n - 1, -1, -1):
+			var j := (q + 1) % n
+			var a_brake := G * gr * maxf(0.5, 0.92 + GRADE[q]) + aero * p[j] * p[j]
+			var lim := sqrt(p[j] * p[j] + 2 * a_brake * RDS[q])
+			if p[q] > lim:
+				p[q] = lim
+	_prof_alt[id] = p
+	return p
 
 func build_bounds() -> void:
 	var min_x := INF

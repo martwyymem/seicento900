@@ -22,6 +22,12 @@ var ctl := Physics.Controls.new()
 var gearbox := "auto"
 var assists := "abs" ## full | abs | off
 var mu := 1.0 ## weather grip
+var grav_mul := 1.0 ## CarMods: moon gravity
+var grip_mul := 1.0 ## CarMods: ice rink
+var rear_grip := 1.0 ## CarMods: drift king
+var drift_king := false
+var monster := false ## CarMods: monster truck (any surface grips like tarmac, climbs higher steps, shrugs off traffic)
+var power_mul := 1.0 ## CarMods: nitrous
 
 var z := 0.0 ## height of the car's ground contact (m above sea level)
 var vz := 0.0
@@ -51,6 +57,19 @@ func _init(town: TownMap, car_model: CarModel = null) -> void:
 	car.control = "free"
 	car.fuel = 30.0
 	_surface_fn = func(x: float, y: float) -> int: return _surface_at(x, y)
+
+## Swaps the car for another model (the Hypercar Seicento): a fresh drivetrain, same place.
+func fit_model(m: CarModel) -> void:
+	model = m
+	phys = Physics.new(m)
+	car.model = m
+	car.physics = phys
+	car.phys = null
+	car.gear = 0
+	car.rev = false
+	car.rpm = m.spec.idle_rpm
+	car.shift_t = 0.0
+	car.hold_t = 0.0
 
 ## Puts the car at rest at a map point, facing heading (radians from +x towards +y).
 func place(p: Vector2, heading: float) -> void:
@@ -120,6 +139,8 @@ func support(x: float, y: float) -> float:
 func _surface_at(x: float, y: float) -> int:
 	if airborne:
 		return Physics.SURF_GRAVEL
+	if monster and not in_water:
+		return Physics.SURF_TRACK
 	var hit := map.road_at(x, y, z)
 	if not hit.is_empty() and absf(float(hit.height) - z) > 1.2:
 		hit = {}
@@ -128,7 +149,7 @@ func _surface_at(x: float, y: float) -> int:
 	return map.surface_of(hit)
 
 ## One physics tick. Pedals 0..1, steer -1..1 (+ right).
-func step(dt: float, thr: float, brk: float, steer_in: float, shift_up := false, shift_down := false) -> void:
+func step(dt: float, thr: float, brk: float, steer_in: float, shift_up := false, shift_down := false, handbrake := 0.0) -> void:
 	var spec := model.spec
 	var mass := model.mass_with_fuel(car.fuel)
 	var ch := cos(car.heading)
@@ -162,12 +183,13 @@ func step(dt: float, thr: float, brk: float, steer_in: float, shift_up := false,
 	if airborne:
 		dz_dx = 0.0
 		dz_dy = 0.0
-	env.gx = -G * dz_dx / sqrt(1.0 + dz_dx * dz_dx)
-	env.gy = -G * dz_dy / sqrt(1.0 + dz_dy * dz_dy)
-	env.mu = (0.04 if airborne else mu)
+	env.gx = -G * grav_mul * dz_dx / sqrt(1.0 + dz_dx * dz_dx)
+	env.gy = -G * grav_mul * dz_dy / sqrt(1.0 + dz_dy * dz_dy)
+	env.mu = (0.04 if airborne else mu * grip_mul)
+	env.rear_grip = rear_grip
 	env.mass = mass
 	env.surface = _surface_fn
-	env.power = 1.0
+	env.power = power_mul
 	env.drag_mul = 4.0 if in_water else 1.0
 	env.abs_on = assists != "off"
 	env.tc_on = assists == "full"
@@ -175,6 +197,10 @@ func step(dt: float, thr: float, brk: float, steer_in: float, shift_up := false,
 	ctl.throttle = thr
 	ctl.brake = brk
 	ctl.steer = steer_in
+	ctl.handbrake = handbrake
+	env.drift_assist = Race.DRIFT_ASSIST_FULL if assists == "full" else (Race.DRIFT_ASSIST_ABS if assists == "abs" else 0.0)
+	if drift_king:
+		env.drift_assist = 1.0
 	var px := car.x
 	var py := car.y
 	car.px = px
@@ -183,6 +209,7 @@ func step(dt: float, thr: float, brk: float, steer_in: float, shift_up := false,
 	car.has_prev = true
 	phys.step(car, ctl, env, dt)
 	car.shift_t = maxf(0.0, car.shift_t - dt)
+	car.hold_t = maxf(0.0, car.hold_t - dt)
 	odometer += Vector2(car.x - px, car.y - py).length()
 
 	_vertical(dt, px, py, mass)
@@ -198,7 +225,8 @@ func step(dt: float, thr: float, brk: float, steer_in: float, shift_up := false,
 ## Ground following, jumps and landings; the steep side of an embankment stops the car like a wall.
 func _vertical(dt: float, px: float, py: float, mass: float) -> void:
 	var target := support(car.x, car.y)
-	if target > z + WALL_STEP and not airborne:
+	var step_h := CarMods.MONSTER_STEP if monster else WALL_STEP
+	if target > z + step_h and not airborne:
 		# the side of an embankment: push back off it
 		for d in map.decks_at(car.x, car.y, TownMap.DRIVE_REACH):
 			var off: Vector2 = d[4]
@@ -211,13 +239,13 @@ func _vertical(dt: float, px: float, py: float, mass: float) -> void:
 					hits.append([car.x, car.y, v])
 				break
 		target = support(car.x, car.y)
-		if target > z + WALL_STEP:
+		if target > z + step_h:
 			car.x = px
 			car.y = py
 			target = support(car.x, car.y)
 	if airborne:
 		air_time += dt
-		vz -= G * dt
+		vz -= G * grav_mul * dt
 		z += vz * dt
 		if z <= target:
 			landed = -vz
@@ -396,6 +424,8 @@ func bump(n_out: Vector2, depth: float, r: Vector2, other_mass: float) -> float:
 	car.x += n_out.x * depth
 	car.y += n_out.y * depth
 	var mass := model.mass_with_fuel(car.fuel)
+	if monster:
+		other_mass *= CarMods.MONSTER_SHRUG
 	var eff := mass * other_mass / (mass + other_mass) * 2.0
 	var v := phys.barrier_hit(car, -n_out.x, -n_out.y, r.x, r.y, eff)
 	if v > 1.0:
@@ -410,10 +440,12 @@ func _auto_shift(vF: float, brk: float) -> void:
 	var g := car.gear
 	if vF < 1.0:
 		g = 0
-	elif g < top and (car.rpm > 6150.0 or cm.wheel_force(vp, g + 1, 1.0) > cm.wheel_force(vp, g, 1.0)) and cm.rpm_for(vF, g + 1) > 2800.0:
+	elif g < top and (car.rpm > cm.spec.limiter - 150.0 or cm.wheel_force(vp, g + 1, 1.0) > cm.wheel_force(vp, g, 1.0)) and cm.rpm_for(vF, g + 1) > cm.spec.limiter * 4.0 / 9.0:
 		g += 1
-	elif g > 0 and cm.rpm_for(vF, g - 1) < 5900.0 and (cm.wheel_force(vp, g - 1, 1.0) > cm.wheel_force(vp, g, 1.0) * 1.06 or (brk > 0.1 and cm.rpm_for(vF, g) < 3200.0)):
+	elif g > 0 and car.hold_t <= 0.0 and (cm.spec.shift_hold <= 0.0 or cm.rpm_for(vF, g) < cm.spec.limiter * 0.5) and cm.rpm_for(vF, g - 1) < cm.spec.limiter - 400.0 and (cm.wheel_force(vp, g - 1, 1.0) > cm.wheel_force(vp, g, 1.0) * 1.06 or (brk > 0.1 and cm.rpm_for(vF, g) < cm.spec.limiter * 32.0 / 63.0)):
 		g -= 1
 	if g != car.gear:
 		car.shift_t = 0.15 if g > car.gear else 0.12
+		if g > car.gear:
+			car.hold_t = cm.spec.shift_hold
 		car.gear = g

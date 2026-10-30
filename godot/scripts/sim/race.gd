@@ -29,6 +29,8 @@ const DIFFICULTY := {
 }
 ## Share of the racing line's limit speed the full-assist brake lets the player carry into a corner.
 const ASSIST_PACE := 0.97
+const DRIFT_ASSIST_FULL := 0.6 ## counter-steer help for the player in a slide (Physics.Env.drift_assist), by driving-aid level
+const DRIFT_ASSIST_ABS := 0.35
 const TOW_MAX := 0.35 ## drag lost in a full slipstream, right behind a car at speed
 const RAIL_LOAD_NORM := 0.66 ## mean of 0.45 + 1.1u² over a lap, so a bot's average wear stays at the nominal figure
 
@@ -39,6 +41,8 @@ class PlayerInput:
 	var steer := 0.0
 	var shift_up := false
 	var shift_down := false
+	var handbrake := 0.0 ## 0..1: Space or the pad's A button
+	var nitro := false ## the Nitrous modifier's button (Shift, pad L3)
 
 # ---------------- weather ----------------
 class Weather:
@@ -120,6 +124,11 @@ class Weather:
 
 # ---------------- models ----------------
 var car_model: CarModel
+var mods := {} ## CarMods switched on for the player's car (set by the game; empty in tests and for parity)
+var nitro := 1.0 ## the Nitrous bottle, 0..1
+var nitro_burning := false
+var brake_k := 1.0 ## rail braking against the stock car's (the hypercar's grip); 1.0 for the stock Seicento
+var brake_aero := 0.0 ## rail braking from downforce, m/s² per (m/s)² at mu = 1
 ## [CarModel, Physics] for each car set-up in the race, so cars on the same one share them (Race.fit_setup).
 var _setup_cars := {}
 var tyres: Tyres
@@ -234,6 +243,10 @@ func _init(settings: RaceSettings, player_plan = null, seed_ := -1, models := {}
 	_surface_fn = func(x: float, y: float) -> int: return surface_at(_surf_car, x, y)
 	s = settings
 	track = get_track(settings.track)
+	track.PROF = track.profile_for(car_model)
+	if spec.resource_name == "hypercar":
+		brake_k = spec.grip_k / 1.4
+		brake_aero = brake_k * 0.5 * 1.225 * maxf(0.0, -spec.lift_a) / car_model.mass_with_fuel(spec.tank * 0.5)
 	cal = strategy.calibrate(track)
 	fpl = cal.fuel_per_lap * settings.fuel_mult
 	# timed races (up to 24 h) finish when the leader crosses the line after the clock runs out;
@@ -454,6 +467,7 @@ func build_field(player_plan) -> void:
 
 	var pl := make_car(0, s.player_name, s.player_color, s.player_number, true)
 	pl.stripes = s.stripes
+	pl.finish = s.finish
 	pl.skill = 0.97 # used only while on autopilot
 	fit_setup(pl, s.car_setup)
 	var solo_mode := s.mode != "race"
@@ -1620,7 +1634,7 @@ func step_rail(car: RaceCar, dt: float) -> void:
 	if car.v < vT and car.fuel > 0.0 and a_max > 0.0:
 		a = minf(a_max, (vT - car.v) / dt)
 	elif car.v > vT:
-		a = -minf(mu * G * car.fx_brake + climb, (car.v - vT) / dt)
+		a = -minf(mu * G * car.fx_brake * brake_k + mu * brake_aero * car.v * car.v + climb, (car.v - vT) / dt)
 	else:
 		a = -car_model.resistance(car.v, mass, drag) / mass - climb
 	car.brake_on = a < -2.5
@@ -1678,11 +1692,38 @@ func wear_tyres(car: RaceCar, dist: float, factor: float) -> void:
 
 # ---------------- player physics ----------------
 ## Surface (Physics.SURF_*) under one wheel, from its lateral offset on the track.
+var _monster_player := false
+
+## Sets the player's CarMods (the game passes the ones switched on and unlocked).
+func set_mods(on: Dictionary) -> void:
+	mods = on
+	_monster_player = on.has("monster")
+
+## The modifiers' physics on the player's car (CarMods): ice, moon gravity on the slopes, Drift King, Nitrous.
+func _apply_mods(car: RaceCar, env: Physics.Env, input: PlayerInput, dt: float) -> void:
+	if mods.has("ice"):
+		env.mu *= CarMods.ICE_GRIP
+	if mods.has("moon"):
+		env.gx *= CarMods.MOON_GRAVITY
+		env.gy *= CarMods.MOON_GRAVITY
+	if mods.has("drift"):
+		env.rear_grip = CarMods.DRIFT_REAR_GRIP
+		env.drift_assist = 1.0
+	nitro_burning = false
+	if mods.has("nitro"):
+		# no skill chains in a race: the bottle refills by itself, a full one in RACE_NITRO_REFILL seconds
+		nitro_burning = input != null and input.nitro and nitro > 0.0 and _ctl.throttle > 0.1
+		if nitro_burning:
+			nitro = maxf(0.0, nitro - CarMods.NITRO_BURN * dt)
+			env.power *= CarMods.NITRO_POWER
+		else:
+			nitro = minf(1.0, nitro + dt / CarMods.RACE_NITRO_REFILL)
+
 func surface_at(car: RaceCar, x: float, y: float) -> int:
 	var tr := track
 	var d := car.d + (x - car.x) * tr.sample(tr.NX, car.s) + (y - car.y) * tr.sample(tr.NY, car.s)
 	var ad := absf(d)
-	if ad <= tr.half + 0.3:
+	if ad <= tr.half + 0.3 or (car.is_player and _monster_player):
 		return Physics.SURF_TRACK
 	var c := tr.cfg
 	var p := tr.rel(car.s)
@@ -1791,8 +1832,15 @@ func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float,
 	_ctl.throttle = thr
 	_ctl.brake = brk
 	_ctl.steer = steer
+	_ctl.handbrake = input.handbrake if input and car.is_player else 0.0
+	# the car helps the player hold a slide, as far as the driving aids allow
+	env.drift_assist = 0.0 if not car.is_player else (DRIFT_ASSIST_FULL if assists == "full" else (DRIFT_ASSIST_ABS if assists == "abs" else 0.0))
+	env.rear_grip = 1.0
+	if car.is_player and not mods.is_empty():
+		_apply_mods(car, env, input, dt)
 	cp.step(car, _ctl, env, dt)
 	car.shift_t = maxf(0.0, car.shift_t - dt)
+	car.hold_t = maxf(0.0, car.hold_t - dt)
 
 	var pr := tr.project(car.x, car.y, car.s)
 	move_s(car, tr.rel(pr[0] - car.s))
@@ -1821,14 +1869,16 @@ func auto_shift(car: RaceCar, vF: float, thr: float, brk: float) -> void:
 	if vF < 1.0:
 		g = 0
 	# upshift at the point where the next gear pulls harder, or just before the limiter
-	elif g < top and (car.rpm > 6150.0 or cm.wheel_force(vp, g + 1, 1.0) > cm.wheel_force(vp, g, 1.0)) and cm.rpm_for(vF, g + 1) > 2800.0:
+	elif g < top and (car.rpm > cm.spec.limiter - 150.0 or cm.wheel_force(vp, g + 1, 1.0) > cm.wheel_force(vp, g, 1.0)) and cm.rpm_for(vF, g + 1) > cm.spec.limiter * 4.0 / 9.0:
 		g += 1
 	# on the power, drop a gear as soon as it pulls clearly harder; on the brakes, keep the revs up for the exit
-	elif g > 0 and cm.rpm_for(vF, g - 1) < 5900.0 and (cm.wheel_force(vp, g - 1, 1.0) > cm.wheel_force(vp, g, 1.0) * 1.06 or (brk > 0.1 and cm.rpm_for(vF, g) < 3200.0)):
+	elif g > 0 and car.hold_t <= 0.0 and (cm.spec.shift_hold <= 0.0 or cm.rpm_for(vF, g) < cm.spec.limiter * 0.5) and cm.rpm_for(vF, g - 1) < cm.spec.limiter - 400.0 and (cm.wheel_force(vp, g - 1, 1.0) > cm.wheel_force(vp, g, 1.0) * 1.06 or (brk > 0.1 and cm.rpm_for(vF, g) < cm.spec.limiter * 32.0 / 63.0)):
 		g -= 1
 	if g != car.gear:
 		# part-throttle or braking shifts are quicker to settle than a flat-out upshift
 		car.shift_t = 0.15 if g > car.gear else 0.12
+		if g > car.gear:
+			car.hold_t = cm.spec.shift_hold
 		car.gear = g
 
 ## A digital key (or a twitchy pad) asks for full lock the instant it's pressed — the bots never do

@@ -11,6 +11,7 @@ var ax_d := 0.0
 var ay_d := 0.0
 var abs_k := PackedFloat64Array([1, 1, 1, 1]) ## ABS pressure factor per wheel
 var tc := 1.0
+var hb_grip := 1.0 ## rear grip left after the handbrake: drops while it is pulled, creeps back once it is released
 var fx0 := 0.0
 var fz := PackedFloat64Array([0, 0, 0, 0])
 var rho := PackedFloat64Array([0, 0, 0, 0])

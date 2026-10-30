@@ -9,6 +9,8 @@ var color := Color.WHITE
 var number := 0
 var is_player := false
 var stripes := false
+var dents := {"front": 0.0, "rear": 0.0, "left": 0.0, "right": 0.0} ## how crumpled each side of the body is, 0..1 (the model's dent_* blend shapes)
+var finish := 0 ## 0 gloss, 1 metallic flake, 2 Martini Racing, 3 Abarth, 4 Marlboro livery
 
 # ---- driver
 var skill := 1.0
@@ -60,6 +62,7 @@ var rpm := 850.0
 var throttle := 0.0
 var brake_on := false
 var shift_t := 0.0
+var hold_t := 0.0 ## s before the automatic gearbox may drop a gear again after an upshift (CarSpec.shift_hold)
 var slip := 0.0
 var understeer := 0.0
 var body_roll := 0.0

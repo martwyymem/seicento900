@@ -25,6 +25,9 @@ must share a node, and the last joins the first], start {"node": id, "before": m
 the route reaches that node), corner_radius (m, the junction fillets), corners [{"at": s} or
 {"node": id, "before"/"after": m}, "name"], blockage_types (highway values that get a barrier),
 blockage_skip_service (service=* values left open, e.g. driveways), trackdef {TrackDef property: value}.
+Optional: nodes [OSM node ids in driving order] gives the driven line node by node (a long route that uses one way
+twice, or a roundabout, can't be told apart by ways alone); local "<open world key>" takes the ways, elevation and
+surroundings from the open world's caches (tools/open_world/cache/<key>_*.json) instead of downloading them.
 
 Data © OpenStreetMap contributors, ODbL. Elevation: EU-DEM via OpenTopoData.
 """
@@ -58,9 +61,23 @@ def overpass(ql):
     raise SystemExit('Overpass failed')
 
 
+def local_osm(cfg):
+    """The open world's cached OSM download (build_open_world.py), for a route file with "local"."""
+    return json.load(open(os.path.join(HERE, 'open_world', 'cache', cfg['local'] + '_osm.json')))
+
+
 def route_data(cfg, refetch):
     """The route's ways (tags, nodes, geometry) and the level crossings on them, cached."""
     path = os.path.join(CACHE, cfg['key'] + '_route.json')
+    if cfg.get('local') and (refetch or not os.path.exists(path)):
+        els = local_osm(cfg)['elements']
+        ids = set(cfg['ways'])
+        ways = [e for e in els if e['type'] == 'way' and e['id'] in ids]
+        on_route = {n for w in ways for n in w['nodes']}
+        xings = [e for e in els if e['type'] == 'node' and e['id'] in on_route
+                 and e.get('tags', {}).get('railway') in ('level_crossing', 'crossing')]
+        os.makedirs(CACHE, exist_ok=True)
+        json.dump({'elements': ways + xings}, open(path, 'w'), separators=(',', ':'))
     if refetch or not os.path.exists(path):
         ids = ','.join(str(i) for i in cfg['ways'])
         data = overpass(f'[out:json][timeout:120];way(id:{ids})->.r;.r out body geom;'
@@ -75,6 +92,8 @@ def chain(cfg, data, P):
     Each way contributes the stretch between the node it shares with the previous way and the one it shares
     with the next, in the direction of travel."""
     ways = {e['id']: e for e in data['elements'] if e['type'] == 'way'}
+    if 'nodes' in cfg:
+        return chain_nodes(cfg, ways, P)
     ids = cfg['ways']
     missing = [i for i in ids if i not in ways]
     assert not missing, f'ways not in the OSM data: {missing}'
@@ -93,6 +112,47 @@ def chain(cfg, data, P):
             nodes.append(w['nodes'][j])
             names.append(name)
     return pts, nodes, names
+
+
+def chain_nodes(cfg, ways, P):
+    """chain() for a route file that lists its nodes: each step runs along a route way joining the two nodes."""
+    where = {}  # node -> [(way, index)]
+    for w in ways.values():
+        for j, n in enumerate(w['nodes']):
+            where.setdefault(n, []).append((w, j))
+    seq = cfg['nodes']
+    pts, nodes, names = [], [], []
+    for k, n in enumerate(seq):
+        m = seq[(k + 1) % len(seq)]
+        hit = next(((w, j) for w, j in where[n] if (j + 1 < len(w['nodes']) and w['nodes'][j + 1] == m)
+                    or (j > 0 and w['nodes'][j - 1] == m)), None)
+        assert hit, f'nodes {n} and {m} are not neighbours on any route way'
+        w, j = hit
+        pts.append(P(w['geometry'][j]))
+        nodes.append(n)
+        names.append(w['tags'].get('name'))
+    return pts, nodes, names
+
+
+def local_elevation(cfg, P, rs, step, margin):
+    """(profile, terrain grid) sampled from the open world's elevation grid, for a route file with "local"."""
+    import build_open_world as bw
+    g = json.load(open(os.path.join(HERE, 'open_world', 'cache', cfg['local'] + '_elevation.json')))
+    def h(x, y):
+        lat, lon = P.inv(x, y)
+        u, v = bw.proj(lat, lon)
+        fx = min(max((u - g['x0']) / g['step'], 0.0), g['nx'] - 1.001)
+        fy = min(max((v - g['y0']) / g['step'], 0.0), g['ny'] - 1.001)
+        i, j = int(fx), int(fy)
+        a, b = fx - i, fy - j
+        hh = g['h']
+        q = lambda ii, jj: hh[jj * g['nx'] + ii]
+        return (q(i, j) * (1 - a) + q(i + 1, j) * a) * (1 - b) + (q(i, j + 1) * (1 - a) + q(i + 1, j + 1) * a) * b
+    xs, ys = [p[0] for p in rs], [p[1] for p in rs]
+    x0, y0 = min(xs) - margin, min(ys) - margin
+    nx = int((max(xs) + margin - x0) / step) + 1
+    ny = int((max(ys) + margin - y0) / step) + 1
+    return [h(x, y) for x, y in rs], (x0, y0, nx, ny, [h(x0 + i * step, y0 + j * step) for j in range(ny) for i in range(nx)])
 
 
 def fillet(pts, radius):
@@ -149,14 +209,17 @@ def elevation(cfg, pts, refetch):
     if refetch or stale or not os.path.exists(path):
         P = bt.proj_for(cfg['key'])
         rs, _, total = bt.resample(pts, [None] * len(pts), 20.0)
-        line = fe.query([P.inv(x, y) for x, y in rs], cfg['dem'])
         step, margin = cfg['grid'], cfg['margin']
-        xs, ys = [p[0] for p in rs], [p[1] for p in rs]
-        x0, y0 = min(xs) - margin, min(ys) - margin
-        nx = int((max(xs) + margin - x0) / step) + 1
-        ny = int((max(ys) + margin - y0) / step) + 1
-        print(f'  terrain grid {nx} x {ny}', flush=True)
-        grid = fe.query([P.inv(x0 + i * step, y0 + j * step) for j in range(ny) for i in range(nx)], cfg['dem'])
+        if cfg.get('local'):
+            line, (x0, y0, nx, ny, grid) = local_elevation(cfg, P, rs, step, margin)
+        else:
+            line = fe.query([P.inv(x, y) for x, y in rs], cfg['dem'])
+            xs, ys = [p[0] for p in rs], [p[1] for p in rs]
+            x0, y0 = min(xs) - margin, min(ys) - margin
+            nx = int((max(xs) + margin - x0) / step) + 1
+            ny = int((max(ys) + margin - y0) / step) + 1
+            print(f'  terrain grid {nx} x {ny}', flush=True)
+            grid = fe.query([P.inv(x0 + i * step, y0 + j * step) for j in range(ny) for i in range(nx)], cfg['dem'])
         os.makedirs(CACHE, exist_ok=True)
         json.dump({'route': [cfg['start'], cfg['ways']], 'line_step': total / len(rs), 'line': [round(h, 2) for h in line],
                    'grid': {'x0': x0, 'y0': y0, 'step': step, 'nx': nx, 'ny': ny, 'h': [round(h, 1) for h in grid]}},
@@ -260,6 +323,10 @@ def tres_value(v):
         return str(v)
     if isinstance(v, float):
         return repr(v)
+    if isinstance(v, list) and v and all(isinstance(p, list) and len(p) == 2 for p in v):  # (from, to) pairs
+        return 'PackedVector2Array(' + ', '.join(repr(float(x)) for p in v for x in p) + ')'
+    if isinstance(v, str) and v.startswith('Color('):  # a Godot colour literal, written as is
+        return v
     return json.dumps(v, ensure_ascii=False)
 
 
@@ -321,6 +388,16 @@ def build(key, refetch=False, check=None):
         print(f'  {s:7.1f}  {nm}')
     # the surroundings over the terrain grid
     env_src = os.path.join(fs.OUT_DIR, key + '.json')
+    if cfg.get('local') and (refetch or not os.path.exists(env_src)):
+        # the open world's download already holds everything the scenery uses; keep what touches the terrain box
+        s_, w_, n_, e_ = fs.bbox(key)
+        def inside(el):
+            b = el.get('bounds')
+            if b:
+                return b['minlat'] <= n_ and b['maxlat'] >= s_ and b['minlon'] <= e_ and b['maxlon'] >= w_
+            return 'lat' not in el or (s_ <= el['lat'] <= n_ and w_ <= el['lon'] <= e_)
+        os.makedirs(fs.OUT_DIR, exist_ok=True)
+        json.dump({'elements': [el for el in local_osm(cfg)['elements'] if inside(el)]}, open(env_src, 'w'), separators=(',', ':'))
     if refetch or not os.path.exists(env_src):
         print('  fetching surroundings', fs.bbox(key), flush=True)
         os.makedirs(fs.OUT_DIR, exist_ok=True)

@@ -89,6 +89,8 @@ var skidmarks_root: Node3D
 var camera: Camera3D
 
 var visuals: Dictionary = {}
+var mods := {} ## the player's CarMods (game.gd sets them with the race): monster wheels on every car, tiny and rainbow on the player's
+var _rainbow_t := 0.0
 var world_center := Vector2.ZERO
 var elevation_base := 0.0
 var overview_target := Vector3.ZERO
@@ -386,7 +388,10 @@ func set_race(value: Race) -> void:
 		visual.set_paint(car.color)
 		visual.car_number = car.number
 		visual.is_player = car.is_player
+		visual.set_livery(car.finish)
 		visual.set_stripes(car.stripes)
+		if mods.has("monster"):
+			visual.set_wheel_scale(CarMods.MONSTER_WHEELS)
 	if value.rc:
 		var sc_visual := CAR_SCENE.instantiate()
 		visuals[value.rc.sc.id] = sc_visual
@@ -463,6 +468,8 @@ func _process(delta: float) -> void:
 		var grade := atan(track.sample(track.GRADE, s) * ALTITUDE_SCALE * cos(heading - track.heading(s)))
 		visual.grade_pitch += (grade - visual.grade_pitch) * minf(1.0, delta * 8.0)
 		visual.basis = _surface_tilt(s, car.d) * Basis(Vector3.UP, -heading - PI / 2.0) * Basis(Vector3.RIGHT, visual.grade_pitch)
+		if car.is_player and not mods.is_empty():
+			_player_mods(visual, delta)
 		visual.sync(car, delta, track.curvature(s), night, car.finished and car != focus)
 		if car == focus:
 			_focus_pos = p
@@ -1848,6 +1855,14 @@ func _add_ribbon(width: float, lift: float, material: Material, label: String) -
 		sm.set_shader_parameter("detail", ROAD_DETAIL[quality])
 		# a street stage's carriageway is patched, cracked town tarmac; circuit asphalt stays smooth
 		sm.set_shader_parameter("street", 1.0 if label == "Asphalt" and track.cfg.street_stage else 0.0)
+		if label == "Asphalt" and not track.cfg.cobbles.is_empty():
+			var zones := PackedVector4Array()
+			for z in track.cfg.cobbles:
+				zones.append(Vector4(z.x, z.y, 0.0, 0.0))
+			sm.set_shader_parameter("cobble_count", mini(zones.size(), 4))
+			while zones.size() < 4:
+				zones.append(Vector4.ZERO)
+			sm.set_shader_parameter("cobble_zones", zones)
 	elif sm and sm.shader == GROUND_SHADER:
 		sm.set_shader_parameter("lush", 1.0)
 	var vertices := PackedVector3Array()
@@ -2386,9 +2401,19 @@ func _build_barriers() -> void:
 	var garages := _garage_span()
 	var kind := cfg.barrier
 	tyre_cells = FURNITURE.tyre_cells(self)
-	var is_armco := kind != "safer" # tyre tracks have armco between their tyre walls
+	# tyre tracks have armco between their tyre walls; street stages pick a roadside look of their own (the sim
+	# wall stands in the same place whatever it looks like)
+	var is_armco := kind in ["armco", "tyres", "armco+fence", "guardrail"]
 	var wall_bottom := 0.3 if is_armco else 0.0
 	var wall_top := 1.0 if is_armco else (1.2 if kind == "safer" else 0.9)
+	match kind:
+		"guardrail": # a W-beam on posts, as along any Polish country road
+			wall_bottom = 0.42
+			wall_top = 0.78
+		"plastic": # red and white water-filled blocks
+			wall_top = 0.8
+		"jersey": # concrete blocks hung with sponsor banners
+			wall_top = 1.0
 	var fence_top := 5.0 if kind == "safer" else CATCH_FENCE_TOP
 	var barrier_color := Color("#7d848a") if is_armco else Color("#89877f")
 	if cfg.barrier_color.a > 0.0:
@@ -2396,6 +2421,14 @@ func _build_barriers() -> void:
 	var barrier_mat := _material(barrier_color, 0.45)
 	if is_armco:
 		barrier_mat.metallic = 0.65
+	var barrier_tex := _barrier_texture(kind, cfg.barrier_color)
+	if barrier_tex:
+		barrier_mat.albedo_color = Color.WHITE if kind != "guardrail" else barrier_color
+		barrier_mat.albedo_texture = barrier_tex
+		barrier_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+		# u runs in metres along the lap, v from the barrier's foot (0) to its top (1)
+		barrier_mat.uv1_scale = Vector3({"plastic": 0.5, "jersey": 1.0 / 24.0}.get(kind, 0.25), 1.0, 1.0)
+		barrier_mat.roughness = {"plastic": 0.55, "jersey": 0.85}.get(kind, 0.45)
 	# walls are single quads seen from both the road and the infield
 	barrier_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	# a see-through chain-link catch fence: the wire texture thins to a faint veil in the distance, as
@@ -2420,6 +2453,7 @@ func _build_barriers() -> void:
 		# the inside is a plain wall
 		var has_fence: bool = (kind == "safer" and side == safer_outside) or kind == "armco+fence"
 		var verts := PackedVector3Array()
+		var uvs := PackedVector2Array()
 		var indices := PackedInt32Array()
 		var fence_verts := PackedVector3Array()
 		var fence_indices := PackedInt32Array()
@@ -2458,6 +2492,7 @@ func _build_barriers() -> void:
 			var t1 := Vector3(p1[0] - world_center.x, y1 + wall_top, p1[1] - world_center.y)
 
 			verts.append_array(PackedVector3Array([b0, t0, b1, t1]))
+			uvs.append_array(PackedVector2Array([Vector2(s, 1.0), Vector2(s, 0.0), Vector2(s + track.step, 1.0), Vector2(s + track.step, 0.0)]))
 			if side > 0:
 				indices.append_array(PackedInt32Array([v_count, v_count + 1, v_count + 2, v_count + 1, v_count + 3, v_count + 2]))
 			else:
@@ -2491,6 +2526,7 @@ func _build_barriers() -> void:
 			var arrays := []
 			arrays.resize(Mesh.ARRAY_MAX)
 			arrays[Mesh.ARRAY_VERTEX] = verts
+			arrays[Mesh.ARRAY_TEX_UV] = uvs
 			arrays[Mesh.ARRAY_INDEX] = indices
 			var b_mesh := ArrayMesh.new()
 			b_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
@@ -2658,6 +2694,55 @@ static func _quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector
 
 ## One 0.25 m tile of chain-link: diamond wires on a clear background, mipmapped so the fence fades to a
 ## thin haze with distance.
+## The face of a street stage's barrier, or null for the plain circuit ones. Guardrail: the W-beam's two ridges
+## and a bolt every 4 m (one tile); plastic: one red (or `accent`) and one white block (2 m); jersey: four 6 m sponsor banners
+## over grey concrete (24 m). v = 0 is the top.
+static func _barrier_texture(kind: String, accent := Color(0, 0, 0, 0)) -> ImageTexture:
+	var img: Image
+	match kind:
+		"guardrail":
+			img = Image.create(64, 16, false, Image.FORMAT_RGBA8)
+			for y in 16:
+				# light on the two ridges, dark in the groove between them and along the rolled edges
+				var shade := 0.72 + 0.28 * sin(float(y) / 15.0 * TAU * 2.0 - PI * 0.5) * -1.0
+				for x in 64:
+					var c := Color(shade, shade, shade)
+					if (x == 31 or x == 32) and (y == 5 or y == 10):
+						c = Color(0.35, 0.35, 0.35)
+					img.set_pixel(x, y, c)
+		"plastic":
+			img = Image.create(64, 16, false, Image.FORMAT_RGBA8)
+			for x in 64:
+				var red := x < 32
+				for y in 16:
+					var c := (accent if accent.a > 0.0 else Color("#c8281e")) if red else Color("#eeeeea")
+					# moulded ribs and the dark seam where two blocks meet
+					if y == 3 or y == 12:
+						c = c.darkened(0.15)
+					if x % 32 == 0 or x % 32 == 31:
+						c = Color(0.15, 0.15, 0.15)
+					img.set_pixel(x, y, c)
+		"jersey":
+			var banners := [Color("#1d4f9c"), Color("#f2c200"), Color("#d6301f"), Color("#1f8a3c")]
+			img = Image.create(256, 16, false, Image.FORMAT_RGBA8)
+			for x in 256:
+				var b: Color = banners[x / 64]
+				var in_panel := x % 64 > 2 and x % 64 < 61
+				for y in 16:
+					var c := Color(0.55, 0.54, 0.51) # concrete below the banner
+					if y < 10 and in_panel:
+						c = b
+						# a white logo band across the middle of each banner
+						if y >= 4 and y <= 5 and x % 64 > 12 and x % 64 < 52:
+							c = Color(0.95, 0.95, 0.95)
+					elif y >= 10:
+						c = c.darkened(0.08 * float(y - 10) / 6.0)
+					img.set_pixel(x, y, c)
+		_:
+			return null
+	img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
+
 static func _chain_link_texture() -> ImageTexture:
 	var size := 32
 	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
@@ -4017,3 +4102,13 @@ func _surface_material(shader: Shader, folder: String, weather := true) -> Shade
 	if weather:
 		_wet_materials.append(m)
 	return m
+
+## Tiny Seicento and Rainbow Paint on the player's car.
+func _player_mods(visual: Node3D, delta: float) -> void:
+	if mods.has("tiny"):
+		visual.basis = visual.basis * Basis.from_scale(Vector3.ONE * CarMods.TINY_SCALE)
+	if mods.has("rainbow"):
+		var before := int(_rainbow_t * 12.0)
+		_rainbow_t += delta
+		if int(_rainbow_t * 12.0) != before:
+			visual.set_paint(Color.from_hsv(fmod(_rainbow_t * 0.12, 1.0), 0.85, 0.92))
