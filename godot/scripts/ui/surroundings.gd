@@ -21,6 +21,7 @@ const LANDMARK_SIZE := {
 	"IndyPagoda": Vector2(57.5, 33.4), "SilverstoneWing": Vector2(374.0, 32.6), "Casino": Vector2(60.0, 160.0),
 	"CastleKeep": Vector2(9.5, 9.5), "CastleTower": Vector2(6.0, 6.0), "CastleWall": Vector2(1.0, 1.8),
 	"Barbakan": Vector2(38.0, 31.5), "FloriaGate": Vector2(10.0, 9.2), "PszczynaCastle": Vector2(58.0, 45.2),
+	"WilamowiceChurch": Vector2(49.6, 23.2),
 }
 const WATER_SHADER := preload("res://shaders/water.gdshader")
 const CHUNK := 256.0 ## metres: trees, canopy and buildings are split into tiles of this size for culling
@@ -233,6 +234,7 @@ func _build_surroundings(root: Node3D) -> void:
 	_build_landmarks(root)
 	_build_pools(root)
 	_build_road_blockages(root)
+	TramRails.build(root, world, track, env.get("tram_rails", []))
 
 # --------------------------------------------------------------------------------------------- exclusions
 
@@ -622,6 +624,7 @@ func _build_buildings(root: Node3D) -> void:
 	var mat := ShaderMaterial.new()
 	mat.shader = BUILDING_SHADER
 	mat.set_shader_parameter("grain", world.noise_texture("grain"))
+	TownBuilder.apply_building_textures(mat)
 	world._wet_materials.append(mat)
 	world._night_materials.append(mat)
 	var node := Node3D.new()
@@ -667,7 +670,6 @@ func _add_building(st: SurfaceTool, ring: Array[Vector2], height: float, kind: i
 	world.add_block_occluder(footprint, eave)
 	var uv2_wall := Vector2(seed, kind)
 	var uv2_roof := Vector2(seed, kind + 10.0)
-	var along := 0.0
 	for i in ring.size():
 		var a := ring[i]
 		var b := ring[(i + 1) % ring.size()]
@@ -677,14 +679,16 @@ func _add_building(st: SurfaceTool, ring: Array[Vector2], height: float, kind: i
 		var b0 := Vector3(b.x - c.x, base, b.y - c.y)
 		var a1 := Vector3(a.x - c.x, eave, a.y - c.y)
 		var b1 := Vector3(b.x - c.x, eave, b.y - c.y)
-		var u0 := along
-		var u1 := along + ln
+		# UV.x restarts at each wall's start and UV2 carries the wall's length and level top (corner quoins and a
+		# cornice in building.gdshader, same encoding as TownBuilder._wall)
+		var u0 := 0.0
+		var u1 := ln
+		var wall_uv2 := Vector2(seed + roundf((eave - ground_hi) * 10.0), kind + 20.0 * minf(roundf(ln * 10.0), 4000.0))
 		# v is metres up from the highest ground under the building, where the windows start
 		var v0 := base - ground_hi
 		var v1 := eave - ground_hi
-		_tri(st, [a0, b0, b1], [Vector2(u0, v0), Vector2(u1, v0), Vector2(u1, v1)], out, wall, uv2_wall)
-		_tri(st, [a0, b1, a1], [Vector2(u0, v0), Vector2(u1, v1), Vector2(u0, v1)], out, wall, uv2_wall)
-		along = u1
+		_tri(st, [a0, b0, b1], [Vector2(u0, v0), Vector2(u1, v0), Vector2(u1, v1)], out, wall, wall_uv2)
+		_tri(st, [a0, b1, a1], [Vector2(u0, v0), Vector2(u1, v1), Vector2(u0, v1)], out, wall, wall_uv2)
 	if pitched:
 		# ridge along the long sides; gables on the short ones
 		var p := ring

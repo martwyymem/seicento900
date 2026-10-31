@@ -139,6 +139,7 @@ var line_off := 0.0 ## a physics bot's smoothed lateral target, relative to the 
 
 # ---- race control (see RaceControl)
 var damage := 0.0 ## 0 = straight, 1 = wrecked; costs power, drag and pace until repaired in the pits
+var scuff := 0.0 ## cosmetic damage of a race without mechanical damage (Race.mechanical_damage): shows on the body, costs nothing
 var dmg_pull := 0.0 ## steering pull from bent suspension (steer units, + = right)
 var parts := {} ## where the damage is: part -> 0..1 severity (Service.PARTS), for the service area
 # what the damaged parts do (Service.sync): all 1 / off on a sound car, so it drives exactly as before

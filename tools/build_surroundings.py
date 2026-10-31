@@ -70,6 +70,7 @@ LANDMARKS = {
     'monaco': {('way', 161769674): 'Casino'},
     'krakow': {('relation', 13562708): 'Barbakan', ('way', 39357538): 'FloriaGate'},
     'pszczyna': {('way', 172583260): 'PszczynaCastle'},
+    'wilamowice': {('way', 161150872): 'WilamowiceChurch'},  # Kościół pw. Przenajświętszej Trójcy
 }
 WATER_AREAS = {('natural', 'water'), ('landuse', 'reservoir'), ('landuse', 'basin'), ('waterway', 'riverbank'),
                ('waterway', 'dock')}

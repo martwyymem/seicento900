@@ -11,9 +11,10 @@ extends RefCounted
 const G := 9.81 ## gravity, m/s²
 
 # surface ids returned by Env.surface: grip multiplier and extra rolling drag (fraction of the wheel load)
-enum { SURF_TRACK, SURF_ASPHALT, SURF_GRASS, SURF_GRAVEL }
-const SURF_GRIP := [1.0, 0.9, 0.5, 0.42]
-const SURF_DRAG := [0.0, 0.004, 0.07, 0.22]
+enum { SURF_TRACK, SURF_ASPHALT, SURF_GRASS, SURF_GRAVEL, SURF_COBBLE }
+const COBBLE_GRIP := 0.85 ## grip of cobbled/sett road (TrackDef.cobbles zones); the one tunable, same for the player and the AI
+const SURF_GRIP := [1.0, 0.9, 0.5, 0.42, COBBLE_GRIP]
+const SURF_DRAG := [0.0, 0.004, 0.07, 0.22, 0.004]
 
 # Magic Formula curves, normalised to a peak of 1. Longitudinal in slip ratio, lateral in slip angle.
 const TX_B := 16.0

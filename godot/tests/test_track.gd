@@ -173,7 +173,7 @@ func run() -> Array:
 				# landmark models only for real buildings drawn on their own OSM footprint (build_surroundings.py LANDMARKS)
 				var lm_ok := true
 				for lm in s_env.get("landmarks", []):
-					lm_ok = lm_ok and String(lm[0]) in ["Barbakan", "FloriaGate", "PszczynaCastle"]
+					lm_ok = lm_ok and String(lm[0]) in ["Barbakan", "FloriaGate", "PszczynaCastle", "WilamowiceChurch"]
 				if not (s_env.get("stands", []) as Array).is_empty() or not lm_ok:
 					errors.append("%s: no grandstands, and no landmark models but real buildings, on a street stage" % c_key)
 				if (s_env.get("buildings", []) as Array).size() < exp[4]:

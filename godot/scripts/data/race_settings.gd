@@ -16,6 +16,10 @@ extends Resource
 @export var collisions := true
 @export var draft := true ## slipstream: a car behind another one, close and in line, pulls less air and gains speed
 @export var race_control := true ## flags, safety car, red flags, stewards' penalties and crash damage
+## Crashes cost power, drag, grip and parts, the same for the player and every AI car (Service). Off (the default),
+## circuit races only dent and scuff the bodywork. A rally stage always has it on; a championship turns it on with
+## its Damage & Repairs setting; quick races and campaign circuits keep it as the player chose (opt-in).
+@export var mechanical_damage := false
 @export var real_drivers := true ## the field is Drivers.ROSTER, each on their set-up and character; off: the JS reference's field (Race.BOTS)
 @export_enum("on", "off") var ai_learning := "on"
 @export_enum("on", "off", "near") var bot_physics := "on" ## near: only bots close to the player run the physics (saves battery)

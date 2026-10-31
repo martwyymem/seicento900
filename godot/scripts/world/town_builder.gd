@@ -728,11 +728,336 @@ func build_tunnels() -> void:
 
 # ============================================================================================ buildings
 
+## How far (metres) the current building's walls stand out from their footprint; see _wall_pushes().
+var _push := 0.0
+
+## Terraced houses, garages and sheds put walls in one plane facing one way. Both draw, they z-fight, and each
+## has its own window layout, so patches of facade flip with every camera move.
+## Where two such walls lie within SHARED_TOL of one plane, the lower building (the later one on a tie) does not
+## draw its wall over the stretch the taller one covers: it is recorded as a cut in _cuts, which _wall() honours.
+## Walls that are close to coplanar but not quite (up to 0.25 m) still stand out: the lower building (the later one
+## on a tie) steps a few centimetres out, one step further per building it hides.
+const SHARED_TOL := 0.04 ## m: walls this near one plane count as the same face
+var wall_plan_enabled := true ## tests switch it off to see the raw overlaps
+var log_walls := false ## tests set it to collect every wall rectangle drawn into wall_log
+var wall_log: Array = [] ## [building, a, b, bottom at a, bottom at b, top at a, top at b, outward] in map x, y
+var _cuts := {} ## building -> [[a, b, s0, s1, y0, y1, covered_to], ...] stretches of its wall edge a-b that are not drawn
+var _cur_bi := -1
+
+func _wall_pushes(skip := {}) -> Dictionary:
+	return _wall_plan(skip).push
+
+## Absolute base and eave heights of building bi, as _add_building will place them.
+func _bld_range(bi: int) -> Vector2:
+	var ring := map.bld_rings[bi]
+	var lo := INF
+	var hi := -INF
+	for p in ring:
+		var g := map.ground(p.x, p.y)
+		lo = minf(lo, g)
+		hi = maxf(hi, g)
+	var b: Array = map.buildings[bi]
+	var extra: Dictionary = b[6] if b.size() > 6 and b[6] is Dictionary else {}
+	return Vector2(lo - 0.5, hi + float(extra.get("eh", b[1])))
+
+## skip: {building index: true} for buildings that are not drawn (landmark models, shaft houses): they hide nothing.
+func _wall_plan(skip := {}) -> Dictionary:
+	_cuts = {}
+	if not wall_plan_enabled:
+		return {"push": {}, "cuts": _cuts}
+	var edges: Array = []
+	var cells := {}
+	for bi in map.buildings.size():
+		var ring := map.bld_rings[bi]
+		if ring.size() < 3 or skip.has(bi):
+			continue
+		for we in _wall_edges(bi, ring):
+			var a: Vector2 = we[0]
+			var b: Vector2 = we[1]
+			var ln := a.distance_to(b)
+			if ln < 0.1:
+				continue
+			var t := (b - a) / ln
+			var out := Vector2(t.y, -t.x)
+			if out.dot((a + b) * 0.1 - (we[2] as Vector2)) < 0.0:
+				out = -out
+			var ei := edges.size()
+			edges.append([bi, a, t, ln, out, float(we[3]), float(we[4])])
+			# every 10 m cell the edge passes through, so a long wall meets a neighbour beside any part of it
+			var steps := int(ln / 5.0) + 1
+			var seen := {}
+			for k in steps + 1:
+				var q := a + t * (ln * float(k) / float(steps))
+				var cell := Vector2i(floori(q.x * 0.1), floori(q.y * 0.1))
+				if seen.has(cell):
+					continue
+				seen[cell] = true
+				if not cells.has(cell):
+					cells[cell] = []
+				cells[cell].append(ei)
+	var below := {} # building -> buildings that hide part of its wall
+	var done := {}
+	var ranges := {}
+	for cell: Vector2i in cells:
+		for ei: int in cells[cell]:
+			var e: Array = edges[ei]
+			var near: Array = [] # edges sampled in this cell or one beside it (samples are 5 m apart, cells 10 m)
+			for dx in range(-1, 2):
+				for dy in range(-1, 2):
+					near.append_array(cells.get(cell + Vector2i(dx, dy), []))
+			for oi: int in near:
+				var o: Array = edges[oi]
+				if o[0] <= e[0] or (e[4] as Vector2).dot(o[4]) < 0.99:
+					continue
+				var pair := ei * 1000003 + oi
+				if done.has(pair):
+					continue
+				var ea: Vector2 = e[1]
+				var et: Vector2 = e[2]
+				var nrm := Vector2(-et.y, et.x)
+				var oa: Vector2 = o[1]
+				var ob: Vector2 = oa + (o[2] as Vector2) * float(o[3])
+				var da := (oa - ea).dot(nrm)
+				var db := (ob - ea).dot(nrm)
+				if absf(da) > 0.25 or absf(db) > 0.25:
+					continue
+				var s0: float = (oa - ea).dot(et)
+				var s1: float = (ob - ea).dot(et)
+				var lo := maxf(0.0, minf(s0, s1))
+				var hi := minf(float(e[3]), maxf(s0, s1))
+				if hi - lo < 0.1:
+					continue
+				done[pair] = true
+				for bi in [e[0], o[0]]:
+					if not ranges.has(bi):
+						ranges[bi] = _bld_range(bi)
+				# the one whose eave is lower where they stand (equal: the later index)
+				var lower: int = e[0] if float((ranges[e[0]] as Vector2).y) < float((ranges[o[0]] as Vector2).y) else o[0]
+				var upper: int = o[0] if lower == e[0] else e[0]
+				if maxf(absf(da), absf(db)) <= SHARED_TOL:
+					# one plane: the lower building leaves the shared stretch out
+					var edge_l: Array = e if lower == e[0] else o
+					var edge_u: Array = o if lower == e[0] else e
+					var pa: Vector2 = ea + et * lo
+					var pb: Vector2 = ea + et * hi
+					var la: Vector2 = edge_l[1]
+					var lt: Vector2 = edge_l[2]
+					var sl0 := (pa - la).dot(lt)
+					var sl1 := (pb - la).dot(lt)
+					if sl0 > sl1:
+						var sw := pa
+						pa = pb
+						pb = sw
+						sl0 = (pa - la).dot(lt)
+						sl1 = (pb - la).dot(lt)
+					var rl: Vector2 = ranges[lower]
+					var ru: Vector2 = ranges[upper]
+					if not _cuts.has(lower):
+						_cuts[lower] = []
+					# up to the taller wall's top (it may slope with its roof), or the lower one's own top plus the
+					# parapet a flat roof stands on its eave
+					var y1a := minf(_edge_top(edge_u, pa), _edge_top(edge_l, pa) + 0.7)
+					var y1b := minf(_edge_top(edge_u, pb), _edge_top(edge_l, pb) + 0.7)
+					_cuts[lower].append([la, la + lt * float(edge_l[3]), sl0, sl1, maxf(rl.x, ru.x), y1a, y1b])
+				else:
+					# near but not on one plane: how far the lower wall stands in front of the upper one (negative: behind)
+					var sep := (da + db) * 0.5 * signf(nrm.dot(e[4]))
+					if lower != e[0]:
+						sep = -sep
+					if sep > -0.04:
+						if not below.has(lower):
+							below[lower] = {}
+						below[lower][upper] = minf(float(below[lower].get(upper, INF)), sep)
+	var push := {}
+	for round in 6:
+		for lower: int in below:
+			var need := 0.0
+			for upper: int in below[lower]:
+				need = maxf(need, float(push.get(upper, 0.0)) + 0.04 - float(below[lower][upper]))
+			push[lower] = need
+	return {"push": push, "cuts": _cuts}
+
+## Height of a plan edge's top above its point p (on the edge's line).
+func _edge_top(edge: Array, p: Vector2) -> float:
+	var f := clampf((p - (edge[1] as Vector2)).dot(edge[2]) / maxf(float(edge[3]), 1e-3), 0.0, 1.0)
+	return lerpf(float(edge[5]), float(edge[6]), f)
+
+## The stretches of wall a-b (either direction) of the current building that _wall_plan() leaves out, as
+## [[s0, s1, y0, y1 at s0, y1 at s1], ...] with s in metres from a: the wall is not drawn from y0 up to the line y1.
+func _wall_cuts_for(a: Vector2, b: Vector2) -> Array:
+	var res: Array = []
+	var recs: Array = _cuts.get(_cur_bi, [])
+	if recs.is_empty():
+		return res
+	var ln := a.distance_to(b)
+	for r in recs:
+		var ra: Vector2 = r[0]
+		var rb: Vector2 = r[1]
+		if ra.distance_to(a) < 0.02 and rb.distance_to(b) < 0.02:
+			res.append([r[2], r[3], r[4], r[5], r[6]])
+		elif ra.distance_to(b) < 0.02 and rb.distance_to(a) < 0.02:
+			res.append([ln - float(r[3]), ln - float(r[2]), r[4], r[6], r[5]])
+	return res
+
+## True if the plan leaves the whole of wall a-b out from y_from to y_to because a taller building's wall covers it.
+func _parapet_covered(a: Vector2, b: Vector2, y_from: float, y_to: float) -> bool:
+	var ln := a.distance_to(b)
+	for c in _wall_cuts_for(a, b):
+		if float(c[0]) <= 0.05 and float(c[1]) >= ln - 0.05 and float(c[2]) <= y_from + 0.01 and float(c[3]) >= y_to - 0.01 and float(c[4]) >= y_to - 0.01:
+			return true
+	return false
+
+## One wall a-b (map x, y) from y_lo up to the heights top_a (at a) and top_b (at b): quads standing `_push` out of the
+## plane, minus the stretches _wall_plan() cut. UV.x is metres from the wall's start, UV.y metres over `hi`; UV2 carries
+## the seed, kind, the wall's length and (when the top is level) its height, which the shader turns into quoins and a
+## cornice (see building.gdshader).
+func _wall(mb: MeshBatch, a: Vector2, b: Vector2, y_lo: float, top_a: float, top_b: float, out: Vector3, color: Color, hi: float, seed: float, code: float) -> void:
+	var ln := a.distance_to(b)
+	if ln < 0.01:
+		return
+	var t := (b - a) / ln
+	var level := absf(top_a - top_b) < 0.05
+	var uv2 := Vector2(seed + (roundf((top_a - hi) * 10.0) if level else 0.0), code + 20.0 * minf(roundf(ln * 10.0), 4000.0))
+	var cuts := _wall_cuts_for(a, b)
+	# slice the wall at every cut boundary; within a slice a cut either covers it or it does not
+	var marks := [0.0, ln]
+	for c in cuts:
+		for s: float in [c[0], c[1]]:
+			if s > 0.01 and s < ln - 0.01:
+				marks.append(s)
+	marks.sort()
+	var po := out * _push
+	for k in marks.size() - 1:
+		var s0: float = marks[k]
+		var s1: float = marks[k + 1]
+		if s1 - s0 < 0.01:
+			continue
+		var mid := (s0 + s1) * 0.5
+		# each cut covering this slice as [y from at s0, at s1, y to at s0, at s1], lowest first
+		var gaps: Array = []
+		for c in cuts:
+			if mid > c[0] and mid < c[1]:
+				var span: float = maxf(float(c[1]) - float(c[0]), 1e-3)
+				var ya: float = lerpf(float(c[3]), float(c[4]), (s0 - float(c[0])) / span)
+				var yb: float = lerpf(float(c[3]), float(c[4]), (s1 - float(c[0])) / span)
+				gaps.append([float(c[2]), float(c[2]), ya, yb])
+		gaps.sort_custom(func(p, q): return p[0] < q[0])
+		var ta0: float = top_a + (top_b - top_a) * s0 / ln
+		var ta1: float = top_a + (top_b - top_a) * s1 / ln
+		var pa := a + t * s0
+		var pb := a + t * s1
+		var lo_a := y_lo
+		var lo_b := y_lo
+		var pieces: Array = [] # [bottom at s0, bottom at s1, top at s0, top at s1]
+		for g in gaps:
+			if g[0] > lo_a + 0.01 or g[1] > lo_b + 0.01:
+				pieces.append([lo_a, lo_b, g[0], g[1]])
+			lo_a = maxf(lo_a, g[2])
+			lo_b = maxf(lo_b, g[3])
+		pieces.append([lo_a, lo_b, ta0, ta1])
+		for pc in pieces:
+			var y0a: float = pc[0]
+			var y0b: float = pc[1]
+			var y1a: float = pc[2]
+			var y1b: float = pc[3]
+			var da := y1a - y0a
+			var db := y1b - y0b
+			if da < 0.01 and db < 0.01:
+				continue
+			if da < 0.0 or db < 0.0:
+				# the top dips under the bottom across this slice (a sloped cut meets a sloped top): keep the triangle where it does not
+				var f := da / (da - db)
+				var pcx := a + t * lerpf(s0, s1, f)
+				var yc := lerpf(y0a, y0b, f)
+				var tri_pts: Array = [Vector3(pcx.x, yc, pcx.y), Vector3(pb.x, y0b, pb.y), Vector3(pb.x, y1b, pb.y)] if da < 0.0 else [Vector3(pa.x, y0a, pa.y), Vector3(pcx.x, yc, pcx.y), Vector3(pa.x, y1a, pa.y)]
+				var tri_s: Array = [lerpf(s0, s1, f), s1, s1] if da < 0.0 else [s0, lerpf(s0, s1, f), s0]
+				var tri_y: Array = [yc, y0b, y1b] if da < 0.0 else [y0a, yc, y1a]
+				mb.flat_tri(tri_pts[0] + po, tri_pts[1] + po, tri_pts[2] + po, out, Vector2(tri_s[0], tri_y[0] - hi), Vector2(tri_s[1], tri_y[1] - hi), Vector2(tri_s[2], tri_y[2] - hi), color, uv2)
+				continue
+			mb.flat_quad(Vector3(pa.x, y0a, pa.y) + po, Vector3(pb.x, y0b, pb.y) + po, Vector3(pb.x, y1b, pb.y) + po, Vector3(pa.x, y1a, pa.y) + po, out, color,
+				[Vector2(s0, y0a - hi), Vector2(s1, y0b - hi), Vector2(s1, y1b - hi), Vector2(s0, y1a - hi)], uv2)
+			if log_walls:
+				wall_log.append([_cur_bi, Vector2(pa.x, pa.y) + Vector2(po.x, po.z), Vector2(pb.x, pb.y) + Vector2(po.x, po.z), y0a, y0b, y1a, y1b, Vector2(out.x, out.z)])
+
+## The outline walls of building bi as [a, b, centre of its ring or roof plane, absolute top height at a, at b]: the
+## footprint's edges, or for a measured (LoD2) building the roof plane edges that no other plane shares, which is where
+## _add_lod2_roof builds walls.
+func _wall_edges(bi: int, ring: PackedVector2Array) -> Array:
+	var b: Array = map.buildings[bi]
+	var extra: Dictionary = b[6] if b.size() > 6 and b[6] is Dictionary else {}
+	var planes: Array[PackedVector2Array] = []
+	var heights: Array[PackedFloat32Array] = [] # roof corner heights over the building's highest ground
+	for face in extra.get("rs", []):
+		if not face is Array or face.size() < 9:
+			continue
+		var pl := PackedVector2Array()
+		var zs := PackedFloat32Array()
+		for j in range(0, face.size() - 2, 3):
+			var q := Vector2(float(face[j]), float(face[j + 1]))
+			if pl.is_empty() or pl[pl.size() - 1].distance_to(q) > 0.01:
+				pl.append(q)
+				zs.append(float(face[j + 2]))
+		if pl.size() > 2 and pl[0].distance_to(pl[pl.size() - 1]) < 0.01:
+			pl.remove_at(pl.size() - 1)
+			zs.remove_at(zs.size() - 1)
+		if pl.size() >= 3:
+			planes.append(pl)
+			heights.append(zs)
+	if not planes.is_empty() and extra.has("rh"):
+		# the same test as _add_building: a survey that puts the ridge far over the eaves is built from the footprint
+		var lod_rect := min_rect(ring)
+		if not lod_rect.is_empty() and (float(extra.rh) - float(extra.get("eh", b[1]))) > 1.6 * maxf(float(lod_rect[3]), 0.5):
+			planes.clear()
+	var ground_hi := -INF
+	for p in ring:
+		ground_hi = maxf(ground_hi, map.ground(p.x, p.y))
+	var res: Array = []
+	if planes.is_empty():
+		var centre := Vector2.ZERO
+		for p in ring:
+			centre += p
+		centre /= ring.size()
+		var top := _bld_range(bi).y
+		for i in ring.size():
+			res.append([ring[i], ring[(i + 1) % ring.size()], centre, top, top])
+		return res
+	for pi in planes.size():
+		var pl := planes[pi]
+		var cen := Vector2.ZERO
+		for q in pl:
+			cen += q
+		cen /= pl.size()
+		for k in pl.size():
+			var a := pl[k]
+			var c := pl[(k + 1) % pl.size()]
+			# a shared edge (ridge, hip, valley) is judged in 3D, as _add_lod2_roof does: two planes' edges can overlap on
+			# the map while one is a gable wall edge far above the other
+			var a3 := Vector3(a.x, heights[pi][k], a.y)
+			var c3 := Vector3(c.x, heights[pi][(k + 1) % pl.size()], c.y)
+			var mid3 := (a3 + c3) * 0.5
+			var shared := false
+			for pj in planes.size():
+				if pj == pi:
+					continue
+				var other := planes[pj]
+				for m in other.size():
+					var m2 := (m + 1) % other.size()
+					var cp := Geometry3D.get_closest_point_to_segment(mid3, Vector3(other[m].x, heights[pj][m], other[m].y), Vector3(other[m2].x, heights[pj][m2], other[m2].y))
+					if cp.distance_to(mid3) < 0.15:
+						shared = true
+						break
+				if shared:
+					break
+			if not shared:
+				res.append([a, c, cen, ground_hi + heights[pi][k], ground_hi + heights[pi][(k + 1) % pl.size()]])
+	return res
+
 func build_buildings() -> void:
 	var group := _group("Buildings")
 	var mat := ShaderMaterial.new()
 	mat.shader = BUILDING_SHADER
 	mat.set_shader_parameter("grain", WORLD.noise_texture("grain"))
+	apply_building_textures(mat)
 	# lighter glass that catches the sky, white frames: the bright, clean look of Forza's towns
 	mat.set_shader_parameter("glass_color", Color(0.3, 0.38, 0.45))
 	mat.set_shader_parameter("frame_color", Color(0.95, 0.94, 0.9))
@@ -740,16 +1065,19 @@ func build_buildings() -> void:
 	night_materials.append(mat)
 	var batches := {}
 	var shafts := shaft_towers()
+	var not_drawn := {} # landmark models and shaft houses: their walls hide nothing behind them
+	for bi in map.buildings.size():
+		var b: Array = map.buildings[bi]
+		var extra: Dictionary = b[6] if b.size() > 6 and b[6] is Dictionary else {}
+		if (extra.has("lm") and has_model(String(extra.lm))) or shafts.hidden.has(bi):
+			not_drawn[bi] = true
+	var pushes := _wall_pushes(not_drawn)
 	for bi in map.buildings.size():
 		var b: Array = map.buildings[bi]
 		var ring := map.bld_rings[bi]
-		if ring.size() < 3:
+		if ring.size() < 3 or not_drawn.has(bi):
 			continue
 		var extra: Dictionary = b[6] if b.size() > 6 and b[6] is Dictionary else {}
-		if extra.has("lm") and has_model(String(extra.lm)):
-			continue
-		if shafts.hidden.has(bi):
-			continue
 		var centre := Vector2.ZERO
 		for p in ring:
 			centre += p
@@ -757,9 +1085,20 @@ func build_buildings() -> void:
 		var c := _chunk_of(centre)
 		if not batches.has(c):
 			batches[c] = MeshBatch.new(true, true)
+		_push = float(pushes.get(bi, 0.0))
+		_cur_bi = bi
 		_add_building(batches[c], ring, String(b[0]), float(b[1]), String(b[3]), centre, extra)
+	_push = 0.0
+	_cur_bi = -1
 	for c in batches:
 		_add_mesh(group, (batches[c] as MeshBatch).commit(), mat)
+
+## The baked detail textures (tools/build_building_textures.py) building.gdshader multiplies onto its facades and roofs.
+static func apply_building_textures(mat: ShaderMaterial) -> void:
+	for pair in [["tex_wall", "building_wall"], ["tex_brick", "building_brick"], ["tex_roof", "building_roof"]]:
+		var path := "res://textures/buildings/%s.png" % pair[1]
+		if ResourceLoader.exists(path):
+			mat.set_shader_parameter(pair[0], load(path))
 
 func _palette(kind: String, seed: float, centre: Vector2) -> Array:
 	var wall: String
@@ -863,6 +1202,11 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 	# pitched roofs over footprints close to a rectangle
 	var rect := []
 	var pitched := roof_shape in ["hipped", "gabled", "pyramidal", "half_hipped", "mansard"] and height < 18.0
+	if not roof_surfaces.is_empty() and extra.has("rh"):
+		# a survey that puts the ridge 5 m over the eaves of a 4 m wide shed raised a tower of wall; build it from the footprint
+		var lod_rect := min_rect(r)
+		if not lod_rect.is_empty() and (float(extra.rh) - eave_height) > 1.6 * maxf(float(lod_rect[3]), 0.5):
+			roof_surfaces = []
 	if not roof_surfaces.is_empty():
 		# LoD2 roof planes: map x, y and a height over the building's highest ground
 		if _add_lod2_roof(mb, roof_surfaces, hi, base, roof, wall, uv2_roof, uv2_wall):
@@ -872,7 +1216,6 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 		rect = min_rect(r)
 		if rect.is_empty() or absf(ring_area(r)) / maxf(float(rect[4]), 1e-3) < 0.78 or float(rect[3]) > 13.0:
 			pitched = false
-	var along := 0.0
 	var n := r.size()
 	for i in n:
 		var a := r[i]
@@ -883,11 +1226,7 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 		var out := Vector3(-(b.y - a.y), 0.0, b.x - a.x).normalized()
 		if out.dot(Vector3((a.x + b.x) * 0.5 - centre.x, 0.0, (a.y + b.y) * 0.5 - centre.y)) < 0.0:
 			out = -out
-		var v0 := base - hi
-		var v1 := eave - hi
-		mb.flat_quad(Vector3(a.x, base, a.y), Vector3(b.x, base, b.y), Vector3(b.x, eave, b.y), Vector3(a.x, eave, a.y), out, wall,
-			[Vector2(along, v0), Vector2(along + ln, v0), Vector2(along + ln, v1), Vector2(along, v1)], uv2_wall)
-		along += ln
+		_wall(mb, a, b, base, eave, eave, out, wall, hi, seed, float(code))
 	if pitched and roof_surfaces.is_empty():
 		var cen: Vector2 = rect[0]
 		var ax: Vector2 = rect[1]
@@ -977,6 +1316,8 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 					Vector3(ai.x, eave + parapet, ai.y), Vector3.UP, wall.darkened(0.2),
 					[Vector2.ZERO, Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)], Vector2(seed, 3.0))
 				var out := -inn
+				if _parapet_covered(a, b, eave, eave + parapet):
+					continue # a taller neighbour's wall stands in this plane right over it
 				mb.flat_quad(Vector3(a.x, eave, a.y), Vector3(b.x, eave, b.y), Vector3(b.x, eave + parapet, b.y),
 					Vector3(a.x, eave + parapet, a.y), Vector3(out.x, 0.0, out.y), wall,
 					[Vector2.ZERO, Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)], Vector2(seed, 3.0))
@@ -1021,6 +1362,11 @@ func _add_lod2_roof(mb: MeshBatch, faces: Array, hi: float, base: float, roof: C
 		var flat := PackedVector2Array()
 		for q in poly:
 			flat.append(Vector2(q.dot(ax), q.dot(ay)))
+		# tile UVs run along the eave (u) and up the slope (v), both in metres in the plane, from the plane's lowest
+		# corner: the roof texture's courses then follow the eave on every plane, whichever way the building faces
+		var corner := Vector2(INF, INF)
+		for q in flat:
+			corner = corner.min(q)
 		var tris := Geometry2D.triangulate_polygon(flat)
 		if tris.is_empty():
 			tris = Geometry2D.triangulate_delaunay(flat)
@@ -1033,12 +1379,11 @@ func _add_lod2_roof(mb: MeshBatch, faces: Array, hi: float, base: float, roof: C
 			var p2 := poly[ic]
 			if (p1 - p0).cross(p2 - p0).length() < 1e-4:
 				continue
-			mb.flat_tri(p0, p1, p2, nrm, Vector2(p0.x, p0.z), Vector2(p1.x, p1.z), Vector2(p2.x, p2.z), roof, uv2_roof)
+			mb.flat_tri(p0, p1, p2, nrm, flat[ia] - corner, flat[ib] - corner, flat[ic] - corner, roof, uv2_roof)
 			drawn += 1
 	if drawn == 0:
 		return false
 	# outline edges: an edge whose midpoint lies on another plane's edge is a ridge, hip or valley
-	var along := 0.0
 	for pi in polys.size():
 		var poly := polys[pi]
 		var cen := Vector2.ZERO
@@ -1074,9 +1419,7 @@ func _add_lod2_roof(mb: MeshBatch, faces: Array, hi: float, base: float, roof: C
 			var out := Vector3(t.y, 0.0, -t.x)
 			if Vector2(out.x, out.z).dot((a2 + b2) * 0.5 - cen) < 0.0:
 				out = -out
-			mb.flat_quad(Vector3(a.x, base, a.z), Vector3(b.x, base, b.z), b, a, out, wall,
-				[Vector2(along, base - hi), Vector2(along + ln, base - hi), Vector2(along + ln, b.y - hi), Vector2(along, a.y - hi)], uv2_wall)
-			along += ln
+			_wall(mb, a2, b2, base, a.y, b.y, out, wall, hi, uv2_wall.x, uv2_wall.y)
 	return true
 
 # ============================================================================================ trees
@@ -1151,12 +1494,65 @@ func build_trees() -> void:
 		imp.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 ## Plot fences are baked as short independent segments so gaps remain clear for driveways.
+## Fence segments that a longer, parallel one within 0.8 m already covers (a mapped barrier next to a generated
+## plot boundary): both would draw, and their panels cross like a double fence. Returns {index: true}.
+func _doubled_fences(walls: Array) -> Dictionary:
+	var order: Array = []
+	var cells := {}
+	for wi in walls.size():
+		var w: Array = walls[wi]
+		var style := int(w[4]) if w.size() > 4 else 0
+		if style == 2 or style == 4:
+			continue
+		var len := Vector2(float(w[2]) - float(w[0]), float(w[3]) - float(w[1])).length()
+		if len >= 0.35:
+			order.append([len, wi])
+	order.sort_custom(func(x: Array, y: Array) -> bool: return x[0] > y[0])
+	var skip := {}
+	for entry: Array in order:
+		var wi: int = entry[1]
+		var w: Array = walls[wi]
+		var a := Vector2(float(w[0]), float(w[1]))
+		var d := Vector2(float(w[2]), float(w[3])) - a
+		var ln: float = entry[0]
+		var t := d / ln
+		var n := Vector2(-t.y, t.x)
+		var mid := a + d * 0.5
+		var cell := Vector2i(floori(mid.x / 6.0), floori(mid.y / 6.0))
+		var covered := false
+		for dx in range(-1, 2):
+			for dy in range(-1, 2):
+				for oi: int in cells.get(cell + Vector2i(dx, dy), []):
+					var o: Array = walls[oi]
+					var oa := Vector2(float(o[0]), float(o[1]))
+					var ob := Vector2(float(o[2]), float(o[3]))
+					var ot := (ob - oa) / maxf(oa.distance_to(ob), 1e-3)
+					if absf(t.cross(ot)) > 0.1:
+						continue
+					if absf((oa - a).dot(n)) > 0.8 or absf((ob - a).dot(n)) > 0.8:
+						continue
+					var s0 := clampf((oa - a).dot(t), 0.0, ln)
+					var s1 := clampf((ob - a).dot(t), 0.0, ln)
+					if absf(s1 - s0) > ln * 0.8:
+						covered = true
+		if covered:
+			skip[wi] = true
+		else:
+			if not cells.has(cell):
+				cells[cell] = []
+			cells[cell].append(wi)
+	return skip
+
 func build_fences() -> void:
 	var group := _group("Garden Fences")
 	var fence := _model("Fence", _fallback_fence)
 	var xfs := []
 	var walls: Array = map.raw.get("fences", [])
-	for w in walls:
+	var doubled := _doubled_fences(walls)
+	for wi in walls.size():
+		if doubled.has(wi):
+			continue
+		var w: Array = walls[wi]
 		var a := Vector2(float(w[0]), float(w[1]))
 		var b := Vector2(float(w[2]), float(w[3]))
 		var d := b - a

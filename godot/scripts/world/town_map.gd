@@ -19,7 +19,6 @@ const DRIVE_REACH := 1.5 ## metres beyond a road's edge where its deck still hol
 const BED_STEP := 10.0 ## metres: the drawn terrain mesh's vertex spacing (TownBuilder), which the car rides on
 const POND_DEPTH := 1.4 ## m: the terrain sinks this far below a pond's surface
 const EMBANKMENT := 1.5 ## horizontal metres per metre of height of a raised road's earth embankment
-const RAMP_GRADE := 0.07 ## slope of a rebuilt approach ramp to a bridge
 const PIER_R := 0.8 ## m: collision radius of a bridge pier (the drawn pier is 1.4 m square)
 const PIER_SPACING := 22.0 ## m along a bridge between piers
 const RAIL_HALF := 2.4 ## m: half the width of the ballast bed a railway runs on, with its kerb
@@ -131,7 +130,6 @@ func _load(map_key: String) -> bool:
 	tny = int(t.ny)
 	th = PackedFloat32Array(t.h)
 	_load_roads()
-	_ramp_approaches()
 	_load_buildings()
 	_load_obstacles()
 	_load_rails()
@@ -170,54 +168,6 @@ func ground(x: float, y: float) -> float:
 	return lerpf(lerpf(a, b, u), lerpf(c, d, u), v)
 
 # ---------------------------------------------------------------------------------------------- roads
-
-## The baked data sometimes ends a road at ground level where a bridge or raised road with a deck several metres up
-## begins (the approach ramp is missing on that side): the car then drives under the bridge instead of onto it.
-## Raise the low road's last stretch into a ramp (RAMP_GRADE) up to the deck it meets; the town builder reads the
-## same road_z, so the drawn road follows. Roads that are bridges themselves are left alone.
-func _ramp_approaches() -> void:
-	var ends := {} # rounded end point -> [[road, at start?, deck height there]]
-	for ri in road_pts.size():
-		var pts := road_pts[ri]
-		var z := road_z[ri]
-		for at_start in [true, false]:
-			var p := pts[0] if at_start else pts[pts.size() - 1]
-			var key := Vector2i(roundi(p.x * 10.0), roundi(p.y * 10.0))
-			var h := 0.0
-			if not z.is_empty():
-				h = z[0] if at_start else z[z.size() - 1]
-			if not ends.has(key):
-				ends[key] = []
-			ends[key].append([ri, at_start, h])
-	for key in ends:
-		var list: Array = ends[key]
-		if list.size() < 2:
-			continue
-		var top := 0.0
-		for e in list:
-			top = maxf(top, float(e[2]))
-		if top < 0.5:
-			continue
-		for e in list:
-			var ri: int = e[0]
-			if road_bridge[ri] == 1 or float(e[2]) > top - 0.3:
-				continue
-			var pts := road_pts[ri]
-			var z := road_z[ri]
-			if z.is_empty():
-				z.resize(pts.size())
-				z.fill(0.0)
-			var n := pts.size()
-			var run_len := 0.0
-			for k in n:
-				var idx: int = k if e[1] else n - 1 - k
-				if k > 0:
-					run_len += pts[idx].distance_to(pts[idx - 1 if e[1] else idx + 1])
-				var want := top - run_len * RAMP_GRADE
-				if want <= 0.0:
-					break
-				z[idx] = maxf(z[idx], want)
-			road_z[ri] = z
 
 func _load_roads() -> void:
 	var lanes_default := {"motorway": 2, "secondary": 2, "tertiary": 2, "residential": 2, "unclassified": 2}
@@ -666,7 +616,7 @@ func walls_near(p: Vector2, r: float) -> Array[PackedFloat32Array]:
 				continue
 			var walls: PackedFloat32Array = _wall_cells[ck]
 			for k in range(0, walls.size(), 5):
-				var key := "%0.1f,%0.1f,%0.1f,%0.1f" % [walls[k], walls[k + 1], walls[k + 2], walls[k + 3]]
+				var key := Vector4i(roundi(walls[k] * 10.0), roundi(walls[k + 1] * 10.0), roundi(walls[k + 2] * 10.0), roundi(walls[k + 3] * 10.0))
 				if seen.has(key):
 					continue
 				seen[key] = true

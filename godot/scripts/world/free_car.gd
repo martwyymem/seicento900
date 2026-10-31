@@ -106,6 +106,9 @@ func respawn() -> void:
 	var side := Vector2(-dir.y, dir.x) * (1.0 if cos(h - atan2(dir.y, dir.x)) > 0.0 else -1.0)
 	var lane := 0.0 if map.road_oneway[near.road] else map.road_w[near.road] * 0.22
 	place(near.pos + side * lane, h)
+	# on the road it was put back on (the deck of a bridge, not the street under it)
+	z = map.ground(car.x, car.y) + map.deck_at(int(near.road), int(near.i), float(near.t))
+	road = map.road_at(car.x, car.y, z)
 
 func speed_kmh() -> float:
 	return absf(car.speed) * 3.6
@@ -114,11 +117,25 @@ func speed_kmh() -> float:
 func support(x: float, y: float) -> float:
 	var g := map.ground(x, y)
 	# the drawn terrain: ponds and river beds slope down their banks (a dyke track through the fishponds stays up)
-	if map.road_at(x, y).is_empty():
+	var lowest := map.road_at(x, y)
+	if lowest.is_empty():
 		g = map.terrain(x, y)
 	var best := g
 	var best_d := absf(g - z)
-	for d in map.decks_at(x, y, TownMap.DRIVE_REACH):
+	# a raised road that is no bridge stands on a solid embankment: where it is the lowest road on the spot the bare
+	# ground under it is out of reach, or a car at the foot of a ramp stays down there while the road rises over it
+	if not lowest.is_empty() and float(lowest.deck) > 0.05 and map.road_bridge[int(lowest.road)] != 1:
+		best_d = INF
+	var decks := map.decks_at(x, y, TownMap.DRIVE_REACH)
+	# on a raised road's own carriageway another road's side slope is no surface (a junction of two embankments)
+	var on_solid := false
+	for d in decks:
+		if not d[5] and float(d[2]) <= 0.0 and float(d[1]) > 0.05:
+			on_solid = true
+			break
+	for d in decks:
+		if on_solid and not d[5] and float(d[2]) > 0.0:
+			continue
 		var over := maxf(float(d[2]), 0.0)
 		var deck: float = d[1]
 		if d[5]:

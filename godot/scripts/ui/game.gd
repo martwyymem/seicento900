@@ -322,6 +322,7 @@ var two_compounds_toggle: CheckButton
 var refuel_toggle: CheckButton
 var collisions_toggle: CheckButton
 var race_control_toggle: CheckButton
+var damage_toggle: CheckButton ## crash damage that costs power, grip and parts (off: dents only)
 var dynamic_toggle: CheckButton
 var draft_toggle: CheckButton
 var strategist_toggle: CheckButton
@@ -1081,6 +1082,11 @@ func _build_setup() -> void:
 	race_control_toggle.tooltip_text = "Flags, safety car, red flags, stewards' penalties and crash damage"
 	dynamic_toggle = _check_field(row8, "Live wear and stops", true)
 	dynamic_toggle.tooltip_text = "Tyre wear and fuel follow how hard each car is driven, and pit stops follow the live state of tyres and tank instead of the starting plan"
+	var row9 := HBoxContainer.new()
+	row9.add_theme_constant_override("separation", 10)
+	rules.add_child(row9)
+	damage_toggle = _check_field(row9, "Mechanical damage", false)
+	damage_toggle.tooltip_text = "Off: crashes only dent and scuff the bodywork. On: they cost power, grip and parts, for you and every rival alike (rally stages and championships with damage always have it)"
 	var bot_row := HBoxContainer.new()
 	bot_row.add_theme_constant_override("separation", 14)
 	rules.add_child(bot_row)
@@ -1993,7 +1999,7 @@ func _race_setting_controls() -> Dictionary:
 		"weather": weather_picker, "gearbox": gearbox_picker, "grid": grid_picker, "quali": quali_picker, "assists": assists_picker,
 		"wear_mult": wear_picker, "fuel_mult": fuel_picker, "mandatory_stop": mandatory_stop_toggle,
 		"two_compounds": two_compounds_toggle, "refuel": refuel_toggle, "collisions": collisions_toggle,
-		"race_control": race_control_toggle, "dynamic_running": dynamic_toggle, "draft": draft_toggle,
+		"race_control": race_control_toggle, "mechanical_damage": damage_toggle, "dynamic_running": dynamic_toggle, "draft": draft_toggle,
 		"auto_strategist": strategist_toggle, "parallel": parallel_toggle, "crew": crew_picker,
 		"ai_learning": ai_learning_picker, "bot_physics": bot_physics_picker, "player_name": player_name_edit,
 		"player_number": player_number_picker, "player_color": player_color_picker, "stripes": player_stripes_toggle, "finish": player_finish_picker, "car_class": car_class_picker,
@@ -3979,6 +3985,8 @@ func _set_up_race() -> void:
 	settings.refuel = refuel_toggle.button_pressed
 	settings.collisions = collisions_toggle.button_pressed
 	settings.race_control = race_control_toggle.button_pressed
+	# mechanical damage is opt-in; a championship with Damage & Repairs on has it (its service area needs it)
+	settings.mechanical_damage = damage_toggle.button_pressed or (is_championship_mode and _service_allocation() > 0)
 	settings.dynamic_running = dynamic_toggle.button_pressed
 	settings.draft = draft_toggle.button_pressed
 	settings.auto_strategist = strategist_toggle.button_pressed
@@ -4328,19 +4336,13 @@ func _show_quali_sheet(qrace: Race, rows: Array, simulated: bool) -> void:
 	col.add_child(sub_label)
 	_add_record_note(col, qrace)
 
-	var widths := [46, 44, 250, 130, 110, 130]
-	var table := VBoxContainer.new()
-	table.add_theme_constant_override("separation", 3)
+	# data first: position, driver, time, gap (the speed is a muted last column); a long field scrolls
+	# inside the table so the header stays up
+	var table := ResultTable.new()
 	col.add_child(table)
-	table.add_child(_result_row(["POS", "NO.", "DRIVER", "LAP TIME", "GAP", "AVG SPEED"], widths,
-		CmrStyle.box(Color(0, 0, 0, 0.25), Color.TRANSPARENT, 14, 3), CmrStyle.ORANGE_SOFT, 12))
+	table.setup(ResultTable.quali_columns(), _table_room(300.0))
 	for r in rows:
-		var cells := [str(r.pos), str(r.number), r.name,
-			Race.fmt_time(r.time) if r.time != null else "NO TIME",
-			("+%.3f" % r.gap) if r.gap != null and r.pos > 1 else "",
-			("%.1f km/h" % r.speed) if r.speed != null else ""]
-		var fill: Color = CmrStyle.ORANGE if r.is_player else (CmrStyle.FIELD if r.pos % 2 == 1 else CmrStyle.FIELD_DIM)
-		table.add_child(_result_row(cells, widths, CmrStyle.box(fill, Color.TRANSPARENT, 14, 3), CmrStyle.INK, 15, r.color))
+		table.add_row(ResultTable.quali_cells(r), r.is_player, r.color, r.time == null)
 
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 10)
@@ -4414,15 +4416,7 @@ func _round_points(r: Dictionary) -> int:
 	return _points_table()[r.pos - 1]
 
 func _sorted_standings() -> Array:
-	var list: Array = champ_data.get("table", {}).values()
-	list.sort_custom(func(a, b):
-		if a.points != b.points:
-			return a.points > b.points
-		if a.wins != b.wins:
-			return a.wins > b.wins
-		return int(a.get("id", 0)) < int(b.get("id", 0))
-	)
-	return list
+	return ResultTable.rank_standings(champ_data.get("table", {}).values()).map(func(r: Dictionary) -> Dictionary: return r.entry)
 
 func _render_championship_standings(col: VBoxContainer) -> void:
 	var list := _sorted_standings()
@@ -4433,16 +4427,18 @@ func _render_championship_standings(col: VBoxContainer) -> void:
 	var div := _label(heading, 16, ACCENT)
 	div.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(div)
-	var table := VBoxContainer.new()
-	table.add_theme_constant_override("separation", 3)
+	var table := ResultTable.new()
 	col.add_child(table)
-	var widths := [46, 44, 250, 60, 70]
-	table.add_child(_result_row(["POS", "NO.", "DRIVER", "WINS", "POINTS"], widths, CmrStyle.box(Color(0, 0, 0, 0.25), Color.TRANSPARENT, 14, 3), CmrStyle.ORANGE_SOFT, 12))
-	for i in list.size():
-		var e: Dictionary = list[i]
-		var fill: Color = CmrStyle.ORANGE if e.get("is_player", false) else (CmrStyle.FIELD if i % 2 == 0 else CmrStyle.FIELD_DIM)
-		table.add_child(_result_row([str(i + 1), str(int(e.get("number", 0))), str(e.name), str(int(e.wins)), str(int(e.points))],
-			widths, CmrStyle.box(fill, Color.TRANSPARENT, 14, 3), CmrStyle.INK, 15))
+	table.setup(ResultTable.standings_columns(), _table_room(330.0))
+	var ranked := ResultTable.rank_standings(list)
+	var leader_points: int = int(ranked[0].entry.points) if not ranked.is_empty() else 0
+	for r in ranked:
+		table.add_row(ResultTable.standings_cells(r, leader_points), r.entry.get("is_player", false), null, false)
+
+## Height a results table may take before it scrolls: what the canvas leaves after the title, notes and
+## buttons around it (chrome px).
+func _table_room(chrome: float) -> float:
+	return clampf(get_viewport_rect().size.y - 40.0 - chrome - 60.0, 160.0, 560.0)
 
 ## Scores a round once, however many times its results are shown. No points for a DNF.
 func _score_championship_round(results: Array) -> void:
