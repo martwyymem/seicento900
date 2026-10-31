@@ -120,7 +120,8 @@ func _spawn(from_node: String, e: Array, pts: PackedVector2Array, s: float) -> v
 	root.add_child(node)
 	var ri: int = e[1]
 	var limit := map.road_limit[ri] / 3.6
-	var c := {"node": node, "from": from_node, "edge": e, "pts": pts, "len": _poly_len(pts), "s": s,
+	var c := {"node": node, "from": from_node, "edge": e, "pts": pts, "len": _poly_len(pts), "s": s, "i0": int(e[2]),
+		"istep": 1 if int(e[3]) >= int(e[2]) else -1,
 		"v": limit * 0.8, "want": limit * (0.75 + _rng.randf() * 0.25), "pos": Vector2.ZERO, "dir": Vector2.RIGHT,
 		"heading": 0.0, "knock": 0.0, "push": Vector2.ZERO, "spin": 0.0, "near": false, "kind": kind, "y": 0.0}
 	_place(c)
@@ -137,7 +138,7 @@ func spawn_ahead(player: FreeCar, kind: String, gap := 22.0) -> void:
 	root.add_child(node)
 	var c := {"node": node, "from": "", "edge": ["", ri], "pts": pts, "len": 60.0, "s": 0.0,
 		"v": 0.0, "want": 0.0, "pos": Vector2.ZERO, "dir": dir, "heading": 0.0, "knock": 0.0, "push": Vector2.ZERO,
-		"spin": 0.0, "near": false, "kind": kind, "y": 0.0}
+		"spin": 0.0, "near": false, "kind": kind, "y": player.z}
 	_place(c)
 	cars.append(c)
 
@@ -208,6 +209,23 @@ func _lane(ri: int) -> float:
 		return map.road_w[ri] * (0.22 if map.road_lanes[ri] >= 2 else 0.0)
 	return map.road_w[ri] * 0.25
 
+## Height of a car on its own road: the deck of the road it drives (never the nearest layer in height), so a car
+## on a bridge stays on the deck and one underneath stays on the ground. Cars with no road index (the dev menu's
+## parked ones) keep to the layer they were first put on.
+func _layer_y(c: Dictionary, at: Array, p: Vector2) -> float:
+	var ri: int = c.edge[1]
+	var g := map.ground(p.x, p.y)
+	if c.has("i0"):
+		var z := map.road_z[ri]
+		if z.is_empty():
+			return g - TownBuilder.ROAD_LIFT * 0.5 + 0.1
+		var ia: int = clampi(int(c.i0) + int(at[2]) * int(c.istep), 0, z.size() - 1)
+		var ib: int = clampi(ia + int(c.istep), 0, z.size() - 1)
+		return g + lerpf(z[ia], z[ib], float(at[3])) - TownBuilder.ROAD_LIFT * 0.5 + 0.1
+	var y_ref: float = float(c.get("y", 0.0))
+	var hit := map.road_at(p.x, p.y, y_ref if y_ref != 0.0 else -INF, 1.0)
+	return float(hit.height) - TownBuilder.ROAD_LIFT * 0.5 + 0.1 if not hit.is_empty() else g
+
 func _place(c: Dictionary) -> void:
 	var at := _point_on(c.pts, c.s)
 	var dir: Vector2 = at[1]
@@ -218,8 +236,7 @@ func _place(c: Dictionary) -> void:
 	c.dir = dir
 	var h := atan2(dir.y, dir.x) + float(c.spin)
 	c.heading = h
-	var hit := map.road_at(p.x, p.y, -INF, 1.0)
-	var y: float = float(hit.height) - TownBuilder.ROAD_LIFT * 0.5 + 0.1 if not hit.is_empty() else map.ground(p.x, p.y)
+	var y := _layer_y(c, at, p)
 	c.y = y
 	var node: Node3D = c.node
 	node.position = Vector3(p.x, y, p.y)

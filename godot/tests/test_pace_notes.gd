@@ -136,6 +136,7 @@ func _service(errors: Array[String]) -> void:
 	var st := RaceSettings.new()
 	st.track = "fiat"
 	st.opponents = 1
+	st.mechanical_damage = true # (a circuit race is cosmetic-only unless it is opted in)
 	var race := Race.new(st, null, 2)
 	var p := race.player
 	race.rc.hurt(p, 6.0, true, 0.95)

@@ -710,6 +710,7 @@ func _banner_label(size: int) -> Label:
 	return l
 
 func _text(c: Control, at: Vector2, s: String, size: int, color: Color, bold := false, align := HORIZONTAL_ALIGNMENT_LEFT, width := -1.0) -> void:
+	_audit_text(c, _bold if bold else _font, at, s, align, width, size)
 	c.draw_string(_bold if bold else _font, at, s, align, width, size, color)
 
 ## The CMR 2.0 bar: a plain rectangle, bright at one end fading to translucent violet at the other.
@@ -814,6 +815,14 @@ func _q(at: Vector2, s: String, size: int, color: Color, font: Font = null, alig
 		_queued.append([maxi(2, size / 9), f, at, s, align, width, size, _shade(0.85 * color.a)])
 	_queued.append([0, f, at, s, align, width, size, color])
 
+## Layout tests set this to an Array: every string the panels draw is then recorded as
+## [canvas, font, baseline, text, align, width, size] so a test can check each one fits its panel.
+var text_audit = null
+
+func _audit_text(c: Control, f: Font, at: Vector2, s: String, align: int, width: float, size: int) -> void:
+	if text_audit != null:
+		text_audit.append([c, f, at, s, align, width, size])
+
 ## The queued text, outlines first, grouped by font and size so each group's glyphs batch together.
 func _q_flush(c: Control) -> void:
 	var groups := {}
@@ -830,6 +839,7 @@ func _q_flush(c: Control) -> void:
 			if t[0] > 0:
 				c.draw_string_outline(t[1], t[2], t[3], t[4], t[5], t[6], t[0], t[7])
 			else:
+				_audit_text(c, t[1], t[2], t[3], t[4], t[5], t[6])
 				c.draw_string(t[1], t[2], t[3], t[4], t[5], t[6], t[7])
 	_queued.clear()
 
@@ -1850,6 +1860,7 @@ var SECTOR_COLORS: Dictionary:
 const TT_RESTART_HINT := "T / Ⓨ  RESTART"
 
 func _mt(c: Control, at: Vector2, s: String, size: int, col: Color, font: Font = null, align := HORIZONTAL_ALIGNMENT_LEFT, width := -1.0) -> void:
+	_audit_text(c, font if font else _bold, at, s, align, width, size)
 	c.draw_string(font if font else _bold, at, s, align, width, size, col)
 
 static func _signed(x: float) -> String:

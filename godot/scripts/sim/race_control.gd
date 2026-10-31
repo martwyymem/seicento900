@@ -137,6 +137,14 @@ func hurt(car: RaceCar, dv: float, into_barrier := false, f := 0.0) -> bool:
 		return false
 	var x := (dv - DMG_FLOOR) / DMG_SPAN
 	var add := x * x
+	if not race.mechanical_damage:
+		# circuit races: the same hit dents and scuffs every car, and costs none of them anything
+		var cside := Service.zone(f)
+		if cside == "side":
+			cside = "left" if (car.id + int(car.scuff * 997.0)) % 2 == 0 else "right"
+		car.dents[cside] = minf(1.0, float(car.dents[cside]) + add * 3.0)
+		car.scuff = minf(1.0, car.scuff + add)
+		return false
 	var before := car.damage
 	var parts_before: Dictionary = car.parts.duplicate()
 	car.damage = minf(1.0, car.damage + add)
@@ -199,6 +207,7 @@ func repair_time(car: RaceCar) -> float:
 
 func repaired(car: RaceCar) -> void:
 	car.damage = 0.0
+	car.scuff = 0.0
 	car.dmg_pull = 0.0
 	car.dents = {"front": 0.0, "rear": 0.0, "left": 0.0, "right": 0.0}
 	car.parts = {}
@@ -233,7 +242,7 @@ func report_contact(a: RaceCar, b: RaceCar, nx: float, ny: float, dv_a: float, d
 				at_fault = null
 				victim = null
 		inc = {"a": a, "b": b, "t": race.clock, "last": race.clock, "dv": 0.0, "at_fault": at_fault,
-			"victim": victim, "under": no_pass(a) or no_pass(b), "vic_dmg": victim.damage if victim else 0.0,
+			"victim": victim, "under": no_pass(a) or no_pass(b), "vic_dmg": victim.damage + victim.scuff if victim else 0.0,
 			"announced": false}
 		incidents[key] = inc
 	# where each car was hit: b lies along n from a, a along -n from b
@@ -262,7 +271,7 @@ func _decide(inc: Dictionary) -> void:
 		return
 	var vic: RaceCar = inc.victim
 	var spun: bool = vic.spin_t >= inc.t - 0.1
-	var harm: float = vic.damage - inc.vic_dmg
+	var harm: float = vic.damage + vic.scuff - inc.vic_dmg
 	var secs := 0
 	if vic.wrecked:
 		secs = 10

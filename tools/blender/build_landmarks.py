@@ -32,6 +32,9 @@ towards the circuit by Godot), Z up, origin on the ground at the footprint's cen
                    helmet and four corner turrets, a pointed arch through the ground floor along Y
   PszczynaCastle   Pszczyna: the castle (58 x 45 m): a long front block to -Y with a clock tower, two
                    wings back to +Y round the court, hipped slate roofs, cream plaster
+  WilamowiceChurch Wilamowice: the parish church of the Holy Trinity (49.6 x 23.2 m, from its OSM footprint): a
+                   square west tower with a copper spire at -X, a gabled nave, a wide transept, low side
+                   chapels and a lower chancel at +X
   Yacht_S/M/L      motor yachts of 14, 28 and 50 m for Monaco's harbour, bow to +X, waterline at z=0
 """
 import bpy
@@ -631,6 +634,73 @@ def pszczyna_castle():
 	return mb
 
 
+def gable_y(mb, x0, x1, y0, y1, z, rise, roof, o=0.5):
+	"""A gabled roof over x0..x1 x y0..y1 whose ridge runs along Y (the cross arm of a church)."""
+	mb.colour = srgb(roof)
+	xm = (x0 + x1) / 2
+	a, b, c, d = (x0 - o, y0 - o, z), (x1 + o, y0 - o, z), (x1 + o, y1 + o, z), (x0 - o, y1 + o, z)
+	r0, r1 = (xm, y0 - o, z + rise), (xm, y1 + o, z + rise)
+	mb.poly([a, d, r1, r0], "Roof", Vector((-1, 0, 1)))
+	mb.poly([b, r0, r1, c], "Roof", Vector((1, 0, 1)))
+	mb.poly([a, r0, b], "Roof", (0, -1, 0))
+	mb.poly([d, c, r1], "Roof", (0, 1, 0))
+	mb.poly([a, d, c, b], "Roof", (0, 0, -1))
+
+
+def wilamowice_church():
+	"""The parish church of the Holy Trinity: tower at -X, nave, transept, side chapels, chancel at +X."""
+	mb = MB()
+	wall, roof, trim = "#e4d8bd", "#6a3b30", "#f1eadb"
+	# the nave: plastered walls under a steep gable running along X
+	mb.colour = srgb(wall)
+	mb.box((-17.5, -7.2, 0), (13.5, 7.2, 9.5), "Plaster", skip=("+z",))
+	mb.colour = srgb(roof)
+	mb.prism([(-7.9, 9.4), (7.9, 9.4), (0.0, 16.2)], -18.0, 14.0, "Roof")
+	# the transept: a wide cross arm across the nave, ridge along Y
+	mb.colour = srgb(wall)
+	mb.box((6.0, -11.4, 0), (17.0, 11.4, 9.5), "Plaster", skip=("+z",))
+	gable_y(mb, 6.0, 17.0, -11.4, 11.4, 9.5, 6.0, roof)
+	# low side chapels either side of the nave, west of the transept
+	hip_block(mb, -19.0, -9.0, -9.7, 9.7, 0, 5.8, 2.4, wall, roof, win_rows=(1.6,), win_h=2.2)
+	# the chancel: narrower and lower, closing the east end
+	hip_block(mb, 16.0, 24.8, -4.7, 4.7, 0, 7.4, 3.2, wall, roof, win_rows=(1.8,), win_h=3.0)
+	# the west tower: square shaft, belfry with louvres, clock faces and a tall copper spire
+	mb.colour = srgb(wall)
+	mb.box((-24.8, -4.2, 0), (-16.8, 4.2, 26.0), "Plaster")
+	mb.colour = srgb("#cfc4a8")
+	mb.box((-25.0, -4.4, 0), (-16.6, 4.4, 1.6), "Plaster")
+	mb.colour = srgb(trim)
+	mb.box((-25.0, -4.4, 24.0), (-16.6, 4.4, 24.5), "Plaster")
+	mb.colour = srgb("#2a2f36")
+	for (x, y, nrm) in ((-24.82, 0.0, (-1, 0, 0)), (-16.78, 0.0, (1, 0, 0))):
+		mb.quad((x, y - 0.9, 18.5), (x, y + 0.9, 18.5), (x, y + 0.9, 22.5), (x, y - 0.9, 22.5), "Glass", nrm)
+	for (y, nrm) in ((-4.22, (0, -1, 0)), (4.22, (0, 1, 0))):
+		mb.quad((-21.8, y, 18.5), (-19.8, y, 18.5), (-19.8, y, 22.5), (-21.8, y, 22.5), "Glass", nrm)
+	mb.colour = srgb("#f1efe6")
+	for sgn in (-1, 1):
+		c = Vector((-24.83 if sgn < 0 else -16.77, 0.0, 14.0))
+		ring = [c + Vector((0, 1.3 * math.cos(2 * math.pi * j / 14), 1.3 * math.sin(2 * math.pi * j / 14))) for j in range(14)]
+		mb.poly(ring if sgn < 0 else list(reversed(ring)), "White", (sgn, 0, 0))
+	# the west portal
+	pointed_arch(mb, -24.82, 0.0, (-1, 0), 1.3, 4.0)
+	mb.colour = srgb("#3d6e5c")
+	mb.lathe([(26.0, 5.6), (26.6, 5.7), (29.0, 4.4), (33.0, 3.0), (33.6, 3.2), (36.0, 2.4), (40.0, 0.9), (46.0, 0.0)], 8, "Copper", centre=(-20.8, 0.0, 0.0))
+	mb.tube(Vector((-20.8, 0, 46.0)), Vector((-20.8, 0, 48.4)), 0.07, "Gold", segs=4)
+	# tall arched windows along the nave, the chapels and the transept ends
+	mb.colour = srgb("#2c3a42")
+	for k in range(5):
+		x = -13.0 + k * 5.2
+		for y, nrm in ((-7.22, (0, -1, 0)), (7.22, (0, 1, 0))):
+			if 3.5 < x < 9.0:  # (the transept stands there)
+				continue
+			mb.quad((x - 0.8, y, 2.6), (x + 0.8, y, 2.6), (x + 0.8, y, 7.4), (x - 0.8, y, 7.4), "Glass", nrm)
+	for y, nrm in ((-11.42, (0, -1, 0)), (11.42, (0, 1, 0))):
+		for x in (8.8, 14.2):
+			mb.quad((x - 0.8, y, 2.6), (x + 0.8, y, 2.6), (x + 0.8, y, 7.4), (x - 0.8, y, 7.4), "Glass", nrm)
+		mb.quad((10.7, y, 7.2), (12.3, y, 7.2), (12.3, y, 8.4), (10.7, y, 8.4), "Glass", nrm)
+	return mb
+
+
 # --------------------------------------------------------------------------- Monaco
 
 def casino():
@@ -878,7 +948,7 @@ PIECES = {
 	"IndyPagoda": indy_pagoda, "ScoringPylon": scoring_pylon, "FerrisWheel": ferris_wheel,
 	"TyreBridge": tyre_bridge, "MonzaPodio": monza_podio, "CastleKeep": castle_keep, "CastleTower": castle_tower,
 	"CastleWall": castle_wall, "Casino": casino, "SilverstoneWing": silverstone_wing,
-	"Barbakan": barbakan, "FloriaGate": floria_gate, "PszczynaCastle": pszczyna_castle, "Yacht_S": lambda: yacht(14.0), "Yacht_M": lambda: yacht(28.0), "Yacht_L": lambda: yacht(50.0),
+	"Barbakan": barbakan, "FloriaGate": floria_gate, "PszczynaCastle": pszczyna_castle, "WilamowiceChurch": wilamowice_church, "Yacht_S": lambda: yacht(14.0), "Yacht_M": lambda: yacht(28.0), "Yacht_L": lambda: yacht(50.0),
 }
 
 
@@ -910,6 +980,7 @@ def main():
 			"Barbakan": ((40, -55, 22), (0, 0, 7), 50),
 			"FloriaGate": ((28, -55, 26), (0, 0, 15), 45),
 			"PszczynaCastle": ((60, -95, 30), (0, -6, 8), 50),
+			"WilamowiceChurch": ((-70, -95, 40), (-3, 0, 17), 50),
 		}
 		for ob in objs.values():
 			ob.hide_render = True

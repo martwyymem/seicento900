@@ -2,13 +2,14 @@
 
     tools/street_routes/<key>.json      the route: the OSM way ids in loop order, where the start line is, the
                                         corner names (anchored to OSM nodes), and the TrackDef settings
-    python3 tools/build_street_tracks.py <key> [...] [--refetch] [--check PNG]
+    python3 tools/build_street_tracks.py <key> [...] [--refetch] [--check PNG] [--trams (only bake the tram rails)]
 
 Writes, like build_tracks.py + build_surroundings.py do for the circuits:
 
     godot/data/tracks/<key>.json        centreline (2 m samples), elevation, terrain grid, street names
     godot/data/tracks/<key>.tres        the TrackDef (settings from the route file, corners)
-    godot/data/tracks/<key>_env.json    the real surroundings (build_surroundings.py) plus "road_blockages":
+    godot/data/tracks/<key>_env.json    the real surroundings (build_surroundings.py) plus "tram_rails" (OSM railway=tram on the
+                                        carriageway, runs of [s, d, ...]; visual only) and "road_blockages":
                                         [[x, y, angle, width]] a barrier across every side road where it meets
                                         the route (angle: the barrier's direction, radians from +x towards +y)
     godot/data/tracks/<key>_land.png    the land map (build_surroundings.py)
@@ -311,6 +312,50 @@ def arm_point(arm, pts, clear):
     return None
 
 
+def tram_rails(osm, pts, half, P, step=1.0):
+    """OSM railway=tram alignment that lies on the carriageway, as runs in the track's own frame (visual only, no
+    collision): [[s, d, s, d, ...]] with s the distance along the centreline and d the signed offset across it
+    (+ to the left of the driving direction, the game's normal), sampled every `step` metres. Underground
+    (layer<0 / tunnel) and bridge-deck tram ways are skipped, as is any tram way off the road."""
+    n = len(pts)
+    seg = [math.dist(pts[i], pts[(i + 1) % n]) for i in range(n)]
+    ds = sum(seg) / n
+    lim = half - 0.9  # the rail bed has to fit on the tarmac
+    runs = []
+    for el in osm['elements']:
+        tags = el.get('tags', {})
+        if el['type'] != 'way' or tags.get('railway') != 'tram' or not el.get('geometry'):
+            continue
+        if tags.get('tunnel') in ('yes', 'building_passage') or tags.get('bridge') == 'yes' or float(tags.get('layer', 0) or 0) != 0:
+            continue
+        g = [P(p) for p in el['geometry'] if p]
+        dense = []
+        for a, b in zip(g, g[1:]):
+            L = math.dist(a, b)
+            for q in range(max(1, int(L / step))):
+                f = q * step / L if L else 0
+                dense.append((a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f))
+        dense.append(g[-1])
+        cur = []
+        for p in dense:
+            i = min(range(n), key=lambda j: (pts[j][0] - p[0]) ** 2 + (pts[j][1] - p[1]) ** 2)
+            c, nx = pts[i], pts[(i + 1) % n]
+            tx, ty = nx[0] - pts[i - 1][0], nx[1] - pts[i - 1][1]
+            tl = math.hypot(tx, ty) or 1.0
+            tx, ty = tx / tl, ty / tl
+            along = (p[0] - c[0]) * tx + (p[1] - c[1]) * ty
+            d = -(p[0] - c[0]) * ty + (p[1] - c[1]) * tx  # left normal: (-ty, tx)
+            if abs(d) <= lim and abs(along) < ds:
+                cur += [round(i * ds + along, 2), round(d, 2)]
+            else:
+                if len(cur) >= 12:
+                    runs.append(cur)
+                cur = []
+        if len(cur) >= 12:
+            runs.append(cur)
+    return runs
+
+
 def nearest(pts, p):
     """Distance from p to the nearest centreline sample (2 m apart, close enough for clearances)."""
     return math.sqrt(min((q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2 for q in pts))
@@ -344,6 +389,21 @@ def write_tres(cfg, corners):
     lines.append('corners = Array[ExtResource("1")]([' + ', '.join(f'SubResource("c{i + 1}")' for i in range(len(corners))) + '])')
     with open(os.path.join(GODOT_TRACKS, cfg['key'] + '.tres'), 'w') as f:
         f.write('\n'.join(lines) + '\n')
+
+
+def build_trams(key):
+    """Only re-bakes env["tram_rails"] into <key>_env.json from the cached OSM download (no other output changes)."""
+    cfg = json.load(open(os.path.join(ROUTES, key + '.json')))
+    bt.TRACKS[key] = dict(origin=tuple(cfg['origin']), dem=cfg['dem'], grid=cfg['grid'], godot=True)
+    P = bt.proj_for(key)
+    pts = centreline(cfg, route_data(cfg, False), P)[0]
+    osm = json.load(open(os.path.join(fs.OUT_DIR, key + '.json')))
+    runs = tram_rails(osm, pts, cfg['trackdef'].get('width', 6.5) / 2, P)
+    env_path = os.path.join(GODOT_TRACKS, key + '_env.json')
+    env = json.load(open(env_path))
+    env['tram_rails'] = runs
+    json.dump(env, open(env_path, 'w'), separators=(',', ':'))
+    print(f'{key}: {len(runs)} tram rail runs, {sum(len(r) // 2 for r in runs)} samples')
 
 
 def build(key, refetch=False, check=None):
@@ -409,6 +469,7 @@ def build(key, refetch=False, check=None):
     env_path = os.path.join(GODOT_TRACKS, key + '_env.json')
     env = json.load(open(env_path))
     env['road_blockages'] = [b[:4] for b in blocks]
+    env['tram_rails'] = tram_rails(osm, pts, half, P)
     if cfg['trackdef'].get('street_stage'):
         env['stands'] = []  # no grandstands on a public road (OSM has none here anyway)
     json.dump(env, open(env_path, 'w'), separators=(',', ':'))
@@ -487,5 +548,9 @@ if __name__ == '__main__':
     keys = [a for a in args if not a.startswith('--')]
     if not keys:
         raise SystemExit(__doc__)
+    if '--trams' in args:  # only the tram rails, from the cached download
+        for k in keys:
+            build_trams(k)
+        raise SystemExit(0)
     for k in keys:
         build(k, refetch, check if len(keys) == 1 else (check and check.replace('.png', f'_{k}.png')))

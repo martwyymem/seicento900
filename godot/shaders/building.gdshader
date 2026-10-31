@@ -1,7 +1,10 @@
 // Buildings from OpenStreetMap footprints (surroundings.gd, town_builder.gd): windows, doors, cladding and
 // weathering drawn from each face's own measurements, so one material serves every building.
 // Vertex data: COLOR = wall (or roof) colour; UV = metres along the wall and up from its foot;
-// UV2.x = the building's seed, UV2.y = kind + 10 * face (face 0 wall, 1 roof). Kinds (build_surroundings.py):
+// UV2.x = the building's seed (fraction) + the wall's top height in decimetres (integer part, 0 = none),
+// UV2.y = kind + 10 * face (face 0 wall, 1 roof) + 20 * the wall's length in decimetres (0 = unknown). On walls UV.x
+// restarts at 0 at each wall's start, so the shader knows how far a point is from the wall's ends (corner quoins) and
+// from its top (cornice) without extra geometry. Kinds (build_surroundings.py):
 // 0 house, 1 flats/town, 2 industrial or large, 3 shed/garage, 4 farm, 5 church, 6 grandstand,
 // 7 shops and public buildings (town_builder.gd only).
 // The seed also picks the facade: some houses, farms, churches and halls are bare red brick, blocks of flats
@@ -14,6 +17,13 @@ uniform float wet = 0.0;
 uniform sampler2D grain : filter_linear_mipmap, repeat_enable;
 uniform vec3 glass_color : source_color = vec3(0.24, 0.32, 0.42);
 uniform vec3 frame_color : source_color = vec3(0.92, 0.91, 0.88);
+// Detail textures from tools/build_building_textures.py: all cover 1.5 m, so the texel density is the same everywhere.
+// building_wall: R roughcast, G smooth plaster, B concrete panel; building_brick: RGB brick tint, A mortar;
+// building_roof: R tile shade, G moss, B per-tile tint. Left unset they would read as all-mortar, so set them.
+uniform sampler2D tex_wall : filter_linear_mipmap, repeat_enable;
+uniform sampler2D tex_brick : filter_linear_mipmap, repeat_enable;
+uniform sampler2D tex_roof : filter_linear_mipmap, repeat_enable;
+const float TEX_M = 1.5;
 
 const vec3 BRICKS[4] = vec3[](vec3(0.21, 0.075, 0.05), vec3(0.16, 0.065, 0.045), vec3(0.25, 0.11, 0.07), vec3(0.15, 0.075, 0.055));
 // shop sign bands and the painted accent strips on renovated blocks (linear)
@@ -25,6 +35,8 @@ varying vec3 world_pos;
 varying flat float v_seed;
 varying flat float v_kind;
 varying flat float v_face;
+varying flat float v_wall_len; // m, 0 when the generator did not say
+varying flat float v_top; // m: the wall's top over the highest ground (the eave), 0 when it is not level
 
 float hash12(vec2 p) {
 	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -34,9 +46,14 @@ float hash12(vec2 p) {
 
 void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	v_seed = UV2.x;
-	v_face = floor(UV2.y / 10.0 + 0.01);
-	v_kind = UV2.y - v_face * 10.0;
+	float top_dm = floor(UV2.x + 0.0001);
+	v_seed = UV2.x - top_dm;
+	v_top = top_dm * 0.1;
+	float len_dm = floor(UV2.y / 20.0 + 0.001);
+	v_wall_len = len_dm * 0.1;
+	float kf = UV2.y - len_dm * 20.0;
+	v_face = floor(kf / 10.0 + 0.01);
+	v_kind = kf - v_face * 10.0;
 }
 
 // A window grid on a wall: returns (inside window 0/1, the window's id hash, frame 0/1).
@@ -100,24 +117,20 @@ void fragment() {
 	bool brick = v_face < 0.5 && ((kind == 0 && pick < 0.2) || (kind == 4 && pick < 0.35) || kind == 5 || (kind == 2 && pick < 0.5));
 	if (brick) {
 		vec3 b = BRICKS[int(fract(v_seed * 5.7) * 4.0)];
-		float course = floor(uv.y / 0.075);
-		float shade = hash12(vec2(floor((uv.x + mod(course, 2.0) * 0.125) / 0.25), course) + v_seed);
-		float fade = 1.0 - smoothstep(0.02, 0.06, fw.x + fw.y);
-		b *= mix(1.0, 0.8 + 0.4 * shade, fade);
-		col = mix(b, vec3(0.42, 0.40, 0.36), brick_mortar(uv, fw) * 0.75) * (0.88 + 0.24 * g);
+		// the baked brick texture (1.5 m = 6 bricks x 20 courses); the seed shifts it so two walls never repeat in step
+		vec4 bt = texture(tex_brick, uv / TEX_M + vec2(fract(v_seed * 3.1), fract(v_seed * 7.3)));
+		b *= 0.55 + 0.9 * bt.rgb;
+		col = mix(b, vec3(0.42, 0.40, 0.36), bt.a * 0.75) * (0.88 + 0.24 * g);
 		rough = 0.92;
 	}
 	if (v_face > 0.5) {
 		// roofs: clay or concrete tiles in courses, flat roofs of tar paper with seams, patches and puddle stains
 		if (kind == 0 || kind == 4 || kind == 5) {
-			float row = floor(uv.y * 3.2);
-			float tx = uv.x * 3.6 + mod(row, 2.0) * 0.5;
-			float scallop = smoothstep(0.0, 0.35, fract(uv.y * 3.2)) * (0.85 + 0.15 * sin(fract(tx) * 3.14159));
-			float tile = hash12(vec2(floor(tx), row) + v_seed);
-			float fade = 1.0 - smoothstep(0.03, 0.1, fw.y);
-			col *= mix(0.92, (0.72 + 0.28 * scallop) * (0.9 + 0.2 * tile), fade);
-			// moss and soot gathered low on the slope
-			col = mix(col, vec3(0.06, 0.07, 0.04), smoothstep(0.55, 0.8, g2) * 0.35);
+			// UV is metres across and up the slope, so the 1.5 m texture's 5 courses of 0.3 m run eave to ridge
+			vec4 rt = texture(tex_roof, uv / TEX_M + vec2(fract(v_seed * 5.3), 0.0));
+			col *= 0.45 + 1.1 * rt.r * (0.85 + 0.3 * rt.b);
+			// moss and soot gathered in patches
+			col = mix(col, vec3(0.06, 0.07, 0.04), smoothstep(0.35, 0.9, rt.g * 0.6 + g2 * 0.5) * 0.35);
 		} else {
 			float seam = lines(uv.x + uv.y * 0.02, 1.0, 0.05, fw.x);
 			col *= (0.78 + 0.3 * texture(grain, world_pos.xz * 0.05).r) * (1.0 - 0.12 * seam);
@@ -237,7 +250,10 @@ void fragment() {
 			// plaster: a little roughcast, a light sill under every window and a lintel over it
 			float sill_band = step(in_bay, ww * 0.5 + 0.08) * step(abs(in_row - 0.84), 0.06) * step(first, uv.y);
 			float lintel = step(in_bay, ww * 0.5 + 0.05) * step(abs(in_row - (0.9 + wh + 0.12)), 0.1) * step(first, uv.y) * step(0.5, float(kind == 0 || kind == 4));
-			col *= 0.96 + 0.08 * texture(grain, uv * 0.9).r;
+			// plaster from the baked texture: roughcast, smooth with trowel marks, or (on blocks) prefab concrete
+			vec3 pl = texture(tex_wall, uv / TEX_M + vec2(fract(v_seed * 11.7), fract(v_seed * 5.9))).rgb;
+			float variant = kind == 1 ? pl.b : (pick < 0.5 ? pl.r : pl.g);
+			col *= 0.84 + 0.32 * variant;
 			col = mix(col, vec3(0.82, 0.8, 0.76), sill_band * 0.8);
 			col = mix(col, col * 1.1 + 0.03, lintel);
 			if (kind == 1 && fract(uv.y / storey) < 0.06) {
@@ -264,6 +280,21 @@ void fragment() {
 			col = mix(col, vec3(0.32, 0.31, 0.29) * (0.85 + 0.3 * g), plinth * 0.85);
 		}
 		col *= mix(0.8, 1.0, smoothstep(-0.2, 0.9, uv.y));
+		// corner quoins and a cornice, read from the wall's own length and top (see the header)
+		if (!is_window && v_wall_len > 2.0 && (kind == 0 || kind == 4 || kind == 5 || kind == 7) && !brick) {
+			float de = min(uv.x, v_wall_len - uv.x);
+			float course = floor(uv.y / 0.3);
+			float qw = 0.5 + 0.22 * mod(course, 2.0);
+			float quoin = (1.0 - smoothstep(qw - 0.01, qw + 0.01, de)) * step(0.55, uv.y) * step(uv.y, max(v_top, 4.0) - 0.4) * step(0.0, de) * (kind == 7 ? step(3.0, uv.y) : 1.0);
+			col = mix(col, mix(vec3(0.62, 0.6, 0.56), col * 1.12, 0.35) * (0.9 + 0.2 * g) * (1.0 - 0.2 * lines(uv.y, 0.3, 0.025, fw.y)), quoin * 0.9);
+		}
+		if (v_top > 2.0 && !is_window && kind != 2 && kind != 3 && kind != 6) {
+			float d = v_top - uv.y;
+			// a lit band at the eave, the shadow it throws just below
+			float band = 1.0 - smoothstep(0.2, 0.24, d);
+			float shade = smoothstep(0.2, 0.26, d) * (1.0 - smoothstep(0.26, 0.55, d));
+			col = col * (1.0 + 0.1 * band) * (1.0 - 0.16 * shade);
+		}
 	}
 	col *= mix(1.0, 0.7, wet);
 	ALBEDO = col;

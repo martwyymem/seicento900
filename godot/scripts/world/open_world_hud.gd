@@ -625,11 +625,7 @@ func press_pause() -> void:
 
 ## Map metres -> minimap pixels (heading up).
 func _mini_xy(p: Vector2, radius: float, sz: Vector2) -> Vector2:
-	var f := Vector2(cos(car_heading), sin(car_heading))
-	var rt := Vector2(-f.y, f.x)
-	var d := p - car_pos
-	var o := Vector2(d.dot(rt), -d.dot(f)) / radius
-	return sz * 0.5 + o * sz * 0.5
+	return MapMarker.mini_xy(p, car_pos, car_heading, radius, sz)
 
 func _draw_minimap_overlay() -> void:
 	var sz := overlay.size
@@ -646,15 +642,22 @@ func _draw_minimap_overlay() -> void:
 			overlay.draw_polyline(pts, Color(CmrStyle.PLATE, 0.7), 7.0, true)
 			overlay.draw_polyline(pts, PURPLE.lightened(0.25), 4.0, true)
 	for m in markers:
-		var q := _mini_xy(m.pos, radius, sz)
-		var c := sz * 0.5
-		var d := q - c
-		var lim := sz.x * 0.44
-		var edge := d.length() > lim
-		if edge:
-			q = c + d.normalized() * lim
+		var rim := MapMarker.rim_clamp(_mini_xy(m.pos, radius, sz), sz)
+		var q: Vector2 = rim.pos
+		var edge: bool = rim.edge
+		var pin: bool = m.get("kind", "") == "waypoint"
+		# a dark disc under every marker and, for the player's own waypoint, a white ring over it: readable on
+		# the dark map, on the sky-blue water and in the skins whose violet is close to the map's own colour
 		overlay.draw_circle(q, 9.0 if not edge else 7.0, Color(0, 0, 0, 0.6))
 		overlay.draw_circle(q, 7.0 if not edge else 5.0, m.color)
+		if pin:
+			overlay.draw_arc(q, 9.5 if not edge else 7.5, 0.0, TAU, 20, Color.WHITE, 2.0, true)
+		if edge:
+			# beyond the rim: a small arrow outside the dot says which way it lies
+			var dir: Vector2 = rim.dir
+			var tip: Vector2 = q + dir * 15.0
+			var side := Vector2(-dir.y, dir.x) * 5.0
+			overlay.draw_colored_polygon(PackedVector2Array([tip, q + dir * 8.0 + side, q + dir * 8.0 - side]), Color.WHITE if pin else m.color)
 	# the car: an arrow at the centre pointing up
 	var c := sz * 0.5
 	var arrow := PackedVector2Array([c + Vector2(0, -11), c + Vector2(8, 9), c + Vector2(0, 4), c + Vector2(-8, 9)])
@@ -668,22 +671,12 @@ func _draw_minimap_overlay() -> void:
 	overlay.draw_string(CmrStyle.font(900), np + Vector2(-5, 6), "N", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color.WHITE)
 
 func _big_xy(p: Vector2) -> Vector2:
-	var sz := big_overlay.size
-	var centre: Vector2 = big_map_mat.get_shader_parameter("centre")
-	var radius: float = big_map_mat.get_shader_parameter("radius_m")
-	var aspect: float = big_map_mat.get_shader_parameter("aspect")
-	var o := (p - centre) / radius
-	o.x /= aspect
-	return sz * 0.5 + o * sz * 0.5
+	return MapMarker.big_xy(p, big_map_mat.get_shader_parameter("centre"), big_map_mat.get_shader_parameter("radius_m"),
+		big_map_mat.get_shader_parameter("aspect"), big_overlay.size)
 
 func _big_world(q: Vector2) -> Vector2:
-	var sz := big_overlay.size
-	var centre: Vector2 = big_map_mat.get_shader_parameter("centre")
-	var radius: float = big_map_mat.get_shader_parameter("radius_m")
-	var aspect: float = big_map_mat.get_shader_parameter("aspect")
-	var o := (q - sz * 0.5) / (sz * 0.5)
-	o.x *= aspect
-	return centre + o * radius
+	return MapMarker.big_world(q, big_map_mat.get_shader_parameter("centre"), big_map_mat.get_shader_parameter("radius_m"),
+		big_map_mat.get_shader_parameter("aspect"), big_overlay.size)
 
 func _big_map_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
@@ -737,6 +730,8 @@ func _draw_big_overlay() -> void:
 		big_overlay.draw_circle(q, 10.0 if sel else 7.0, m.color)
 		if sel:
 			big_overlay.draw_arc(q, 18.0, 0.0, TAU, 32, Color.WHITE, 2.5, true)
+		elif m.get("kind", "") == "waypoint":
+			big_overlay.draw_arc(q, 12.0, 0.0, TAU, 24, Color.WHITE, 2.0, true)
 		big_overlay.draw_string(font, q + Vector2(16, 6), String(m.label), HORIZONTAL_ALIGNMENT_LEFT, -1, 16 if sel else 13,
 			Color.WHITE if sel else Color(1, 1, 1, 0.75))
 	var c := _big_xy(car_pos)

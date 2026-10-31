@@ -196,6 +196,7 @@ var bot_uturn := true ## a spun bot drives itself round; false lifts it back ont
 var warp := 1
 var brain: Brain = null
 var limiter := false ## the player has the flag speed limiter switched on (V)
+var mechanical_damage := false ## crashes cost power, grip and parts for every car (RaceSettings.mechanical_damage, or a rally stage); else cosmetic only
 var rc: RaceControl = null ## flags, safety car, stewards and damage (null: contact is just physics, as before)
 var stage: Rally.Stage = null ## s.mode == "rally": the special stage's clock, splits and penalties
 var tt: TimeTrial = null ## s.mode == "time_trial": sectors, the live delta and the lap list
@@ -272,6 +273,7 @@ func _init(settings: RaceSettings, player_plan = null, seed_ := -1, models := {}
 	# learning AI (off: every bot drives one fixed pace everywhere, as before)
 	brain = Brain.new(self, not settings.demo) if settings.ai_learning != "off" and not settings.qualifying else null
 	build_field(player_plan)
+	mechanical_damage = settings.mechanical_damage or settings.mode == "rally"
 	rc = RaceControl.new(self) if settings.race_control and not settings.demo and not settings.qualifying else null
 	if settings.mode == "rally":
 		stage = Rally.Stage.new(self)
@@ -1719,13 +1721,23 @@ func _apply_mods(car: RaceCar, env: Physics.Env, input: PlayerInput, dt: float) 
 		else:
 			nitro = minf(1.0, nitro + dt / CarMods.RACE_NITRO_REFILL)
 
+## Whether lap distance s (0..L) lies in one of the track's cobbled stretches (TrackDef.cobbles).
+func in_cobbles(s: float) -> bool:
+	for z in track.cfg.cobbles:
+		if s >= z.x and s <= z.y:
+			return true
+	return false
+
 func surface_at(car: RaceCar, x: float, y: float) -> int:
 	var tr := track
 	var d := car.d + (x - car.x) * tr.sample(tr.NX, car.s) + (y - car.y) * tr.sample(tr.NY, car.s)
 	var ad := absf(d)
-	if ad <= tr.half + 0.3 or (car.is_player and _monster_player):
-		return Physics.SURF_TRACK
 	var c := tr.cfg
+	if ad <= tr.half + 0.3 or (car.is_player and _monster_player):
+		# a cobbled stretch (street stages) grips less than the tarmac round it; tracks without cobbles are untouched
+		if not c.cobbles.is_empty() and ad <= tr.half and not (car.is_player and _monster_player) and in_cobbles(tr.wrap_s(car.s)):
+			return Physics.SURF_COBBLE
+		return Physics.SURF_TRACK
 	var p := tr.rel(car.s)
 	if signf(d) == signf(c.pit_offset) and p > c.pit_entry - 20.0 and p < c.pit_exit + 20.0:
 		return Physics.SURF_ASPHALT

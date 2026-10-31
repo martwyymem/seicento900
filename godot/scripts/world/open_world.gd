@@ -75,6 +75,7 @@ var gamepad_device := -1
 var cam_mode := 0
 var cam_pos := Vector3.ZERO
 var cam_vel_dir := Vector2.RIGHT
+var _chase_cam: ChaseCam
 var hour := 18.5
 var night := 0.0
 
@@ -490,7 +491,7 @@ func _update_markers() -> void:
 		var info := "%s · %s · %s" % [e.title, SPOT_NOTE.get(e.spot, ""), "Done" if e.done else ("Open" if e.open else "Locked")]
 		list.append({"pos": e.pos, "color": e.color, "label": "%d. %s" % [e.stage + 1, String(st.track).capitalize()], "info": info})
 	if wp_on:
-		list.append({"pos": wp_pos, "color": OpenWorldHud.PURPLE, "label": "WAYPOINT", "info": "Your waypoint"})
+		list.append({"pos": wp_pos, "color": OpenWorldHud.PURPLE, "label": "WAYPOINT", "kind": "waypoint", "info": "Your waypoint"})
 	hud.set_markers(list)
 
 ## The first open stage that isn't cleared yet (the unlock cap stays on the last stage once the campaign is
@@ -532,6 +533,7 @@ func _spawn(spawn) -> void:
 	var f := Vector3(cos(drive.car.heading), 0.0, sin(drive.car.heading))
 	cam_pos = _prev_pos - f * 7.0 + Vector3.UP * 2.6
 	cam_vel_dir = Vector2(f.x, f.z)
+	_chase_cam = null # snaps to the car's new spot
 	_apply_time()
 	if not gps_waypoint and (gps_target < 0 or gps_target >= events.size() or events[gps_target].done):
 		gps_target = _next_open_event()
@@ -897,7 +899,7 @@ func award_fans(n: int) -> void:
 
 ## Drops the player's own waypoint (map click or cursor) and routes there.
 func _set_waypoint(pos: Vector2) -> void:
-	wp_pos = pos
+	wp_pos = MapMarker.keep_inside(pos, map.play) # a click on the dimmed ground beyond the edge has no route
 	wp_on = true
 	gps_waypoint = true
 	hud.cursor_on = false
@@ -1006,6 +1008,12 @@ func _sync_car(delta: float) -> void:
 		_rainbow_t = 0.0
 		_apply_look()
 
+## The chase camera's spot with walls, fences and buildings between it and the car taken out (ChaseCam).
+func _clear_of_walls(p: Vector3, free: Vector3, delta: float) -> Vector3:
+	if _chase_cam == null:
+		_chase_cam = ChaseCam.new()
+	return _chase_cam.update(map, p + Vector3.UP * 1.0, free, delta)
+
 func _update_camera(delta: float) -> void:
 	if drive == null:
 		return
@@ -1024,7 +1032,7 @@ func _update_camera(delta: float) -> void:
 		1:
 			var target := p - d3 * 10.5 + Vector3.UP * 3.6
 			cam_pos = cam_pos.lerp(target, 1.0 - exp(-delta * 5.0))
-			camera.position = cam_pos
+			camera.position = _clear_of_walls(p, cam_pos, delta)
 			camera.look_at(p + d3 * 5.0 + Vector3.UP * 1.0, Vector3.UP)
 			camera.fov = 66.0 + kmh * 0.06
 		2:
@@ -1035,12 +1043,10 @@ func _update_camera(delta: float) -> void:
 			var back := 6.0 + kmh * 0.012
 			var target := p - d3 * back + Vector3.UP * (2.15 + kmh * 0.004)
 			cam_pos = cam_pos.lerp(target, 1.0 - exp(-delta * 7.0))
-			# keep it out of the buildings and above the ground
-			var c2 := Vector2(cam_pos.x, cam_pos.z)
-			if map.inside_building(c2):
-				cam_pos = cam_pos.lerp(p + Vector3.UP * 2.0, 0.5)
-			cam_pos.y = maxf(cam_pos.y, map.ground(cam_pos.x, cam_pos.z) + 0.8)
-			camera.position = cam_pos
+			# keep it out of the walls and buildings (shortened or swung aside, ChaseCam) and above the ground
+			var spot := _clear_of_walls(p, cam_pos, delta)
+			spot.y = maxf(spot.y, map.ground(spot.x, spot.z) + 0.8)
+			camera.position = spot
 			camera.look_at(p + d3 * 3.5 + Vector3.UP * 1.05, Vector3.UP)
 			camera.fov = lerpf(camera.fov, 70.0 + clampf(kmh, 0.0, 140.0) * 0.1, 1.0 - exp(-delta * 3.0))
 

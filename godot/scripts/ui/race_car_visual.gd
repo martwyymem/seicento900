@@ -424,13 +424,14 @@ func sync(car: RaceCar, dt: float, curvature: float, night: float, ghost: bool) 
 		_show_livery()
 		if is_instance_valid(_door_decal_l):
 			_sunstrip_decal.visible = not ghost
-	if car.damage - _damage_shown > 0.035 and _fx_near:
+	var hurt := car.damage + car.scuff # (scuff: the cosmetic damage of a race without mechanical damage)
+	if hurt - _damage_shown > 0.035 and _fx_near:
 		var q: int = _world.quality
 		FxParticles.burst(self, "debris", global_position + Vector3(0.0, 0.35, 0.0), 14, q)
 		FxParticles.burst(self, "sparks", global_position + Vector3(0.0, 0.25, 0.0), 10, q)
 	_show_dents(car.dents, dt)
-	if absf(car.damage - _damage_shown) > 0.02:
-		_damage_shown = car.damage
+	if absf(hurt - _damage_shown) > 0.02:
+		_damage_shown = hurt
 		_apply_paint()
 
 	if not _light_bar.is_empty():

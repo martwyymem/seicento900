@@ -22,16 +22,27 @@ const SUITES := [
 	"res://tests/test_fx_particles.gd",
 	"res://tests/test_open_world.gd",
 	"res://tests/test_open_world_terrain.gd",
+	"res://tests/test_open_world_ramps.gd",
 	"res://tests/test_open_world_bridges.gd",
+	"res://tests/test_open_world_layers.gd",
 	"res://tests/test_roadside_props.gd",
+	"res://tests/test_building_walls.gd",
 	"res://tests/test_ui_layout.gd",
+	"res://tests/test_hud_skins.gd",
+	"res://tests/test_result_table.gd",
+	"res://tests/test_map_marker.gd",
+	"res://tests/test_gamepad_menus.gd",
 	"res://tests/test_model_contract.gd",
 	"res://tests/test_handbrake.gd",
 	"res://tests/test_fan_levels.gd",
 	"res://tests/test_hypercar.gd",
 	"res://tests/test_dev_menu.gd",
 	"res://tests/test_car_mods.gd",
-	"res://tests/test_goliath.gd"
+	"res://tests/test_goliath.gd",
+	"res://tests/test_cobbles.gd",
+	"res://tests/test_street_tracks.gd",
+	"res://tests/test_chase_cam.gd",
+	"res://tests/test_damage_policy.gd"
 ]
 
 const SURROUNDINGS := preload("res://scripts/ui/surroundings.gd")

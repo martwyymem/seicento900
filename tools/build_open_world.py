@@ -27,6 +27,7 @@ Writes godot/data/world/brzeszcze.json:
     trees [[x, y] ...]      single mapped trees and tree rows
     lamps [[x, y] ...]      street lamps (mapped ones, plus generated ones along lit roads)
     signals [[x, y] ...]    traffic signals
+    level_crossings [[x, y] ...]  OSM railway=level_crossing nodes (road and rail are never raised there)
     stops [[x, y, name] ...] bus stops
     places [{name, kind, x, y, tags}]   named amenities, shops, churches, the mine shafts and stations
 
@@ -200,6 +201,9 @@ UNPAVED = {'unpaved', 'gravel', 'dirt', 'ground', 'grass', 'sand', 'compacted', 
 CLASS_ID = {k: i for i, k in enumerate(DRIVABLE)}
 RAMP_GRADE = 0.06  # embankment ramps up to a road bridge
 RAIL_RAMP_GRADE = 0.02
+RIVER_DEPTH = 1.0  # m: how far a river or canal sinks the terrain grid at its centre line
+RIVER_BANK = 26.0  # m: the bank's blend distance (the grid is 40 m)
+CROSSING_GRADE = 0.06  # a ramp that reaches a level crossing climbs at most this steeply away from it
 UNDERPASS_Z = 5.4  # m: a railway over a road underpass has its deck this high (4.5 m of headroom under the slab)
 CLEARANCE_ROAD = 6.0  # deck height of a bridge with a road or railway under it
 CLEARANCE_WATER = 2.2
@@ -803,6 +807,30 @@ def build(check_png=None):
         for a, b in zip(pts, pts[1:]):
             under.add(a, b, ('water', wd))
 
+    # ---- river valleys: the grid is too coarse for a channel, so rivers and canals sink their valley floor a little
+    # (smoothstep falloff to the banks), except next to a road or railway on the ground, which keep their levelled bed
+    wgrid = SegGrid(30.0)
+    for wd, pts in waterways:
+        if wd >= 5.0:
+            for a, b in zip(pts, pts[1:]):
+                wgrid.add(a, b, wd)
+    carved = 0
+    for j in range(tny):
+        for i in range(tnx):
+            x, y = tx0 + i * tstep, ty0 + j * tstep
+            best = 0.0
+            for a, b, wd in wgrid.near(x, y, 40.0):
+                reach = wd * 0.5 + RIVER_BANK
+                d = dist_seg(x, y, a, b)
+                if d < reach:
+                    u = 1.0 - max(d - wd * 0.5, 0.0) / RIVER_BANK
+                    best = max(best, RIVER_DEPTH * u * u * (3.0 - 2.0 * u))
+            if best > 0.02 and not any(item[0] in ('road', 'rail') and dist_seg(x, y, c, d2) < 12.0
+                                       for c, d2, item in under.near(x, y, 12.0)):
+                hs[j * tnx + i] -= best
+                carved += 1
+    print(carved, 'terrain vertices sunk into river valleys')
+
     def deck_height(pts, own, is_rail):
         best = 0.0
         for a, b in zip(pts, pts[1:]):
@@ -856,11 +884,32 @@ def build(check_png=None):
                     heapq.heappush(heap, (-cand, lj, j))
         return z
 
+    def ease(lines, z, junction_of, top_of, passes=3):
+        """Rounds the kinks where a ramp meets the ground and the deck: a few 3-point averages along each line (the
+        grade stays within the ramp's, an average of a bounded slope is bounded). Junction points and the deck's
+        own plateau (top_of(line, li) and above) stay put, so roads that meet agree on the height and the clearance
+        under a bridge is not lost. The same profile serves road bridges, railway embankments and underpass approaches."""
+        out = []
+        for li, l in enumerate(lines):
+            v = list(z[li])
+            if max(v) > 0.05:
+                top = top_of(l, li)
+                pinned = {0, len(v) - 1} | {idx for idx, _ in junction_of(l)} | {k for k in range(len(v)) if v[k] >= top - 0.01}
+                for _ in range(passes):
+                    w = list(v)
+                    for k in range(1, len(v) - 1):
+                        if k not in pinned and (v[k - 1] > 0 or v[k] > 0 or v[k + 1] > 0):
+                            w[k] = (v[k - 1] + 2 * v[k] + v[k + 1]) / 4.0
+                    v = w
+            out.append(v)
+        return out
+
     for i, r in enumerate(out_roads):
         r['deck'] = deck_height(r['p'], ('road', i), False) if r['b'] and seg_len(r['p']) > 8 else 0.0
     for i, r in enumerate(rails):
         r['deck'] = deck_height(r['p'], ('rail', i), True) if r['b'] else 0.0
     zr = relax(out_roads, RAMP_GRADE, lambda l: l['e'])
+    zr = ease(out_roads, zr, lambda l: l['e'], lambda l, li: l['deck'] if l['deck'] > 0 else 1e9)
     # railway lines meet at their ends; join them by position (the densified points lost the node ids)
     for r in rails:
         r['e'] = [(idx, (round(r['p'][idx][0]), round(r['p'][idx][1]))) for idx in (0, len(r['p']) - 1)]
@@ -916,6 +965,23 @@ def build(check_png=None):
         r = out_roads[ri]
         tunnels.append({'c': [r1(x), r1(y)], 'u': [round(ux, 3), round(uy, 3)], 'v': [round(vx, 3), round(vy, 3)],
                         'w': r['w'], 'z': round(zc, 2), 'road': r['id'], 'tn': r['tn'], 'rail': li})
+    # a level crossing stays on the ground: a ramp reaches it no steeper than CROSSING_GRADE (the lines that carry it
+    # lose the part of the ramp above that cone, they never rise at the crossing itself)
+    lcs = [proj(e['lat'], e['lon']) for e in els if e['type'] == 'node' and e.get('tags', {}).get('railway') == 'level_crossing']
+    def under_cone(lines, z, grade):
+        out = []
+        for l, zz in zip(lines, z):
+            v = []
+            for p, h in zip(l['p'], zz):
+                if h > 0.0:
+                    d = min((math.dist(p, q) for q in lcs), default=1e9)
+                    h = min(h, grade * max(d - 1.0, 0.0))
+                v.append(h)
+            out.append(v)
+        return out
+    zr = under_cone(out_roads, zr, 0.07)
+    zl = ease(rails, zl, lambda l: l['e'], lambda l, li: UNDERPASS_Z)
+    zl = under_cone(rails, zl, CROSSING_GRADE)
     print(len(tunnels), 'underpasses through railway embankments:', [(t['road'], t['z']) for t in tunnels])
     n_raised = sum(1 for zz in zr if max(zz) > 0.3)
     print(n_raised, 'roads raised on bridges or ramps;', sum(1 for zz in zl if max(zz) > 0.3), 'railway lines raised')
@@ -1018,6 +1084,7 @@ def build(check_png=None):
     signals = []
     stops = []
     places = []
+    level_crossings = []  # OSM railway=level_crossing nodes: road and rail stay at the ground there
     for e in els:
         t = e.get('tags', {})
         if e['type'] == 'node':
@@ -1029,6 +1096,8 @@ def build(check_png=None):
                 lamps.append((x, y))
             elif hw == 'traffic_signals':
                 signals.append((x, y))
+            elif t.get('railway') == 'level_crossing':
+                level_crossings.append((x, y))
             elif hw == 'bus_stop' or t.get('public_transport') == 'platform' and t.get('bus') == 'yes':
                 stops.append((x, y, t.get('name', '')))
         if e['type'] == 'way' and t.get('natural') == 'tree_row':
@@ -1500,6 +1569,7 @@ def build(check_png=None):
         'garden_beds': [[r1(x), r1(y), round(a, 3), l, w] for x, y, a, l, w in garden_beds],
         'lamps': flat_pts(lamps),
         'signals': flat_pts(signals),
+        'level_crossings': flat_pts([q for q in level_crossings if in_zone(q[0], q[1], 0.0)]),
         'stops': [[r1(x), r1(y), n] for x, y, n in stops],
         'places': places,
         'spots': spots,
