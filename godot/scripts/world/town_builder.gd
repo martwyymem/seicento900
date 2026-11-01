@@ -14,6 +14,7 @@ const ROAD_SHADER := preload("res://shaders/town_road.gdshader")
 const BUILDING_SHADER := preload("res://shaders/building.gdshader")
 const FOLIAGE_SHADER := preload("res://shaders/foliage.gdshader")
 const WATER_SHADER := preload("res://shaders/water.gdshader")
+const VEGETATION := preload("res://scripts/world/vegetation.gd")
 const TOWN_MODELS := "res://models/town.glb"
 const LANDMARK_MODELS := "res://models/brzeszcze_landmarks.glb" ## tools/blender/build_brzeszcze.py
 const LAND_RES := 2.5 ## metres per texel of data/world/<key>_land.png (tools/build_open_world.py)
@@ -28,8 +29,8 @@ const IMPOSTOR_CHUNK := 512.0
 const TREE_NEAR := 380.0 ## m: full tree meshes this far, impostors beyond
 const TREE_FAR := 1800.0
 const ROAD_LIFT := 0.09 ## streets sit this far over the ground; the bigger road wins at a junction
-const KERB_H := 0.13
-const PAVEMENT_W := 1.5
+const KERB_H := TownMap.KERB_H
+const PAVEMENT_W := TownMap.PAVEMENT_W
 const HEADFRAME_SHAFT := 10.1 ## m from town.glb's Headframe origin forward (-Z) to its shaft
 
 ## Building palettes (sRGB): Polish plaster, brick and roofing
@@ -96,7 +97,7 @@ func has_model(name: String) -> bool:
 func steps() -> Array:
 	return [["Terrain", build_terrain], ["Ponds and streams", build_water], ["Streets", build_roads],
 		["Railway", build_rail], ["Tunnels", build_tunnels], ["Buildings", build_buildings], ["Woods and gardens", build_trees], ["Garden fences", build_fences],
-		["Street furniture", build_props], ["Road ends", build_closures], ["Landmarks", build_landmarks], ["Horizon", build_horizon]]
+		["Fields and meadows", build_vegetation], ["Street furniture", build_props], ["Road ends", build_closures], ["Landmarks", build_landmarks], ["Horizon", build_horizon]]
 
 static func color_lin(hex: String) -> Color:
 	return Color(hex).srgb_to_linear()
@@ -262,16 +263,6 @@ func _style(ri: int) -> int:
 		return 1
 	return 0
 
-func _has_pavement(ri: int, mid: Vector2) -> bool:
-	var kind := map.road_kind[ri]
-	if not kind in ["primary", "secondary", "tertiary", "residential", "unclassified", "living_street"]:
-		return false
-	if map.road_bridge[ri] or not map.road_z[ri].is_empty():
-		return false
-	if not map.in_town(mid):
-		return false
-	return not map.buildings_near(mid, 45.0).is_empty()
-
 func build_roads() -> void:
 	var group := _group("Streets")
 	var mat := _surface_material(ROAD_SHADER, "asphalt")
@@ -365,7 +356,7 @@ func build_roads() -> void:
 			mb.quad(a, a + 1, a + 3, a + 2)
 		# kerbs and pavements in town, broken at the junctions
 		var mid := pts[n / 2]
-		if _has_pavement(ri, mid):
+		if map.road_pave[ri] == 1:
 			var kb: MeshBatch = kerb_b[c]
 			for side: float in [-1.0, 1.0]:
 				var edge: PackedVector3Array = left if side < 0.0 else right
@@ -1219,7 +1210,7 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 		roof_surfaces = [] # unusable planes: the OSM walls and a roof of our own
 	if roof_surfaces.is_empty() and pitched:
 		rect = min_rect(r)
-		if rect.is_empty() or absf(ring_area(r)) / maxf(float(rect[4]), 1e-3) < 0.78 or float(rect[3]) > 13.0:
+		if rect.is_empty() or absf(ring_area(r)) / maxf(float(rect[4]), 1e-3) < PITCHED_MIN_FIT or float(rect[3]) > 13.0:
 			pitched = false
 	var n := r.size()
 	for i in n:
@@ -1327,7 +1318,8 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 					Vector3(a.x, eave + parapet, a.y), Vector3(out.x, 0.0, out.y), wall,
 					[Vector2.ZERO, Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)], Vector2(seed, 3.0))
 
-const LOD2_MIN_COVER := 0.6 ## share of the footprint (sampled) the measured roof planes must lie over; ~8% of buildings fall below
+const LOD2_MIN_COVER := 0.85 ## share of the footprint (sampled) the measured roof planes must lie over; below it we build our own roof, so no wall is left open to the sky
+const PITCHED_MIN_FIT := 0.92 ## footprint area / bounding rectangle area a pitched roof needs; looser fits leave roof overhanging where the walls are not, and gaps where they are
 
 ## The share of the footprint `ring` that lies under at least one roof plane (map x, y, height triples), by a
 ## grid of sample points. Overlapping planes count once, and planes belonging to a neighbour count for nothing.
@@ -1771,6 +1763,15 @@ func _multimesh_chunked(parent: Node3D, mesh: Mesh, xfs: Array, tints: Array, ma
 		mmi.visibility_range_end_margin = 20.0
 		out.append(mmi)
 	return out
+
+## Wheat, maize, grass, flowers and bushes, planted around the camera as it drives (vegetation.gd).
+func build_vegetation() -> void:
+	var veg: Node3D = VEGETATION.new()
+	veg.name = "Vegetation"
+	if veg.setup(map):
+		root.add_child(veg)
+	else:
+		veg.free()
 
 ## Barriers where a road meets the edge of the playable area: a striped beam across it on posts with a red sign, or
 ## for the S1's turn-around a long row of concrete blocks. The collision comes from the baked style-4 fence segment.

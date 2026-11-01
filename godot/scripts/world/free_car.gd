@@ -11,6 +11,7 @@ const HALF_W := 0.76
 const WALL_STEP := 0.9 ## m: a deck this much above the car is a wall (the side of an embankment), not a ramp
 const UNDER_DECK := 3.6 ## m: a deck this far above the car is a bridge it passes under
 const BOOM_R := 0.12 ## m: half the thickness of a level crossing boom
+const KERB_BUMP_MIN := 0.05 ## m: a step up at least this high is a bump (a kerb is 0.13)
 const WATER_RESPAWN := 2.2 ## s in deep water before the car is put back on the road
 
 var map: TownMap
@@ -119,7 +120,7 @@ func support(x: float, y: float) -> float:
 	# the drawn terrain: ponds and river beds slope down their banks (a dyke track through the fishponds stays up)
 	var lowest := map.road_at(x, y)
 	if lowest.is_empty():
-		g = map.terrain(x, y)
+		g = map.terrain(x, y) + map.kerb_at(x, y)
 	var best := g
 	var best_d := absf(g - z)
 	# a raised road that is no bridge stands on a solid embankment: where it is the lowest road on the spot the bare
@@ -278,8 +279,29 @@ func _vertical(dt: float, px: float, py: float, mass: float) -> void:
 		air_time = 0.0
 		z = pred
 		return
-	vz = clampf((target - z) / maxf(dt, 1e-4), -25.0, 25.0)
+	var rise := target - z
+	var spd := absf(car.speed)
+	if rise > KERB_BUMP_MIN and rise < 0.4 and spd > 1.5:
+		_kerb_strike(rise, spd)
+		if airborne:
+			z = target
+			return
+	vz = clampf(rise / maxf(dt, 1e-4), -25.0, 25.0)
 	z = target
+
+## Wheels hit the edge of a kerb: the car loses speed, thumps (a hit event for the sound) and, if quick, hops.
+func _kerb_strike(rise: float, spd: float) -> void:
+	var keep := 1.0 - clampf(spd * 0.012 * (rise / 0.13), 0.0, 0.22)
+	if monster:
+		keep = 1.0 - (1.0 - keep) * 0.25
+	car.vx *= keep
+	car.vy *= keep
+	car.yaw_rate *= 0.85
+	hits.append([car.x, car.y, minf(spd * 0.3, 5.0)])
+	if spd > 9.0 and not monster:
+		vz = minf(spd * 0.05, 1.1)
+		airborne = true
+		air_time = 0.0
 
 func _water(dt: float) -> void:
 	var w := map.water_at(Vector2(car.x, car.y))

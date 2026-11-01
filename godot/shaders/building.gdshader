@@ -65,7 +65,7 @@ vec3 windows(vec2 uv, float bay, float storey, float w, float h, float sill, flo
 	float lo = sill / storey;
 	float hi = (sill + h) / storey;
 	float inside = step(0.5 - hw, f.x) * step(f.x, 0.5 + hw) * step(lo, f.y) * step(f.y, hi) * step(0.0, row)
-		* step(first_row, uv.y);
+		* step(first_row, uv.y) * fits_wall(uv.x, bay, w);
 	float fw = 0.08 / bay;
 	float fh = 0.08 / storey;
 	float frame = inside * (1.0 - step(0.5 - hw + fw, f.x) * step(f.x, 0.5 + hw - fw) * step(lo + fh, f.y) * step(f.y, hi - fh));
@@ -261,7 +261,7 @@ void fragment() {
 			}
 		} else if (w.x < 0.5) {
 			// brick houses: a concrete sill under each window
-			col = mix(col, vec3(0.6, 0.58, 0.55), step(in_bay, ww * 0.5 + 0.06) * step(abs(in_row - 0.85), 0.05) * step(first, uv.y));
+			col = mix(col, vec3(0.6, 0.58, 0.55), fits_wall(uv.x, bay, ww) * step(in_bay, ww * 0.5 + 0.06) * step(abs(in_row - 0.85), 0.05) * step(first, uv.y));
 		}
 		// the front door on houses and farms
 		float door_x = fract(uv.x / 11.0 + v_seed);

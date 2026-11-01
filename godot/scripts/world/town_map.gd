@@ -23,6 +23,9 @@ const PIER_R := 0.8 ## m: collision radius of a bridge pier (the drawn pier is 1
 const PIER_SPACING := 22.0 ## m along a bridge between piers
 const RAIL_HALF := 2.4 ## m: half the width of the ballast bed a railway runs on, with its kerb
 const TUNNEL_HEADROOM := 4.4 ## m: free height under a railway deck over a street (the bore)
+const KERB_H := 0.13 ## m: height of a kerb; the pavement behind it is flat at this height (TownBuilder draws the same)
+const PAVEMENT_W := 1.5 ## m: width of the pavement beyond a road's edge
+const PAVE_GAP := 2.5 ## m: pavements stop this far short of a junction's edge
 const PARAPET := 0.4 ## m: a bridge deck holds a car up this far beyond its edge (the parapet), then it drops off
 
 var key := ""
@@ -57,6 +60,8 @@ var road_lanes := PackedInt32Array()
 var road_limit := PackedFloat32Array() ## km/h
 var road_bridge := PackedByteArray()
 var road_len := PackedFloat32Array()
+var road_pave := PackedByteArray() ## 1: the street has kerbs and pavements (in town, among buildings)
+var road_jd: Array[PackedFloat32Array] = [] ## per road point: distance along the road to the nearest junction's edge
 var road_marks: Array = [] ## per road: [[point index, node id] ...] junctions and ends
 var road_rank := PackedInt32Array()
 var _seg_road := PackedInt32Array()
@@ -132,6 +137,7 @@ func _load(map_key: String) -> bool:
 	th = PackedFloat32Array(t.h)
 	_load_roads()
 	_load_buildings()
+	_build_pavements()
 	_load_obstacles()
 	_load_rails()
 	_load_tunnels()
@@ -237,6 +243,72 @@ func _load_roads() -> void:
 			node_edges[nb].append([na, ri, ib, ia, seg_len, road_oneway[ri] == 0])
 
 ## Height of a road's deck over the ground at point index i + t towards i + 1.
+## Which streets have pavements, and how far each point is from a junction (pavements break at junctions).
+func _build_pavements() -> void:
+	var node_width := {}
+	var node_roads := {}
+	for ri in road_pts.size():
+		for m in road_marks[ri]:
+			var nid := str(m[1])
+			node_width[nid] = maxf(float(node_width.get(nid, 0.0)), road_w[ri])
+			node_roads[nid] = int(node_roads.get(nid, 0)) + 1
+	road_pave.resize(road_pts.size())
+	road_jd.clear()
+	for ri in road_pts.size():
+		var pts := road_pts[ri]
+		var n := pts.size()
+		var jd := PackedFloat32Array()
+		jd.resize(n)
+		jd.fill(INF)
+		road_jd.append(jd)
+		if n < 2:
+			continue
+		var s := PackedFloat32Array()
+		s.resize(n)
+		for i in range(1, n):
+			s[i] = s[i - 1] + pts[i].distance_to(pts[i - 1])
+		for m in road_marks[ri]:
+			var nid := str(m[1])
+			if int(node_roads.get(nid, 0)) >= 2:
+				var half_j := float(node_width[nid]) * 0.5
+				for i in n:
+					jd[i] = minf(jd[i], absf(s[i] - s[int(m[0])]) - half_j)
+		road_pave[ri] = 1 if _has_pavement(ri, pts[n / 2]) else 0
+
+func _has_pavement(ri: int, mid: Vector2) -> bool:
+	if not road_kind[ri] in ["primary", "secondary", "tertiary", "residential", "unclassified", "living_street"]:
+		return false
+	if road_bridge[ri] or not road_z[ri].is_empty():
+		return false
+	if not in_town(mid):
+		return false
+	return not buildings_near(mid, 45.0).is_empty()
+
+## Kerb height (KERB_H) when (x, y) is on a pavement, else 0. A point on any road's carriageway is never pavement.
+func kerb_at(x: float, y: float) -> float:
+	var ck := _cell_key(int(floor(x / CELL)), int(floor(y / CELL)))
+	if not _seg_cells.has(ck):
+		return 0.0
+	var p := Vector2(x, y)
+	var on_pave := false
+	for sid in _seg_cells[ck]:
+		var ri := _seg_road[sid]
+		var i := _seg_i[sid]
+		var pts := road_pts[ri]
+		var a := pts[i]
+		var ab := pts[i + 1] - a
+		var l2 := ab.length_squared()
+		var t := 0.0 if l2 < 1e-6 else clampf((p - a).dot(ab) / l2, 0.0, 1.0)
+		var d := p.distance_to(a + ab * t)
+		var half := road_w[ri] * 0.5
+		if d <= half:
+			return 0.0
+		if road_pave[ri] and d <= half + PAVEMENT_W:
+			var jd := road_jd[ri]
+			if jd[i] >= PAVE_GAP and jd[i + 1] >= PAVE_GAP:
+				on_pave = true
+	return KERB_H if on_pave else 0.0
+
 func deck_at(ri: int, i: int, t: float) -> float:
 	var z := road_z[ri]
 	if z.is_empty():

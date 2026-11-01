@@ -25,6 +25,16 @@ kit.MATERIALS.update({
 	"Red": ((0.78, 0.12, 0.08), 0.72, 0.0, {}),
 	"Concrete": ((0.58, 0.58, 0.53), 0.92, 0.0, {}),
 	"Dark": ((0.15, 0.17, 0.16), 0.85, 0.0, {}),
+	# field crops and meadow flowers (double sided: cards seen from both sides)
+	"Wheat": ((0.82, 0.68, 0.3), 0.95, 0.0, {"double": True}),
+	"WheatEar": ((0.88, 0.7, 0.28), 0.9, 0.0, {"double": True}),
+	"CornStalk": ((0.36, 0.5, 0.17), 0.9, 0.0, {"double": True}),
+	"CornLeaf": ((0.28, 0.5, 0.14), 0.88, 0.0, {"double": True}),
+	"CornHusk": ((0.5, 0.58, 0.25), 0.9, 0.0, {}),
+	"CornTassel": ((0.78, 0.68, 0.38), 0.9, 0.0, {"double": True}),
+	"Stem": ((0.22, 0.42, 0.13), 0.9, 0.0, {"double": True}),
+	"Petal": ((1.0, 1.0, 1.0), 0.8, 0.0, {"double": True}),
+	"Centre": ((0.9, 0.62, 0.08), 0.8, 0.0, {"double": True}),
 })
 
 
@@ -67,6 +77,116 @@ def grass():
 		x, y = math.cos(a) * 0.13, math.sin(a) * 0.13
 		h = 0.42 + (i % 4) * 0.11
 		m.prism([(y-0.025,0),(y+0.025,0),(y+0.015,h*0.55),(y+0.006,h)], x-0.012, x+0.012, "Grass")
+	return m
+
+
+def card(m, pts, mat, cols):
+	"""One double-sided polygon with a vertex colour per corner (dark at the root, light at the tip)."""
+	m.face([m.vert(p, c) for p, c in zip(pts, cols)], mat)
+
+
+def blade(m, x, y, h, w, yaw, lean, mat, root_col, tip_col):
+	"""A tapered, leaning blade card (3 corners wide at the root, a point at the tip)."""
+	ca, sa = math.cos(yaw), math.sin(yaw)
+	lx, ly = math.cos(yaw + 1.5708) * lean, math.sin(yaw + 1.5708) * lean
+	card(m, [(x - ca * w, y - sa * w, 0.0), (x + ca * w, y + sa * w, 0.0),
+		(x + ca * w * 0.55 + lx * 0.5, y + sa * w * 0.55 + ly * 0.5, h * 0.62),
+		(x + lx, y + ly, h), (x - ca * w * 0.55 + lx * 0.5, y - sa * w * 0.55 + ly * 0.5, h * 0.62)],
+		mat, [root_col, root_col, tip_col, tip_col, tip_col])
+
+
+def wheat():
+	"""A clump of wheat about 1 m high: two crossed leafy cards for body and bearded ears over them."""
+	m = MB()
+	dark, light = (0.55, 0.5, 0.3), (1.0, 0.95, 0.7)
+	for k in range(5):
+		a = k * math.pi * 0.4 + 0.2
+		blade(m, math.cos(a) * 0.12, math.sin(a) * 0.12, 0.78 + (k % 3) * 0.06, 0.2, a, 0.05, "Wheat", dark, light)
+	for k in range(9):
+		a = k * math.pi * 0.618
+		r = 0.1 + 0.26 * ((k * 5) % 9) / 9.0
+		x, y = math.cos(a) * r, math.sin(a) * r
+		h = 0.84 + ((k * 7) % 5) * 0.045
+		lean = 0.04 + 0.03 * (k % 3)
+		# thin stalk, then the ear: a narrow spike of grain
+		blade(m, x, y, h - 0.12, 0.012, a, lean, "Wheat", dark, light)
+		ex, ey = x + math.cos(a + 1.5708) * lean, y + math.sin(a + 1.5708) * lean
+		ca, sa = math.cos(a + 0.9), math.sin(a + 0.9)
+		for cx, sx in ((ca, sa), (-sa, ca)):
+			card(m, [(ex - cx * 0.03, ey - sx * 0.03, h - 0.14), (ex + cx * 0.03, ey + sx * 0.03, h - 0.14),
+				(ex + cx * 0.02, ey + sx * 0.02, h + 0.04), (ex, ey, h + 0.17), (ex - cx * 0.02, ey - sx * 0.02, h + 0.04)],
+				"WheatEar", [(0.85, 0.7, 0.35)] * 2 + [(1.0, 0.85, 0.45)] * 3)
+	return m
+
+
+def corn():
+	"""Maize: three tall plants (1.9 m) with arching leaves, a tassel on top and a cob on the stalk."""
+	m = MB()
+	for px, py, ph, pa in [(0.0, 0.0, 1.95, 0.3), (0.32, 0.18, 1.75, 1.9), (-0.25, 0.3, 1.85, 4.0)]:
+		# the stalk: two crossed thin cards
+		for da in (0.0, 1.5708):
+			ca, sa = math.cos(pa + da), math.sin(pa + da)
+			card(m, [(px - ca * 0.03, py - sa * 0.03, 0.0), (px + ca * 0.03, py + sa * 0.03, 0.0),
+				(px + ca * 0.02, py + sa * 0.02, ph * 0.94), (px - ca * 0.02, py - sa * 0.02, ph * 0.94)],
+				"CornStalk", [(0.6, 0.6, 0.5)] * 2 + [(1.0, 1.0, 0.85)] * 2)
+		# arching leaves in four directions, three segments each
+		for k in range(6):
+			a = pa + k * 1.047 + 0.3 * (k % 2)
+			z0 = 0.35 + 0.28 * k
+			if z0 > ph * 0.9:
+				z0 = ph * 0.8
+			length = 0.9 - 0.06 * k
+			ca, sa = math.cos(a), math.sin(a)
+			side = (-sa, ca)
+			prev = [(px, py, z0)]
+			segs = []
+			for s in range(1, 4):
+				t = s / 3.0
+				reach = length * t
+				rise = z0 + length * 0.55 * math.sin(t * 1.5) - length * 0.35 * t * t
+				w = 0.085 * math.sin(math.pi * (0.2 + 0.8 * t) * 0.9) + 0.01
+				segs.append((px + ca * reach, py + sa * reach, rise, w))
+			ring = [(px, py, z0, 0.012)] + segs
+			for i in range(len(ring) - 1):
+				x0, y0, z0_, w0 = ring[i]
+				x1, y1, z1, w1 = ring[i + 1]
+				c0 = (0.55, 0.62, 0.4) if i == 0 else (0.85, 0.95, 0.65)
+				c1 = (0.85, 0.95, 0.65) if i < 2 else (1.0, 1.0, 0.8)
+				card(m, [(x0 - side[0] * w0, y0 - side[1] * w0, z0_), (x0 + side[0] * w0, y0 + side[1] * w0, z0_),
+					(x1 + side[0] * w1, y1 + side[1] * w1, z1), (x1 - side[0] * w1, y1 - side[1] * w1, z1)],
+					"CornLeaf", [c0, c0, c1, c1])
+		# the cob, wrapped in husk, on the side of the stalk
+		cx, cy = px + math.cos(pa + 0.8) * 0.07, py + math.sin(pa + 0.8) * 0.07
+		m.box((cx - 0.035, cy - 0.035, ph * 0.52), (cx + 0.035, cy + 0.035, ph * 0.52 + 0.24), "CornHusk")
+		# the tassel: thin pale spikes fanning from the top
+		for k in range(5):
+			a = pa + k * 1.2566
+			ca, sa = math.cos(a), math.sin(a)
+			tx, ty = px + ca * 0.2, py + sa * 0.2
+			card(m, [(px - sa * 0.012, py + ca * 0.012, ph * 0.9), (px + sa * 0.012, py - ca * 0.012, ph * 0.9),
+				(tx, ty, ph + 0.12)], "CornTassel", [(0.8, 0.75, 0.5)] * 2 + [(1.0, 0.9, 0.6)])
+	return m
+
+
+def flower():
+	"""A small meadow flower (0.45 m): a stem, two leaves and a daisy-like head in a white 'Petal' material
+	that the MultiMesh instance colour turns red, yellow, violet or white."""
+	m = MB()
+	m.tube((0, 0, 0), (0.02, 0.01, 0.34), 0.012, "Stem", 4, True)
+	for a in (0.5, 3.6):
+		blade(m, 0.0, 0.0, 0.2, 0.035, a, 0.12, "Stem", (0.5, 0.55, 0.4), (1.0, 1.0, 0.8))
+	cx, cy, cz = 0.02, 0.01, 0.34
+	for k in range(7):
+		a = k * 2 * math.pi / 7
+		ca, sa = math.cos(a), math.sin(a)
+		card(m, [(cx, cy, cz), (cx + ca * 0.1 - sa * 0.035, cy + sa * 0.1 + ca * 0.035, cz + 0.045),
+			(cx + ca * 0.1 + sa * 0.035, cy + sa * 0.1 - ca * 0.035, cz + 0.045)], "Petal", [(1.0, 1.0, 1.0)] * 3)
+	for k in range(7):  # a second ring so the head is not a flat star from above
+		a = (k + 0.5) * 2 * math.pi / 7
+		ca, sa = math.cos(a), math.sin(a)
+		card(m, [(cx, cy, cz + 0.01), (cx + ca * 0.08 - sa * 0.03, cy + sa * 0.08 + ca * 0.03, cz + 0.07),
+			(cx + ca * 0.08 + sa * 0.03, cy + sa * 0.08 - ca * 0.03, cz + 0.07)], "Petal", [(0.85, 0.85, 0.85)] * 3)
+	m.disc((cx, cy, cz + 0.035), 0.035, "Centre", segs=6)
 	return m
 
 
@@ -113,7 +233,8 @@ def main():
 	bpy.ops.object.select_all(action="SELECT")
 	bpy.ops.object.delete(use_global=False)
 	objects = []
-	for name, builder in [("BushCluster", bush), ("TallGrass", grass), ("HayBale", hay_bale),
+	for name, builder in [("BushCluster", bush), ("TallGrass", grass), ("Wheat", wheat), ("Corn", corn),
+		("Flower", flower), ("HayBale", hay_bale),
 		("WaysideCross", roadside_cross), ("KilometrePost", kilometre_post), ("RallyBoard", rally_board)]:
 		objects.append(builder().emit(name))
 	kit.export_glb(OUT_GLB, objects)
@@ -122,8 +243,8 @@ def main():
 		cam = kit.setup_preview(ground=30.0)
 		# A lineup makes silhouettes and relative scale easy to inspect.
 		for i, ob in enumerate(objects):
-			kit.place(ob, ((i - 2.5) * 3.0, 0.0, 0.0))
-		kit.render(cam, os.path.join(render_dir, "roadside.png"), (9, -16, 8), (0, 0, 0), 42.0)
+			kit.place(ob, ((i - 4) * 2.4, 0.0, 0.0))
+		kit.render(cam, os.path.join(render_dir, "roadside.png"), (9, -14, 6), (0, 0, 0.8), 55.0)
 
 
 if __name__ == "__main__":
