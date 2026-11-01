@@ -2012,6 +2012,8 @@ func _dev_entries() -> Array:
 	var out: Array = []
 	var add := func(section: String, label: String, fn: Callable, close := false) -> void:
 		out.append({"section": section, "label": label, "do": fn, "close": close})
+	add.call("COORDINATES", "Copy coordinates to the clipboard", func() -> void:
+		DisplayServer.clipboard_set(dev_coordinates_text()))
 	for n in [10000, 100000, 1000000]:
 		add.call("FANS & UNLOCKS", "+%s fans" % OpenWorldHud._thousands(n), func() -> void: _dev_fans(n))
 	add.call("FANS & UNLOCKS", "Unlock everything (hypercar, final race, modifiers): %s" % ("ON" if FanLevels.dev_unlock else "off"),
@@ -2036,6 +2038,16 @@ func _dev_entries() -> Array:
 			race.approximate_finish()
 			_show_results(), true)
 	return out
+
+## The car on screen as text for the dev menu: open-world metres from the baked origin, race metres from the track's origin.
+func dev_coordinates_text() -> String:
+	if open_world != null and open_world.active and open_world.drive != null:
+		var c: RaceCar = open_world.drive.car
+		return "open world  x %.1f  y %.1f  z %.1f  heading %.1f°" % [c.x, c.y, open_world.drive.z, rad_to_deg(c.heading)]
+	if race != null and race.player != null:
+		var p: RaceCar = race.player
+		return "race  x %.1f  y %.1f  heading %.1f°" % [p.x, p.y, rad_to_deg(p.heading)]
+	return "no car on screen"
 
 func _dev_fans(n: int) -> void:
 	if open_world != null and open_world.progress != null:

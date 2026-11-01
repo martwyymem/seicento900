@@ -1,5 +1,6 @@
 ## The developer menu: § + 1 (the key left of 1, held, then 1; either order). A list of actions for whatever is on screen:
 ## fans and unlocks everywhere, teleports, time of day and parked cars in the open world, weather, repairs and finishing in a race.
+## A live coordinates line at the top shows the car on screen (x, y, heading; z in the open world); "Copy coordinates" puts it on the clipboard.
 ## The game fills it (game.gd `_dev_entries()`); the world freezes (Engine.time_scale 0) while it is open. ↑ ↓ and Enter or a click
 ## choose, Esc or § + 1 again closes. The ~ performance overlay (DevHud) still toggles on the key's own press and release.
 class_name DevMenu
@@ -16,6 +17,7 @@ var _buttons: Array[Button] = []
 var _index := 0
 var _open := false
 var _saved_scale := 1.0
+var _readout: Label ## live coordinates of the car on screen (game.dev_coordinates_text())
 
 func _init() -> void:
 	name = "DevMenu"
@@ -48,6 +50,10 @@ func _ready() -> void:
 	title.add_theme_font_size_override("font_size", 15)
 	title.add_theme_color_override("font_color", Color("#ff9d1a"))
 	col.add_child(title)
+	_readout = Label.new()
+	_readout.add_theme_font_size_override("font_size", 13)
+	_readout.add_theme_color_override("font_color", Color("#7fd9ff"))
+	col.add_child(_readout)
 	_scroll = ScrollContainer.new()
 	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -59,6 +65,10 @@ func _ready() -> void:
 
 func is_open() -> bool:
 	return _open
+
+func _process(_delta: float) -> void:
+	if _open and game and game.has_method("dev_coordinates_text"):
+		_readout.text = game.dev_coordinates_text()
 
 func _is_section_key(key: InputEventKey) -> bool:
 	return key.physical_keycode == KEY_QUOTELEFT or key.physical_keycode == KEY_SECTION or key.keycode == KEY_SECTION
