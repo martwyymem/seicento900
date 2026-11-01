@@ -16,6 +16,21 @@ func _init(with_uv2 := false, with_color := false) -> void:
 	use_uv2 = with_uv2
 	use_color = with_color
 
+## How many vertices and indices there are now, for rollback().
+func mark() -> Vector2i:
+	return Vector2i(verts.size(), indices.size())
+
+## Drop everything added since mark() (a builder that gave up half way).
+func rollback(m: Vector2i) -> void:
+	verts.resize(m.x)
+	normals.resize(m.x)
+	uvs.resize(m.x)
+	if use_uv2:
+		uv2s.resize(m.x)
+	if use_color:
+		colors.resize(m.x)
+	indices.resize(m.y)
+
 func is_empty() -> bool:
 	return indices.is_empty()
 

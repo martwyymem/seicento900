@@ -1,0 +1,48 @@
+[gd_resource type="Resource" script_class="TrackDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/corner_name.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/data/track_def.gd" id="2"]
+
+[sub_resource type="Resource" id="c1"]
+script = ExtResource("1")
+distance = 2153.8
+name = "ul. Lachowicka"
+
+[sub_resource type="Resource" id="c2"]
+script = ExtResource("1")
+distance = 3898.1
+name = "ul. Nazieleńce"
+
+[sub_resource type="Resource" id="c3"]
+script = ExtResource("1")
+distance = 4198.1
+name = "ul. Kolejowa"
+
+[resource]
+script = ExtResource("2")
+key = "maly_bor"
+display_name = "Mały Bór Rally Stage"
+short_name = "Mały Bór"
+width = 6.5
+theme = "forest"
+street_stage = true
+point_to_point = true
+barrier = "guardrail"
+runoff = 1.8
+runoff_surface = "grass"
+runoff_paved = 0.0
+kerb_style = "none"
+kerb_width = 0.0
+tree_density = 0.9
+tree_patch = 0.75
+tree_conifer = 0.8
+grandstands = false
+stand_tiers = 0
+floodlight_spacing = 0.0
+pit_entry = -120.0
+pit_exit = 120.0
+pit_ramp = 40.0
+pit_offset = 8.0
+box_start = -60.0
+box_spacing = 9.0
+corners = Array[ExtResource("1")]([SubResource("c1"), SubResource("c2"), SubResource("c3")])

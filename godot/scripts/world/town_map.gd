@@ -51,6 +51,7 @@ var road_w := PackedFloat32Array()
 var road_kind: PackedStringArray = []
 var road_name: PackedStringArray = []
 var road_surface := PackedInt32Array() ## 0 asphalt, 1 setts or slabs, 2 unpaved
+var road_gravel := PackedByteArray() ## 1: an unpaved road of loose stone (OSM surface gravel, fine_gravel, compacted), else dirt
 var road_oneway := PackedByteArray()
 var road_lanes := PackedInt32Array()
 var road_limit := PackedFloat32Array() ## km/h
@@ -181,6 +182,7 @@ func _load_roads() -> void:
 		road_kind.append(kind)
 		road_name.append(str(r.get("n", "")))
 		road_surface.append(int(r.get("s", 0)))
+		road_gravel.append(int(r.get("g", 0)))
 		road_oneway.append(int(r.get("o", 0)))
 		road_lanes.append(int(r.get("l", lanes_default.get(kind, 1))))
 		road_bridge.append(int(r.get("b", 0)))
@@ -276,7 +278,7 @@ func road_at(x: float, y: float, z_ref := -INF, reach := 0.0) -> Dictionary:
 			best_score = score
 			var side := signf(ab.x * (p.y - a.y) - ab.y * (p.x - a.x))
 			best = {"road": ri, "i": i, "t": t, "dist": d * side, "half": half, "deck": deck,
-				"surface": road_surface[ri]}
+				"surface": road_surface[ri], "gravel": road_gravel[ri]}
 	if not best.is_empty():
 		best["height"] = ground(x, y) + float(best.deck)
 	return best
@@ -671,7 +673,7 @@ func surface_of(hit: Dictionary) -> int:
 	if absf(float(hit.dist)) > float(hit.half) + 0.25:
 		return Physics.SURF_GRASS
 	match int(hit.surface):
-		2: return Physics.SURF_GRAVEL
+		2: return Physics.SURF_GRAVEL_ROAD if int(hit.get("gravel", 0)) else Physics.SURF_DIRT
 		1: return Physics.SURF_ASPHALT
 	return Physics.SURF_TRACK
 

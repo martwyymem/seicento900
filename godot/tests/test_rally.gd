@@ -25,6 +25,21 @@ func run() -> Array:
 				errors.append("%s: unknown surface %s" % [e.key, sd.surface])
 			if not sd.weather in ["dry", "wet", "snow", "hail", "fog", "variable"]:
 				errors.append("%s: unknown weather %s" % [e.key, sd.weather])
+		# distinct stages: no two stages of an event share road on the same track (spans as [from, to) on the loop)
+		for a in n:
+			for b in range(a + 1, n):
+				var sa: Dictionary = e.stages[a]
+				var sb: Dictionary = e.stages[b]
+				if sa.track != sb.track:
+					continue
+				var L: float = Race.get_track(sa.track).L
+				var pa := Rally.span(sa)
+				var pb := Rally.span(sb)
+				var la := Rally.stage_length(sa, L)
+				var lb := Rally.stage_length(sb, L)
+				# b's start lies inside a, or a's start inside b
+				if fposmod(pb.x - pa.x, L) < la - 1.0 or fposmod(pa.x - pb.x, L) < lb - 1.0:
+					errors.append("%s: stages %s and %s overlap on %s" % [e.key, sa.name, sb.name, sa.track])
 	if Rally.event("nope") != {} or Rally.event("sprint").is_empty():
 		errors.append("Rally.event looks an event up by key")
 	if absf(Rally.stage_length({"from": 0.0, "to": 0.0}, 3000.0) - 3000.0) > 1e-6 \
@@ -53,10 +68,26 @@ func run() -> Array:
 		errors.append("a plain race has no stage or time-trial tracker")
 	var gr := Race.new(st, null, 3)
 	gr.player.tyre = pr.player.tyre.duplicate()
-	if absf(gr.grip(gr.player) - pr.grip(pr.player) * Rally.SURFACE_GRIP.gravel) > 1e-9:
-		errors.append("a gravel stage scales the grip by SURFACE_GRIP.gravel")
+	if absf(gr.plan_grip(gr.player) - pr.grip(pr.player) * Rally.SURFACE_GRIP.gravel) > 1e-9:
+		errors.append("a gravel stage scales the drivers' judged grip by SURFACE_GRIP.gravel")
+	if gr.grip(gr.player) != pr.grip(pr.player) or pr.plan_grip(pr.player) != pr.grip(pr.player):
+		errors.append("the tyres' grip leaves the road out (the physics meets the gravel under the wheels)")
+	if gr.surface_at(gr.player, gr.player.x, gr.player.y) != Physics.SURF_GRAVEL_ROAD:
+		errors.append("a gravel stage's road is Physics.SURF_GRAVEL_ROAD")
 	if gr.rc == null or gr.cars.size() != 1 or gr.stage == null:
 		errors.append("a stage: the player alone, with race control and a Rally.Stage")
+	# a dirt stage (the open world's unpaved tracks, Rajsko–Wilczkowice): Physics.SURF_DIRT under the wheels
+	var dst: RaceSettings = st.duplicate()
+	dst.surface = "dirt"
+	var dirt_race := Race.new(dst, null, 3)
+	dirt_race.player.tyre = pr.player.tyre.duplicate()
+	if dirt_race.surface_at(dirt_race.player, dirt_race.player.x, dirt_race.player.y) != Physics.SURF_DIRT:
+		errors.append("a dirt stage's road is Physics.SURF_DIRT")
+	if absf(dirt_race.plan_grip(dirt_race.player) - pr.grip(pr.player) * Rally.SURFACE_GRIP.dirt) > 1e-9:
+		errors.append("a dirt stage scales the drivers' judged grip by SURFACE_GRIP.dirt")
+	if not (Rally.conditions_factor("tarmac", "dry") < Rally.conditions_factor("dirt", "dry") and Rally.conditions_factor("dirt", "dry") <= Rally.conditions_factor("gravel", "dry")):
+		errors.append("dirt is slower than tarmac and no slower than gravel (SURFACE_PACE)")
+	dirt_race.dispose()
 	pr.dispose()
 	gr.dispose()
 

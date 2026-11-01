@@ -14,6 +14,7 @@ const SUITES := [
 	"res://tests/test_qualifying.gd",
 	"res://tests/test_lap_records.gd",
 	"res://tests/test_rally.gd",
+	"res://tests/test_surfaces.gd",
 	"res://tests/test_time_trial.gd",
 	"res://tests/test_pace_notes.gd",
 	"res://tests/test_world_audio.gd",
@@ -42,7 +43,8 @@ const SUITES := [
 	"res://tests/test_cobbles.gd",
 	"res://tests/test_street_tracks.gd",
 	"res://tests/test_chase_cam.gd",
-	"res://tests/test_damage_policy.gd"
+	"res://tests/test_damage_policy.gd",
+	"res://tests/test_routes.gd"
 ]
 
 const SURROUNDINGS := preload("res://scripts/ui/surroundings.gd")

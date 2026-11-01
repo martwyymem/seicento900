@@ -47,7 +47,8 @@ const PALETTES := {
 }
 const COUNTRY := {"gp": "de", "nordschleife": "de", "spa": "be", "monaco": "mc", "lemans": "fr", "monza": "it",
 	"silverstone": "uk", "suzuka": "jp", "zandvoort": "nl", "indy": "us", "fiat": "pl",
-	"tokyo": "jp", "bielsko": "pl", "krakow": "pl", "oswiecim": "pl", "wilamowice": "pl", "brzeszcze": "pl", "pszczyna": "pl", "bor": "pl", "goliath": "pl"}
+	"tokyo": "jp", "bielsko": "pl", "krakow": "pl", "oswiecim": "pl", "wilamowice": "pl", "brzeszcze": "pl", "pszczyna": "pl", "bor": "pl", "goliath": "pl", "s1_sprint": "pl", "maly_bor": "pl",
+	"kolonia_stawowa": "pl", "babudy_gora": "pl", "rajsko_wilczkowice": "pl", "lipowiec_kobylec": "pl"}
 ## The trees of each country (models/trees.glb): [conifers, broadleaves, street and garden trees], each a
 ## species -> weight mix.
 const SPECIES := {

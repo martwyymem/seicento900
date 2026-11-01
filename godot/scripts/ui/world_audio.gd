@@ -14,6 +14,8 @@ class_name WorldAudio
 extends Node
 
 const DIR := "res://audio/"
+## Share of the gravel trap's crunch a loose road makes under a wheel: [dirt, gravel road].
+const LOOSE_ROAD_CRUNCH := [0.35, 0.6]
 const LOOPS := ["engine", "kerb", "gravel", "grass", "wind", "rain", "spray", "scrape", "squeal", "crowd"]
 const SHOTS := ["impact_0", "impact_1", "impact_2", "bump", "gun", "jack", "cheer"]
 const ENGINE_RPM := 4500.0 ## the engine loop is recorded at this speed (ENGINE_RPM in tools/build_sounds.py)
@@ -237,6 +239,9 @@ static func wheel_contact(race: Race, car: RaceCar) -> PackedFloat32Array:
 			continue
 		if surf == Physics.SURF_GRAVEL:
 			out[2] += 0.25
+			continue
+		if surf == Physics.SURF_GRAVEL_ROAD or surf == Physics.SURF_DIRT:
+			out[2] += 0.25 * LOOSE_ROAD_CRUNCH[surf - Physics.SURF_DIRT] # a loose road: the gravel crunch, quieter
 			continue
 		if not kerbs:
 			continue

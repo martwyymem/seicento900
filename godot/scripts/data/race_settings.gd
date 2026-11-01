@@ -34,7 +34,7 @@ extends Resource
 @export_enum("race", "rally", "time_trial") var mode := "race"
 @export var stage_from := 0.0 ## rally: where the stage starts, metres after the start line
 @export var stage_to := 0.0 ## rally: where it finishes, metres after the start line (0: back at the start line, a full lap)
-@export_enum("tarmac", "gravel") var surface := "tarmac" ## the road itself (rally stages); tarmac changes nothing
+@export_enum("tarmac", "gravel", "dirt") var surface := "tarmac" ## the road itself (rally stages); tarmac changes nothing
 @export var rolling_start := false ## time trial: start at speed, on an out-lap run-up to the line
 
 @export_group("Conditions")

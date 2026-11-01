@@ -14,7 +14,7 @@ Writes godot/data/world/brzeszcze.json:
     boundary [[x, y] ...]   the town limit (the outer ring of the admin boundary)
     terrain {x0, y0, step, nx, ny, h}   ground height (m above sea level) on a grid, row-major from (x0, y0),
                             smoothed, and with every road's corridor levelled across its width
-    roads [{id, n (name), k (class), w (width m), l (lanes), o (oneway), s (surface), b (bridge),
+    roads [{id, n (name), k (class), w (width m), l (lanes), o (oneway), s (surface), g (1: loose gravel), b (bridge),
             t (tunnel), p [[x, y] ...]}]
     nodes {id: [x, y]}      road graph junctions; each road also lists "j": the indices of its points that are
                             shared with another road (junctions), and "e": the node ids at those indices
@@ -197,6 +197,7 @@ DRIVABLE = {
     'unclassified': (5.4, 2, True), 'residential': (5.4, 2, True), 'living_street': (4.5, 1, True),
     'pedestrian': (5.0, 1, True), 'service': (4.0, 1, True), 'track': (3.0, 1, False), 'road': (5.0, 2, True),
 }
+LOOSE_GRAVEL = {'gravel', 'fine_gravel', 'compacted', 'pebblestone'}  # unpaved roads of loose stone (Physics.SURF_GRAVEL_ROAD)
 UNPAVED = {'unpaved', 'gravel', 'dirt', 'ground', 'grass', 'sand', 'compacted', 'fine_gravel', 'earth', 'mud', 'pebblestone'}
 CLASS_ID = {k: i for i, k in enumerate(DRIVABLE)}
 RAMP_GRADE = 0.06  # embankment ramps up to a road bridge
@@ -735,6 +736,8 @@ def build(check_png=None):
         surface = t.get('surface', '')
         unpaved = surface in UNPAVED or (k == 'track' and surface not in ('asphalt', 'concrete', 'paved', 'concrete:plates'))
         sid = 2 if unpaved else (1 if surface in ('paving_stones', 'sett', 'cobblestone', 'concrete:plates') else 0)
+        # an unpaved road tagged as loose stone drives as a gravel road; the rest (dirt, ground, grass, untagged) as dirt
+        gravel = sid == 2 and surface in LOOSE_GRAVEL
         oneway = t.get('oneway') in ('yes', '1', 'true') or k in ('motorway', 'motorway_link') or t.get('junction') == 'roundabout'
         # keep the junction nodes, simplify the rest, then densify for the terrain
         keep = [0] + [i for i, nid in enumerate(ids) if nid in junction and 0 < i < len(ids) - 1] + [len(ids) - 1]
@@ -753,6 +756,7 @@ def build(check_png=None):
             node_xy[nid] = (r1(dense[idx][0]), r1(dense[idx][1]))
         out_roads.append({'id': e['id'], 'n': t.get('name', '') or t.get('ref', ''), 'ref': t.get('ref', ''),
                           'k': CLASS_ID[k], 'kn': k, 'w': round(width, 1), 'l': lanes, 'o': 1 if oneway else 0, 's': sid,
+                          'g': 1 if gravel else 0,
                           'b': 1 if t.get('bridge') in ('yes', 'viaduct') else 0,
                           'tn': 1 if t.get('tunnel') in ('yes',) else 0,
                           'lit': 1 if t.get('lit') == 'yes' else 0,
@@ -1538,6 +1542,8 @@ def build(check_png=None):
             rec['z'] = [round(v, 2) for v in z]
         if r['rb']:
             rec['rb'] = 1
+        if r['g']:
+            rec['g'] = 1
         if r['maxspeed']:
             rec['v'] = r['maxspeed']
         if r['tn']:

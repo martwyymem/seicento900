@@ -10,7 +10,9 @@ const G := 9.81
 ## wobble), with a little yaw damping. This is the actual geometry a driver needs to make the corner —
 ## not a fixed lock, but exactly the angle the coming curvature calls for at this speed and grip. Used
 ## both to drive the bots and, as a ceiling, to keep a keyboard's digital steering from overshooting it.
-static func pursuit_steer(phys: Physics, tr: Track, car: RaceCar, mu: float, offs: float, err) -> float:
+## steer_mu, steer_k: what the physics' steering limit is built from (env.mu and the road's Physics.SURF_STEER), when
+## mu (the grip the driver judges by) also carries the road's surface; steer_mu < 0 means mu itself.
+static func pursuit_steer(phys: Physics, tr: Track, car: RaceCar, mu: float, offs: float, err, steer_mu := -1.0, steer_k := 1.0) -> float:
 	var ch := cos(car.heading)
 	var sh := sin(car.heading)
 	var v := maxf(0.0, car.vx * ch + car.vy * sh)
@@ -33,16 +35,16 @@ static func pursuit_steer(phys: Physics, tr: Track, car: RaceCar, mu: float, off
 	var ay := v * v * kap
 	delta += signf(kap) * minf(0.08, absf(ay) / (mu * G) * phys.APK * 0.35)
 	delta += 0.06 * (v * kap - car.yaw_rate)
-	return clampf(delta / phys.max_steer(v, mu), -1.0, 1.0)
+	return clampf(delta / phys.max_steer(v, mu if steer_mu < 0.0 else steer_mu, steer_k), -1.0, 1.0)
 
 ## The steer a driver on the racing line, exactly at car's own position, would ask for right now — used
 ## as a guide rail for keyboard/pad steering (see Race.steer_assist), not to drive anyone directly.
-static func line_steer(phys: Physics, tr: Track, car: RaceCar, mu: float) -> float:
-	return pursuit_steer(phys, tr, car, mu, 0.0, null)
+static func line_steer(phys: Physics, tr: Track, car: RaceCar, mu: float, steer_mu := -1.0, steer_k := 1.0) -> float:
+	return pursuit_steer(phys, tr, car, mu, 0.0, null, steer_mu, steer_k)
 
 ## tg: {vT (speed wanted here, traffic included), dT (lateral target), K (profile scale), err (a mistake in
 ## progress)}. Fills and returns out.
-static func control(phys: Physics, tr: Track, car: RaceCar, tg: Dictionary, mu: float, out: Physics.Controls) -> Physics.Controls:
+static func control(phys: Physics, tr: Track, car: RaceCar, tg: Dictionary, mu: float, out: Physics.Controls, steer_mu := -1.0, steer_k := 1.0) -> Physics.Controls:
 	var ch := cos(car.heading)
 	var sh := sin(car.heading)
 	var v := maxf(0.0, car.vx * ch + car.vy * sh)
@@ -80,5 +82,5 @@ static func control(phys: Physics, tr: Track, car: RaceCar, tg: Dictionary, mu: 
 	var rl := tr.sample(tr.RLD, car.s)
 	out.throttle = throttle
 	out.brake = brake
-	out.steer = pursuit_steer(phys, tr, car, mu, tg.dT - rl, err)
+	out.steer = pursuit_steer(phys, tr, car, mu, tg.dT - rl, err, steer_mu, steer_k)
 	return out

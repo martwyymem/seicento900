@@ -90,6 +90,7 @@ func build(world: Node3D, parent: Node3D) -> bool:
 			var farmland := 1.0
 			var water := 0.0
 			var built := 0.0
+			var lake := false
 			# open sea, though not the polders below sea level that the land cover has as dry land
 			if int(sea[k]) == 1 and (cover.is_empty() or cover[k] == "w"):
 				col = SEA
@@ -124,6 +125,7 @@ func build(world: Node3D, parent: Node3D) -> bool:
 						col = SEA
 						farmland = 0.0
 						water = 1.0
+						lake = true
 			else:
 				# steep ground and high ground are wooded, then rock above the tree line
 				var slope := _slope(xs, zs, hs, i, j)
@@ -145,7 +147,7 @@ func build(world: Node3D, parent: Node3D) -> bool:
 					col = WOOD_BROADLEAF.lerp(WOOD_CONIFER, conifer)
 					farmland = 0.0
 					y += TREE_HEIGHT * (0.8 + 0.4 * absf(noise.get_noise_2d(x * 7.0, z * 7.0)))
-			if water < 1.0:
+			if water < 1.0 or lake: # (a lake is sunk too: a pond by the road stood through a dyke, Mały Bór 2026-10-31)
 				y -= sink
 			ground[k] = y - 6.0 * built # the land as drawn, sunk near the circuit, so buildings stand on what is seen
 			built_at[k] = int(built > 0.5 and out > SKYLINE_FROM)

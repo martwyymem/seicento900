@@ -5,10 +5,11 @@ extends Control
 
 const RaceHud = preload("res://scripts/ui/race_hud.gd")
 
-## Circuits offered in the menus, in menu order; each key needs data/tracks/<key>.tres and .json.
+## Circuits offered in the menus, in menu order; each key needs data/tracks/<key>.tres and .json. New keys go at the
+## end (saved settings store picker indices). Point-to-point rally stages (TrackDef.point_to_point) stay out.
 ## TRACK_NAMES is the display name for the key at the same index.
-const TRACK_KEYS := ["gp", "nordschleife", "monaco", "indy", "lemans", "monza", "silverstone", "spa", "suzuka", "zandvoort", "fiat", "tokyo", "bielsko", "krakow", "oswiecim", "wilamowice", "brzeszcze", "pszczyna", "bor", "goliath"]
-const TRACK_NAMES := ["Nürburgring GP", "Nordschleife", "Monaco", "Indianapolis", "Le Mans", "Monza", "Silverstone", "Spa-Francorchamps", "Suzuka", "Zandvoort", "Fiat Track", "Tokyo C1 Expressway", "Bielsko-Biała Szyndzielnia", "Kraków Royal Ring", "Oświęcim Riverfront", "Wilamowice Country Loop", "Brzeszcze Industrial Sprint", "Pszczyna Castle Grounds", "Bór Forest Stage", "The Seicento Goliath"]
+const TRACK_KEYS := ["gp", "nordschleife", "monaco", "indy", "lemans", "monza", "silverstone", "spa", "suzuka", "zandvoort", "fiat", "tokyo", "bielsko", "krakow", "oswiecim", "wilamowice", "brzeszcze", "pszczyna", "bor", "goliath", "s1_sprint"]
+const TRACK_NAMES := ["Nürburgring GP", "Nordschleife", "Monaco", "Indianapolis", "Le Mans", "Monza", "Silverstone", "Spa-Francorchamps", "Suzuka", "Zandvoort", "Fiat Track", "Tokyo C1 Expressway", "Bielsko-Biała Szyndzielnia", "Kraków Royal Ring", "Oświęcim Riverfront", "Wilamowice Country Loop", "Brzeszcze Industrial Sprint", "Pszczyna Castle Grounds", "Bór Forest Stage", "The Seicento Goliath", "S1 Sprint"]
 
 ## Championship rounds in order (track keys)
 const CHAMPIONSHIP_CALENDAR := ["monza", "silverstone", "spa", "gp", "monaco", "indy", "lemans", "nordschleife"]
@@ -17,7 +18,7 @@ const CHAMPIONSHIP_POINTS := [25, 18, 15, 12, 10, 8, 6, 4, 2, 1]
 ## A season is set up before round 1 (champ_data.config) and locked once it is under way. Calendar presets:
 const SEASON_PRESETS := [
 	{"name": "Classic GP", "tracks": CHAMPIONSHIP_CALENDAR},
-	{"name": "Polish Tour", "tracks": ["wilamowice", "brzeszcze", "bor", "pszczyna", "bielsko", "oswiecim", "krakow", "fiat"]},
+	{"name": "Polish Tour", "tracks": ["wilamowice", "brzeszcze", "bor", "pszczyna", "bielsko", "oswiecim", "krakow", "fiat", "s1_sprint"]},
 	{"name": "World Tour", "tracks": ["monza", "suzuka", "silverstone", "zandvoort", "spa", "tokyo", "monaco", "krakow", "indy", "nordschleife"]},
 	{"name": "Full", "tracks": TRACK_KEYS},
 	{"name": "Custom", "tracks": []}, # whatever is ticked on the calendar list
@@ -76,10 +77,11 @@ const TRACK_DEFAULTS := {
 	"krakow": {"laps": 6, "wear": 2.0},
 	"oswiecim": {"laps": 8, "wear": 2.0},
 	"wilamowice": {"laps": 3, "wear": 2.0},
-	"brzeszcze": {"laps": 8, "wear": 2.0},
+	"brzeszcze": {"laps": 3, "wear": 2.0}, # Brzeszcze Kopalnia, 6.2 km (the invented 2.8 km circuit had 8)
 	"pszczyna": {"laps": 6, "wear": 2.0},
 	"bor": {"laps": 7, "wear": 2.0},
 	"goliath": {"laps": 1, "wear": 1.0},
+	"s1_sprint": {"laps": 1, "wear": 1.0},
 }
 
 ## Stock paints: ◂ ▸ steps through them on the set-up page (Enter on the swatch opens the mixer for any colour)

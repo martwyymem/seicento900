@@ -123,6 +123,8 @@ def chain_nodes(cfg, ways, P):
             where.setdefault(n, []).append((w, j))
     seq = cfg['nodes']
     pts, nodes, names = [], [], []
+    surfs = cfg['_surfs'] = []  # each point's road surface (surface_of), for a route file with "surfaces"
+    bridge = cfg['_bridge'] = []  # whether each point's way is a bridge, for a route file with "bridges"
     for k, n in enumerate(seq):
         m = seq[(k + 1) % len(seq)]
         hit = next(((w, j) for w, j in where[n] if (j + 1 < len(w['nodes']) and w['nodes'][j + 1] == m)
@@ -132,7 +134,19 @@ def chain_nodes(cfg, ways, P):
         pts.append(P(w['geometry'][j]))
         nodes.append(n)
         names.append(w['tags'].get('name'))
+        surfs.append(surface_of(w['tags'].get('highway'), w['tags']))
+        bridge.append(w['tags'].get('bridge') not in (None, 'no'))
     return pts, nodes, names
+
+
+def surface_of(h, t):
+    """'gravel', 'dirt' or 'paved': how the open world drives the road (build_open_world.UNPAVED, LOOSE_GRAVEL)."""
+    import build_open_world as bw
+    s = t.get('surface', '')
+    unpaved = s in bw.UNPAVED or (h == 'track' and s not in ('asphalt', 'concrete', 'paved', 'concrete:plates'))
+    if not unpaved:
+        return 'paved'
+    return 'gravel' if s in bw.LOOSE_GRAVEL else 'dirt'
 
 
 def local_elevation(cfg, P, rs, step, margin):
@@ -154,6 +168,14 @@ def local_elevation(cfg, P, rs, step, margin):
     nx = int((max(xs) + margin - x0) / step) + 1
     ny = int((max(ys) + margin - y0) / step) + 1
     return [h(x, y) for x, y in rs], (x0, y0, nx, ny, [h(x0 + i * step, y0 + j * step) for j in range(ny) for i in range(nx)])
+
+
+def point_segment(p, a, b):
+    """Distance from p to the segment a-b."""
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    l2 = dx * dx + dy * dy or 1e-9
+    f = max(0.0, min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2))
+    return math.dist(p, (a[0] + dx * f, a[1] + dy * f))
 
 
 def fillet(pts, radius):
@@ -249,10 +271,55 @@ def centreline(cfg, data, P):
     start_s = shift * step
     node_s = {nid: (s - start_s) % total for nid, s in node_s.items()}
     name_at = []
+    per_way = cfg.get('surfaces') or cfg.get('bridges')
+    for key_ in ('_surfs', '_bridge'):
+        if per_way:
+            cfg[key_] = bt.rotate(cfg[key_], k)
+    cfg['_way_at'] = []  # per sample: the index of the raw segment (so of the way) it lies on
+    m = len(raw)
+    seg_d = lambda j, p: point_segment(p, raw[j % m], raw[(j + 1) % m])
+    cur = None
     for p in pts:  # street name per sample, from the nearest raw OSM point
         i = min(range(len(raw)), key=lambda j: (raw[j][0] - p[0]) ** 2 + (raw[j][1] - p[1]) ** 2)
         name_at.append(names[i])
+        if per_way:
+            # walk the raw chain with the samples (a global nearest point can jump to the other level of a crossing)
+            if cur is None:
+                cur = min(range(m), key=lambda j: seg_d(j, p))
+            else:
+                cur = min(range(cur, cur + 6), key=lambda j: seg_d(j, p))
+            cfg['_way_at'].append(cur % m)
     return pts, name_at, node_s, total, raw
+
+
+BRIDGE_CLEARANCE = 6.0  # m of deck over the road below (build_open_world.CLEARANCE_ROAD)
+BRIDGE_RAMP = 140.0  # m of approach either side of the crossing
+
+
+def lift_bridges(cfg, pts, elev, step):
+    """Where the loop passes under itself (a junction's overbridge), raise the upper road, the samples on an OSM
+    bridge way, to BRIDGE_CLEARANCE over the lower one, eased in over BRIDGE_RAMP m (the game draws the deck where
+    the loop crosses itself 4 m or more apart in height)."""
+    n = len(pts)
+    half = cfg['trackdef'].get('width', 6.5) / 2
+    apart = int(200 / step)
+    done = []
+    for i in range(n):
+        if not cfg['_bridge'][cfg['_way_at'][i]]:
+            continue
+        for j in range(n):
+            if min(abs(i - j), n - abs(i - j)) < apart or math.dist(pts[i], pts[j]) > half:
+                continue
+            if cfg['_bridge'][cfg['_way_at'][j]] or any(min(abs(i - a), n - abs(i - a)) < apart for a, _ in done):
+                continue
+            done.append((i, j))
+    span = int(BRIDGE_RAMP / step)
+    for up, low in done:
+        need = BRIDGE_CLEARANCE - (elev[up] - elev[low])
+        if need > 0:
+            for k in range(-span, span + 1):
+                elev[(up + k) % n] += need * (0.5 + 0.5 * math.cos(math.pi * k / span))
+        print(f'  bridge at {up * step:.0f} m over {low * step:.0f} m: deck raised {max(need, 0):.1f} m')
 
 
 def blockages(cfg, osm, route, node_s, pts, half):
@@ -260,12 +327,17 @@ def blockages(cfg, osm, route, node_s, pts, half):
     the stage's run-off: [x, y, angle, width]."""
     route_ways = {e['id'] for e in route['elements'] if e['type'] == 'way'}
     route_nodes = set(node_s)
+    # a route file that lists its nodes: a route way the loop only partly drives (it turns off it, or crosses it) gets a
+    # barrier on the arms it leaves, like any side road; the edges the loop drives are the consecutive listed nodes
+    seq = cfg.get('nodes')
+    driven = {frozenset(e) for e in zip(seq, seq[1:] + seq[:1])} if seq else None
     P = bt.proj_for(cfg['key'])
     clear = half + cfg['trackdef'].get('runoff', 1.8) + 2.0
     out = []
     for el in osm['elements']:
         tags = el.get('tags', {})
-        if el['type'] != 'way' or el['id'] in route_ways or tags.get('highway') not in cfg['blockage_types']:
+        on_route = el.get('type') == 'way' and el['id'] in route_ways
+        if el['type'] != 'way' or (on_route and driven is None) or tags.get('highway') not in cfg['blockage_types']:
             continue
         if tags.get('highway') == 'service' and tags.get('service') in cfg.get('blockage_skip_service', ()):
             continue
@@ -278,7 +350,9 @@ def blockages(cfg, osm, route, node_s, pts, half):
         for k, nid in enumerate(nodes):
             if nid not in route_nodes:
                 continue
-            for arm in (xy[k::-1], xy[k:]):  # the side road either way from the junction
+            for arm, nxt in ((xy[k::-1], k - 1), (xy[k:], k + 1)):  # the side road either way from the junction
+                if on_route and (not 0 <= nxt < len(nodes) or frozenset((nid, nodes[nxt])) in driven):
+                    continue  # the loop drives on along this way
                 hit = arm_point(arm, pts, clear)
                 if not hit:
                     continue
@@ -424,6 +498,8 @@ def build(key, refetch=False, check=None):
         k, f = int(u) % m, u - int(u)
         elev.append(line[k] * (1 - f) + line[(k + 1) % m] * f)
     elev = bt.smooth_loop(elev, 30 / step)
+    if cfg.get('bridges'):
+        lift_bridges(cfg, pts, elev, step)
     sectors, last = [], None
     for i, nm in enumerate(names):
         if nm and nm != last:
@@ -431,6 +507,15 @@ def build(key, refetch=False, check=None):
             last = nm
     track = {'step': step, 'length': total, 'pts': [v for p in pts for v in (round(p[0], 2), round(p[1], 2))],
              'names': sectors, 'elev': [round(h, 2) for h in elev], 'grid': ev['grid']}
+    if cfg.get('surfaces'):  # road surface sectors, like the names: [[first sample, 'paved' | 'gravel' | 'dirt']]
+        track['surfaces'] = []
+        for i, j in enumerate(cfg['_way_at']):
+            sf = cfg['_surfs'][j]
+            if not track['surfaces'] or track['surfaces'][-1][1] != sf:
+                track['surfaces'].append([i, sf])
+    if 'stage' in cfg:  # a point-to-point rally stage on the loop: [from, to], m from the start line
+        track['stage'] = [round(node_s[cfg['stage']['start']], 1), round(node_s[cfg['stage']['finish']], 1)]
+        print(f"  stage {track['stage'][0]:.0f} -> {track['stage'][1]:.0f} m ({track['stage'][1] - track['stage'][0]:.0f} m)")
     with open(os.path.join(GODOT_TRACKS, key + '.json'), 'w') as f:
         json.dump(track, f, separators=(',', ':'))
     # corners: s from the start line
@@ -458,7 +543,7 @@ def build(key, refetch=False, check=None):
             return 'lat' not in el or (s_ <= el['lat'] <= n_ and w_ <= el['lon'] <= e_)
         os.makedirs(fs.OUT_DIR, exist_ok=True)
         json.dump({'elements': [el for el in local_osm(cfg)['elements'] if inside(el)]}, open(env_src, 'w'), separators=(',', ':'))
-    if refetch or not os.path.exists(env_src):
+    elif refetch or not os.path.exists(env_src):  # (a "local" route never downloads: its surroundings came from the cache above)
         print('  fetching surroundings', fs.bbox(key), flush=True)
         os.makedirs(fs.OUT_DIR, exist_ok=True)
         json.dump(fs.fetch(key), open(env_src, 'w'), separators=(',', ':'))
@@ -470,6 +555,17 @@ def build(key, refetch=False, check=None):
     env = json.load(open(env_path))
     env['road_blockages'] = [b[:4] for b in blocks]
     env['tram_rails'] = tram_rails(osm, pts, half, P)
+    if cfg.get('bridges'):
+        # build_surroundings records a bridge "over the circuit" wherever a bridge way crosses the centreline, so the
+        # route's own bridges (the S1 over the Soła, a junction's overbridge) weave across it as a row of decks; the
+        # game draws a real crossing of the loop over itself (RaceWorld._crossings), so keep only other roads' bridges
+        own = [[P(g) for g in w['geometry']] for w in route['elements']
+               if w['type'] == 'way' and w.get('tags', {}).get('bridge') not in (None, 'no')]
+        def on_route(b):
+            return any(point_segment((b[1], b[2]), u, v) < 3.0 for line in own for u, v in zip(line, line[1:]))
+        kept = [b for b in env.get('bridges', []) if not on_route(b)]
+        print(f"  bridges over the route: {len(kept)} kept, {len(env.get('bridges', [])) - len(kept)} of its own dropped")
+        env['bridges'] = kept
     if cfg['trackdef'].get('street_stage'):
         env['stands'] = []  # no grandstands on a public road (OSM has none here anyway)
     json.dump(env, open(env_path, 'w'), separators=(',', ':'))

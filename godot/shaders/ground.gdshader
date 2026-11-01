@@ -157,6 +157,12 @@ void fragment() {
 		nmap_depth = mix(nmap_depth, 0.3, tarmac);
 	}
 
+	// meadow: the photo normal map and its roughness light up as thin bright straw-like scratches under
+	// headlights and a low moon; keep grass matte, with a gentle normal map
+	float meadow = (use_textures ? tuft : clamp(lush * tuft, 0.0, 1.0)) * (1.0 - paved); // the open world has photo grass but no `lush`
+	rough = mix(rough, max(rough, 0.92), meadow);
+	nmap_depth = mix(nmap_depth, nmap_depth * 0.3, meadow);
+
 	col *= mix(1.0, 0.72, wet);
 	if (snow > 0.01) {
 		col = mix(col, vec3(0.92, 0.94, 0.98), snow * 0.85);

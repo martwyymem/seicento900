@@ -496,8 +496,8 @@ static func _fx_strengths(race, car: RaceCar) -> Dictionary:
 	var go := smoothstep(3.0, 22.0, v)
 	if surf == Physics.SURF_GRAVEL:
 		out.gravel = go * (1.0 - 0.7 * wet)
-	elif loose and surf != Physics.SURF_GRASS:
-		out.dust = go * (1.0 - 0.7 * wet)
+	elif surf == Physics.SURF_DIRT or surf == Physics.SURF_GRAVEL_ROAD or (loose and surf != Physics.SURF_GRASS):
+		out.dust = go * (1.0 - 0.7 * wet) # a dirt or gravel road (a loose rally stage)
 	elif surf == Physics.SURF_GRASS:
 		out.grass = go
 	else:

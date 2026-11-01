@@ -273,8 +273,10 @@ void fragment() {
 	}
 	if (v_face < 0.5) {
 		// weathering: rain streaks running down from the top, and a stone or concrete plinth
-		float streak = texture(grain, vec2(uv.x * 0.9, uv.y * 0.04 + v_seed)).r;
-		col *= 1.0 - 0.12 * smoothstep(0.5, 0.8, streak) * (is_window ? 0.0 : 1.0);
+		// broad, faint stains rather than thin dark lines (a headlight on the wall turned the thin ones into scratches)
+		float streak = texture(grain, vec2(uv.x * 0.3, uv.y * 0.03 + v_seed)).r;
+		float streak_fade = 1.0 - smoothstep(0.1, 0.4, fw.x); // and none once a pixel spans a few cm
+		col *= 1.0 - 0.06 * smoothstep(0.45, 0.85, streak) * streak_fade * (is_window ? 0.0 : 1.0);
 		float plinth = 1.0 - step(0.55, uv.y);
 		if (!is_window && kind != 3 && kind != 2) {
 			col = mix(col, vec3(0.32, 0.31, 0.29) * (0.85 + 0.3 * g), plinth * 0.85);

@@ -1463,6 +1463,13 @@ func _build_track() -> void:
 	asphalt_material = _surface_material(ROAD_SHADER, "asphalt")
 	asphalt_material.set_shader_parameter("base_color", ASPHALT_DRY)
 	asphalt_material.set_shader_parameter("half_width", track.half)
+	var loose := PackedVector4Array()
+	for z in track.loose.slice(0, 16):
+		loose.append(Vector4(z.x, z.y, z.z, 0.0))
+	asphalt_material.set_shader_parameter("loose_count", loose.size())
+	while loose.size() < 16:
+		loose.append(Vector4.ZERO)
+	asphalt_material.set_shader_parameter("loose_zones", loose)
 	_add_ribbon(ro_width, 0.01, runoff_material, "Runoff")
 	_add_ribbon(track.width, 0.04, asphalt_material, "Asphalt")
 	_add_edge_lines()

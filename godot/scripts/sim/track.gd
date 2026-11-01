@@ -40,6 +40,7 @@ var _prof_alt := {} ## profile_for() results for other cars, by CarSpec instance
 var PROF := PackedFloat64Array() ## max speed at mu = 1: cornering limit + braking envelope
 var BANK := PackedFloat64Array() ## cross slope (rise per metre towards +d); banked turns rise to the outside
 var rl_length := 0.0
+var loose: Array[Vector3] = [] ## unpaved stretches of a rally stage: (from m, to m, 1 dirt / 2 gravel) along the lap, for the road shader
 var sectors: Array = [] ## [[sample index, name]] sorted by index
 var bounds := PackedFloat64Array() ## [min_x, min_y, max_x, max_y]
 var cal: Dictionary = {} ## strategy calibration for the stock Seicento, filled lazily by Strategy
@@ -70,6 +71,20 @@ func _init(def: TrackDef) -> void:
 		Y[i] = pts[2 * j + 1]
 		H[i] = elev[j] if elev else 0.0
 	grid = raw.get("grid")
+	# baked surface spans [[sample index, kind]] (tools/build_street_tracks.py): where the road is dirt or gravel
+	var spans: Array = raw.get("surfaces", [])
+	for k in spans.size():
+		var kind: String = spans[k][1]
+		if kind != "dirt" and kind != "gravel":
+			continue
+		var a := posmod(int(spans[k][0]) - off, n)
+		var b := posmod((int(spans[k + 1][0]) if k + 1 < spans.size() else n) - off, n)
+		var code := 1.0 if kind == "dirt" else 2.0
+		if b > a:
+			loose.append(Vector3(a * step, b * step, code))
+		else: # the span crosses the start line
+			loose.append(Vector3(a * step, n * step, code))
+			loose.append(Vector3(0.0, b * step, code))
 	tunnels = raw.get("tunnels", [])
 	h_min = INF
 	h_max = -INF

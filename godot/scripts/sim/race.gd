@@ -213,6 +213,10 @@ var _ctl := Physics.Controls.new()
 var _uturn_ctl := Physics.Controls.new()
 var _surf_car: RaceCar
 var _surface_fn: Callable
+## Physics surface of the road itself: SURF_TRACK, or SURF_GRAVEL_ROAD on a gravel rally stage (the tyres meet
+## the loose surface in the physics; plan_grip carries it into the drivers' judgement).
+var road_surf := Physics.SURF_TRACK
+var _steer_k := 1.0 ## Physics.SURF_STEER of road_surf
 
 ## Tracks are built (and calibrated) once per session.
 static var _track_cache := {}
@@ -243,6 +247,9 @@ func _init(settings: RaceSettings, player_plan = null, seed_ := -1, models := {}
 	_setup_cars[_setup_key(CarSetup.stock())] = [car_model, phys]
 	_surface_fn = func(x: float, y: float) -> int: return surface_at(_surf_car, x, y)
 	s = settings
+	if settings.surface == "gravel" or settings.surface == "dirt":
+		road_surf = Physics.SURF_GRAVEL_ROAD if settings.surface == "gravel" else Physics.SURF_DIRT
+		_steer_k = Physics.SURF_STEER[road_surf]
 	track = get_track(settings.track)
 	track.PROF = track.profile_for(car_model)
 	if spec.resource_name == "hypercar":
@@ -404,6 +411,7 @@ static func _setup_key(setup: Dictionary) -> String:
 	return k
 
 ## The grip a car's tyres give it: the compound in the conditions, and in the wet how good the driver is in it.
+## The road's own surface (a gravel stage) is not in it: the physics meets it under each wheel (surface_at).
 func grip(car: RaceCar) -> float:
 	var g := tyres.tyre_grip(car.tyre, weather.wet) * (1.0 + (car.wet_skill - 1.0) * minf(1.0, weather.wet * 2.0))
 	if weather.snow > 0.1:
@@ -412,8 +420,14 @@ func grip(car: RaceCar) -> float:
 		g *= (1.0 - weather.hail * 0.36)
 	if weather.fog > 0.1:
 		g *= 0.94
+	return g
+
+## The grip a driver judges the road by (speeds, braking points, how hard the tyres work): the tyres' grip
+## and, on a loose stage, the road's surface (Rally.SURFACE_GRIP, = Physics.SURF_GRIP of road_surf).
+func plan_grip(car: RaceCar) -> float:
+	var g := grip(car)
 	if s.surface != "tarmac":
-		g *= Rally.SURFACE_GRIP.get(s.surface, 1.0) # a loose stage: the whole road is gravel
+		g *= Rally.SURFACE_GRIP.get(s.surface, 1.0)
 	return g
 
 func build_field(player_plan) -> void:
@@ -1596,7 +1610,7 @@ func step_rail(car: RaceCar, dt: float) -> void:
 		if car.pit.left <= 0.0 and pit_lane_clear(car):
 			finish_service(car)
 		return
-	var mu := grip(car)
+	var mu := plan_grip(car)
 	var mass := car_model.mass_with_fuel(car.fuel)
 	var rl := tr.sample(tr.RLD, car.s)
 	var vT: float
@@ -1732,12 +1746,14 @@ func surface_at(car: RaceCar, x: float, y: float) -> int:
 	var tr := track
 	var d := car.d + (x - car.x) * tr.sample(tr.NX, car.s) + (y - car.y) * tr.sample(tr.NY, car.s)
 	var ad := absf(d)
+	if car.is_player and _monster_player:
+		return Physics.SURF_TRACK # grips like tarmac anywhere, a gravel stage too
 	var c := tr.cfg
 	if ad <= tr.half + 0.3 or (car.is_player and _monster_player):
 		# a cobbled stretch (street stages) grips less than the tarmac round it; tracks without cobbles are untouched
 		if not c.cobbles.is_empty() and ad <= tr.half and not (car.is_player and _monster_player) and in_cobbles(tr.wrap_s(car.s)):
 			return Physics.SURF_COBBLE
-		return Physics.SURF_TRACK
+		return road_surf
 	var p := tr.rel(car.s)
 	if signf(d) == signf(c.pit_offset) and p > c.pit_entry - 20.0 and p < c.pit_exit + 20.0:
 		return Physics.SURF_ASPHALT
@@ -1802,7 +1818,7 @@ func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float,
 	var assists := s.assists
 	var drag_mul := slipstream(car, dt) if car.is_player else car.slip_drag
 	var mu := grip(car)
-	var steer := steer_assist(car, steer_in, mu, assists) if car.is_player else steer_in
+	var steer := steer_assist(car, steer_in, plan_grip(car) if road_surf != Physics.SURF_TRACK else mu, assists) if car.is_player else steer_in
 	var env := _env
 	env.mu = mu
 	env.mass = mass
@@ -1861,7 +1877,7 @@ func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float,
 
 	burn_fuel(car, cm.fuel_rate(cp.engine_power) * car.mix_burn * dt * s.fuel_mult)
 	# wear follows the energy the tyres dissipate while sliding, on top of normal running
-	var mu_g := grip(car) * G
+	var mu_g := plan_grip(car) * G
 	var acc := sqrt(car.phys.ax_f * car.phys.ax_f + car.phys.ay_f * car.phys.ay_f)
 	var u := minf(1.5, acc / mu_g)
 	var slide := minf(3.0, cp.slide_power / (mass * mu_g * 1.5))
@@ -1903,7 +1919,7 @@ func auto_shift(car: RaceCar, vF: float, thr: float, brk: float) -> void:
 func steer_assist(car: RaceCar, raw: float, mu: float, assists: String) -> float:
 	if assists != "full" or absf(raw) < 1e-3:
 		return raw
-	var ideal := Driver.line_steer(car.physics, track, car, mu)
+	var ideal := Driver.line_steer(car.physics, track, car, mu, grip(car) if road_surf != Physics.SURF_TRACK else -1.0, _steer_k)
 	if signf(raw) != signf(ideal):
 		return raw
 	var cap := absf(ideal) * 1.35 + 0.05
@@ -2117,7 +2133,7 @@ func bot_input(car: RaceCar, dt: float) -> Physics.Controls:
 		_uturn_ctl.throttle = 0.45 if v < 6.0 else 0.0
 		_uturn_ctl.brake = 0.3 if v > 9.0 else 0.0
 		return _uturn_ctl
-	var mu := grip(car)
+	var mu := plan_grip(car)
 	var tg := targets(car, dt, mu, true)
 	car.slip_drag = tg.drag
 	if bot_smooth_line and line_slew > 0.0:
@@ -2139,7 +2155,7 @@ func bot_input(car: RaceCar, dt: float) -> Physics.Controls:
 		car.err.t -= dt
 		if car.err.t <= 0.0:
 			car.err = null
-	return Driver.control(car.physics, track, car, tg, mu, _ctl)
+	return Driver.control(car.physics, track, car, tg, mu, _ctl, grip(car) if road_surf != Physics.SURF_TRACK else -1.0, _steer_k)
 
 ## A driving error: on rails a sideways twitch, in the physics a braking point missed or a line run wide
 ## that the car then has to live with.

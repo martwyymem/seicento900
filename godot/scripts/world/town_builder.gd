@@ -1209,10 +1209,15 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 			roof_surfaces = []
 	if not roof_surfaces.is_empty():
 		# LoD2 roof planes: map x, y and a height over the building's highest ground
-		if _add_lod2_roof(mb, roof_surfaces, hi, base, roof, wall, uv2_roof, uv2_wall):
+		# measured planes that leave a good part of the footprint uncovered would show the sky through the roof
+		# (a tall wall with no gable over it): build the OSM walls and a roof of our own instead
+		var mark := mb.mark()
+		if _lod2_cover(roof_surfaces, r) >= LOD2_MIN_COVER \
+				and _add_lod2_roof(mb, roof_surfaces, hi, base, roof, wall, uv2_roof, uv2_wall):
 			return
-		roof_surfaces = [] # unusable planes: the OSM walls and a flat roof
-	elif pitched:
+		mb.rollback(mark) # a roof given up half way leaves nothing behind
+		roof_surfaces = [] # unusable planes: the OSM walls and a roof of our own
+	if roof_surfaces.is_empty() and pitched:
 		rect = min_rect(r)
 		if rect.is_empty() or absf(ring_area(r)) / maxf(float(rect[4]), 1e-3) < 0.78 or float(rect[3]) > 13.0:
 			pitched = false
@@ -1322,6 +1327,42 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 					Vector3(a.x, eave + parapet, a.y), Vector3(out.x, 0.0, out.y), wall,
 					[Vector2.ZERO, Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)], Vector2(seed, 3.0))
 
+const LOD2_MIN_COVER := 0.6 ## share of the footprint (sampled) the measured roof planes must lie over; ~8% of buildings fall below
+
+## The share of the footprint `ring` that lies under at least one roof plane (map x, y, height triples), by a
+## grid of sample points. Overlapping planes count once, and planes belonging to a neighbour count for nothing.
+static func _lod2_cover(faces: Array, ring: PackedVector2Array) -> float:
+	var polys: Array[PackedVector2Array] = []
+	for face in faces:
+		if not face is Array or face.size() < 9:
+			continue
+		var poly := PackedVector2Array()
+		for j in range(0, face.size() - 2, 3):
+			poly.append(Vector2(float(face[j]), float(face[j + 1])))
+		polys.append(poly)
+	var lo := Vector2(INF, INF)
+	var hi := Vector2(-INF, -INF)
+	for p in ring:
+		lo = lo.min(p)
+		hi = hi.max(p)
+	var step := maxf(maxf(hi.x - lo.x, hi.y - lo.y) / 14.0, 0.4) # ~150 points over the box, so thin or L-shaped houses still get a dozen or more inside
+	var inside := 0
+	var covered := 0
+	var y := lo.y + step * 0.5
+	while y < hi.y:
+		var x := lo.x + step * 0.5
+		while x < hi.x:
+			var pt := Vector2(x, y)
+			if Geometry2D.is_point_in_polygon(pt, ring):
+				inside += 1
+				for poly in polys:
+					if Geometry2D.is_point_in_polygon(pt, poly):
+						covered += 1
+						break
+			x += step
+		y += step
+	return float(covered) / float(inside) if inside > 0 else 1.0
+
 ## A measured (GUGiK LoD2) roof: each plane triangulated in its own plane, and walls from the ground up to
 ## every roof edge that no other plane shares, so the walls meet the eaves and gables of the roof exactly.
 ## False if the planes are unusable (the caller builds the OSM walls and roof instead).
@@ -1350,7 +1391,7 @@ func _add_lod2_roof(mb: MeshBatch, faces: Array, hi: float, base: float, roof: C
 			var b := poly[(k + 1) % poly.size()]
 			nrm += Vector3((a.y - b.y) * (a.z + b.z), (a.z - b.z) * (a.x + b.x), (a.x - b.x) * (a.y + b.y))
 		if nrm.length() < 1e-4:
-			continue
+			return false # a degenerate plane: same, fall back
 		nrm = nrm.normalized()
 		if nrm.y < 0.0:
 			nrm = -nrm
@@ -1370,6 +1411,8 @@ func _add_lod2_roof(mb: MeshBatch, faces: Array, hi: float, base: float, roof: C
 		var tris := Geometry2D.triangulate_polygon(flat)
 		if tris.is_empty():
 			tris = Geometry2D.triangulate_delaunay(flat)
+		if tris.is_empty():
+			return false # a plane we cannot draw would leave a hole its walls still reach up to: use our own roof
 		for j in range(0, tris.size(), 3):
 			var ia: int = tris[j]
 			var ib: int = tris[j + 1]

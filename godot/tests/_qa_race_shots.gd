@@ -2,7 +2,7 @@
 ## Env: TRACK (gp), WEATHER (dry|wet|snow|hail|fog|variable), HOUR (14), OPP (8), RUN (8 s of race time before
 ## the first shot), SHOTS (1: shots RUN_GAP s apart), MODES ("0" or e.g. "0,1,2,3,4,5,6": retro styles shot per
 ## frame, the race frozen meanwhile), CAM (camera cycles before shooting), ASPECT (aspect picker index),
-## TAG, OUT (/tmp/qa/shots).
+## TAG, OUT (/tmp/qa/shots), MODS (comma list of CarMods ids put on the player's car without touching the save, e.g. monster,nitro).
 ## TRACK=gp WEATHER=wet HOUR=22 godot --path godot --audio-driver Dummy -s tests/_qa_race_shots.gd
 extends SceneTree
 
@@ -75,6 +75,15 @@ func _initialize() -> void:
 		quit(1)
 		return
 	game.race.set_autopilot(true)
+	if _env("MODS", "") != "":
+		var on := {}
+		for id in _env("MODS", "").split(","):
+			on[id] = true
+		game.race.set_mods(on)
+		game.world_view.mods = on
+		game.world_view.set_race(game.race)
+		if on.has("nitro"):
+			game.race.nitro = 0.6
 	for k in int(_env("CAM", "0")):
 		game._cycle_camera()
 	var run := float(_env("RUN", "8"))

@@ -32,7 +32,7 @@ const STAGES := [
 		"act_name": "Act I: Silesian Grassroots",
 		"title": "Stage 2: Coal & Cobblestones",
 		"track": "brzeszcze",
-		"laps": 4,
+		"laps": 2,
 		"weather": "fog",
 		"time_of_day": 8.0,
 		"start_hour": 8.0,
@@ -43,8 +43,8 @@ const STAGES := [
 		"target_pos": 3,
 		"grid": "p3",
 		"trophy": "Mining Headframe Cup",
-		"desc": "Dense morning fog blankets the industrial streets past KWK Szyb Andrzej. Watch for the sharp chicane over the railway crossing.",
-		"tip": "Brake early for the railway grade crossing — curb-hopping here will unsettle the chassis."
+		"desc": "Dense morning fog blankets the mining town: up ul. Ofiar Oświęcimia past the Andrzej shafts, round Leśna, Kościuszki and Piastowska, and back by Daszyńskiego.",
+		"tip": "The town's right-angle junctions loom out of the fog late: brake while the corner is still a guess, not when you see it."
 	},
 	{
 		"id": "stage_3",

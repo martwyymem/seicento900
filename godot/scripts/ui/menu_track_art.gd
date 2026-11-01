@@ -104,7 +104,7 @@ func _rebuild_path() -> void:
 						b_pts.append(p)
 						if bounds_rect.has_point(p):
 							any_in = true
-					if b_pts.size() >= 3 and any_in:
+					if b_pts.size() >= 3 and any_in and not Geometry2D.triangulate_polygon(b_pts).is_empty():
 						_map_buildings.append(b_pts)
 
 	_ensure_marker()

@@ -10,11 +10,18 @@ extends RefCounted
 
 const G := 9.81 ## gravity, m/s²
 
-# surface ids returned by Env.surface: grip multiplier and extra rolling drag (fraction of the wheel load)
-enum { SURF_TRACK, SURF_ASPHALT, SURF_GRASS, SURF_GRAVEL, SURF_COBBLE }
-const COBBLE_GRIP := 0.85 ## grip of cobbled/sett road (TrackDef.cobbles zones); the one tunable, same for the player and the AI
-const SURF_GRIP := [1.0, 0.9, 0.5, 0.42, COBBLE_GRIP]
-const SURF_DRAG := [0.0, 0.004, 0.07, 0.22, 0.004]
+# surface ids returned by Env.surface: grip multiplier and extra rolling drag (fraction of the wheel load).
+# SURF_GRAVEL is the gravel trap (a run-off that stops cars); SURF_COBBLE is cobbled/sett road (TrackDef.cobbles zones);
+# SURF_DIRT (hard-packed dirt track) and SURF_GRAVEL_ROAD (a loose gravel road, a gravel rally stage) are roads:
+# less grip and a little drag, still drivable. The first four are parity-tested: never change their values.
+# SURF_DIRT and SURF_GRAVEL_ROAD stay adjacent (world_audio indexes by surf - SURF_DIRT).
+enum { SURF_TRACK, SURF_ASPHALT, SURF_GRASS, SURF_GRAVEL, SURF_COBBLE, SURF_DIRT, SURF_GRAVEL_ROAD }
+const COBBLE_GRIP := 0.85 ## grip of cobbled/sett road; the one tunable, same for the player and the AI
+const SURF_GRIP := [1.0, 0.9, 0.5, 0.42, COBBLE_GRIP, 0.72, 0.62]
+const SURF_DRAG := [0.0, 0.004, 0.07, 0.22, 0.004, 0.015, 0.03]
+## Factor on the steering limit (max_steer) when the front wheels are on the surface: on a loose road the
+## driver needs more lock for the slip angles the surface asks for and to catch a slide.
+const SURF_STEER := [1.0, 1.0, 1.0, 1.0, 1.0, 1.1, 1.15]
 
 # Magic Formula curves, normalised to a peak of 1. Longitudinal in slip ratio, lateral in slip angle.
 const TX_B := 16.0
@@ -158,9 +165,10 @@ func init_car(car: RaceCar) -> PhysState:
 
 ## Speed-sensitive steering limit: enough lock to reach the tyres' peak slip, not so much that a
 ## keyboard tap throws the car past it. Scaled by the steering input.
-func max_steer(v: float, mu: float) -> float:
+## k: the surface's SURF_STEER (1 on tarmac).
+func max_steer(v: float, mu: float, k := 1.0) -> float:
 	var v2 := maxf(1.0, v * v)
-	return minf(spec.steer_lock, (wb * mu * G / v2 + 1.35 * APK) * spec.steer_gain)
+	return minf(spec.steer_lock, (wb * mu * G / v2 + 1.35 * APK) * spec.steer_gain * k)
 
 ## Advance the car by dt.
 ## Hot path (every car, 8 substeps per tick): the tyre model is inlined and the car/drivetrain state
@@ -205,7 +213,17 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 	var max_rho_r := 0.0
 	var slide_v := 0.0
 	var v0 := sqrt(car.vx * car.vx + car.vy * car.vy)
-	var delta := input.steer * max_steer(v0, env.mu)
+	# the surface under each wheel, once per step (the substeps keep it), before the steering: the front
+	# wheels' surface sets how much lock the driver gets
+	var surf := _surf
+	var drag := _drag
+	var ch0 := cos(car.heading)
+	var sh0 := sin(car.heading)
+	for i in 4:
+		surf[i] = env.surface.call(car.x + WX[i] * ch0 - WY[i] * sh0, car.y + WX[i] * sh0 + WY[i] * ch0)
+		drag[i] = crr + SURF_DRAG[surf[i]] * offroad
+	var steer_k: float = (SURF_STEER[surf[0]] + SURF_STEER[surf[1]]) * 0.5
+	var delta := input.steer * max_steer(v0, env.mu, steer_k)
 	var drift_k := env.drift_assist
 	car.steer = delta
 	# Ackermann: the inside wheel turns tighter
@@ -226,11 +244,9 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 	var vl := _vl
 	var vt := _vt
 	var mu := _mu
-	var drag := _drag
 	var cw := _cw
 	var dw := _dw
 	var esc := _esc
-	var surf := _surf
 	var fz := ph.fz
 	var w := ph.w
 	var rho_a := ph.rho
@@ -295,9 +311,6 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 			var wy := vy + r * WX[i]
 			vl[i] = wx * cd[i] + wy * sd[i]
 			vt[i] = -wx * sd[i] + wy * cd[i]
-			if k == 0:
-				surf[i] = env.surface.call(c_x + WX[i] * ch - WY[i] * sh, c_y + WX[i] * sh + WY[i] * ch)
-				drag[i] = crr + SURF_DRAG[surf[i]] * offroad
 			var sens := clampf(1.0 - load_sens * (fz[i] / fz0 - 1.0), 0.75, 1.15)
 			mu[i] = env_mu * grip_k * SURF_GRIP[surf[i]] * sens
 			if i >= 2:

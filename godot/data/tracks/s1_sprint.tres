@@ -1,0 +1,47 @@
+[gd_resource type="Resource" script_class="TrackDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/corner_name.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/data/track_def.gd" id="2"]
+
+[sub_resource type="Resource" id="c1"]
+script = ExtResource("1")
+distance = 7602.1
+name = "ul. Pszczyńska"
+
+[sub_resource type="Resource" id="c2"]
+script = ExtResource("1")
+distance = 8224.6
+name = "S1"
+
+[sub_resource type="Resource" id="c3"]
+script = ExtResource("1")
+distance = 9156.1
+name = "S1"
+
+[resource]
+script = ExtResource("2")
+key = "s1_sprint"
+display_name = "S1 Sprint"
+short_name = "S1"
+width = 8.0
+theme = "country"
+street_stage = true
+barrier = "armco"
+runoff = 2.0
+runoff_surface = "grass"
+runoff_paved = 0.0
+kerb_style = "none"
+kerb_width = 0.0
+tree_density = 0.35
+tree_patch = 0.6
+tree_conifer = 0.5
+grandstands = false
+stand_tiers = 0
+floodlight_spacing = 0.0
+pit_entry = -120.0
+pit_exit = 170.0
+pit_ramp = 50.0
+pit_offset = 9.0
+box_start = -65.0
+box_spacing = 9.0
+corners = Array[ExtResource("1")]([SubResource("c1"), SubResource("c2"), SubResource("c3")])

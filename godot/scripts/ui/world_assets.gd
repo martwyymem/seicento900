@@ -4,6 +4,7 @@
 ## to its procedural look for anything that is missing. See godot/ASSETS.md for what to put where.
 extends RefCounted
 
+const PROP_DETAIL := preload("res://scripts/ui/prop_detail.gd")
 const ROOTS := ["res://assets", "user://assets"] ## folders searched for assets, in order
 const SKY_CACHE := "user://sky_cache.cfg" ## each HDRI's sun position and brightness, so they are scanned once
 const SKY_EXTS := ["hdr", "exr", "png", "jpg", "webp"] ## file types accepted as skies (assets/sky/)
@@ -310,6 +311,12 @@ func tree_variants() -> Array:
 	return variants
 
 static func _load_model(path: String) -> Node:
+	var scene := _load_model_raw(path)
+	if scene != null and path.begins_with("res://models/"):
+		PROP_DETAIL.upgrade(scene) # textured props; the trees (user assets) keep their own look
+	return scene
+
+static func _load_model_raw(path: String) -> Node:
 	if ResourceLoader.exists(path):
 		var packed := load(path) as PackedScene
 		if packed:

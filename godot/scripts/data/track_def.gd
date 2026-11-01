@@ -51,6 +51,9 @@ extends Resource
 ## grandstands, pit building, marshal posts, braking boards, hoardings, tyre walls or paddock.
 @export var street_stage := false
 @export var cobbles := PackedVector2Array() ## street stages: lap distances (from, to) of cobbled stretches, drawn in road.gdshader
+## A point-to-point rally stage baked as a loop (tools/plan_route.py): the stage, a run-off past the finish and a
+## return leg. data/tracks/<key>.json has "stage": [from, to]. Rally only: kept out of the race and championship pickers.
+@export var point_to_point := false
 
 @export_group("Names")
 @export var osm_names := false ## use the section names from OpenStreetMap

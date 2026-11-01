@@ -1035,6 +1035,8 @@
   "parking_aisle",
   "drive-through"
  ],
+ "surfaces": true,
+ "bridges": true,
  "trackdef": {
   "display_name": "The Seicento Goliath",
   "short_name": "Goliath",

@@ -11,8 +11,10 @@
 class_name Rally
 extends RefCounted
 
-## Road grip of a whole stage's surface against tarmac (Race.grip multiplies by it; tarmac leaves it alone).
-const SURFACE_GRIP := {"tarmac": 1.0, "gravel": 0.74}
+## Road grip of a whole stage's surface against tarmac: Physics.SURF_GRIP of the road's surface (a gravel stage's
+## road is Physics.SURF_GRAVEL_ROAD, a dirt stage's Physics.SURF_DIRT; test_surfaces keeps them equal). The physics meets it under the wheels;
+## Race.plan_grip hands it to the drivers' judgement.
+const SURFACE_GRIP := {"tarmac": 1.0, "gravel": 0.62, "dirt": 0.72}
 const SPLITS := 2 ## split checkpoints inside a stage (at a third and two thirds), then the finish
 const START_BACK := 4.0 ## m behind the start line the car waits
 const JUMP_DIST := 0.6 ## m the car may creep before the start before it is a jump start
@@ -29,48 +31,50 @@ const SERVICE_LATE := 10.0 ## s of penalty per minute the service crew overruns 
 
 # rival incidents, per stage (scaled by the driver's mistake rate where it is a driving error)
 const SPIN_RATE := 2.5 ## × mistake rate: a spin or a moment, 2–16 s
-const PUNCTURE := {"tarmac": 0.015, "gravel": 0.04}
-const RETIRE := {"tarmac": 0.004, "gravel": 0.009} ## × (mistake rate / 0.07): off the road for good
+const PUNCTURE := {"tarmac": 0.015, "gravel": 0.04, "dirt": 0.025}
+const RETIRE := {"tarmac": 0.004, "gravel": 0.009, "dirt": 0.007} ## × (mistake rate / 0.07): off the road for good
 
 ## The events. Each stage: name, track (key), from / to (m after the start line; to 0 = back at the line,
 ## so 0 → 0 is one full lap; a section of a long road splits it into several stages), surface, weather,
 ## hour (local time at the start), service (minutes of service before this stage; 0 none).
 ## Running a road in reverse is not supported (the racing line, pace notes and the world are built one way
-## round), so a second pass over the same road is a different section or the full loop in other conditions.
+## round), so a second pass over the same road is a different section; no two stages of an event share road.
+## A point-to-point stage cut from the open world (TrackDef.point_to_point) has "baked": true instead of from / to:
+## its span comes from the track's data (baked_span).
 const EVENTS := [
 	{"key": "sprint", "name": "Rajd Seicento Sprint", "short": "SPRINT", "difficulty": "easy",
-		"blurb": "Three short tarmac tests round Wilamowice, Brzeszcze and Pszczyna: the place to learn the notes.",
+		"blurb": "Tarmac tests round Wilamowice, the Brzeszcze mine and Pszczyna, then flat out on the S1: the place to learn the notes.",
 		"stages": [
 			{"name": "Wilamowice", "track": "wilamowice", "from": 0.0, "to": 0.0, "surface": "tarmac", "weather": "dry", "hour": 10.0, "service": 0},
 			{"name": "Brzeszcze Kopalnia", "track": "brzeszcze", "from": 0.0, "to": 0.0, "surface": "tarmac", "weather": "dry", "hour": 11.5, "service": 0},
 			{"name": "Pszczyna Zamek", "track": "pszczyna", "from": 0.0, "to": 0.0, "surface": "tarmac", "weather": "dry", "hour": 13.0, "service": 30},
+			{"name": "S1 Sprint", "track": "s1_sprint", "from": 0.0, "to": 0.0, "surface": "tarmac", "weather": "dry", "hour": 15.0, "service": 0},
 		]},
 	{"key": "bor", "name": "Rajd Borów", "short": "BÓR", "difficulty": "medium",
-		"blurb": "Loose forest roads round Brzeszcze Bór and the Wilamowice lanes, the last stage at dusk in the wet.",
+		"blurb": "Loose forest roads from Brzeszcze Bór to the Wola fishponds and Góra, the last stage at dusk in the wet.",
 		"stages": [
-			{"name": "Bór I", "track": "bor", "from": 0.0, "to": 0.0, "surface": "gravel", "weather": "fog", "hour": 8.5, "service": 0},
-			{"name": "Wilamowice Szuter", "track": "wilamowice", "from": 0.0, "to": 0.0, "surface": "gravel", "weather": "dry", "hour": 10.0, "service": 0},
-			{"name": "Staw Bór", "track": "bor", "from": 0.0, "to": 1700.0, "surface": "gravel", "weather": "dry", "hour": 12.0, "service": 45},
-			{"name": "Bór II", "track": "bor", "from": 0.0, "to": 0.0, "surface": "gravel", "weather": "wet", "hour": 19.5, "service": 0},
+			{"name": "Bór", "track": "bor", "from": 1700.0, "to": 0.0, "surface": "gravel", "weather": "fog", "hour": 8.5, "service": 0},
+			{"name": "Mały Bór", "track": "maly_bor", "baked": true, "surface": "gravel", "weather": "dry", "hour": 10.0, "service": 0},
+			{"name": "Kolonia Stawowa", "track": "kolonia_stawowa", "baked": true, "surface": "gravel", "weather": "dry", "hour": 12.0, "service": 45},
+			{"name": "Babudy–Góra", "track": "babudy_gora", "baked": true, "surface": "gravel", "weather": "wet", "hour": 19.5, "service": 0},
 		]},
 	{"key": "beskidy", "name": "Rajd Beskidów", "short": "BESKIDY", "difficulty": "medium",
 		"blurb": "Mountain tarmac above the Seicento's home town: Szyndzielnia in the morning fog, then the rain.",
 		"stages": [
-			{"name": "Szyndzielnia I", "track": "bielsko", "from": 0.0, "to": 0.0, "surface": "tarmac", "weather": "fog", "hour": 8.0, "service": 0},
+			{"name": "Szyndzielnia Podjazd", "track": "bielsko", "from": 2400.0, "to": 0.0, "surface": "tarmac", "weather": "fog", "hour": 8.0, "service": 0},
 			{"name": "Szyndzielnia Zjazd", "track": "bielsko", "from": 400.0, "to": 2400.0, "surface": "tarmac", "weather": "dry", "hour": 9.5, "service": 0},
 			{"name": "Wilamowice Mokre", "track": "wilamowice", "from": 0.0, "to": 0.0, "surface": "tarmac", "weather": "wet", "hour": 11.5, "service": 60},
-			{"name": "Szyndzielnia II", "track": "bielsko", "from": 0.0, "to": 0.0, "surface": "tarmac", "weather": "wet", "hour": 15.0, "service": 0},
 			{"name": "Pszczyna Park", "track": "pszczyna", "from": 0.0, "to": 0.0, "surface": "tarmac", "weather": "dry", "hour": 17.0, "service": 0},
 		]},
 	{"key": "zima", "name": "Zimowy Rajd Śląska", "short": "ZIMA", "difficulty": "hard",
-		"blurb": "Six stages of Silesian winter: snow on the roads all day, gravel under it in the forest.",
+		"blurb": "Six stages of Silesian winter: snow on the roads all day, dirt and gravel under it in the forest.",
 		"stages": [
 			{"name": "Pszczyna Zima", "track": "pszczyna", "from": 0.0, "to": 0.0, "surface": "tarmac", "weather": "snow", "hour": 9.0, "service": 0},
-			{"name": "Wilamowice Zima", "track": "wilamowice", "from": 0.0, "to": 0.0, "surface": "tarmac", "weather": "snow", "hour": 10.0, "service": 0},
+			{"name": "Rajsko–Wilczkowice", "track": "rajsko_wilczkowice", "baked": true, "surface": "dirt", "weather": "snow", "hour": 10.0, "service": 0},
 			{"name": "Bór Zima", "track": "bor", "from": 0.0, "to": 0.0, "surface": "gravel", "weather": "snow", "hour": 11.0, "service": 45},
 			{"name": "Brzeszcze Zima", "track": "brzeszcze", "from": 0.0, "to": 0.0, "surface": "tarmac", "weather": "snow", "hour": 13.0, "service": 0},
 			{"name": "Szyndzielnia Zima", "track": "bielsko", "from": 0.0, "to": 0.0, "surface": "tarmac", "weather": "snow", "hour": 14.5, "service": 30},
-			{"name": "Bór Noc", "track": "bor", "from": 0.0, "to": 0.0, "surface": "gravel", "weather": "snow", "hour": 17.5, "service": 0},
+			{"name": "Lipowiec Noc", "track": "lipowiec_kobylec", "baked": true, "surface": "gravel", "weather": "snow", "hour": 17.5, "service": 0},
 		]},
 	{"key": "eifel", "name": "Eifel Rallye Nordschleife", "short": "EIFEL", "difficulty": "hard",
 		"blurb": "The Nordschleife cut into three long stages, fog in the morning and rain by the afternoon.",
@@ -93,9 +97,25 @@ static func event(key: String) -> Dictionary:
 
 ## Stage length in metres on a circuit of length L.
 static func stage_length(stage_def: Dictionary, L: float) -> float:
-	var from: float = stage_def.get("from", 0.0)
-	var to: float = stage_def.get("to", 0.0)
-	return (to if to > from else to + L) - from
+	var sp := span(stage_def)
+	return (sp.y if sp.y > sp.x else sp.y + L) - sp.x
+
+## (from, to) of a stage: its own, or for a "baked" one the track's (baked_span).
+static func span(stage_def: Dictionary) -> Vector2:
+	if stage_def.get("baked", false):
+		var b := baked_span(stage_def.track)
+		if b.size() == 2:
+			return Vector2(b[0], b[1])
+	return Vector2(float(stage_def.get("from", 0.0)), float(stage_def.get("to", 0.0)))
+
+static var _baked := {}
+## [from, to] (m from the start line) of the point-to-point stage on data/tracks/<key>.json ("stage", written by
+## tools/build_street_tracks.py), or [] when the track has none.
+static func baked_span(key: String) -> Array:
+	if not _baked.has(key):
+		var raw = JSON.parse_string(FileAccess.get_file_as_string("res://data/tracks/%s.json" % key))
+		_baked[key] = raw.get("stage", []) if raw is Dictionary else []
+	return _baked[key]
 
 ## Turns race settings into one special stage: the player alone, no pit rules, race control for crash damage
 ## only (no flags, stewards or safety car), no learning AI. The player's own choices on st (name, paint,
@@ -103,8 +123,9 @@ static func stage_length(stage_def: Dictionary, L: float) -> float:
 static func configure_stage(st: RaceSettings, stage_def: Dictionary, difficulty := "medium") -> void:
 	st.mode = "rally"
 	st.track = stage_def.track
-	st.stage_from = float(stage_def.get("from", 0.0))
-	st.stage_to = float(stage_def.get("to", 0.0))
+	var sp := span(stage_def)
+	st.stage_from = sp.x
+	st.stage_to = sp.y
 	st.surface = stage_def.get("surface", "tarmac")
 	st.weather = stage_def.get("weather", "dry")
 	st.start_hour = float(stage_def.get("hour", 12.0))
@@ -128,15 +149,21 @@ static func configure_stage(st: RaceSettings, stage_def: Dictionary, difficulty 
 	st.rolling_start = false
 	st.starting_tyre = "W" if st.weather in ["wet", "snow", "hail"] else "S"
 
-## Time-of-stage factor of the conditions against a dry tarmac road: grip-limited driving (most of a stage)
-## takes about 1/√μ longer.
+## Stage time on the surface against dry tarmac, measured with the co-driver (tests/_rally_surface_probe.gd,
+## 2026-10-31: Bór 1.082, Wilamowice 1.112, Staw Bór 1.055 on SURF_GRAVEL_ROAD). Re-measure when the
+## surface's physics (Physics.SURF_GRIP/SURF_DRAG/SURF_STEER) changes. Dirt (SURF_DIRT), 2026-10-31, SURFACES=tarmac,dirt
+## on the baked stages: Rajsko–Wilczkowice 1.083, Kolonia Stawowa 1.084, Babudy–Góra 1.089, Mały Bór 1.060.
+const SURFACE_PACE := {"tarmac": 1.0, "gravel": 1.083, "dirt": 1.079}
+
+## Time-of-stage factor of the conditions against a dry tarmac road: the surface's measured pace, and for the
+## weather, grip-limited driving (most of a stage) takes about 1/√μ longer.
 static func conditions_factor(surface: String, weather: String) -> float:
-	var mu: float = SURFACE_GRIP.get(surface, 1.0)
+	var mu := 1.0
 	match weather:
 		"snow": mu *= 1.0 - 0.85 * 0.42
 		"hail": mu *= 1.0 - 0.9 * 0.36
 		"fog": mu *= 0.94
-	return 0.3 + 0.7 / sqrt(mu)
+	return float(SURFACE_PACE.get(surface, 1.0)) * (0.3 + 0.7 / sqrt(mu))
 
 ## The share of a lap's time spent between from and to (m after the line), and of the stage's time at each
 ## split, from the lap model's time per sample: {frac, splits: [share of the stage time at each split]}.

@@ -161,8 +161,8 @@ func _ready() -> void:
 	_nitro_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
 	_nitro_label.add_theme_constant_override("outline_size", 4)
 	_nitro_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
-	_nitro_label.offset_top = -64
-	_nitro_label.offset_bottom = -40
+	_nitro_label.offset_top = -96
+	_nitro_label.offset_bottom = -72
 	_nitro_label.offset_left = -120
 	_nitro_label.offset_right = 120
 	_nitro_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -1688,7 +1688,7 @@ func _build_map() -> void:
 					var pts := PackedVector2Array()
 					for k in range(3, b_entry.size() - 1, 2):
 						pts.append(Vector2(b_entry[k], b_entry[k + 1]) * _map_scale + _map_origin)
-					if pts.size() >= 3:
+					if pts.size() >= 3 and not Geometry2D.triangulate_polygon(pts).is_empty(): ## a footprint that collapses at map scale can't be filled
 						_map_buildings.append(pts)
 
 ## What minimap_base shows: the circuit, the map's size and the flags along it.
@@ -1965,7 +1965,7 @@ func _draw_stage_panel() -> void:
 		head += "  ·  %s" % str(ev.def.get("short", ev.def.get("name", "")))
 	_mt(c, Vector2(18, 28), _fit(head, 22, W - 30), 22, TEXT)
 	var sname: String = ev.stage_def(st.index).get("name", "") if ev and st.index >= 0 and st.index < ev.stage_count() else race.track.name
-	var surf := " · GRAVEL" if race.s.surface == "gravel" else ""
+	var surf := "" if race.s.surface == "tarmac" else " · " + str(race.s.surface).to_upper()
 	_mt(c, Vector2(18, 54), _fit(sname.to_upper() + surf, 16, W - 30), 16, MUTED)
 	var y := 72.0
 	# splits: time, gap to the stage leader there, stage position

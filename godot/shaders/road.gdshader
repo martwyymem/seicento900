@@ -23,6 +23,9 @@ uniform float street : hint_range(0.0, 1.0) = 0.0;
 // cobbled stretches (street stages): lap distances (from, to) in x, y of up to four zones
 uniform vec4 cobble_zones[4];
 uniform int cobble_count = 0;
+// loose stretches of a rally stage: x = from, y = to (m along the lap), z = 1 dirt / 2 gravel
+uniform vec4 loose_zones[16];
+uniform int loose_count = 0;
 
 uniform sampler2D grain : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D grain_normal : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
@@ -168,18 +171,48 @@ void fragment() {
 		tar *= 1.0 - cob;
 		crack *= 1.0 - cob;
 	}
+	// loose surface: dirt or gravel in place of tarmac, no paint, seams, tar or cracks
+	float unp = 0.0;
+	float gravel_k = 0.0;
+	for (int i = 0; i < loose_count; i++) {
+		vec4 z = loose_zones[i];
+		float m = smoothstep(z.x, z.x + 3.0, s) * (1.0 - smoothstep(z.y - 3.0, z.y, s));
+		if (m > unp) {
+			unp = m;
+			gravel_k = z.z > 1.5 ? 1.0 : 0.0;
+		}
+	}
+	if (unp > 0.0) {
+		vec3 dirt_c = vec3(0.30, 0.215, 0.135);
+		vec3 grav_c = vec3(0.47, 0.43, 0.37);
+		vec3 base = mix(dirt_c, grav_c, gravel_k) * (0.72 + 0.5 * broad + 0.16 * mid);
+		float stones = smoothstep(0.58, 0.8, texture(grain, vec2(d, s) * 3.1 + 0.3).r) * (0.4 + 0.6 * gravel_k);
+		base *= 1.0 + (stones - 0.35) * 0.4 + (micro - 0.5) * 0.3;
+		// two wheel ruts, pale loose berm down the middle and at the verges
+		float rut = exp(-pow((abs(abs(d) - half_width * 0.38) - 0.0) / 0.42, 2.0));
+		base *= 1.0 - 0.28 * rut;
+		float verge = smoothstep(half_width - 1.6, half_width, abs(d));
+		base = mix(base, base * 0.8 + vec3(0.02, 0.05, 0.015), verge * 0.7); // weeds creep in
+		col = mix(col, base, unp);
+		rough = mix(rough, 0.95, unp);
+		nmap = mix(nmap, vec3(0.5, 0.5, 1.0) + (nmap - vec3(0.5, 0.5, 1.0)) * 2.2, unp * 0.5);
+		seam *= 1.0 - unp;
+		tar *= 1.0 - unp;
+		crack *= 1.0 - unp;
+		patch_mask *= 1.0 - unp;
+	}
 	// rubber laid down on the racing line
 	float rl = UV2.x;
 	float line = exp(-rl * rl / 1.8) * rubber;
-	col = mix(col, col * 0.62, line * 0.55);
+	col = mix(col, col * 0.62, line * 0.55 * (1.0 - unp));
 	rough = mix(rough, rough * 0.8, line);
 	// braking streaks along the line: long dark smears of rubber, a few wheel widths across
-	float streak = smoothstep(0.62, 0.8, texture(grain, vec2(d * 0.7, s * 0.008) + 0.9).r) * exp(-rl * rl / 5.0) * detail * rubber;
+	float streak = smoothstep(0.62, 0.8, texture(grain, vec2(d * 0.7, s * 0.008) + 0.9).r) * exp(-rl * rl / 5.0) * detail * rubber * (1.0 - unp);
 	col = mix(col, col * 0.55, streak * 0.55);
 	// town roads: the cars' wheels polish two darker tracks in each lane
 	float lane = abs(abs(d) - half_width * 0.5);
 	float wheel = exp(-pow((lane - 0.78) / 0.34, 2.0)) * street * step(half_width, 5.5);
-	col = mix(col, col * 0.78, wheel * 0.55);
+	col = mix(col, col * 0.78, wheel * 0.55 * (1.0 - unp));
 	rough = mix(rough, rough - 0.12, wheel);
 
 	// dust and marbles collecting at the edges
@@ -200,7 +233,7 @@ void fragment() {
 	float edge_line = mix(smoothstep(0.09, 0.03, edge_dist), smoothstep(0.06 + line_aa, 0.06 - line_aa, edge_dist), step(0.001, detail)) * (1.0 - w * 0.35);
 	// town paint: faded, scuffed through by the wheels, and gone where the road was patched
 	float paint_wear = mix(1.0, (0.4 + 0.6 * smoothstep(0.3, 0.62, texture(grain, vec2(d * 2.0, s * 0.35) + 0.7).r)) * (1.0 - patch_mask * 0.85), street);
-	edge_line *= paint_wear * (1.0 - cob);
+	edge_line *= paint_wear * (1.0 - cob) * (1.0 - unp);
 	col = mix(col, vec3(0.92, 0.94, 0.96) * (0.85 + 0.15 * fine), edge_line * 0.9);
 	rough = mix(rough, 0.42, edge_line * 0.9);
 
@@ -208,7 +241,7 @@ void fragment() {
 	if (half_width >= 3.2 && half_width <= 4.2) {
 		float dash_pattern = step(0.45, fract(s / 5.5));
 		float center_dist = abs(d);
-		float center_line = smoothstep(0.065, 0.02, center_dist) * dash_pattern * (1.0 - w * 0.4) * paint_wear * (1.0 - cob);
+		float center_line = smoothstep(0.065, 0.02, center_dist) * dash_pattern * (1.0 - w * 0.4) * paint_wear * (1.0 - cob) * (1.0 - unp);
 		col = mix(col, vec3(0.90, 0.91, 0.88) * (0.85 + 0.15 * fine), center_line * 0.75);
 		rough = mix(rough, 0.45, center_line * 0.75);
 	}
