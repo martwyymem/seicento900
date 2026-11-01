@@ -137,8 +137,9 @@ func _game_options(errors: Array[String]) -> void:
 		if i <= at:
 			errors.append("%s should be reachable with the d-pad, after the one before it (%d <= %d)" % [c.name if c else "null", i, at])
 		at = i
-	if game.resolution_picker.item_count < 2 or game.resolution_picker.get_item_text(0) != "Native (desktop)":
-		errors.append("the resolution picker should list Native and the window's size")
+	if game.resolution_picker.item_count < 3 or not game.resolution_picker.get_item_text(0).begins_with("Auto") \
+			or game.resolution_picker.get_item_text(1) != "Native (desktop)":
+		errors.append("the resolution picker should list Auto, Native and the window's size")
 
 	# save, scramble, load
 	game.graphics_resolution = Vector2i(1280, 720)
@@ -182,6 +183,20 @@ func _game_options(errors: Array[String]) -> void:
 	game.graphics_resolution = Vector2i.ZERO
 	if game._render_resolution(Vector2i(3024, 1964)) != Vector2i(3024, 1964):
 		errors.append("Native should render at the screen's resolution")
+	# Auto (the default) caps the 3D view near 1080p's pixel count at the screen's shape, in a window too
+	game.graphics_resolution = game.AUTO_RESOLUTION
+	var auto_px: Vector2i = game._render_resolution(Vector2i(3024, 1964))
+	if absi(auto_px.x - 1787) > 1 or absi(auto_px.y - 1160) > 1:
+		errors.append("Auto on a 3024×1964 screen should render about 1787×1160, got %s" % auto_px)
+	if game._render_resolution(Vector2i(1600, 900)) != Vector2i(1600, 900):
+		errors.append("Auto should leave a view already under 1080p's pixel count alone")
+	game.graphics_display_mode = 0
+	auto_px = game._render_resolution(Vector2i(3024, 1890))
+	if absi(auto_px.x - 1821) > 1 or absi(auto_px.y - 1138) > 1:
+		errors.append("Auto should cap a maximised window too, got %s" % auto_px)
+	game.graphics_display_mode = 1
+	if game._resolution_options()[0] != game.AUTO_RESOLUTION or game._current_resolution() != game.AUTO_RESOLUTION:
+		errors.append("Auto should head the resolution picker and be what an untouched setting shows")
 	game.graphics_display_mode = 0
 
 	# aspect ratios: the canvas and how it is fitted; the panels stay inside it

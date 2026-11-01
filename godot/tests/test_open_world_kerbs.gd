@@ -45,19 +45,24 @@ func run() -> Array:
 	completed = true
 	return errors
 
-## A street edge with a pavement beyond it, clear of junctions and buildings: {edge, out}.
+## An edge of a pavement shape that borders a carriageway, with open pavement beyond it: {edge, out}.
 func _find_pavement(map: TownMap) -> Dictionary:
-	for ri in map.road_pts.size():
-		if map.road_pave[ri] != 1:
+	for poly in map.pave_polys:
+		if poly.size() < 4:
 			continue
-		var pts := map.road_pts[ri]
-		for i in range(1, pts.size() - 1):
-			if map.road_jd[ri][i - 1] < 12.0 or map.road_jd[ri][i] < 12.0 or map.road_jd[ri][i + 1] < 12.0:
+		for k in poly.size():
+			var a := poly[k]
+			var b := poly[(k + 1) % poly.size()]
+			var d := b - a
+			if d.length() < 6.0:
 				continue
-			var nrm := (pts[i + 1] - pts[i - 1]).normalized().orthogonal()
-			var edge := pts[i] + nrm * map.road_w[ri] * 0.5
-			if map.kerb_at(edge.x + nrm.x * 0.8, edge.y + nrm.y * 0.8) > 0.0 \
-					and map.road_at(edge.x - nrm.x * 8.0, edge.y - nrm.y * 8.0).is_empty() == false \
-					and not map.inside_building(edge + nrm * 5.0) and map.road_at(edge.x + nrm.x * 5.0, edge.y + nrm.y * 5.0).is_empty():
-				return {"edge": edge, "out": nrm}
+			var mid := (a + b) * 0.5
+			var nrm := d.normalized().orthogonal()
+			for sgn in [1.0, -1.0]:
+				var o: Vector2 = nrm * sgn
+				if map.kerb_at(mid.x + o.x * 0.8, mid.y + o.y * 0.8) > 0.0 and map.kerb_at(mid.x - o.x * 0.5, mid.y - o.y * 0.5) == 0.0 \
+						and not map.road_at(mid.x - o.x * 1.0, mid.y - o.y * 1.0).is_empty() \
+						and map.road_at(mid.x - o.x * 8.0, mid.y - o.y * 8.0).is_empty() == false \
+						and map.kerb_at(mid.x + o.x * 1.3, mid.y + o.y * 1.3) > 0.0:
+					return {"edge": mid, "out": o}
 	return {}

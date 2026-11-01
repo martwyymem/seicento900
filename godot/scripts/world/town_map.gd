@@ -61,7 +61,10 @@ var road_limit := PackedFloat32Array() ## km/h
 var road_bridge := PackedByteArray()
 var road_len := PackedFloat32Array()
 var road_pave := PackedByteArray() ## 1: the street has kerbs and pavements (in town, among buildings)
-var road_jd: Array[PackedFloat32Array] = [] ## per road point: distance along the road to the nearest junction's edge
+var pave_polys: Array[PackedVector2Array] = [] ## the pavements: merged, non-overlapping, carriageways and junction gaps cut out
+var _pave_rects: Array[Rect2] = []
+var _pave_cells := {} ## int cell -> PackedInt32Array of pave_polys indices
+var _road_polys := {} ## road -> its carriageway outline polygons (while pavements are built)
 var road_marks: Array = [] ## per road: [[point index, node id] ...] junctions and ends
 var road_rank := PackedInt32Array()
 var _seg_road := PackedInt32Array()
@@ -243,7 +246,9 @@ func _load_roads() -> void:
 			node_edges[nb].append([na, ri, ib, ia, seg_len, road_oneway[ri] == 0])
 
 ## Height of a road's deck over the ground at point index i + t towards i + 1.
-## Which streets have pavements, and how far each point is from a junction (pavements break at junctions).
+## Which streets have pavements, and the pavements themselves: one band per run of street between junctions,
+## with every carriageway and every earlier pavement cut out, so no two pavement shapes overlap. TownBuilder
+## draws these same shapes and kerb_at() answers from them.
 func _build_pavements() -> void:
 	var node_width := {}
 	var node_roads := {}
@@ -253,27 +258,155 @@ func _build_pavements() -> void:
 			node_width[nid] = maxf(float(node_width.get(nid, 0.0)), road_w[ri])
 			node_roads[nid] = int(node_roads.get(nid, 0)) + 1
 	road_pave.resize(road_pts.size())
-	road_jd.clear()
+	pave_polys.clear()
+	_pave_rects.clear()
+	_pave_cells.clear()
+	_road_polys.clear()
 	for ri in road_pts.size():
 		var pts := road_pts[ri]
 		var n := pts.size()
-		var jd := PackedFloat32Array()
-		jd.resize(n)
-		jd.fill(INF)
-		road_jd.append(jd)
-		if n < 2:
+		road_pave[ri] = 0
+		if n < 2 or not _has_pavement(ri, pts[n / 2]):
 			continue
+		road_pave[ri] = 1
 		var s := PackedFloat32Array()
 		s.resize(n)
 		for i in range(1, n):
 			s[i] = s[i - 1] + pts[i].distance_to(pts[i - 1])
+		var jd := PackedFloat32Array()
+		jd.resize(n)
+		jd.fill(INF)
 		for m in road_marks[ri]:
 			var nid := str(m[1])
 			if int(node_roads.get(nid, 0)) >= 2:
 				var half_j := float(node_width[nid]) * 0.5
 				for i in n:
 					jd[i] = minf(jd[i], absf(s[i] - s[int(m[0])]) - half_j)
-		road_pave[ri] = 1 if _has_pavement(ri, pts[n / 2]) else 0
+		var i := 0
+		while i < n:
+			if jd[i] < PAVE_GAP:
+				i += 1
+				continue
+			var j := i
+			while j + 1 < n and jd[j + 1] >= PAVE_GAP:
+				j += 1
+			if j > i:
+				_add_pavement_run(ri, pts.slice(i, j + 1))
+			i = j + 1
+	_road_polys.clear()
+
+func _carriageway(ri: int) -> Array:
+	if not _road_polys.has(ri):
+		_road_polys[ri] = Geometry2D.offset_polyline(road_pts[ri], road_w[ri] * 0.5, Geometry2D.JOIN_ROUND, Geometry2D.END_BUTT)
+	return _road_polys[ri]
+
+static func _bounds_of(poly: PackedVector2Array) -> Rect2:
+	var r := Rect2(poly[0], Vector2.ZERO)
+	for q in poly:
+		r = r.expand(q)
+	return r
+
+static func _area_of(poly: PackedVector2Array) -> float:
+	var a := 0.0
+	for k in poly.size():
+		var p := poly[k]
+		var q := poly[(k + 1) % poly.size()]
+		a += p.x * q.y - q.x * p.y
+	return a * 0.5
+
+## Clips every polygon in `pieces` against `cut`, dropping the holes the result may carry.
+static func _subtract(pieces: Array, cut: PackedVector2Array) -> Array:
+	var out := []
+	for pc in pieces:
+		var res := Geometry2D.clip_polygons(pc, cut)
+		for r in res:
+			if not Geometry2D.is_polygon_clockwise(r):
+				out.append(r)
+	return out
+
+## Drops the zero-width spikes and repeated points clipping can leave in an outline (an edge out and straight back):
+## they triangulate into hair-thin slivers that flicker, and would get kerb faces of their own.
+static func _despike(poly: PackedVector2Array) -> PackedVector2Array:
+	var out := poly.duplicate()
+	var changed := true
+	while changed and out.size() >= 3:
+		changed = false
+		var k := 0
+		while k < out.size() and out.size() >= 3:
+			var a := out[(k - 1 + out.size()) % out.size()]
+			var b := out[k]
+			var c := out[(k + 1) % out.size()]
+			var ab := b - a
+			var bc := c - b
+			# b repeats a, or the outline doubles back on itself at b (collinear, turning ~180 degrees)
+			if ab.length_squared() < 1e-6 or (absf(ab.cross(bc)) < 1e-3 * maxf(ab.length() * bc.length(), 1e-6) and ab.dot(bc) < 0.0):
+				out.remove_at(k)
+				changed = true
+			else:
+				k += 1
+	return out
+
+func _add_pavement_run(ri: int, run: PackedVector2Array) -> void:
+	var half := road_w[ri] * 0.5
+	var pieces: Array = []
+	# the carriageway cut overshoots the run's ends (square caps): a butt cap would end exactly on the band's own
+	# end and leave a zero-width slit across the road, which draws as a flickering sliver at every junction
+	var inner := Geometry2D.offset_polyline(run, half, Geometry2D.JOIN_ROUND, Geometry2D.END_SQUARE)
+	for o in Geometry2D.offset_polyline(run, half + PAVEMENT_W, Geometry2D.JOIN_ROUND, Geometry2D.END_BUTT):
+		if Geometry2D.is_polygon_clockwise(o):
+			continue
+		var cur := [o]
+		for ip in inner:
+			cur = _subtract(cur, ip)
+		pieces.append_array(cur)
+	if pieces.is_empty():
+		return
+	var rect := Rect2(run[0], Vector2.ZERO)
+	for q in run:
+		rect = rect.expand(q)
+	rect = rect.grow(half + PAVEMENT_W + 0.5)
+	# every other carriageway near the run (not the raised ones: a bridge does not cut the pavement under it)
+	var seen := {}
+	for cx in range(int(floor(rect.position.x / CELL)), int(floor(rect.end.x / CELL)) + 1):
+		for cy in range(int(floor(rect.position.y / CELL)), int(floor(rect.end.y / CELL)) + 1):
+			var ck := _cell_key(cx, cy)
+			if not _seg_cells.has(ck):
+				continue
+			for sid in _seg_cells[ck]:
+				var r2 := _seg_road[sid]
+				if r2 == ri or seen.has(r2):
+					continue
+				seen[r2] = true
+				if road_bridge[r2] or not road_z[r2].is_empty():
+					continue
+				for cp in _carriageway(r2):
+					if _bounds_of(cp).intersects(rect):
+						pieces = _subtract(pieces, cp)
+	# pavements already placed: they own what they cover
+	var owners := {}
+	for cx in range(int(floor(rect.position.x / CELL)), int(floor(rect.end.x / CELL)) + 1):
+		for cy in range(int(floor(rect.position.y / CELL)), int(floor(rect.end.y / CELL)) + 1):
+			var ck := _cell_key(cx, cy)
+			if _pave_cells.has(ck):
+				for pid in _pave_cells[ck]:
+					owners[pid] = true
+	for pid in owners:
+		if _pave_rects[pid].intersects(rect):
+			pieces = _subtract(pieces, pave_polys[pid])
+	for raw_pc: PackedVector2Array in pieces:
+		var pc := _despike(raw_pc)
+		if pc.size() < 3 or absf(_area_of(pc)) < 0.3 or Geometry2D.triangulate_polygon(pc).is_empty():
+			continue
+		var id := pave_polys.size()
+		var pr := _bounds_of(pc)
+		pave_polys.append(pc)
+		_pave_rects.append(pr)
+		for cx in range(int(floor(pr.position.x / CELL)), int(floor(pr.end.x / CELL)) + 1):
+			for cy in range(int(floor(pr.position.y / CELL)), int(floor(pr.end.y / CELL)) + 1):
+				var ck2 := _cell_key(cx, cy)
+				if not _pave_cells.has(ck2):
+					_pave_cells[ck2] = PackedInt32Array()
+				_pave_cells[ck2].append(id)
 
 func _has_pavement(ri: int, mid: Vector2) -> bool:
 	if not road_kind[ri] in ["primary", "secondary", "tertiary", "residential", "unclassified", "living_street"]:
@@ -284,30 +417,16 @@ func _has_pavement(ri: int, mid: Vector2) -> bool:
 		return false
 	return not buildings_near(mid, 45.0).is_empty()
 
-## Kerb height (KERB_H) when (x, y) is on a pavement, else 0. A point on any road's carriageway is never pavement.
+## Kerb height (KERB_H) when (x, y) is on a pavement, else 0.
 func kerb_at(x: float, y: float) -> float:
 	var ck := _cell_key(int(floor(x / CELL)), int(floor(y / CELL)))
-	if not _seg_cells.has(ck):
+	if not _pave_cells.has(ck):
 		return 0.0
 	var p := Vector2(x, y)
-	var on_pave := false
-	for sid in _seg_cells[ck]:
-		var ri := _seg_road[sid]
-		var i := _seg_i[sid]
-		var pts := road_pts[ri]
-		var a := pts[i]
-		var ab := pts[i + 1] - a
-		var l2 := ab.length_squared()
-		var t := 0.0 if l2 < 1e-6 else clampf((p - a).dot(ab) / l2, 0.0, 1.0)
-		var d := p.distance_to(a + ab * t)
-		var half := road_w[ri] * 0.5
-		if d <= half:
-			return 0.0
-		if road_pave[ri] and d <= half + PAVEMENT_W:
-			var jd := road_jd[ri]
-			if jd[i] >= PAVE_GAP and jd[i + 1] >= PAVE_GAP:
-				on_pave = true
-	return KERB_H if on_pave else 0.0
+	for pid in _pave_cells[ck]:
+		if _pave_rects[pid].has_point(p) and Geometry2D.is_point_in_polygon(p, pave_polys[pid]):
+			return KERB_H
+	return 0.0
 
 func deck_at(ri: int, i: int, t: float) -> float:
 	var z := road_z[ri]

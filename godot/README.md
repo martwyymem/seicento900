@@ -336,6 +336,14 @@ it draws a few more frames and then keeps its last image. In those states the ca
 10 fps while the window is in the background (which also pauses a running race). High no longer stacks MSAA on
 top of SMAA and SSIL is Ultra-only; the sky's radiance cubemap refreshes only when the sky changes instead of
 every frame. `tests/_perf.gd` is a frame-cost benchmark (`OLD=1` restores the previous MSAA/SSIL/sky settings for comparison).
+Options → Resolution defaults to **Auto**: the 3D view (races and the open world) is drawn at no more than
+1080p's pixel count and scaled up, while menus and the HUD stay sharp; Native and the fixed sizes stay available
+(the open world used to ignore the setting). Below Ultra the trees cast their shadows from stand-ins (a
+~60-triangle crown shape per tree, `Surroundings.set_tree_shadows`) instead of their own swaying meshes, which
+were the costliest thing on screen. Measured on an M4 Pro (`tools/power_sampler.py` around
+`tests/_power_probe.gd`, GPU watts from IOReport plus the game's own GPU time): native Retina pixels at 120 fps
+~22 W of GPU against ~8 W at 60 fps; on the S1 Sprint's wooded stretch the tree shadows went from 8.4-9.4 W to
+4.4-5.6 W.
 The CPU floor is the 120 Hz simulation, about 2 ms per tick with 16 physics cars (mostly `Physics.step`), whatever the
 frame rate. Set-up → Bot physics → Nearby only runs the physics just for bots within about 250–350 m ahead of the
 player or 60–110 m behind (`Race.NEAR_PHYS_*`: no forward view shows a car further back) and keeps the rest on the

@@ -164,6 +164,8 @@ func _surface_at(x: float, y: float) -> int:
 		hit = {}
 	if in_water:
 		return Physics.SURF_GRAVEL
+	if hit.is_empty() and map.kerb_at(x, y) > 0.0 and z < map.ground(x, y) + 0.6:
+		return Physics.SURF_ASPHALT # a pavement grips like tarmac
 	return map.surface_of(hit)
 
 ## One physics tick. Pedals 0..1, steer -1..1 (+ right).
@@ -237,6 +239,8 @@ func step(dt: float, thr: float, brk: float, steer_in: float, shift_up := false,
 		road = {}
 	_water(dt)
 	surface = map.surface_of(road) if not road.is_empty() and absf(float(road.height) - z) < 1.2 else Physics.SURF_GRASS
+	if surface == Physics.SURF_GRASS and not in_water and map.kerb_at(car.x, car.y) > 0.0:
+		surface = Physics.SURF_ASPHALT
 	var n := Vector3(-dz_dx, 1.0, -dz_dy).normalized()
 	tilt = tilt.slerp(Basis(Quaternion(Vector3.UP, n)), minf(1.0, dt * 10.0)) if not airborne else tilt
 

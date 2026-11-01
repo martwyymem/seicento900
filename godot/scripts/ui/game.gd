@@ -115,6 +115,12 @@ const WARP_VALUES := [1, 2, 5, 10, 30, 60] ## time-warp steps (, and . keys)
 const UI_SCALES := [0.85, 1.0, 1.15, 1.3] ## Options → Interface size, on top of the window scaling
 const BASE_SIZE := Vector2i(1600, 900) ## the canvas the interface is laid out on (project.godot)
 ## Options → Resolution presets (only those that fit the screen are offered, with Native and the window's own).
+## Options → Resolution's default, Auto: the window stays as launched (fullscreen keeps the desktop's mode) and
+## the 3D view is drawn at no more than AUTO_RENDER_PIXELS, then scaled up; menus and the HUD stay sharp. A
+## 14-inch Retina screen in fullscreen is 5.9 million pixels, and drawing them all at 120 fps took ~22 W of GPU
+## (measured 2026-11-01 with tests/_power_probe.gd): a hot, loud laptop for a picture that barely differs.
+const AUTO_RESOLUTION := Vector2i(-1, -1)
+const AUTO_RENDER_PIXELS := 1920 * 1080
 const RESOLUTIONS: Array[Vector2i] = [Vector2i(1280, 720), Vector2i(1366, 768), Vector2i(1600, 900), Vector2i(1920, 1080), Vector2i(2560, 1440), Vector2i(3840, 2160)]
 ## Options → Aspect ratio: Auto fills the window; a ratio letterboxes (or pillarboxes) the game to it.
 const ASPECTS := [
@@ -242,7 +248,7 @@ var resolution_picker: MenuSelector
 var resolution_note: Label
 var aspect_picker: MenuSelector
 var audio_pickers := {} ## AudioSettings channel key -> its volume picker
-var graphics_resolution := Vector2i(-1, -1) ## Options → Resolution: (-1, -1) as launched, ZERO native
+var graphics_resolution := AUTO_RESOLUTION ## Options → Resolution: AUTO_RESOLUTION (the default), ZERO native
 var graphics_aspect := 0 ## index into ASPECTS
 var _resolution_choices: Array[Vector2i] = [] ## what resolution_picker's entries stand for
 var antialiasing_picker: MenuSelector
@@ -738,6 +744,8 @@ func _fit_3d_views() -> void:
 		if vp.size != px:
 			vp.size = px
 			_still_frames = 0 # a resized target is blank until it is drawn again
+	if open_world != null and open_world.active:
+		open_world._fit_view()
 
 func _build_setup() -> void:
 	menu_tint = ColorRect.new()
@@ -3128,9 +3136,9 @@ func _on_display_mode_selected(index: int) -> void:
 	_apply_resolution.call_deferred() # once the window has left (or entered) fullscreen
 	_save_graphics_settings()
 
-## Options → Resolution's entries: Native, the presets that fit the screen, and the window's own size.
+## Options → Resolution's entries: Auto, Native, the presets that fit the screen, and the window's own size.
 func _resolution_options() -> Array[Vector2i]:
-	var out: Array[Vector2i] = [Vector2i.ZERO]
+	var out: Array[Vector2i] = [AUTO_RESOLUTION, Vector2i.ZERO]
 	var screen := DisplayServer.screen_get_size(DisplayServer.window_get_current_screen())
 	for r in RESOLUTIONS:
 		if screen.x <= 0 or (r.x <= screen.x and r.y <= screen.y):
@@ -3141,11 +3149,9 @@ func _resolution_options() -> Array[Vector2i]:
 		out.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.x * a.y < b.x * b.y)
 	return out
 
-## The resolution the picker shows: the chosen one, or before any choice the window's size (Native in fullscreen).
+## The resolution the picker shows: the chosen one (Auto until the player picks another).
 func _current_resolution() -> Vector2i:
-	if graphics_resolution.x >= 0:
-		return graphics_resolution
-	return DisplayServer.window_get_size() if graphics_display_mode == 0 else Vector2i.ZERO
+	return graphics_resolution if graphics_resolution.x >= 0 else AUTO_RESOLUTION
 
 func _rebuild_resolution_picker() -> void:
 	if not is_instance_valid(resolution_picker):
@@ -3153,7 +3159,10 @@ func _rebuild_resolution_picker() -> void:
 	_resolution_choices = _resolution_options()
 	resolution_picker.clear()
 	for r in _resolution_choices:
-		resolution_picker.add_item("Native (desktop)" if r == Vector2i.ZERO else "%d × %d" % [r.x, r.y])
+		if r == AUTO_RESOLUTION:
+			resolution_picker.add_item("Auto (3D up to 1080p)")
+		else:
+			resolution_picker.add_item("Native (desktop)" if r == Vector2i.ZERO else "%d × %d" % [r.x, r.y])
 	resolution_picker.select(maxi(0, _resolution_choices.find(_current_resolution())))
 	var caption := resolution_picker.get_parent().get_child(0) as Label
 	if caption:
@@ -3191,11 +3200,15 @@ func _apply_resolution() -> void:
 			DisplayServer.window_set_position(screen.position + (screen.size - outer) / 2)
 	_fit_3d_views()
 
-## The 3D view's render target for px screen pixels: in fullscreen with a resolution chosen, fitted inside it
-## (never above the screen's own). The upscaler's render scale then applies on top.
+## The 3D view's render target for px screen pixels: Auto (in a window too) keeps it within AUTO_RENDER_PIXELS at
+## the view's own shape; fullscreen with a resolution chosen fits it inside that one (never above the screen's
+## own). The upscaler's render scale then applies on top.
 func _render_resolution(px: Vector2i) -> Vector2i:
 	var res := graphics_resolution
-	if graphics_display_mode != 1 or res.x <= 0:
+	if res.x < 0:
+		var k_auto := minf(1.0, sqrt(float(AUTO_RENDER_PIXELS) / maxf(1.0, float(px.x) * px.y)))
+		return Vector2i((Vector2(px) * k_auto).round()).max(Vector2i(2, 2))
+	if graphics_display_mode != 1 or res.x == 0:
 		return px
 	var k := minf(1.0, minf(float(res.x) / px.x, float(res.y) / px.y))
 	return Vector2i((Vector2(px) * k).round()).max(Vector2i(2, 2))
@@ -4584,6 +4597,7 @@ func _enter_open_world(spawn) -> void:
 		"audio": audio,
 		"quality": graphics_quality,
 		"ssao": graphics_ssao,
+		"render_size": _render_resolution,
 	})
 
 ## Pays a campaign result's fans into the open-world progress (live if the world is loaded, else the save) and

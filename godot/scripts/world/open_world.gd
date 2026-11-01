@@ -40,6 +40,9 @@ var train: Train
 var progress: WorldProgress
 var drive: FreeCar
 var audio = null ## the game's RaceAudio
+## The game's Options → Resolution rule for a 3D view (game.gd _render_resolution: Auto's pixel cap, or the
+## fullscreen render resolution), screen pixels in, render target out; unset: the view's own pixels
+var render_size := Callable()
 var gearbox := "auto"
 var assists := "abs"
 var paint := Color("#c62828")
@@ -152,6 +155,7 @@ func open(spawn = "", opts := {}) -> void:
 		viewport.scaling_3d_mode = src.scaling_3d_mode
 		viewport.scaling_3d_scale = src.scaling_3d_scale
 	audio = opts.get("audio", audio)
+	render_size = opts.get("render_size", render_size)
 	show()
 	active = true
 	paused = false
@@ -194,6 +198,8 @@ func _fit_view() -> void:
 	if not is_inside_tree():
 		return
 	var px := Vector2i((view.size * get_viewport().get_final_transform().get_scale()).round()).max(Vector2i(2, 2))
+	if render_size.is_valid():
+		px = render_size.call(px)
 	if viewport.size != px:
 		viewport.size = px
 

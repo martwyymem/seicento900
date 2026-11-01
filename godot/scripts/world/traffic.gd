@@ -224,7 +224,7 @@ func _layer_y(c: Dictionary, at: Array, p: Vector2) -> float:
 		return g + lerpf(z[ia], z[ib], float(at[3])) - TownBuilder.ROAD_LIFT * 0.5 + 0.1
 	var y_ref: float = float(c.get("y", 0.0))
 	var hit := map.road_at(p.x, p.y, y_ref if y_ref != 0.0 else -INF, 1.0)
-	return float(hit.height) - TownBuilder.ROAD_LIFT * 0.5 + 0.1 if not hit.is_empty() else g
+	return float(hit.height) - TownBuilder.ROAD_LIFT * 0.5 + 0.1 if not hit.is_empty() else g + map.kerb_at(p.x, p.y)
 
 func _place(c: Dictionary) -> void:
 	var at := _point_on(c.pts, c.s)

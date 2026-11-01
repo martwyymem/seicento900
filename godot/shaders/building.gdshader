@@ -56,6 +56,15 @@ void vertex() {
 	v_kind = kf - v_face * 10.0;
 }
 
+// 1 if the window in the bay holding x lies wholly on this wall, so none is cut off at a corner.
+float fits_wall(float x, float bay, float w) {
+	if (v_wall_len < 0.5) {
+		return 1.0;
+	}
+	float c = (floor(x / bay) + 0.5) * bay;
+	return step(0.7, c - w * 0.5) * step(c + w * 0.5, v_wall_len - 0.7);
+}
+
 // A window grid on a wall: returns (inside window 0/1, the window's id hash, frame 0/1).
 vec3 windows(vec2 uv, float bay, float storey, float w, float h, float sill, float first_row) {
 	float bx = uv.x / bay;

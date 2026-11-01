@@ -75,6 +75,15 @@ var land_rect := Rect2() ## track metres
 var _res := 2.0 ## land map metres per texel
 static var _tree_meshes := {} ## Blender tree meshes by species
 static var _tree_sizes := {} ## species -> Vector2(crown radius, height) of its mesh, for the TV cameras' sightlines
+## Tree shadows come from stand-ins below Ultra: each tile of trees gets a shadows-only twin of ~60-triangle
+## crown shapes and the trees themselves cast none. The swaying 600-triangle trees drawn into four shadow
+## cascades were the costliest thing on screen; measured 2026-11-01 with tests/_power_probe.gd on the S1 Sprint's
+## wooded stretch, real tree shadows 12.8-14.0 W of GPU, stand-ins 9.9-10.5 W, no tree shadows 9.2-10.0 W.
+const TREE_PROXY_CONES := ["Pine", "Spruce", "Cypress"] ## conifers cast a cone, the rest an ellipsoid
+static var _tree_proxies := {} ## species -> ArrayMesh, the shadow stand-in
+static var _tree_proxy_material: StandardMaterial3D = null
+var _tree_tiles: Array[MultiMeshInstance3D] = []
+var _tree_twins: Array[MultiMeshInstance3D] = []
 static var _tree_reaches := {} ## species -> how far its mesh reaches from the trunk at scale 1, turned any way
 var _bank_cells := {} ## 16 m cells (Vector2i) within reach of the banking, kept clear of trees
 static var _landmark_meshes := {} ## Blender landmark meshes (and yachts) by name
@@ -341,7 +350,7 @@ func _build_woods(root: Node3D) -> void:
 		for species in chunks[c]:
 			if meshes.has(species):
 				var lists: Array = chunks[c][species]
-				_add_trees(trees, meshes[species], Transform3D.IDENTITY, lists[0], lists[1], foliage, q)
+				_add_trees(trees, meshes[species], Transform3D.IDENTITY, lists[0], lists[1], foliage, q, species)
 	_build_canopy(root, band - 25.0)
 
 ## The Blender trees (tools/blender/build_trees.py) by species.
@@ -432,7 +441,8 @@ func _add_tree(chunks: Dictionary, species: String, x: float, z: float, scale: f
 	var tint := 0.8 + _rand(x, z, 8.0) * 0.32
 	chunks[c][species][1].append(Color(tint * (0.94 + _rand(x, z, 9.0) * 0.12), tint, tint * (0.88 + _rand(x, z, 10.0) * 0.16)))
 
-func _add_trees(parent: Node3D, mesh: Mesh, local: Transform3D, xfs: Array, tints: Array, material: Material, q: int) -> void:
+func _add_trees(parent: Node3D, mesh: Mesh, local: Transform3D, xfs: Array, tints: Array, material: Material, q: int,
+		species := "") -> void:
 	if xfs.is_empty():
 		return
 	var mm := MultiMesh.new()
@@ -452,6 +462,73 @@ func _add_trees(parent: Node3D, mesh: Mesh, local: Transform3D, xfs: Array, tint
 		mmi.visibility_range_end_margin = 100.0
 		mmi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 	parent.add_child(mmi)
+	if species == "":
+		return
+	var twin_mm := MultiMesh.new()
+	twin_mm.transform_format = MultiMesh.TRANSFORM_3D
+	twin_mm.mesh = _tree_proxy(species, mesh)
+	twin_mm.instance_count = mm.instance_count
+	for i in mm.instance_count:
+		twin_mm.set_instance_transform(i, mm.get_instance_transform(i))
+	var twin := MultiMeshInstance3D.new()
+	twin.name = mmi.name + "Shadow"
+	twin.multimesh = twin_mm
+	twin.material_override = _tree_proxy_material
+	twin.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+	twin.visibility_range_end = mmi.visibility_range_end
+	parent.add_child(twin)
+	_tree_tiles.append(mmi)
+	_tree_twins.append(twin)
+	_set_tree_shadow(_tree_tiles.size() - 1, q)
+
+## Ultra: the trees cast their own shadows; below it their stand-ins do (see TREE_PROXY_CONES).
+func set_tree_shadows(quality: int) -> void:
+	for i in _tree_tiles.size():
+		_set_tree_shadow(i, quality)
+
+func _set_tree_shadow(i: int, quality: int) -> void:
+	if not is_instance_valid(_tree_tiles[i]) or not is_instance_valid(_tree_twins[i]):
+		return
+	var real := quality >= 3
+	_tree_tiles[i].cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if real else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_tree_twins[i].visible = not real
+
+## A species' shadow stand-in at scale 1: an ellipsoid (or a cone for a conifer) filling the crown of its mesh.
+static func _tree_proxy(species: String, mesh: Mesh) -> ArrayMesh:
+	if _tree_proxies.has(species):
+		return _tree_proxies[species]
+	if _tree_proxy_material == null:
+		_tree_proxy_material = StandardMaterial3D.new()
+	var box := mesh.get_aabb()
+	var width := maxf(box.size.x, box.size.z)
+	var arrays: Array
+	var lift: float
+	if species in TREE_PROXY_CONES:
+		var cone := CylinderMesh.new()
+		cone.top_radius = 0.0
+		cone.bottom_radius = 0.42 * width
+		cone.height = 0.85 * box.size.y
+		cone.radial_segments = 8
+		cone.rings = 1
+		arrays = cone.get_mesh_arrays()
+		lift = box.end.y - 0.5 * cone.height
+	else:
+		var crown := SphereMesh.new()
+		crown.radius = 0.4 * width
+		crown.height = 0.7 * box.size.y
+		crown.radial_segments = 8
+		crown.rings = 4
+		arrays = crown.get_mesh_arrays()
+		lift = box.end.y - 0.5 * crown.height
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var centre := Vector3(box.get_center().x, lift, box.get_center().z)
+	for k in verts.size():
+		verts[k] += centre
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	var out := ArrayMesh.new()
+	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	_tree_proxies[species] = out
+	return out
 
 ## The canopy: a sheet of crowns 14-24 m over the ground wherever the land map is wood, from inner metres off
 ## the centreline outwards (the single trees stand in front of its edge). Its rim drops to the ground.

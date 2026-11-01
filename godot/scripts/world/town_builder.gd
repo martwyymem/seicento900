@@ -31,6 +31,7 @@ const TREE_FAR := 1800.0
 const ROAD_LIFT := 0.09 ## streets sit this far over the ground; the bigger road wins at a junction
 const KERB_H := TownMap.KERB_H
 const PAVEMENT_W := TownMap.PAVEMENT_W
+const VERGE_W := 1.2 ## m: the grass slope from a pavement's outer edge down to the lawn
 const HEADFRAME_SHAFT := 10.1 ## m from town.glb's Headframe origin forward (-Z) to its shaft
 
 ## Building palettes (sRGB): Polish plaster, brick and roofing
@@ -354,30 +355,6 @@ func build_roads() -> void:
 			# seen from above (north up) with travel to the east, left_i is top left and right_i bottom left:
 			# left_i, right_i, right_i+1, left_i+1 is the counter-clockwise order quad() wants
 			mb.quad(a, a + 1, a + 3, a + 2)
-		# kerbs and pavements in town, broken at the junctions
-		var mid := pts[n / 2]
-		if map.road_pave[ri] == 1:
-			var kb: MeshBatch = kerb_b[c]
-			for side: float in [-1.0, 1.0]:
-				var edge: PackedVector3Array = left if side < 0.0 else right
-				for i in n - 1:
-					if jd[i] < 2.5 or jd[i + 1] < 2.5:
-						continue
-					var e0: Vector3 = edge[i]
-					var e1: Vector3 = edge[i + 1]
-					var t2 := Vector2(e1.x - e0.x, e1.z - e0.z).normalized()
-					var out := Vector3(-t2.y, 0.0, t2.x) * side
-					var o0 := e0 + out * PAVEMENT_W
-					var o1 := e1 + out * PAVEMENT_W
-					o0.y = maxf(o0.y, map.ground(o0.x, o0.z) + 0.05)
-					o1.y = maxf(o1.y, map.ground(o1.x, o1.z) + 0.05)
-					var kc := Color(0.52, 0.51, 0.49)
-					var pc := Color(0.38, 0.37, 0.35) if hash2(e0.x, e0.z, 4.0) > 0.5 else Color(0.34, 0.33, 0.32)
-					var up := Vector3.UP * KERB_H
-					# kerb face, then the pavement top
-					kb.flat_quad(e0, e1, e1 + up, e0 + up, -out, kc)
-					kb.flat_quad(e0 + up, e1 + up, o1 + up, o0 + up, Vector3.UP, pc)
-					kb.flat_quad(o0 + up, o1 + up, o1 + Vector3.DOWN * 0.3, o0 + Vector3.DOWN * 0.3, out, pc)
 		# raised stretches: a bridge deck with parapets, or an earth embankment down to the ground
 		if not zs.is_empty():
 			var db: MeshBatch = deck_b[c]
@@ -431,6 +408,96 @@ func build_roads() -> void:
 		if not (bank_b[c] as MeshBatch).is_empty():
 			_add_mesh(group, (bank_b[c] as MeshBatch).commit(), bank_mat)
 	_build_junction_patches(group, mat, node_width, node_roads)
+	_build_pavements(group, kerb_mat, bank_mat)
+
+## The pavements: TownMap's merged shapes, flat at kerb height over the street surface. A kerb face drops to the
+## carriageway; every other edge runs down to the grass in a short verge (grass material), so the slab never stands
+## proud of the lawn like a concrete barrier.
+func _build_pavements(group: Node3D, kerb_mat: Material, verge_mat: Material) -> void:
+	var batches := {}
+	var verges := {}
+	var top_y := ROAD_LIFT + 0.03 + KERB_H
+	for poly in map.pave_polys:
+		var c := _chunk_of(poly[0])
+		if not batches.has(c):
+			batches[c] = MeshBatch.new(false, true)
+		var kb: MeshBatch = batches[c]
+		var tris := Geometry2D.triangulate_polygon(poly)
+		for t in range(0, tris.size(), 3):
+			var v: Array[Vector3] = []
+			var cen := Vector2.ZERO
+			for k in 3:
+				var q := poly[tris[t + k]]
+				cen += q / 3.0
+				v.append(Vector3(q.x, map.ground(q.x, q.y) + top_y, q.y))
+			var pc := Color(0.38, 0.37, 0.35) if hash2(floorf(cen.x / 3.0), floorf(cen.y / 3.0), 4.0) > 0.5 else Color(0.34, 0.33, 0.32)
+			kb.flat_tri(v[0], v[1], v[2], Vector3.UP, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, pc)
+		var sign_ := 1.0 if TownMap._area_of(poly) > 0.0 else -1.0
+		var np := poly.size()
+		# each edge: its outward normal and what it gets (0 nothing, 1 kerb face, 2 plain face, 3 grass verge)
+		var nrm := PackedVector2Array()
+		var kind := PackedByteArray()
+		nrm.resize(np)
+		kind.resize(np)
+		for k in np:
+			var a := poly[k]
+			var b := poly[(k + 1) % np]
+			var d := b - a
+			kind[k] = 0
+			if d.length_squared() < 1e-4:
+				continue
+			var n2 := Vector2(d.y, -d.x).normalized() * sign_
+			nrm[k] = n2
+			var mid := (a + b) * 0.5
+			# clipping can leave zero-width slits (an edge out and straight back): no pavement inside, so no face
+			var inner := mid - n2 * 0.1
+			if map.kerb_at(inner.x, inner.y) == 0.0:
+				continue
+			if not map.road_at(mid.x, mid.y, -INF, 0.35).is_empty():
+				kind[k] = 1
+				continue
+			var vo := mid + n2 * VERGE_W
+			kind[k] = 3 if map.road_at(vo.x, vo.y, -INF, 0.2).is_empty() and map.kerb_at(vo.x, vo.y) == 0.0 else 2
+		# where two verge edges meet, both use one mitred foot so the slopes join rather than overlap or gap
+		var foot := PackedVector2Array()
+		foot.resize(np)
+		for k in np:
+			var kp := (k - 1 + np) % np
+			if kind[k] == 3 and kind[kp] == 3:
+				var dir := (nrm[k] + nrm[kp]).normalized()
+				foot[k] = poly[k] + dir * VERGE_W / maxf(dir.dot(nrm[k]), 0.6)
+			else:
+				foot[k] = poly[k] + (nrm[k] if kind[k] == 3 else nrm[kp]) * VERGE_W
+		for k in np:
+			if kind[k] == 0:
+				continue
+			var k1 := (k + 1) % np
+			var a := poly[k]
+			var b := poly[k1]
+			var ta := Vector3(a.x, map.ground(a.x, a.y) + top_y, a.y)
+			var tb := Vector3(b.x, map.ground(b.x, b.y) + top_y, b.y)
+			if kind[k] == 3:
+				# a grass verge from the pavement's edge down into the lawn
+				if not verges.has(c):
+					verges[c] = MeshBatch.new()
+				var oa := foot[k] if kind[(k - 1 + np) % np] == 3 else a + nrm[k] * VERGE_W
+				var ob := foot[k1] if kind[k1] == 3 else b + nrm[k] * VERGE_W
+				var ga := Vector3(oa.x, map.ground(oa.x, oa.y) - 0.04, oa.y)
+				var gb := Vector3(ob.x, map.ground(ob.x, ob.y) - 0.04, ob.y)
+				var vn := (tb - ta).cross(ga - ta).normalized()
+				if vn.y < 0.0:
+					vn = -vn
+				(verges[c] as MeshBatch).flat_quad(ta, tb, gb, ga, vn, Color.WHITE)
+				continue
+			var n2 := nrm[k]
+			var col := Color(0.5, 0.49, 0.47) if kind[k] == 1 else Color(0.36, 0.35, 0.33)
+			var ba := Vector3(a.x, map.ground(a.x, a.y) - 0.2, a.y)
+			var bb := Vector3(b.x, map.ground(b.x, b.y) - 0.2, b.y)
+			kb.flat_quad(ta, tb, bb, ba, Vector3(n2.x, 0.0, n2.y), col)
+	for c in batches:
+		_add_mesh(group, (batches[c] as MeshBatch).commit(), kerb_mat)
+	for c in verges:
+		_add_mesh(group, (verges[c] as MeshBatch).commit(), verge_mat)
 
 ## A disc of plain asphalt over each junction, so the meeting streets' ends and corners join up.
 func _build_junction_patches(group: Node3D, mat: Material, node_width: Dictionary, node_roads: Dictionary) -> void:
@@ -1994,7 +2061,7 @@ func _build_parked_cars(group: Node3D) -> void:
 					if not map.inside_building(spot) and map.posts_near(spot, 2.0).is_empty():
 						var pick := _pick_index(weights, hash2(q.x, q.y, 23.0))
 						var h := atan2(t.y, t.x) + (PI if sgn < 0.0 else 0.0)
-						_add_parked(lists[kinds[pick]], spot, h)
+						_add_parked(lists[kinds[pick]], spot + side * sgn * _pavement_nudge(spot, h, side * sgn), h)
 				d += 9.0
 			acc += ln
 	var paint := StandardMaterial3D.new()
@@ -2010,9 +2077,34 @@ func _build_parked_cars(group: Node3D) -> void:
 		else:
 			_place_many(group, "Parked" + k, mesh_xf, lists[k][0], lists[k][1], paint, 400.0)
 
+## The four corners of a parked car's footprint (a sedan is about 4 m by 1.8 m).
+func _parked_corners(p: Vector2, heading: float) -> PackedVector2Array:
+	var f := Vector2(cos(heading), sin(heading)) * 2.0
+	var r := Vector2(-f.y, f.x).normalized() * 0.9
+	return PackedVector2Array([p + f + r, p + f - r, p - f - r, p - f + r])
+
+## How far to slide a car parked at the kerb along `out` (away from the road) so it stands wholly on the pavement
+## rather than straddling the kerb step; 0 when it already does or sits wholly off it.
+func _pavement_nudge(p: Vector2, heading: float, out: Vector2) -> float:
+	for d in [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]:
+		var n := 0
+		for q in _parked_corners(p + out * d, heading):
+			if map.kerb_at(q.x, q.y) > 0.0:
+				n += 1
+		if n == 0 or n == 4:
+			return d if n == 4 else 0.0
+	return 0.0
+
+## Height a parked car rests at: ground, plus the kerb if any wheel stands on the pavement (none sink into it).
+func _parked_y(p: Vector2, heading: float) -> float:
+	var k := 0.0
+	for q in _parked_corners(p, heading):
+		k = maxf(k, map.kerb_at(q.x, q.y))
+	return map.ground(p.x, p.y) + 0.02 + k
+
 func _add_parked(list: Array, p: Vector2, heading: float) -> void:
 	var basis := Basis(Vector3.UP, -heading - PI / 2.0)
-	list[0].append(Transform3D(basis, Vector3(p.x, map.ground(p.x, p.y) + 0.02, p.y)))
+	list[0].append(Transform3D(basis, Vector3(p.x, _parked_y(p, heading), p.y)))
 	list[1].append(color_lin(CAR_PAINTS[int(hash2(p.x, p.y, 31.0) * 997.0) % CAR_PAINTS.size()]))
 	var f := Vector2(cos(heading), sin(heading))
 	map.add_post(p + f * 1.0, 0.85)

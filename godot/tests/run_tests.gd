@@ -81,6 +81,8 @@ static func release(tree: SceneTree) -> void:
 	for n in tree.root.get_children():
 		n.free()
 	SURROUNDINGS._tree_meshes.clear()
+	SURROUNDINGS._tree_proxies.clear()
+	SURROUNDINGS._tree_proxy_material = null
 	SURROUNDINGS._landmark_meshes.clear()
 	FURNITURE._meshes.clear()
 	preload("res://scripts/ui/roadside_props.gd")._meshes.clear()

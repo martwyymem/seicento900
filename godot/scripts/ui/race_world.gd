@@ -292,6 +292,8 @@ func apply_graphics(level: int) -> void:
 		sun.directional_shadow_max_distance = [220.0, 320.0, 420.0, 560.0][quality]
 		# a real sun is half a degree across: soft, contact-hardening shadows on the top preset
 		sun.light_angular_distance = 0.5 if quality >= 3 else 0.0
+	if surroundings:
+		surroundings.set_tree_shadows(quality)
 	for weather_particles in [rain_particles, rain_splash_particles, rain_mist_particles, snow_particles, hail_particles]:
 		if weather_particles:
 			if weather_particles == rain_particles:
