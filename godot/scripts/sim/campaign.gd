@@ -112,7 +112,7 @@ const STAGES := [
 		"act_name": "Act II: Regional Championship",
 		"title": "Stage 6: Riverbank Grand Prix",
 		"track": "oswiecim",
-		"laps": 4,
+		"laps": 2,
 		"weather": "wet",
 		"time_of_day": 15.0,
 		"start_hour": 15.0,
@@ -123,8 +123,8 @@ const STAGES := [
 		"target_pos": 3,
 		"grid": "p3",
 		"trophy": "Piast Shield",
-		"desc": "Torrential rain pounds the boulevards along the Soła river and the bridge crossing beneath the medieval Piast Castle.",
-		"tip": "Wet tyres are vital here. Brake in a straight line before the Most Piastowski turn."
+		"desc": "Torrential rain over the Soła. Two laps of the old town: up ul. Legionów, over Most Piastowski, up past the castle hill, along the setts of Plebańska and round the Rynek, down ul. Jagiełły, and back over Most Jagielloński.",
+		"tip": "The setts of Plebańska and the Rynek are slick in the wet: brake in a straight line before you reach them, and keep it tidy through Rondo Płonki onto the bridge."
 	},
 	{
 		"id": "stage_7",
@@ -172,7 +172,7 @@ const STAGES := [
 		"act_name": "Act III: Global Legends",
 		"title": "Stage 9: Midnight Showdown",
 		"track": "tokyo",
-		"laps": 4,
+		"laps": 1,
 		"weather": "dry",
 		"time_of_day": 0.0,
 		"start_hour": 0.0,
@@ -183,8 +183,8 @@ const STAGES := [
 		"target_pos": 1,
 		"grid": "pole",
 		"trophy": "Tokyo Midnight Emperor",
-		"desc": "The international grand finale! Midnight underground racing through the Shuto C1 Expressway's neon viaducts and the Yaesu tunnel.",
-		"tip": "Narrow barriers leave zero room for error. Watch for the blind apex at Miyakezaka."
+		"desc": "The international grand finale! One midnight lap of the Shuto C1 inner loop: the viaducts over the Nihonbashi river, the tunnels under the Imperial Palace moats, Hamazakibashi JCT and the Ginza trench.",
+		"tip": "Two lanes between concrete walls. Lift for the blind left at Miyakezaka in the tunnel, and carry speed round the Hamarikyu Spiral: it drops two full turns into the Ginza trench."
 	},
 	{
 		"id": "stage_10",

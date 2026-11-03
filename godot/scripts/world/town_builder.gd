@@ -1066,6 +1066,9 @@ func _wall_edges(bi: int, ring: PackedVector2Array) -> Array:
 		var lod_rect := min_rect(ring)
 		if not lod_rect.is_empty() and (float(extra.rh) - float(extra.get("eh", b[1]))) > 1.6 * maxf(float(lod_rect[3]), 0.5):
 			planes.clear()
+	# _add_building gives up measured planes that cover too little of the footprint and builds footprint walls instead
+	if not planes.is_empty() and _lod2_cover(extra.get("rs", []), ring) < LOD2_MIN_COVER:
+		planes.clear()
 	var ground_hi := -INF
 	for p in ring:
 		ground_hi = maxf(ground_hi, map.ground(p.x, p.y))

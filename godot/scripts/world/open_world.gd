@@ -57,6 +57,9 @@ var quality := 2 ## graphics preset level (GraphicsPresets): 0 Low .. 3 Ultra
 var env: Environment
 var sky_mat: ShaderMaterial
 var car_visual: Node3D
+var surface_fx: SurfaceFeedback ## dust, kick-up, tyre smoke and the gravel/grass/wind loops
+var golden := 0.0 ## 0..1, how deep in the golden hour the sun is (low, warm, long shadows, sunlit haze)
+var _volumetric := false ## the preset affords volumetric fog: sun shafts in the golden hour (Ultra)
 var headlights: Array[SpotLight3D] = []
 var lamp_lights: Array[OmniLight3D] = []
 var route_mesh: MeshInstance3D
@@ -168,6 +171,8 @@ func open(spawn = "", opts := {}) -> void:
 	if drive:
 		drive.gearbox = gearbox
 		drive.assists = assists
+	if surface_fx:
+		surface_fx.reset_car_bus()
 	_refresh_events()
 	_spawn(spawn)
 	if progress.car_class == 1 and not FanLevels.hypercar_unlocked(progress.fans):
@@ -190,6 +195,9 @@ func suspend() -> void:
 	viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	if audio:
 		audio.update_car(null, false)
+	if surface_fx:
+		surface_fx.stop_all()
+		surface_fx.silence(car_visual)
 	if traffic:
 		traffic.clear()
 	hide()
@@ -228,6 +236,7 @@ func _build_world() -> void:
 		if by_frame:
 			await get_tree().process_frame
 		(steps[i][1] as Callable).call()
+	_apply_vegetation_quality()
 	hud.show_loading("Starting the engine", 0.95)
 	if by_frame:
 		await get_tree().process_frame
@@ -236,6 +245,10 @@ func _build_world() -> void:
 	car_visual = CAR_SCENE.instantiate()
 	world.add_child(car_visual)
 	car_visual.is_player = true
+	car_visual.fx_quality = quality
+	surface_fx = SurfaceFeedback.new()
+	surface_fx.name = "SurfaceFeedback"
+	add_child(surface_fx)
 	_build_headlights()
 	_build_lamp_lights()
 	_build_route_mesh()
@@ -258,6 +271,18 @@ func apply_graphics(level: int, ssao := true) -> void:
 			else DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	if env:
 		env.ssao_enabled = ssao
+	_volumetric = bool(p.get("volumetric_fog", false))
+	if car_visual:
+		car_visual.fx_quality = quality
+	if sky_mat:
+		_apply_time()
+	_apply_vegetation_quality()
+
+## The grass's density and reach follow the preset (vegetation.gd).
+func _apply_vegetation_quality() -> void:
+	var veg := world.find_child("Vegetation", true, false) if world else null
+	if veg and veg.has_method("set_quality") and int(veg.get("quality")) != quality:
+		veg.set_quality(quality)
 
 func _build_environment() -> void:
 	var we := WorldEnvironment.new()
@@ -297,6 +322,10 @@ func _build_environment() -> void:
 	env.adjustment_contrast = 1.05
 	we.environment = env
 	world.add_child(we)
+	# the sun's lens flare (the races' LensFlare), drawn in this viewport under the HUD
+	var flare := LensFlare.new()
+	flare.source = self
+	viewport.add_child(flare)
 	sun = DirectionalLight3D.new()
 	sun.shadow_enabled = true
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
@@ -325,15 +354,18 @@ func _apply_time() -> void:
 	var az := deg_to_rad(lerpf(50.0, 310.0, day_frac))
 	var dir := Vector3(sin(az) * cos(elev), sin(elev), -cos(az) * cos(elev)).normalized()
 	var day := clampf(elev / deg_to_rad(12.0) + 0.15, 0.0, 1.0)
-	var golden := clampf(1.0 - absf(elev - deg_to_rad(6.0)) / deg_to_rad(14.0), 0.0, 1.0) * (1.0 if elev > -0.05 else 0.0)
+	# the golden hour: from about 25 degrees down the sun turns gold, deepest a few degrees over the horizon
+	var elev_deg := rad_to_deg(elev)
+	golden = (1.0 - smoothstep(4.0, 25.0, elev_deg)) * smoothstep(-3.0, 1.5, elev_deg)
 	night = 1.0 - day
 	var sun_dir := dir if elev > -0.02 else Vector3(-dir.x, absf(dir.y) + 0.5, -dir.z).normalized() # moonlight
 	sun.basis = Basis.looking_at(-sun_dir, Vector3.UP)
 	var day_col := Color(1.0, 0.96, 0.88)
-	var gold_col := Color(1.0, 0.62, 0.32)
+	var gold_col := Color(1.0, 0.58, 0.28)
 	var moon_col := Color(0.55, 0.65, 0.9)
 	sun.light_color = moon_col.lerp(day_col.lerp(gold_col, golden), day)
-	sun.light_energy = lerpf(0.45, 1.25, day) * lerpf(1.0, 0.85, golden)
+	# a strong low sun against a dimmer, cooler fill: warm faces, long lavender shadows
+	sun.light_energy = lerpf(0.45, 1.25, day) * lerpf(1.0, 1.12, golden)
 	sky_mat.set_shader_parameter("sun_dir", dir)
 	sky_mat.set_shader_parameter("moon_dir", Vector3(-dir.x, 0.6, -dir.z).normalized())
 	sky_mat.set_shader_parameter("night", night)
@@ -345,9 +377,27 @@ func _apply_time() -> void:
 	sky_mat.set_shader_parameter("sun_color", day_col.lerp(gold_col, golden))
 	sky_mat.set_shader_parameter("sky_energy", lerpf(0.25, 1.0, day))
 	sky_mat.set_shader_parameter("cloud_lit", Color(1, 1, 1).lerp(Color(1.0, 0.7, 0.5), golden))
-	env.fog_light_color = Color(0.06, 0.07, 0.12).lerp(Color(0.68, 0.76, 0.86).lerp(Color(0.95, 0.68, 0.48), golden), day)
-	env.fog_sun_scatter = 0.25 * golden
-	env.ambient_light_energy = lerpf(0.85, 1.0, day) # Forza's nights stay readable: a blue moonlit town
+	sky_mat.set_shader_parameter("halo_amount", 0.15 * day + 0.55 * golden)
+	# sunlit haze: thicker and gold towards the sun, so the distance glows behind the trees
+	env.fog_light_color = Color(0.06, 0.07, 0.12).lerp(Color(0.68, 0.76, 0.86).lerp(Color(0.97, 0.66, 0.42), golden), day)
+	env.fog_sun_scatter = 0.6 * golden
+	env.fog_density = 0.00028 * lerpf(1.0, 2.4, golden)
+	env.ambient_light_energy = lerpf(0.85, 1.0, day) * lerpf(1.0, 0.7, golden) # Forza's nights stay readable: a blue moonlit town
+	env.ambient_light_color = Color(0.82, 0.78, 0.72).lerp(Color(0.68, 0.7, 0.84), golden * 0.6)
+	env.ambient_light_sky_contribution = lerpf(0.7, 0.4, golden) # the pink sky would wash the shadows out
+	# the warm grade: richer colour and a touch more contrast as the sun sinks
+	env.adjustment_saturation = lerpf(1.18, 1.3, golden)
+	env.adjustment_contrast = lerpf(1.05, 1.12, golden)
+	# Ultra: sun shafts through the trees and between the houses (volumetric fog lit by the low sun)
+	var shafts := _volumetric and golden > 0.05 and day > 0.2
+	if env.volumetric_fog_enabled != shafts:
+		env.volumetric_fog_enabled = shafts
+	if shafts:
+		env.volumetric_fog_density = 0.0045 * golden
+		env.volumetric_fog_albedo = Color(1.0, 0.86, 0.7)
+		env.volumetric_fog_length = 160.0
+		env.volumetric_fog_anisotropy = 0.7 # forward scattering: the shafts glow looking into the sun
+		sun.light_volumetric_fog_energy = 1.6
 	env.glow_hdr_threshold = lerpf(0.95, 0.7, night)
 	# streetlamps, windows and headlights after dusk
 	var lamps_on := clampf((night - 0.35) * 3.0, 0.0, 1.0)
@@ -933,6 +983,8 @@ func _process(delta: float) -> void:
 		return
 	if paused or hud.map_open:
 		_update_camera(delta)
+		if surface_fx:
+			surface_fx.silence(car_visual)
 		hud.update_drive(drive.speed_kmh(), _gear_shown(), drive.car.rpm, drive.model.spec.limiter, Vector2(drive.car.x, drive.car.y), drive.car.heading, delta)
 		return
 	nitro_on = false
@@ -960,6 +1012,7 @@ func _process(delta: float) -> void:
 	hour = fmod(hour + delta * DAY_RATE, 24.0)
 	_apply_time()
 	_sync_car(delta)
+	surface_fx.update(drive, car_visual, delta)
 	_update_camera(delta)
 	_update_skills(delta * _time_rate)
 	_update_nitro(delta * _time_rate) # simulation time, so bullet time doesn't farm drift points

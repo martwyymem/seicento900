@@ -29,10 +29,16 @@ blockage_skip_service (service=* values left open, e.g. driveways), trackdef {Tr
 Optional: nodes [OSM node ids in driving order] gives the driven line node by node (a long route that uses one way
 twice, or a roundabout, can't be told apart by ways alone); local "<open world key>" takes the ways, elevation and
 surroundings from the open world's caches (tools/open_world/cache/<key>_*.json) instead of downloading them.
+An elevated or sunken road (Tokyo's C1): dem "gsi" takes the ground from Japan's GSI 5 m elevation tiles (cached in
+tools/.tiles/gsi/); levels {bridge {layer: m}, tunnel {layer: m}, cutting, bridge_min, tunnel_cover, grade, smooth,
+clearance} puts the road over or under that ground by its ways' OSM bridge/tunnel/cutting tags (road_levels) and writes
+the tunnels as "tunnels" [[first sample, last sample]]; spiral {node, after, turns, radius, side, entry_level,
+exit_level, name} splices in a helix that isn't on the map (splice_spiral); building_reach (m) keeps only the
+buildings and trees that close to the route.
 
-Data © OpenStreetMap contributors, ODbL. Elevation: EU-DEM via OpenTopoData.
+Data © OpenStreetMap contributors, ODbL. Elevation: EU-DEM via OpenTopoData; in Japan, GSI elevation tiles (国土地理院).
 """
-import json, math, os, sys, time, urllib.parse, urllib.request
+import json, math, os, sys, time, urllib.error, urllib.parse, urllib.request
 
 sys.path.insert(0, os.path.dirname(__file__))
 import build_tracks as bt  # noqa: E402  (projection, resampling, smoothing)
@@ -99,6 +105,7 @@ def chain(cfg, data, P):
     missing = [i for i in ids if i not in ways]
     assert not missing, f'ways not in the OSM data: {missing}'
     pts, nodes, names = [], [], []
+    wtags = cfg['_wtags'] = []  # each point's way tags, for a route file with "levels"
     for k, wid in enumerate(ids):
         w = ways[wid]
         prev_w, next_w = ways[ids[k - 1]], ways[ids[(k + 1) % len(ids)]]
@@ -112,6 +119,7 @@ def chain(cfg, data, P):
             pts.append(P(w['geometry'][j]))
             nodes.append(w['nodes'][j])
             names.append(name)
+            wtags.append(w['tags'])
     return pts, nodes, names
 
 
@@ -125,6 +133,7 @@ def chain_nodes(cfg, ways, P):
     pts, nodes, names = [], [], []
     surfs = cfg['_surfs'] = []  # each point's road surface (surface_of), for a route file with "surfaces"
     bridge = cfg['_bridge'] = []  # whether each point's way is a bridge, for a route file with "bridges"
+    wtags = cfg['_wtags'] = []
     for k, n in enumerate(seq):
         m = seq[(k + 1) % len(seq)]
         hit = next(((w, j) for w, j in where[n] if (j + 1 < len(w['nodes']) and w['nodes'][j + 1] == m)
@@ -136,6 +145,7 @@ def chain_nodes(cfg, ways, P):
         names.append(w['tags'].get('name'))
         surfs.append(surface_of(w['tags'].get('highway'), w['tags']))
         bridge.append(w['tags'].get('bridge') not in (None, 'no'))
+        wtags.append(w['tags'])
     return pts, nodes, names
 
 
@@ -224,17 +234,80 @@ def project(pts, q):
     return best
 
 
+GSI_TILES = os.path.join(HERE, '.tiles', 'gsi')
+_gsi = {}
+
+
+def gsi_tile(src, z, x, y):
+    """One GSI elevation tile (Geospatial Information Authority of Japan, https://maps.gsi.go.jp/development/
+    ichiran.html, PNG encoding) as a 256 x 256 list of heights (None where it has no data), cached on disk."""
+    key = (src, z, x, y)
+    if key not in _gsi:
+        from PIL import Image
+        path = os.path.join(GSI_TILES, src, str(z), str(x), f'{y}.png')
+        if not os.path.exists(path):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            url = f'https://cyberjapandata.gsi.go.jp/xyz/{src}/{z}/{x}/{y}.png'
+            try:
+                body = urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'seicento-game/1.0'}),
+                                              timeout=60).read()
+            except urllib.error.HTTPError as err:  # outside the dataset: an empty tile
+                if err.code != 404:
+                    raise
+                body = b''
+            open(path, 'wb').write(body)
+            time.sleep(0.2)
+        if os.path.getsize(path) == 0:
+            _gsi[key] = None
+        else:
+            im = Image.open(path).convert('RGB')
+            px = im.load()
+            hs = []
+            for j in range(256):
+                for i in range(256):
+                    r, g, b = px[i, j]
+                    v = (r << 16) | (g << 8) | b
+                    hs.append(None if v == 1 << 23 else (v if v < 1 << 23 else v - (1 << 24)) * 0.01)
+            _gsi[key] = hs
+    return _gsi[key]
+
+
+def gsi_height(lat, lon):
+    """Ground height (m) from GSI's 5 m DEM (laser survey, the bare ground without buildings), else its 10 m one,
+    else 0 (the sea)."""
+    for src, z in (('dem5a_png', 15), ('dem_png', 14)):
+        n = 2 ** z
+        fx = (lon + 180) / 360 * n
+        fy = (1 - math.log(math.tan(math.radians(lat)) + 1 / math.cos(math.radians(lat))) / math.pi) / 2 * n
+        t = gsi_tile(src, z, int(fx), int(fy))
+        if t is None:
+            continue
+        h = t[int((fy % 1) * 256) * 256 + int((fx % 1) * 256)]
+        if h is not None:
+            return h
+    return 0.0
+
+
 def elevation(cfg, pts, refetch):
     """Centreline heights (every 20 m) and the terrain grid round the route from OpenTopoData, cached."""
     path = os.path.join(CACHE, cfg['key'] + '_elevation.json')
     # (the profile runs from the start node, so a moved start line or changed route needs a new one)
-    stale = os.path.exists(path) and json.load(open(path)).get('route', [cfg['start'], cfg['ways']]) != [cfg['start'], cfg['ways']]
+    route_key = [cfg['start'], cfg['ways']] + ([cfg['spiral']] if cfg.get('spiral') else [])
+    stale = os.path.exists(path) and json.load(open(path)).get('route', route_key) != route_key
     if refetch or stale or not os.path.exists(path):
         P = bt.proj_for(cfg['key'])
         rs, _, total = bt.resample(pts, [None] * len(pts), 20.0)
         step, margin = cfg['grid'], cfg['margin']
         if cfg.get('local'):
             line, (x0, y0, nx, ny, grid) = local_elevation(cfg, P, rs, step, margin)
+        elif cfg['dem'] == 'gsi':  # Japan: GSI's tiles instead of OpenTopoData
+            line = [gsi_height(*P.inv(x, y)) for x, y in rs]
+            xs, ys = [p[0] for p in rs], [p[1] for p in rs]
+            x0, y0 = min(xs) - margin, min(ys) - margin
+            nx = int((max(xs) + margin - x0) / step) + 1
+            ny = int((max(ys) + margin - y0) / step) + 1
+            print(f'  terrain grid {nx} x {ny} (GSI)', flush=True)
+            grid = [gsi_height(*P.inv(x0 + i * step, y0 + j * step)) for j in range(ny) for i in range(nx)]
         else:
             line = fe.query([P.inv(x, y) for x, y in rs], cfg['dem'])
             xs, ys = [p[0] for p in rs], [p[1] for p in rs]
@@ -244,16 +317,56 @@ def elevation(cfg, pts, refetch):
             print(f'  terrain grid {nx} x {ny}', flush=True)
             grid = fe.query([P.inv(x0 + i * step, y0 + j * step) for j in range(ny) for i in range(nx)], cfg['dem'])
         os.makedirs(CACHE, exist_ok=True)
-        json.dump({'route': [cfg['start'], cfg['ways']], 'line_step': total / len(rs), 'line': [round(h, 2) for h in line],
+        json.dump({'route': route_key, 'line_step': total / len(rs), 'line': [round(h, 2) for h in line],
                    'grid': {'x0': x0, 'y0': y0, 'step': step, 'nx': nx, 'ny': ny, 'h': [round(h, 1) for h in grid]}},
                   open(path, 'w'))
     return json.load(open(path))
+
+
+def splice_spiral(cfg, raw, nodes, names):
+    """Splices a helix into the raw chain (route file "spiral": {"node": id, "after": m, "turns", "radius", "side": 1 or
+    -1, "name", "exit_level"}): at the point `after` m past the node the road leaves its line, circles `turns` times
+    round a centre `radius` m to one side (side 1: towards the game's +d normal, -1 the other way) and rejoins
+    the line where it left it, heading the same way. The heights (road_levels) stack the rings over one another.
+    Not a real road: OSM has no spiral on the route, the route file says where one is wanted."""
+    sp = cfg['spiral']
+    i = nodes.index(sp['node'])
+    go = sp.get('after', 0.0)
+    m = len(raw)
+    while True:  # the segment `after` m on
+        a, b = raw[i % m], raw[(i + 1) % m]
+        seg = math.dist(a, b)
+        if go < seg - 1.0:
+            break
+        go -= seg
+        i += 1
+    u = ((b[0] - a[0]) / seg, (b[1] - a[1]) / seg)
+    A = (a[0] + u[0] * go, a[1] + u[1] * go)
+    side, R, turns = sp.get('side', 1), sp['radius'], sp['turns']
+    nrm = (-u[1], u[0])  # the game's +d normal (Track.NX, NY)
+    C = (A[0] + side * R * nrm[0], A[1] + side * R * nrm[1])
+    t0 = math.atan2(A[1] - C[1], A[0] - C[0])
+    k = int(2 * math.pi * turns * R / 2.0)  # a point every 2 m
+    ring = ([A] if go > 0.5 else []) + [(C[0] + R * math.cos(t0 + side * 2 * math.pi * turns * q / k),
+                   C[1] + R * math.sin(t0 + side * 2 * math.pi * turns * q / k)) for q in range(1, k)]
+    at = i % m + 1
+    raw[at:at] = ring
+    nodes[at:at] = [None] * len(ring)
+    names[at:at] = [sp.get('name')] * len(ring)
+    for key_ in ('_surfs', '_bridge', '_wtags'):
+        if key_ in cfg:
+            fill = {'_surfs': 'paved', '_bridge': True, '_wtags': {'_spiral': 'yes'}}[key_]
+            cfg[key_][at:at] = [fill] * len(ring)
+    cfg['_spiral_centre'] = C
+    print(f'  spiral: {turns} turns of radius {R} m round ({C[0]:.0f}, {C[1]:.0f}), {len(ring) * 2} m')
 
 
 def centreline(cfg, data, P):
     """The driven line: the chained OSM ways from the start line, junctions filleted, smoothed and resampled
     to STEP. Returns (points, street name per point, s of each route node on the line)."""
     raw, nodes, names = chain(cfg, data, P)
+    if cfg.get('spiral'):
+        splice_spiral(cfg, raw, nodes, names)
     # start line: `before` metres before the route reaches the start node
     k = nodes.index(cfg['start']['node'])
     raw, nodes, names = bt.rotate(raw, k), bt.rotate(nodes, k), bt.rotate(names, k)
@@ -271,9 +384,9 @@ def centreline(cfg, data, P):
     start_s = shift * step
     node_s = {nid: (s - start_s) % total for nid, s in node_s.items()}
     name_at = []
-    per_way = cfg.get('surfaces') or cfg.get('bridges')
-    for key_ in ('_surfs', '_bridge'):
-        if per_way:
+    per_way = cfg.get('surfaces') or cfg.get('bridges') or cfg.get('levels')
+    for key_ in ('_surfs', '_bridge', '_wtags'):
+        if per_way and key_ in cfg:
             cfg[key_] = bt.rotate(cfg[key_], k)
     cfg['_way_at'] = []  # per sample: the index of the raw segment (so of the way) it lies on
     m = len(raw)
@@ -320,6 +433,133 @@ def lift_bridges(cfg, pts, elev, step):
             for k in range(-span, span + 1):
                 elev[(up + k) % n] += need * (0.5 + 0.5 * math.cos(math.pi * k / span))
         print(f'  bridge at {up * step:.0f} m over {low * step:.0f} m: deck raised {max(need, 0):.1f} m')
+
+
+def road_levels(cfg, pts, ground, step):
+    """Heights of an elevated or sunken road (route file "levels"). Each sample wants to sit over the ground by its OSM
+    way's kind: a bridge's deck `levels.bridge[layer]` m up, a tunnel `levels.tunnel[layer]` and a cutting
+    `levels.cutting` m down, the rest on it. OSM layers only order the roads at a crossing, so those are wishes; what
+    must hold is a deck at least `levels.bridge_min` m over the street and a bore at least `levels.tunnel_cover` m
+    under it (both easing to nothing at the abutments and portals), and a cutting below street level. The road takes
+    the closest profile to the wishes that never climbs or dives steeper than `levels.grade`, inside those bounds.
+    A spliced spiral runs evenly from `spiral.entry_level` to `spiral.exit_level` over the ground.
+    Returns (heights, tunnel spans [[first sample, last sample]]).
+    """
+    lv = cfg['levels']
+    n = len(pts)
+    g = bt.smooth_loop(ground, lv.get('ground_smooth', 60.0) / step)
+    big = 1e9
+    kind = [''] * n
+    off = [0.0] * n
+    for i in range(n):
+        t = cfg['_wtags'][cfg['_way_at'][i]]
+        layer = t.get('layer', '0')
+        if t.get('_spiral'):
+            kind[i] = 'spiral'
+        elif t.get('tunnel') not in (None, 'no'):
+            kind[i], off[i] = 'tunnel', lv['tunnel'].get(layer, lv['tunnel']['-1'])
+        elif t.get('bridge') not in (None, 'no'):
+            kind[i], off[i] = 'bridge', lv['bridge'].get(layer, lv['bridge']['1'])
+        elif t.get('cutting') not in (None, 'no'):
+            kind[i], off[i] = 'cutting', lv['cutting']
+        else:
+            kind[i] = 'ground'
+    # how far each sample is from the ends of its run of one kind (abutments, portals)
+    to_end = [0.0] * n
+    for i in range(n):
+        if kind[i] != kind[i - 1]:
+            j = i
+            while kind[(j + 1) % n] == kind[i] and (j + 1) % n != i:
+                j += 1
+            run = (j - i) % n + 1
+            for k in range(run):
+                to_end[(i + k) % n] = min(k, run - 1 - k) * step
+    lo, hi, target = [-big] * n, [big] * n, [g[i] + off[i] for i in range(n)]
+    for i in range(n):
+        if kind[i] == 'bridge':
+            lo[i] = g[i] + lv.get('bridge_min', 5.5) * min(1.0, to_end[i] / 40.0)
+        elif kind[i] == 'tunnel':
+            hi[i] = g[i] - lv.get('tunnel_cover', 8.0) * min(1.0, to_end[i] / 60.0)
+        elif kind[i] == 'cutting':
+            hi[i] = g[i] - 1.5 * min(1.0, to_end[i] / 20.0)
+    spiral = [i for i in range(n) if kind[i] == 'spiral']
+    if spiral:
+        a, b = spiral[0], spiral[-1]
+        assert b - a + 1 == len(spiral), 'the spiral must not straddle the start line'
+        sp = cfg['spiral']
+        top, bot = g[a] + sp['entry_level'], g[a] + sp['exit_level']  # (one ground: the rings stand over one spot)
+        for i in spiral:
+            target[i] = lo[i] = hi[i] = top + (bot - top) * (i - a) / (b - a)
+        lead = int(40 / step)  # level into and out of the helix, where the line runs beside its first and last ring
+        for k in range(1, lead + 1):
+            target[a - k] = lo[a - k] = hi[a - k] = top
+            target[(b + k) % n] = lo[(b + k) % n] = hi[(b + k) % n] = bot
+        print(f"  spiral: {top:.1f} m -> {bot:.1f} m, {(top - bot) / sp['turns']:.1f} m between rings, "
+              f"grade {(top - bot) / ((b - a) * step) * 100:.1f}%")
+
+    def envelope(arr, better, delta):  # carried along the loop at the steepest grade, both ways round
+        arr = arr[:]
+        for _ in range(2):
+            for i in range(n):
+                arr[i] = better(arr[i], arr[i - 1] + delta)
+            for i in range(n - 1, -1, -1):
+                arr[i] = better(arr[i], arr[(i + 1) % n] + delta)
+        return arr
+    grade = lv.get('grade', 0.06) * step
+    U = envelope(hi, min, grade)
+    # where a deck's clearance and a bore's cover can't both be had at this grade, the bore wins: a tunnel must stay
+    # under the street, a deck over a moat or a dip the smoothed ground misses may run lower (clipping each bound by
+    # U, which keeps to the grade, leaves L under U everywhere)
+    eased = sum(1 for i in range(n) if lo[i] > U[i])
+    if eased:
+        print(f'  levels: {eased * step:.0f} m of deck lower than {lv.get("bridge_min", 5.5)} m over the smoothed ground, '
+              f'between tunnels')
+    L = envelope([min(lo[i], U[i]) for i in range(n)], max, -grade)
+    # the wishes made no steeper than the grade (the mean of the tightest profiles over and under them, which never
+    # strays more than half their worst step), then pushed inside the bounds (both keep to the grade)
+    h = [(p + q) / 2 for p, q in zip(envelope(target, max, -grade), envelope(target, min, grade))]
+    clamp = lambda i, v: (L[i] + U[i]) / 2 if L[i] > U[i] else min(max(v, L[i]), U[i])
+    h = [clamp(i, v) for i, v in enumerate(h)]
+    for _ in range(3):  # round the changes of grade (vertical curves), still inside the bounds
+        h = [clamp(i, v) for i, v in enumerate(bt.smooth_loop(h, lv.get('smooth', 30.0) / step))]
+    if os.environ.get('LEVELS_DEBUG'):
+        for i in range(0, n, int(50 / step)):
+            print(f'    {i * step:7.0f} {kind[i]:8} ground {g[i]:5.1f} want {target[i]:5.1f} '
+                  f'bounds {max(L[i], -99):6.1f} {min(U[i], 999):6.1f} road {h[i]:5.1f}')
+    steep = max(abs(h[i] - h[i - 1]) for i in range(n)) / step
+    print(f'  levels: steepest grade {steep * 100:.1f}%')
+    tunnels = []
+    for i in range(n):
+        if kind[i] == 'tunnel' and kind[i - 1] != 'tunnel':
+            j = i
+            while kind[(j + 1) % n] == 'tunnel' and (j + 1) % n != i:
+                j += 1
+            tunnels.append([i, j % n])
+    cfg['_kind'] = kind
+    return h, tunnels
+
+
+def check_clearance(pts, elev, half, step, need):
+    """Warns where two stretches of the loop pass over one another with less than `need` m between them."""
+    n = len(pts)
+    cell = 8.0
+    grid = {}
+    for i, p in enumerate(pts):
+        grid.setdefault((int(p[0] // cell), int(p[1] // cell)), []).append(i)
+    worst = {}
+    for i, p in enumerate(pts):
+        cx, cy = int(p[0] // cell), int(p[1] // cell)
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for j in grid.get((cx + dx, cy + dy), []):
+                    if j <= i or min(j - i, n - j + i) * step < 150 or math.dist(p, pts[j]) > 2 * half + 2:
+                        continue
+                    gap = abs(elev[i] - elev[j])
+                    if gap < need and gap < worst.get(i // 50, (1e9, 0, 0))[0]:
+                        worst[i // 50] = (gap, i, j)
+    for gap, i, j in worst.values():
+        print(f'  WARNING: {i * step:.0f} m and {j * step:.0f} m cross only {gap:.1f} m apart')
+    return not worst
 
 
 def blockages(cfg, osm, route, node_s, pts, half):
@@ -498,6 +738,11 @@ def build(key, refetch=False, check=None):
         k, f = int(u) % m, u - int(u)
         elev.append(line[k] * (1 - f) + line[(k + 1) % m] * f)
     elev = bt.smooth_loop(elev, 30 / step)
+    tunnels = []
+    street = elev  # the ground along the line, before road_levels lifts or sinks the road
+    if cfg.get('levels'):
+        elev, tunnels = road_levels(cfg, pts, elev, step)
+        check_clearance(pts, elev, cfg['trackdef'].get('width', 6.5) / 2, step, cfg['levels'].get('clearance', 6.5))
     if cfg.get('bridges'):
         lift_bridges(cfg, pts, elev, step)
     sectors, last = [], None
@@ -507,6 +752,8 @@ def build(key, refetch=False, check=None):
             last = nm
     track = {'step': step, 'length': total, 'pts': [v for p in pts for v in (round(p[0], 2), round(p[1], 2))],
              'names': sectors, 'elev': [round(h, 2) for h in elev], 'grid': ev['grid']}
+    if tunnels:  # covered spans [first sample, last sample] (Track.tunnels)
+        track['tunnels'] = tunnels
     if cfg.get('surfaces'):  # road surface sectors, like the names: [[first sample, 'paved' | 'gravel' | 'dirt']]
         track['surfaces'] = []
         for i, j in enumerate(cfg['_way_at']):
@@ -555,7 +802,8 @@ def build(key, refetch=False, check=None):
     env = json.load(open(env_path))
     env['road_blockages'] = [b[:4] for b in blocks]
     env['tram_rails'] = tram_rails(osm, pts, half, P)
-    if cfg.get('bridges'):
+    if env.get('bridges'):  # every street stage, not only those with "bridges"/"levels" (Oświęcim's and Pszczyna's
+        # own river bridges were drawn as rows of 7 m road bridges along the road)
         # build_surroundings records a bridge "over the circuit" wherever a bridge way crosses the centreline, so the
         # route's own bridges (the S1 over the Soła, a junction's overbridge) weave across it as a row of decks; the
         # game draws a real crossing of the loop over itself (RaceWorld._crossings), so keep only other roads' bridges
@@ -563,17 +811,62 @@ def build(key, refetch=False, check=None):
                if w['type'] == 'way' and w.get('tags', {}).get('bridge') not in (None, 'no')]
         def on_route(b):
             return any(point_segment((b[1], b[2]), u, v) < 3.0 for line in own for u, v in zip(line, line[1:]))
-        kept = [b for b in env.get('bridges', []) if not on_route(b)]
+        def alongside(b):
+            # a bridge way running within 25 degrees of the road where it "crosses" it (the other carriageway or the
+            # footway of the route's own bridge, weaving across the smoothed line) does not pass over it
+            i = min(range(len(pts)), key=lambda j: (pts[j][0] - b[1]) ** 2 + (pts[j][1] - b[2]) ** 2)
+            a, c = pts[i - 1], pts[(i + 1) % len(pts)]
+            tl = math.dist(a, c) or 1.0
+            return abs(b[3] * (c[0] - a[0]) + b[4] * (c[1] - a[1])) / tl > math.cos(math.radians(25))
+        kept = [b for b in env.get('bridges', []) if not on_route(b) and not alongside(b)]
+        if cfg.get('levels'):  # another road's bridge passes over the route only where that runs below the street
+            def sunk(b):
+                i = min(range(len(pts)), key=lambda j: (pts[j][0] - b[1]) ** 2 + (pts[j][1] - b[2]) ** 2)
+                return elev[i] < street[i] - 3.0 and cfg['_kind'][i] != 'tunnel'
+            kept = [b for b in kept if sunk(b)]
         print(f"  bridges over the route: {len(kept)} kept, {len(env.get('bridges', [])) - len(kept)} of its own dropped")
         env['bridges'] = kept
     if cfg['trackdef'].get('street_stage'):
         env['stands'] = []  # no grandstands on a public road (OSM has none here anyway)
+    if cfg.get('building_reach') or cfg.get('spiral'):
+        trim_scenery(cfg, env, pts, half)
     json.dump(env, open(env_path, 'w'), separators=(',', ':'))
     fh.build(key, ev)  # the distant land (its height and cover tiles are cached in tools/.tiles/)
     fl.build(key)
     print(f'  {len(blocks)} road blockages: ' + ', '.join(sorted({b[5] or str(b[4]) for b in blocks})))
     if check:
         check_image(key, pts, osm, blocks, corners, node_s, check)
+
+
+def trim_scenery(cfg, env, pts, half):
+    """Drops the buildings and trees further than `building_reach` m from the route (a city centre maps tens of
+    thousands, more than the game draws well), and those standing in the spiral's footprint."""
+    from PIL import Image, ImageDraw
+    reach = cfg.get('building_reach', 1e5)
+    res = 5.0
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    x0, y0 = min(xs) - reach - 10, min(ys) - reach - 10
+    mask = Image.new('1', (int((max(xs) - x0 + reach + 10) / res) + 1, int((max(ys) - y0 + reach + 10) / res) + 1), 0)
+    if reach < 1e5:
+        ImageDraw.Draw(mask).line([((x - x0) / res, (y - y0) / res) for x, y in pts + pts[:1]], fill=1,
+                                  width=int(2 * reach / res), joint='curve')
+    else:
+        mask.paste(1, (0, 0) + mask.size)
+    px = mask.load()
+    C = cfg.get('_spiral_centre')
+    disc = (cfg['spiral']['radius'] + half + 8.0) if C else 0.0
+
+    def keep(x, y):
+        i, j = int((x - x0) / res), int((y - y0) / res)
+        inside = 0 <= i < mask.size[0] and 0 <= j < mask.size[1] and px[i, j]
+        return inside and not (C and math.dist((x, y), C) < disc)
+    before = len(env.get('buildings', []))
+    env['buildings'] = [b for b in env.get('buildings', [])
+                        if all(keep(b[k], b[k + 1]) for k in range(3, len(b) - 1, 2))]
+    trees = env.get('trees', [])
+    env['trees'] = [v for k in range(0, len(trees) - 1, 2) if keep(trees[k], trees[k + 1]) for v in trees[k:k + 2]]
+    env['towers'] = [t for t in env.get('towers', []) if keep(t[2], t[3])]
+    print(f"  scenery: {len(env['buildings'])} of {before} buildings kept (reach {reach:.0f} m, spiral clear)")
 
 
 def check_image(key, pts, osm, blocks, corners, node_s, path):

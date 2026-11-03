@@ -2,7 +2,7 @@
 ## Env: TRACK (gp), WEATHER (dry|wet|snow|hail|fog|variable), HOUR (14), OPP (8), RUN (8 s of race time before
 ## the first shot), SHOTS (1: shots RUN_GAP s apart), MODES ("0" or e.g. "0,1,2,3,4,5,6": retro styles shot per
 ## frame, the race frozen meanwhile), CAM (camera cycles before shooting), ASPECT (aspect picker index),
-## TAG, OUT (/tmp/qa/shots), MODS (comma list of CarMods ids put on the player's car without touching the save, e.g. monster,nitro).
+## WARP (time-warp steps while getting to RUN), TAG, OUT (/tmp/qa/shots), MODS (comma list of CarMods ids put on the player's car without touching the save, e.g. monster,nitro).
 ## TRACK=gp WEATHER=wet HOUR=22 godot --path godot --audio-driver Dummy -s tests/_qa_race_shots.gd
 extends SceneTree
 
@@ -87,9 +87,13 @@ func _initialize() -> void:
 	for k in int(_env("CAM", "0")):
 		game._cycle_camera()
 	var run := float(_env("RUN", "8"))
+	for k in int(_env("WARP", "0")): # time-warp steps (WARP_VALUES) to get far round a long lap, back to 1x for the shots
+		game._change_warp(1)
 	var t0 := Time.get_ticks_msec()
-	while game.race.race_time < run and Time.get_ticks_msec() - t0 < 60000:
+	while game.race.race_time < run and Time.get_ticks_msec() - t0 < 90000:
 		await _wait(1)
+	while game.warp_index > 0:
+		game._change_warp(-1)
 	if _env("DIAG", "") != "":
 		var w = game.world_view
 		var e: Environment = w.world_environment

@@ -50,6 +50,10 @@ extends Resource
 ## across the side roads. No circuit furniture: no start gantry (a painted line), TV towers, floodlights,
 ## grandstands, pit building, marshal posts, braking boards, hoardings, tyre walls or paddock.
 @export var street_stage := false
+## An elevated expressway (Tokyo's C1): where the road runs over the ground it stands on a deck on piers, not a
+## retaining wall, and the ground under it stays at street level; where it runs below it (a trench, a tunnel) the
+## ground is cut back only beside it.
+@export var viaduct := false
 @export var cobbles := PackedVector2Array() ## street stages: lap distances (from, to) of cobbled stretches, drawn in road.gdshader
 ## A point-to-point rally stage baked as a loop (tools/plan_route.py): the stage, a run-off past the finish and a
 ## return leg. data/tracks/<key>.json has "stage": [from, to]. Rally only: kept out of the race and championship pickers.

@@ -35,6 +35,9 @@ kit.MATERIALS.update({
 	"Stem": ((0.22, 0.42, 0.13), 0.9, 0.0, {"double": True}),
 	"Petal": ((1.0, 1.0, 1.0), 0.8, 0.0, {"double": True}),
 	"Centre": ((0.9, 0.62, 0.08), 0.8, 0.0, {"double": True}),
+	# meadow grass and wheat patches: Godot draws them with shaders/grass.gdshader, which reads the vertex colour as
+	# data (R per-blade dryness, G height along the blade, B 1 on wheat ears, A per-blade random), so plain white here
+	"Blade": ((1.0, 1.0, 1.0), 0.9, 0.0, {"double": True}),
 })
 
 
@@ -168,6 +171,75 @@ def corn():
 	return m
 
 
+def _rand(k, salt):
+	"""A repeatable 0..1 hash of an integer, so the patches come out the same on every build."""
+	v = math.sin(k * 12.9898 + salt * 78.233) * 43758.5453
+	return v - math.floor(v)
+
+
+def curved_blade(m, x, y, h, w, yaw, lean, dry, rnd, segs=(0.0, 0.4, 0.75)):
+	"""A tapered blade bending away along `yaw`: a quad strip up to a point, 5 triangles. Vertex colour carries
+	(dryness, height fraction, 0, random) for grass.gdshader."""
+	ca, sa = math.cos(yaw), math.sin(yaw)
+	px, py = -sa, ca  # the blade's width runs across its bend
+	rows = []
+	for t in segs:
+		off = lean * h * t * t
+		z = h * t * (1.0 - 0.18 * lean * t)
+		half = w * (1.0 - t) ** 0.8
+		cx, cy = x + ca * off, y + sa * off
+		rows.append((m.vert((cx - px * half, cy - py * half, z), (dry, t, 0.0, rnd)),
+			m.vert((cx + px * half, cy + py * half, z), (dry, t, 0.0, rnd))))
+	off = lean * h
+	tip = m.vert((x + ca * off, y + sa * off, h * (1.0 - 0.18 * lean)), (dry, 1.0, 0.0, rnd))
+	for (a0, b0), (a1, b1) in zip(rows, rows[1:]):
+		m.face([a0, b0, b1, a1], "Blade")
+	m.face([rows[-1][0], rows[-1][1], tip], "Blade")
+
+
+def grass_patch(blades, width_mul=1.0, salt=1.0):
+	"""About 1.6 m across of meadow grass: `blades` curved blades 0.3-1.0 m high leaning every way."""
+	m = MB()
+	for k in range(blades):
+		r = 0.8 * math.sqrt(_rand(k, salt))
+		a = k * 2.39996 + _rand(k, salt + 1) * 0.6
+		x, y = math.cos(a) * r, math.sin(a) * r
+		tall = _rand(k, salt + 2)
+		h = 0.3 + 0.7 * tall ** 0.7
+		w = (0.022 + 0.022 * _rand(k, salt + 3)) * width_mul
+		curved_blade(m, x, y, h, w, _rand(k, salt + 4) * math.tau, 0.15 + 0.45 * _rand(k, salt + 5),
+			1.0 if _rand(k, salt + 6) < 0.18 else 0.25 * _rand(k, salt + 7), _rand(k, salt + 8))
+	return m
+
+
+def wheat_patch(stalks, width_mul=1.0, salt=7.0):
+	"""About 1.6 m across of ripe wheat: upright stalks about 0.9 m with a leaf each and a grain ear on top (B = 1)."""
+	m = MB()
+	for k in range(stalks):
+		r = 0.8 * math.sqrt(_rand(k, salt))
+		a = k * 2.39996
+		x, y = math.cos(a) * r, math.sin(a) * r
+		h = 0.78 + 0.2 * _rand(k, salt + 2)
+		yaw = _rand(k, salt + 4) * math.tau
+		lean = 0.04 + 0.08 * _rand(k, salt + 5)
+		rnd = _rand(k, salt + 8)
+		curved_blade(m, x, y, h, 0.012 * width_mul, yaw, lean, 0.6, rnd)
+		if k % 3 == 0:  # a drooping leaf half way up
+			curved_blade(m, x, y, h * 0.55, 0.02 * width_mul, yaw + 1.6, 0.6, 0.4, rnd)
+		# the ear: a narrow spindle, two crossed cards
+		ca, sa = math.cos(yaw), math.sin(yaw)
+		ex, ey = x + ca * lean * h, y + sa * lean * h
+		top = h * (1.0 - 0.18 * lean)
+		for da in ((0.0, 1.5708) if width_mul > 1.0 else (0.8,)):
+			cx, cy = math.cos(yaw + da), math.sin(yaw + da)
+			ear = 0.017 * width_mul
+			ids = [m.vert(p, (0.8, f, 1.0, rnd)) for p, f in [((ex - cx * ear, ey - cy * ear, top - 0.11), 0.85),
+				((ex + cx * ear, ey + cy * ear, top - 0.11), 0.85), ((ex + cx * ear * 0.8, ey + cy * ear * 0.8, top + 0.02), 0.95),
+				((ex + ca * 0.02, ey + sa * 0.02, top + 0.08), 1.0), ((ex - cx * ear * 0.8, ey - cy * ear * 0.8, top + 0.02), 0.95)]]
+			m.face(ids, "Blade")
+	return m
+
+
 def flower():
 	"""A small meadow flower (0.45 m): a stem, two leaves and a daisy-like head in a white 'Petal' material
 	that the MultiMesh instance colour turns red, yellow, violet or white."""
@@ -234,7 +306,8 @@ def main():
 	bpy.ops.object.delete(use_global=False)
 	objects = []
 	for name, builder in [("BushCluster", bush), ("TallGrass", grass), ("Wheat", wheat), ("Corn", corn),
-		("Flower", flower), ("HayBale", hay_bale),
+		("Flower", flower), ("GrassPatch", lambda: grass_patch(110)), ("GrassPatchLow", lambda: grass_patch(30, 2.2, 3.0)),
+		("WheatPatch", lambda: wheat_patch(60)), ("WheatPatchLow", lambda: wheat_patch(22, 2.0, 9.0)), ("HayBale", hay_bale),
 		("WaysideCross", roadside_cross), ("KilometrePost", kilometre_post), ("RallyBoard", rally_board)]:
 		objects.append(builder().emit(name))
 	kit.export_glb(OUT_GLB, objects)
@@ -243,7 +316,7 @@ def main():
 		cam = kit.setup_preview(ground=30.0)
 		# A lineup makes silhouettes and relative scale easy to inspect.
 		for i, ob in enumerate(objects):
-			kit.place(ob, ((i - 4) * 2.4, 0.0, 0.0))
+			kit.place(ob, ((i - 6) * 2.4, 0.0, 0.0))
 		kit.render(cam, os.path.join(render_dir, "roadside.png"), (9, -14, 6), (0, 0, 0.8), 55.0)
 
 

@@ -103,11 +103,17 @@ func _setup_list(errors: Array[String], game, tree: SceneTree) -> void:
 	if sel != null:
 		game._focus_setup_item(items, items.find(sel))
 		var before := sel.selected
-		game._input(_btn(JOY_BUTTON_DPAD_RIGHT))
-		var after_right := sel.selected
-		game._input(_btn(JOY_BUTTON_DPAD_LEFT))
-		if after_right == before or sel.selected != before:
-			errors.append("d-pad right/left steps a selector there and back (%d -> %d -> %d)" % [before, after_right, sel.selected])
+		# selectors do not wrap on the d-pad, so step away from whichever end the value sits at
+		var out_btn := JOY_BUTTON_DPAD_RIGHT
+		var back_btn := JOY_BUTTON_DPAD_LEFT
+		if before >= sel.item_count - 1:
+			out_btn = JOY_BUTTON_DPAD_LEFT
+			back_btn = JOY_BUTTON_DPAD_RIGHT
+		game._input(_btn(out_btn))
+		var after_out := sel.selected
+		game._input(_btn(back_btn))
+		if after_out == before or sel.selected != before:
+			errors.append("d-pad left/right steps a selector there and back (%d -> %d -> %d)" % [before, after_out, sel.selected])
 	# focus recovery: the focused control goes away (a section folds, a mode hides it); the next press picks again
 	var victim: Control = items[2]
 	var hider: Control = victim.get_parent() if victim is LineEdit else victim # (a spin box's field is listed through its box)

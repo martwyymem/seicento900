@@ -15,6 +15,7 @@ const SUITES := [
 	"res://tests/test_lap_records.gd",
 	"res://tests/test_rally.gd",
 	"res://tests/test_surfaces.gd",
+	"res://tests/test_surface_feedback.gd",
 	"res://tests/test_time_trial.gd",
 	"res://tests/test_pace_notes.gd",
 	"res://tests/test_world_audio.gd",

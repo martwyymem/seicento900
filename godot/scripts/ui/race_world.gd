@@ -58,7 +58,7 @@ const HORIZON_OVERCAST := Color("#a2a7ad")
 const DUSK_GLOW := Color("#e98559")
 const GROUND_NIGHT := Color("#090e17")
 const GROUND_DAY := Color("#222822")
-const AMBIENT_NIGHT := Color("#8093b5")
+const AMBIENT_NIGHT := Color("#6f8dcc") ## a blue moonlit fill, not grey
 const SUN_NIGHT := Color("#8295c5")
 const SUN_DAY := Color("#fff1d8")
 const SUN_GOLDEN := Color("#ffb46e") ## the low sun of the golden hour (Forza Horizon's late afternoon)
@@ -74,7 +74,7 @@ const CLOUD_LIT := Color("#fbf8f2")
 const CLOUD_SHADE := Color("#8f9aa8")
 const CLOUD_NIGHT := Color("#1a2130")
 const FOG_DAY := Color("#b9c6d3")
-const FOG_NIGHT := Color("#0d1420")
+const FOG_NIGHT := Color("#0e172e")
 const FOG_RAIN := Color("#8d969f")
 
 ## Graphics quality presets (apply_graphics): 0 Low, 1 Medium, 2 High, 3 Ultra.
@@ -250,7 +250,13 @@ var _lamp_color := PackedColorArray()
 var _lamp_energy := PackedFloat32Array()
 var _lamp_range := PackedFloat32Array()
 var _lamp_always := PackedByteArray() ## 1 for lamps that burn by day too (the tunnel)
-var _lamp_pool: Array[OmniLight3D] = []
+var _lamp_aim := PackedVector3Array() ## where each lamp points (a mast at the track, a street lamp straight down)
+var _lamp_cone := PackedFloat32Array() ## its spot angle, degrees
+var _lamp_pool: Array[SpotLight3D] = [] ## spots, not omnis: an omni lit the air and the camera side of wet tarmac white
+## The pool of light under each lamp, painted on the ground (emission) so it reads on every preset and however
+## many real lights the pool has: the real spots only add the shading and the wet highlights.
+var _lamp_decals: Array[Decal] = []
+static var _pool_texture: GradientTexture2D
 var _lamp_material: StandardMaterial3D
 var _lamp_pick := PackedInt32Array()
 var _lamp_pick_d2 := PackedFloat32Array()
@@ -358,7 +364,10 @@ func set_track(value: Track) -> void:
 	_lamp_energy.clear()
 	_lamp_range.clear()
 	_lamp_always.clear()
+	_lamp_aim.clear()
+	_lamp_cone.clear()
 	_lamp_pool.clear()
+	_lamp_decals.clear()
 	_lamp_material = null
 	_lights_lit = -1
 	_skid_instance = null
@@ -579,7 +588,7 @@ func _update_atmosphere(hour: float, wet: float, rain: float, snow: float = 0.0,
 	var fill: Color = (preset.fill as Color).lerp(FILL_GOLDEN, golden).lerp(FILL_OVERCAST, overcast)
 	world_environment.ambient_light_color = AMBIENT_NIGHT.lerp(fill, day_t)
 	world_environment.ambient_light_sky_contribution = lerpf(1.0, 0.5, clear)
-	world_environment.ambient_light_energy = lerpf(0.3, 0.95, day_t) * (1.0 - overcast * 0.2)
+	world_environment.ambient_light_energy = lerpf(0.34, 0.95, day_t) * (1.0 - overcast * 0.2)
 	sun.light_energy = lerpf(0.1, 1.75, day_t) * (1.0 - overcast * 0.62) * lerpf(1.0, 0.8, golden)
 	sun.light_color = SUN_NIGHT.lerp(SUN_DAY, day_t).lerp(SUN_GOLDEN, golden * 0.85).lerp(DUSK_GLOW, glow * 0.35)
 	sun.shadow_opacity = lerpf(0.55, 1.0, day_t) * (1.0 - overcast * 0.45)
@@ -592,6 +601,11 @@ func _update_atmosphere(hour: float, wet: float, rain: float, snow: float = 0.0,
 	world_environment.fog_sun_scatter = 0.18 * glow + (0.06 + 0.28 * golden) * clear
 	world_environment.adjustment_saturation = lerpf(1.02, float(preset.saturation) + 0.05 * golden, clear)
 	world_environment.glow_hdr_threshold = lerpf(1.0, 0.75, night)
+	# after dark the lamps, headlights and tail lights wear soft halos, wider in the rain's mist
+	world_environment.glow_intensity = lerpf(0.55, 0.85, night)
+	# softlight mutes the halos; after dark the lamps glow over the picture (screen)
+	world_environment.glow_blend_mode = Environment.GLOW_BLEND_MODE_SCREEN if night > 0.5 else Environment.GLOW_BLEND_MODE_SOFTLIGHT
+	world_environment.glow_bloom = 0.03 + 0.03 * night * clampf(rain * 1.5, 0.0, 1.0)
 	var is_fog := fog > 0.1 or (race and race.weather.mode == "fog")
 	# volumetric fog shows the headlight beams in the rain and after dark (High and Ultra only), or when in fog
 	var volumetric := is_fog or (quality >= 2 and (rain > 0.08 or night > 0.45 or hail > 0.08 or snow > 0.08))
@@ -601,7 +615,8 @@ func _update_atmosphere(hour: float, wet: float, rain: float, snow: float = 0.0,
 		world_environment.volumetric_fog_density = 0.025
 		world_environment.fog_density = 0.02
 	else:
-		world_environment.volumetric_fog_density = 0.0012 + 0.0035 * rain + 0.0005 * night
+		# thinner in the night rain: the mist would eat the floodlit pools
+		world_environment.volumetric_fog_density = 0.0012 + 0.0035 * rain * (1.0 - 0.5 * night) + 0.0005 * night
 		world_environment.fog_density = haze + 0.00045 * overcast + 0.0024 * rain
 	world_environment.volumetric_fog_albedo = Color(0.9, 0.92, 0.95).lerp(Color(0.3, 0.32, 0.36), night)
 	if far_land:
@@ -610,11 +625,15 @@ func _update_atmosphere(hour: float, wet: float, rain: float, snow: float = 0.0,
 		m.set_shader_parameter("wet", wet)
 		m.set_shader_parameter("rain", rain)
 		m.set_shader_parameter("snow", snow)
+		m.set_shader_parameter("night", night)
 	for m in _night_materials:
 		m.set_shader_parameter("night", night)
 	_lamp_on = smoothstep(0.08, 0.55, night)
 	if _lamp_material:
 		_lamp_material.emission_energy_multiplier = 7.0 * _lamp_on
+	for d in _lamp_decals:
+		d.emission_energy = float(d.get_meta("glow", POOL_GLOW)) * _lamp_on * (1.0 + 0.4 * wet) # a wet road shines brighter under a lamp
+		d.visible = _lamp_on > 0.01
 	if rain_particles:
 		rain_particles.emitting = rain > 0.03
 		rain_particles.amount_ratio = clampf(rain, 0.0, 1.0)
@@ -1119,6 +1138,7 @@ func _build_beams() -> void:
 		beam.spot_angle_attenuation = 1.8
 		beam.shadow_enabled = false
 		beam.light_volumetric_fog_energy = 0.45
+		beam.light_specular = 0.35 # at full, the glossy wet road after dark threw back a white hotspot ahead of each car
 		beam.visible = false
 		add_child(beam)
 		beams.append(beam)
@@ -1476,6 +1496,7 @@ func _build_track() -> void:
 	_add_ribbon(track.width, 0.04, asphalt_material, "Asphalt")
 	_add_edge_lines()
 	_build_road_supports()
+	_build_viaduct()
 
 	# 3. Alternating Red & White Kerbs on corner apexes
 	_build_kerbs()
@@ -1553,6 +1574,17 @@ func _build_terrain(ground: MeshInstance3D) -> void:
 	var radius := ceili(band / fine) + 1
 	var radius_squared := float(radius * radius)
 	var road_clearance := _terrain_clear_distance()
+	# an expressway (viaduct) cuts the ground back only just beside a stretch below street level, steeply (retaining
+	# walls stand there, _build_viaduct), and leaves it whole over a tunnel
+	var viaduct := track.cfg.viaduct
+	var cap_start := road_clearance
+	var cap_slope := 0.45
+	var bored := PackedByteArray()
+	if viaduct:
+		# a grid cell flat beside the road, else a cell's triangle would lean from the trench floor up over the road
+		cap_start = track.half + track.cfg.runoff + fine
+		cap_slope = 1.2
+		bored = _bored_samples()
 
 	# Splat nearby centreline samples onto a compact grid; this keeps terrain under every road section.
 	var track_x := track.X
@@ -1562,6 +1594,10 @@ func _build_terrain(ground: MeshInstance3D) -> void:
 		var sx := track_x[sample_index]
 		var sz := track_y[sample_index]
 		var cap_base := track_h[sample_index] - elevation_base - 0.35
+		if viaduct and bored[sample_index] == 1:
+			cap_base = INF
+		elif viaduct and bored[sample_index] == 2:
+			cap_base += 8.95 # on the tube's roof (_build_tunnels outer_h 8.0)
 		var cx := roundi((sx - x0) / fine)
 		var cz := roundi((sz - z0) / fine)
 		for dz in range(-radius, radius + 1):
@@ -1579,7 +1615,7 @@ func _build_terrain(ground: MeshInstance3D) -> void:
 				# (a hairpin's other leg, the harbour road) would drag the ground under this one down with it
 				var distance_to_sample := sqrt(distance_squared)
 				if distance_to_sample <= road_clearance:
-					height_cap[cell] = minf(height_cap[cell], cap_base + maxf(0.0, distance_to_sample - road_clearance) * 0.45)
+					height_cap[cell] = minf(height_cap[cell], cap_base + maxf(0.0, distance_to_sample - cap_start) * cap_slope)
 				if distance_squared < nearest_distance[cell]:
 					nearest_distance[cell] = distance_squared
 					nearest_index[cell] = sample_index
@@ -1588,9 +1624,17 @@ func _build_terrain(ground: MeshInstance3D) -> void:
 	# off and far below does not pull this one's ground down
 	for cell in grid_size:
 		var nearest := nearest_index[cell]
+		if viaduct and nearest >= 0 and bored[nearest] != 0:
+			if bored[nearest] == 1:
+				height_cap[cell] = INF # over a bore: a portal's cut further along must not reach in under the street
+			else:
+				height_cap[cell] = maxf(height_cap[cell], track_h[nearest] - elevation_base + 8.6)
+			continue
 		if nearest >= 0:
-			height_cap[cell] = minf(height_cap[cell], track_h[nearest] - elevation_base - 0.35 + maxf(0.0, sqrt(nearest_distance[cell]) - road_clearance) * 0.45)
+			height_cap[cell] = minf(height_cap[cell], track_h[nearest] - elevation_base - 0.35 + maxf(0.0, sqrt(nearest_distance[cell]) - cap_start) * cap_slope)
 
+	var portal := _portal_samples() if viaduct else PackedByteArray()
+	var portal_reach := (track.half + track.cfg.runoff + fine) * (track.half + track.cfg.runoff + fine)
 	var base_color := _terrain_base_color()
 	var terrain_material := _surface_material(GROUND_SHADER, "grass" if track.cfg.theme != "city" else "")
 	terrain_material.set_shader_parameter("use_vertex_color", true)
@@ -1619,6 +1663,11 @@ func _build_terrain(ground: MeshInstance3D) -> void:
 			var i11 := i01 + 1
 			if minf(minf(nearest_distance[i00], nearest_distance[i10]), minf(nearest_distance[i01], nearest_distance[i11])) >= band_squared:
 				continue
+			if viaduct and (_at_portal(portal, nearest_index[i00], nearest_distance[i00], portal_reach) \
+					or _at_portal(portal, nearest_index[i10], nearest_distance[i10], portal_reach) \
+					or _at_portal(portal, nearest_index[i01], nearest_distance[i01], portal_reach) \
+					or _at_portal(portal, nearest_index[i11], nearest_distance[i11], portal_reach)):
+				continue # the ground can't step from the cut up over the tube within a cell: a headwall closes the gap
 			corners[0] = i00
 			corners[1] = i10
 			corners[2] = i01
@@ -1706,6 +1755,8 @@ func _terrain_clear_distance() -> float:
 func _terrain_height(x: float, z: float, nearest: int, distance: float, cap: float, grid: Dictionary) -> float:
 	var dem_height := _sample_dem(grid, x, z) - elevation_base
 	var height := dem_height - 1.0
+	if track.cfg.viaduct: # the streets under an expressway stay where they are
+		return minf(dem_height - 0.3, cap)
 	if nearest >= 0 and distance <= 175.0:
 		var track_height := track.H[nearest] - elevation_base
 		var clear_distance := _terrain_clear_distance()
@@ -1771,7 +1822,7 @@ func _ground_at(x: float, z: float) -> float:
 ## tarmac would hang in the air with nothing under it. Each side gets a wall down to the ground, concrete in the
 ## city and a steep bank of the ground's own material elsewhere.
 func _build_road_supports() -> void:
-	if typeof(track.grid) != TYPE_DICTIONARY:
+	if typeof(track.grid) != TYPE_DICTIONARY or track.cfg.viaduct: # an expressway stands on piers (_build_viaduct)
 		return
 	var city := track.cfg.theme == "city"
 	var po := track.cfg.pit_offset
@@ -2801,6 +2852,8 @@ func _crossings() -> Array[Vector2]:
 ## A concrete bridge where the circuit crosses itself: a deep deck under the upper road, wide enough for
 ## its run-off, and an abutment wall along each side of the road passing underneath.
 func _build_bridges() -> void:
+	if track.cfg.viaduct: # every stretch over another already has its own deck (_build_viaduct)
+		return
 	var crossings := _crossings()
 	if crossings.is_empty():
 		return
@@ -2832,6 +2885,191 @@ func _build_bridges() -> void:
 	inst.mesh = st.commit()
 	inst.material_override = mat
 	track_root.add_child(inst)
+
+## Per centreline sample, what the ground over a tunnel does: 1 where the street is well over the tube (more than 10
+## m above the road; the tube is 8 m tall) and the ground stays whole, 2 over the rest of a tunnel, where it is laid on the
+## tube's roof (cut and cover), and 0 outside the tunnels.
+func _bored_samples() -> PackedByteArray:
+	var out := PackedByteArray()
+	out.resize(track.n)
+	if typeof(track.grid) != TYPE_DICTIONARY:
+		return out
+	for span in _tunnel_spans():
+		var s := span.x
+		while s < span.y:
+			var i := int(track.wrap_s(s) / track.step) % track.n
+			out[i] = 1 if _sample_dem(track.grid, track.X[i], track.Y[i]) - track.H[i] > 10.0 else 2
+			s += track.step * 0.5
+	return out
+
+const PORTAL_GAP := 20.0 ## metres either side of a tunnel portal where the ground is left open for the headwall
+
+## 1 for each centreline sample within PORTAL_GAP of a tunnel portal.
+func _portal_samples() -> PackedByteArray:
+	var out := PackedByteArray()
+	out.resize(track.n)
+	for span in _tunnel_spans():
+		for p in [span.x, span.y]:
+			var s: float = p - PORTAL_GAP
+			while s < p + PORTAL_GAP:
+				out[int(track.wrap_s(s) / track.step) % track.n] = 1
+				s += track.step * 0.5
+	return out
+
+static func _at_portal(portal: PackedByteArray, nearest: int, dist2: float, reach2: float) -> bool:
+	return nearest >= 0 and portal[nearest] == 1 and dist2 < reach2
+
+const DECK_DEPTH := 1.8 ## the expressway deck's concrete under the road
+const PIER_SPACING := 26.0
+
+## An elevated expressway (TrackDef.viaduct, Tokyo's C1): a concrete deck under the road, and under the pit lane where
+## it runs beside it, wherever the road is over the ground; a pier every PIER_SPACING m where there is room under it,
+## a single column with a T head, or a portal of two columns outside the deck where another stretch of the road
+## passes underneath (the spiral's rings); and retaining walls each side where the road runs below street level (the
+## Ginza trench, the ramps down into the tunnels). The ground itself stays at street level (_terrain_height).
+func _build_viaduct() -> void:
+	if not track.cfg.viaduct:
+		return
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_smooth_group(0xFFFFFFFF) # flat faces
+	var edge := track.half + track.cfg.runoff + 0.75 # just outside the barrier (track.half + runoff + 0.3)
+	var po := track.cfg.pit_offset
+	var pit_side := signf(po) if absf(po) > 1.0 else 0.0
+	var bored := _bored_samples()
+	var lookup := _track_lookup(24.0)
+	var ground := func(s: float, d: float) -> float:
+		var p := track.pos(s, d)
+		return surroundings.ground_height(p[0], p[1]) if surroundings else _ground_at(p[0], p[1])
+	var point := func(s: float, d: float, y: float) -> Vector3:
+		var p := track.pos(s, d)
+		return Vector3(p[0] - world_center.x, y, p[1] - world_center.y)
+	# the deck: runs of samples over the ground, each a box from -edge to the far edge (the pit lane's barrier there)
+	var over := PackedByteArray()
+	over.resize(track.n)
+	for i in track.n:
+		var s := i * track.step
+		var top := _road_y(s) - 0.12
+		over[i] = 1 if top - minf(ground.call(s, 0.0), minf(ground.call(s, -edge), ground.call(s, edge))) > 0.3 else 0
+	var prev: Array[Vector3] = []
+	for k in track.n + 1:
+		var i := k % track.n
+		var s := k * track.step
+		if over[i] == 0 and (k == 0 or over[(k - 1) % track.n] == 0):
+			prev = []
+			continue
+		var left := -edge
+		var right := edge
+		if pit_side != 0.0:
+			var reach := lerpf(edge, absf(po) + PIT_FENCE_D + 0.45, track.pit_blend(s))
+			if pit_side > 0.0:
+				right = reach
+			else:
+				left = -reach
+		var top := _road_y(s) - 0.12
+		var ring: Array[Vector3] = [point.call(s, left, top - DECK_DEPTH), point.call(s, left, top),
+			point.call(s, right, top), point.call(s, right, top - DECK_DEPTH)]
+		if prev.is_empty():
+			_quad(st, ring[0], ring[3], ring[2], ring[1]) # the open end
+		else:
+			for j in 4:
+				_quad(st, prev[j], prev[(j + 1) % 4], ring[(j + 1) % 4], ring[j])
+		if over[i] == 0:
+			_quad(st, ring[0], ring[1], ring[2], ring[3])
+			prev = []
+		else:
+			prev = ring
+	# the piers
+	var s := 0.0
+	while s < track.L:
+		var i := int(s / track.step) % track.n
+		var soffit := _road_y(s) - 0.12 - DECK_DEPTH
+		var foot: float = ground.call(s, 0.0) - 0.5
+		if over[i] == 1 and soffit - foot > 3.5 and absf(track.rel(s)) > 6.0:
+			var heading := track.heading(s)
+			var basis := Basis(Vector3.UP, -heading)
+			var under := _stretch_below(lookup, i, edge + 1.5)
+			if under:
+				# a portal: a column outside the deck each side, clear of the stretch underneath, and a beam across
+				for side in [-1.0, 1.0]:
+					var c: Vector3 = point.call(s, side * (edge + 1.0), 0.0)
+					var low: float = ground.call(s, side * (edge + 1.0)) - 0.5
+					_box(st, Vector3(c.x, (low + soffit) * 0.5, c.z), Vector3(1.0, soffit - low, 1.0), basis)
+				var mid: Vector3 = point.call(s, 0.0, soffit - 0.6)
+				_box(st, mid, Vector3(1.2, 1.2, (edge + 1.5) * 2.0), basis)
+			else:
+				var c: Vector3 = point.call(s, 0.0, 0.0)
+				_box(st, Vector3(c.x, (foot + soffit - 1.4) * 0.5, c.z), Vector3(2.4, soffit - 1.4 - foot, 1.8), basis)
+				_box(st, Vector3(c.x, soffit - 0.7, c.z), Vector3(2.6, 1.4, edge * 1.6), basis) # the T head
+		s += PIER_SPACING
+	# retaining walls where the road is below street level, up to the ground beside it (not in a tunnel's bore)
+	for side in [-1.0, 1.0]:
+		var prev_wall: Array[Vector3] = []
+		for k in track.n + 1:
+			var i := k % track.n
+			var ws := k * track.step
+			var d: float = side * (edge + 0.1)
+			if side == pit_side:
+				d = side * lerpf(edge + 0.1, absf(po) + PIT_FENCE_D + 0.5, track.pit_blend(ws))
+			var road := _road_y(ws)
+			# up to the street (the elevation model: the terrain mesh is cut back a grid cell behind the wall)
+			var q := track.pos(ws, d * 1.15)
+			var top: float = (_sample_dem(track.grid, q[0], q[1]) - elevation_base) * ALTITUDE_SCALE + 0.3
+			if bored[i] != 0 or top < road + 1.2: # (a tunnel's own shell walls it in)
+				prev_wall = []
+				continue
+			var cur: Array[Vector3] = [point.call(ws, d, road - 0.6), point.call(ws, d, top),
+				point.call(ws, d + side * 0.5, top), point.call(ws, d + side * 0.5, road - 0.6)]
+			if not prev_wall.is_empty():
+				for j in 3:
+					_quad(st, prev_wall[j], prev_wall[j + 1], cur[j + 1], cur[j])
+			prev_wall = cur
+	# a headwall over each tunnel portal, from the tube's roof up to the street, across the gap left in the ground
+	var fine := maxf(track.cfg.terrain_fine * 2.0, 18.0)
+	for span in _tunnel_spans():
+		for p in [span.x, span.y]:
+			var road := _road_y(p)
+			var q := track.pos(p, 0.0)
+			var street := (_sample_dem(track.grid, q[0], q[1]) - elevation_base) * ALTITUDE_SCALE
+			var top := maxf(street, road + 6.2) + 0.6
+			var c: Vector3 = point.call(p, 0.0, 0.0)
+			var basis := Basis(Vector3.UP, -track.heading(p))
+			var across := (edge + fine + 3.0) * 2.0
+			_box(st, Vector3(c.x, (road + 6.0 + top) * 0.5, c.z), Vector3(1.2, top - road - 6.0, across), basis)
+	st.generate_normals()
+	var mat := _material(Color("#a39e93"), 0.92)
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var inst := MeshInstance3D.new()
+	inst.name = "Viaduct"
+	inst.mesh = st.commit()
+	inst.material_override = mat
+	track_root.add_child(inst)
+
+## Whether another stretch of the road (far along the lap) runs under sample i within `reach` m across: the spiral's
+## lower rings, where a pier in the middle would stand on the road below.
+func _stretch_below(lookup: Dictionary, i: int, reach: float) -> bool:
+	var cell: float = lookup.cell
+	var cx := floori(track.X[i] / cell)
+	var cz := floori(track.Y[i] / cell)
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			for j in lookup.get(Vector2i(cx + dx, cz + dz), PackedInt32Array()):
+				var apart := absi(i - j)
+				if mini(apart, track.n - apart) * track.step < 150.0 or track.H[j] > track.H[i] - 3.0:
+					continue
+				if Vector2(track.X[i] - track.X[j], track.Y[i] - track.Y[j]).length() < reach + track.half:
+					return true
+	return false
+
+## A box centred at c, size (x, y, z) turned by basis, into st; with Basis(UP, -track.heading(s)) x runs along the road
+## and z across it.
+static func _box(st: SurfaceTool, c: Vector3, size: Vector3, basis: Basis) -> void:
+	var h := size * 0.5
+	var v: Array[Vector3] = []
+	for k in 8:
+		v.append(c + basis * Vector3(h.x if k & 1 else -h.x, h.y if k & 2 else -h.y, h.z if k & 4 else -h.z))
+	for f in [[0, 1, 3, 2], [4, 6, 7, 5], [0, 4, 5, 1], [2, 3, 7, 6], [0, 2, 6, 4], [1, 5, 7, 3]]:
+		_quad(st, v[f[0]], v[f[1]], v[f[2]], v[f[3]])
 
 ## A box swept along the road from s0 to s1 between lateral offsets d0 < d1; y_range(s) gives its (bottom, top).
 func _sweep_box(st: SurfaceTool, s0: float, s1: float, d0: float, d1: float, y_range: Callable) -> void:
@@ -3206,11 +3444,16 @@ func _build_lighting() -> void:
 			k += 1
 			if not lit:
 				continue
-			var c := track.pos(s - 28.0, side * (edge + 1.7))
+			# (an expressway's lamps stand on its parapet, over the street or the trench below)
+			var lamp_d := edge + (0.55 if cfg.viaduct else 1.7)
+			var c := track.pos(s - 28.0, side * lamp_d)
 			if cfg.sea and _sample_dem(track.grid, c[0], c[1]) < 1.0:
 				continue # the harbour
 			var mid := track.pos(s - 28.0, 0.0)
-			_lamp_post(fx, Vector2(c[0], c[1]), _ground_y(c[0], c[1], s - 28.0, edge + 1.7), Vector2(mid[0], mid[1]), false)
+			var foot := _ground_y(c[0], c[1], s - 28.0, lamp_d)
+			if cfg.viaduct:
+				foot = maxf(foot, _road_y(s - 28.0) - 0.09)
+			_lamp_post(fx, Vector2(c[0], c[1]), foot, Vector2(mid[0], mid[1]), false)
 
 	# floodlight masts round the lap, outside the run-off (the city has street lamps instead): on the pit side
 	# behind the garages, and alternating sides elsewhere, wherever there is room
@@ -3236,7 +3479,7 @@ func _build_lighting() -> void:
 				if not _clear_of_track(lookup, c[0], c[1], edge + 6.0):
 					continue
 			var mid := track.pos(s, 0.0)
-			_lamp_post(fx, Vector2(c[0], c[1]), _ground_y(c[0], c[1], s, absf(d)), Vector2(mid[0], mid[1]), true)
+			_lamp_post(fx, Vector2(c[0], c[1]), _ground_y(c[0], c[1], s, absf(d)), Vector2(mid[0], mid[1]), true, _road_y(s))
 
 	# floodlight masts behind the grandstands, lighting the crowd and the track in front of them
 	if cfg.grandstands and cfg.stands.y > cfg.stands.x:
@@ -3251,7 +3494,7 @@ func _build_lighting() -> void:
 			if cfg.sea and _sample_dem(track.grid, c[0], c[1]) < 1.0:
 				continue
 			var mid := track.pos(s, 0.0)
-			_lamp_post(fx, Vector2(c[0], c[1]), _ground_y(c[0], c[1], s, absf(d)), Vector2(mid[0], mid[1]), true)
+			_lamp_post(fx, Vector2(c[0], c[1]), _ground_y(c[0], c[1], s, absf(d)), Vector2(mid[0], mid[1]), true, _road_y(s))
 
 	# the pit building: a post between the lane and the doors every 30 m, and a light strip under the ledge
 	var garages := _garage_span()
@@ -3299,11 +3542,14 @@ func _build_lighting() -> void:
 	_add_multimesh(root, "LampHeads", _multimesh(unit, heads, []), _lamp_material)
 	for inst in root.get_children():
 		inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_build_lamp_streaks(root)
 	for i in LAMP_POOL.max():
-		var light := OmniLight3D.new()
+		var light := SpotLight3D.new()
 		light.name = "LampLight%d" % i
 		light.shadow_enabled = false
-		light.light_specular = 0.3 # 0.6 laid a sheet of white glare over wet tarmac and run-off under each mast
+		light.spot_attenuation = 0.8
+		light.spot_angle_attenuation = 1.6 # a soft edge to the cone
+		light.light_specular = 0.4 # an omni at 0.6 laid a sheet of white glare over wet tarmac; a spot pointed down does not
 		light.light_volumetric_fog_energy = 0.3 # the lamps' haze would grey the whole picture in rain
 		light.visible = false
 		root.add_child(light)
@@ -3314,7 +3560,7 @@ func _build_lighting() -> void:
 ## One lamp post with its foot at track point p (ground height in world units), turned towards track point
 ## look. A street post is a pole with a short arm and a lantern; a mast is a tall pole carrying a bank of
 ## floodlights tilted down at the circuit. fx is [poles, arms, heads].
-func _lamp_post(fx: Array, p: Vector2, ground: float, look: Vector2, mast: bool) -> void:
+func _lamp_post(fx: Array, p: Vector2, ground: float, look: Vector2, mast: bool, look_y := NAN) -> void:
 	var foot := Vector3(p.x - world_center.x, ground - 0.8, p.y - world_center.y)
 	var to := Vector3(look.x - p.x, 0.0, look.y - p.y).normalized()
 	var h := 27.0 if mast else 7.6
@@ -3327,21 +3573,101 @@ func _lamp_post(fx: Array, p: Vector2, ground: float, look: Vector2, mast: bool)
 		var at := top + to * 0.9 + Vector3.UP * 0.2
 		fx[1].append(Transform3D(basis.scaled_local(Vector3(5.7, 2.7, 0.3)), at - dir * 0.22))
 		fx[2].append(Transform3D(basis.scaled_local(Vector3(5.2, 2.2, 0.25)), at))
-		_register_lamp(at + dir * 2.0, Color("#eaf1ff"), 70.0, 85.0, false) # lights the circuit, not the woods around it
+		# lights the circuit, not the woods around it: aimed at the track in front of the mast
+		var target := Vector3(look.x - world_center.x, ground if is_nan(look_y) else look_y, look.y - world_center.y)
+		var from := at + dir * 2.0
+		_register_lamp(from, Color("#eaf1ff"), 70.0, from.distance_to(target) * 1.9, false, target - from, 42.0, target, 17.0, 0.16, 3.0)
 	else:
 		var arm := 1.7
 		var basis := Basis.looking_at(to)
 		fx[1].append(Transform3D(basis.scaled_local(Vector3(0.11, 0.11, arm)), top + to * arm * 0.5))
 		var at := top + to * (arm - 0.1) - Vector3.UP * 0.12
 		fx[2].append(Transform3D(basis.scaled_local(Vector3(0.42, 0.1, 0.95)), at))
-		_register_lamp(at - Vector3.UP * 0.5, Color("#ffd08a"), 10.0, 30.0, false)
+		_register_lamp(at - Vector3.UP * 0.5, Color("#ffd08a"), 10.0, 30.0, false, Vector3.DOWN, 68.0,
+			Vector3(at.x, ground + 0.8, at.z), 8.5, POOL_GLOW, 1.3)
 
-func _register_lamp(at: Vector3, color: Color, energy: float, reach: float, always: bool) -> void:
+## A lamp at `at` pointing along `aim` with a cone of `cone` degrees. pool_at / pool_r: the pool of light it lays
+## on the ground (painted by a decal), none when pool_r is 0, and streak_w the width of its reflection streak on a
+## wet road (lamp_streak.gdshader, none at 0); pool_glow its emission at the middle (masts stand close
+## together, so theirs is faint or the pools merge into one grey sheet).
+func _register_lamp(at: Vector3, color: Color, energy: float, reach: float, always: bool, aim := Vector3.DOWN,
+		cone := 75.0, pool_at := Vector3.ZERO, pool_r := 0.0, pool_glow := POOL_GLOW, streak_w := 0.0) -> void:
 	_lamp_pos.append(at)
 	_lamp_color.append(color)
 	_lamp_energy.append(energy)
 	_lamp_range.append(reach)
 	_lamp_always.append(1 if always else 0)
+	_lamp_aim.append(aim.normalized() if aim.length_squared() > 0.0001 else Vector3.DOWN)
+	_lamp_cone.append(cone)
+	if pool_r > 0.0 and track_root:
+		var d := _pool_decal(pool_at, pool_r, color)
+		d.set_meta("glow", pool_glow)
+		d.set_meta("streak", streak_w)
+		_lamp_decals.append(d)
+
+## The lamps' reflections in a wet road after dark: one long additive streak per lamp pool, turned to the camera
+## by lamp_streak.gdshader. Faked, not reflected (the guild's advice, after NFS): SSR is Ultra-only and short.
+func _build_lamp_streaks(root: Node3D) -> void:
+	var pools := _lamp_decals.filter(func(d: Decal) -> bool: return float(d.get_meta("streak", 0.0)) > 0.0)
+	if pools.is_empty():
+		return
+	var quad := PlaneMesh.new()
+	quad.size = Vector2(1.0, 1.0)
+	quad.center_offset = Vector3(0.0, 0.0, 0.5) # x across -0.5..0.5, z along 0..1
+	quad.custom_aabb = AABB(Vector3(-45.0, -2.0, -45.0), Vector3(90.0, 4.0, 90.0)) # the shader swings it round
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_custom_data = true
+	mm.mesh = quad
+	mm.instance_count = pools.size()
+	for i in pools.size():
+		var d: Decal = pools[i]
+		mm.set_instance_transform(i, Transform3D(Basis(), d.position + Vector3.UP * 0.07))
+		var c: Color = d.modulate * (0.9 if float(d.get_meta("streak")) > 2.0 else 1.4)
+		mm.set_instance_custom_data(i, Color(c.r, c.g, c.b, float(d.get_meta("streak"))))
+	var mat := ShaderMaterial.new()
+	mat.shader = preload("res://shaders/lamp_streak.gdshader")
+	_wet_materials.append(mat)
+	var inst := MultiMeshInstance3D.new()
+	inst.name = "LampStreaks"
+	inst.multimesh = mm
+	inst.material_override = mat
+	inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(inst)
+
+const POOL_GLOW := 0.55 ## emission of a lamp's pool at its middle, after dark
+
+## A soft round pool of lamp light on the ground: a decal only the emission of which shows, so it costs no
+## light and lights nothing but what lies within a couple of metres of the ground under the lamp.
+func _pool_decal(at: Vector3, r: float, color: Color) -> Decal:
+	if _pool_texture == null:
+		var g := Gradient.new()
+		g.offsets = PackedFloat32Array([0.0, 0.45, 1.0])
+		g.colors = PackedColorArray([Color(1, 1, 1), Color(0.42, 0.42, 0.42), Color(0, 0, 0)])
+		_pool_texture = GradientTexture2D.new()
+		_pool_texture.gradient = g
+		_pool_texture.fill = GradientTexture2D.FILL_RADIAL
+		_pool_texture.fill_from = Vector2(0.5, 0.5)
+		_pool_texture.fill_to = Vector2(1.0, 0.5)
+		_pool_texture.width = 128
+		_pool_texture.height = 128
+	var d := Decal.new()
+	d.name = "LampPool"
+	d.size = Vector3(r * 2.0, 4.0, r * 2.0)
+	d.position = at
+	d.texture_emission = _pool_texture
+	d.albedo_mix = 0.0
+	d.modulate = color
+	d.emission_energy = 0.0
+	d.upper_fade = 0.6
+	d.lower_fade = 0.4
+	d.normal_fade = 0.5 # the ground, not the walls of the cars and barriers
+	d.distance_fade_enabled = true
+	d.distance_fade_begin = 180.0
+	d.distance_fade_length = 60.0
+	d.visible = false
+	track_root.add_child(d)
+	return d
 
 func _hide_lamp_lights() -> void:
 	for light in _lamp_pool:
@@ -3383,8 +3709,10 @@ func _update_lamp_lights() -> void:
 		light.light_energy = _lamp_energy[i] * (1.0 if _lamp_always[i] == 1 else _lamp_on) * fade
 		light.visible = light.light_energy > 0.02
 		light.position = _lamp_pos[i]
+		light.basis = Basis.looking_at(_lamp_aim[i], Vector3.FORWARD if absf(_lamp_aim[i].y) > 0.99 else Vector3.UP)
 		light.light_color = _lamp_color[i]
-		light.omni_range = _lamp_range[i]
+		light.spot_range = _lamp_range[i]
+		light.spot_angle = _lamp_cone[i]
 
 ## Covered grandstands built from the Blender pieces: 10 m bays of concrete tiers with plastic seats and a
 ## seated crowd, a cantilever roof with sponsor boards on its fascia and the front wall, closed at each

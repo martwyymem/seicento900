@@ -1,0 +1,238 @@
+{
+  "_comment": "Tokyo, Japan: the Shuto Expressway C1 Inner Circular Route (都心環状線), inner loop (内回り, anticlockwise), from OpenStreetMap. Start on the viaduct over the Nihonbashi river heading north-west, Kandabashi, Takebashi JCT, down past Kitanomaru park into the Kitanomaru, Chiyoda and Kasumigaseki tunnels under the Imperial Palace moats, up onto the Tanimachi viaducts, Ichinohashi JCT, Shibakoen, Hamazakibashi JCT and Shiodome, then down into the Ginza trench (old canal bed) under Ginza and Kyobashi, Takaracho, Edobashi JCT and the Nihonbashi bridge. Heights: the GSI 5 m ground model plus each way's OSM bridge/tunnel/cutting layer (levels). NOT REAL: the Hamarikyu Spiral, a two-turn helix (Daikoku/Ohashi JCT style) off the Shiodome viaduct over the northern tip of Hamarikyu gardens, which the real C1 does not have; the route file asks for it (spiral). No road blockages: the ramps aren't modelled and the parapet runs unbroken past them. The scenery keeps the buildings within building_reach of the route. See tools/build_street_tracks.py for the keys.",
+  "key": "tokyo",
+  "origin": [
+    35.6745,
+    139.758
+  ],
+  "dem": "gsi",
+  "grid": 20,
+  "margin": 400,
+  "building_reach": 260,
+  "ways": [
+    4848875,
+    4848933,
+    205411831,
+    205411833,
+    205411832,
+    205411830,
+    205411835,
+    205411834,
+    4848937,
+    593037725,
+    4848938,
+    378284510,
+    378284506,
+    378284502,
+    378284508,
+    378284513,
+    378284512,
+    316213222,
+    378284483,
+    41009552,
+    1085022601,
+    199311847,
+    24402099,
+    550689173,
+    44805845,
+    1545541219,
+    44779774,
+    44779770,
+    24402095,
+    23704461,
+    23704469,
+    27536429,
+    24402540,
+    906266863,
+    807457064,
+    206499785,
+    688648677,
+    45392985,
+    24402541,
+    333682072,
+    24402609,
+    24402611,
+    23297430,
+    316123950,
+    199311749,
+    23297444,
+    24039738,
+    45021975,
+    4848878,
+    45021973,
+    45021970,
+    316213226,
+    760597805,
+    45068170,
+    4848906
+  ],
+  "start": {
+    "node": 567877355,
+    "before": 60
+  },
+  "corner_radius": 25.0,
+  "levels": {
+    "bridge": {
+      "0": 7.0,
+      "1": 10.0,
+      "2": 13.5,
+      "3": 17.0
+    },
+    "tunnel": {
+      "-1": -11.0,
+      "-2": -15.0
+    },
+    "cutting": -6.5,
+    "grade": 0.06,
+    "smooth": 30.0,
+    "clearance": 6.5
+  },
+  "spiral": {
+    "node": 31253896,
+    "after": 0,
+    "turns": 2,
+    "radius": 45.0,
+    "side": 1,
+    "entry_level": 17.0,
+    "exit_level": -5.0,
+    "name": "Hamarikyu Spiral"
+  },
+  "corners": [
+    {
+      "at": 0,
+      "name": "Nihonbashi River"
+    },
+    {
+      "node": 1070863041,
+      "before": 60,
+      "name": "Kandabashi"
+    },
+    {
+      "node": 264871735,
+      "before": 80,
+      "name": "Takebashi JCT"
+    },
+    {
+      "node": 264871745,
+      "before": 40,
+      "name": "Kitanomaru"
+    },
+    {
+      "node": 256672738,
+      "before": 20,
+      "name": "Kitanomaru Tunnel"
+    },
+    {
+      "node": 297945194,
+      "before": 50,
+      "name": "Daikancho"
+    },
+    {
+      "node": 255513709,
+      "before": 60,
+      "name": "Miyakezaka JCT"
+    },
+    {
+      "node": 264877781,
+      "before": 20,
+      "name": "Kasumigaseki Tunnel"
+    },
+    {
+      "node": 264877784,
+      "after": 20,
+      "name": "Kasumigaseki"
+    },
+    {
+      "node": 252175042,
+      "before": 60,
+      "name": "Tanimachi JCT"
+    },
+    {
+      "node": 252175204,
+      "before": 40,
+      "name": "Iikura"
+    },
+    {
+      "node": 574460605,
+      "before": 60,
+      "name": "Ichinohashi JCT"
+    },
+    {
+      "node": 31296943,
+      "before": 40,
+      "name": "Shibakoen"
+    },
+    {
+      "node": 31252942,
+      "before": 60,
+      "name": "Hamazakibashi JCT"
+    },
+    {
+      "node": 571468136,
+      "before": 30,
+      "name": "Shiodome"
+    },
+    {
+      "node": 571468136,
+      "after": 150,
+      "name": "Hamarikyu Spiral"
+    },
+    {
+      "node": 1834887185,
+      "before": 40,
+      "name": "Ginza"
+    },
+    {
+      "node": 588391376,
+      "before": 40,
+      "name": "Shintomicho"
+    },
+    {
+      "node": 31254349,
+      "before": 40,
+      "name": "Kyobashi JCT"
+    },
+    {
+      "node": 1891818143,
+      "before": 40,
+      "name": "Takaracho"
+    },
+    {
+      "node": 264871771,
+      "before": 60,
+      "name": "Edobashi JCT"
+    },
+    {
+      "node": 264871779,
+      "before": 30,
+      "name": "Nihonbashi"
+    }
+  ],
+  "blockage_types": [],
+  "trackdef": {
+    "display_name": "Tokyo C1 Expressway",
+    "short_name": "Tokyo C1",
+    "width": 7.5,
+    "theme": "city",
+    "street_stage": true,
+    "viaduct": true,
+    "barrier": "safer",
+    "runoff": 0.9,
+    "runoff_surface": "asphalt",
+    "runoff_paved": 0.9,
+    "kerb_style": "none",
+    "kerb_width": 0.0,
+    "tree_density": 0.15,
+    "tree_patch": 0.5,
+    "tree_conifer": 0.2,
+    "grandstands": false,
+    "stand_tiers": 0,
+    "floodlight_spacing": 0.0,
+    "pit_entry": -200.0,
+    "pit_exit": 120.0,
+    "pit_ramp": 50.0,
+    "pit_offset": 8.2,
+    "box_start": -125.0,
+    "box_spacing": 9.0
+  }
+}

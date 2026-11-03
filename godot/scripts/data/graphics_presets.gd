@@ -50,3 +50,29 @@ static func match_index(s: Dictionary) -> int:
 
 static func describe(index: int) -> String:
 	return preset(index).blurb if index < PRESETS.size() else "Your own mix of the settings below."
+
+## First run (no graphics.cfg yet): the preset for this machine, from its GPU's name and kind
+## (RenderingServer.get_video_adapter_name / get_video_adapter_type, a RenderingDevice.DeviceType) and its CPU cores.
+## Never Ultra (a choice for the player); a GPU it does not recognise gets the default, High.
+## Software renderers and tiny machines get Low; Intel UHD/HD graphics Low, Iris Medium; other integrated GPUs
+## Medium; Apple M1/M2 base chips Medium, every other Apple chip and any discrete GPU High.
+static func auto_pick(adapter: String, device_type: int, cores: int) -> int:
+	var gpu := adapter.to_lower()
+	if device_type == RenderingDevice.DEVICE_TYPE_CPU or device_type == RenderingDevice.DEVICE_TYPE_VIRTUAL_GPU \
+			or gpu.contains("llvmpipe") or gpu.contains("swiftshader") or gpu.contains("software"):
+		return 0
+	if cores > 0 and cores < 4:
+		return 0
+	var apple := RegEx.create_from_string("apple m(\\d+)\\s*(pro|max|ultra)?")
+	var m := apple.search(gpu)
+	if m:
+		var tier := m.get_string(2)
+		return 1 if tier == "" and int(m.get_string(1)) <= 2 else 2
+	if gpu.contains("intel") and not gpu.contains("arc"):
+		if gpu.contains("iris"):
+			return 1
+		if gpu.contains("uhd") or gpu.contains("hd graphics"):
+			return 0
+	if device_type == RenderingDevice.DEVICE_TYPE_INTEGRATED_GPU:
+		return 1
+	return 2

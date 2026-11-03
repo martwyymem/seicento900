@@ -35,6 +35,7 @@ const ELEMENTS := [
 
 static var _textures: Array[Texture2D] = []
 
+var source: Node = null ## what it reads (camera, sky material, night, race weather); the parent when unset (the race world)
 var strength := 0.0 ## 0..1 after the weather, the hour and the view; eased so it does not pop
 var _sun_px := Vector2.ZERO
 var _height := 1.0
@@ -68,24 +69,29 @@ func _process(delta: float) -> void:
 
 ## How strong the flare should be now (0 when it should not show), setting _sun_px on the way.
 func _target() -> float:
-	var world := get_parent()
+	var world := source if source else get_parent()
 	var camera: Camera3D = world.get("camera")
-	var sky: ShaderMaterial = world.get("sky_material")
-	var race = world.get("race")
-	if not camera or not sky or not race or world.get("overview") or camera.projection != Camera3D.PROJECTION_PERSPECTIVE:
+	var sky: ShaderMaterial = world.get("sky_material") if world.get("sky_material") else world.get("sky_mat")
+	var race = world.get("race") # none in the open world, which has no weather
+	if not camera or not sky or world.get("overview") or camera.projection != Camera3D.PROJECTION_PERSPECTIVE:
 		return 0.0
-	var sun_dir: Vector3 = sky.get_shader_parameter("sun_dir")
-	if sun_dir == null or sun_dir.length_squared() < 0.01:
+	if "race" in world and not race:
+		return 0.0 # the race world between races
+	var sun_param = sky.get_shader_parameter("sun_dir") # null until the sky is first lit
+	if not (sun_param is Vector3) or (sun_param as Vector3).length_squared() < 0.01:
 		return 0.0
-	sun_dir = sun_dir.normalized()
+	var sun_dir := (sun_param as Vector3).normalized()
 	# up over the horizon and the hills' line, out of the dark, through clear air
 	var amount := smoothstep(-0.01, 0.06, sun_dir.y) * (1.0 - smoothstep(0.1, 0.5, float(world.get("night"))))
-	var overcast := float(sky.get_shader_parameter("overcast"))
-	amount *= 1.0 - smoothstep(0.12, 0.45, overcast)
-	var weather = race.weather
-	amount *= 1.0 - smoothstep(0.03, 0.25, maxf(weather.rain, maxf(weather.snow, weather.hail)))
-	amount *= 1.0 - smoothstep(0.05, 0.3, weather.fog)
-	if weather.mode == "fog" or amount < 0.01:
+	var overcast = sky.get_shader_parameter("overcast")
+	amount *= 1.0 - smoothstep(0.12, 0.45, float(overcast) if overcast != null else 0.0)
+	if race:
+		var weather = race.weather
+		amount *= 1.0 - smoothstep(0.03, 0.25, maxf(weather.rain, maxf(weather.snow, weather.hail)))
+		amount *= 1.0 - smoothstep(0.05, 0.3, weather.fog)
+		if weather.mode == "fog":
+			return 0.0
+	if amount < 0.01:
 		return 0.0
 	var eye := camera.global_position
 	var far := eye + sun_dir * 1000.0

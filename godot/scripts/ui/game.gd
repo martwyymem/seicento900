@@ -72,10 +72,10 @@ const TRACK_DEFAULTS := {
 	"suzuka": {"laps": 6, "wear": 2.0},
 	"zandvoort": {"laps": 6, "wear": 2.0},
 	"fiat": {"laps": 8, "wear": 2.0},
-	"tokyo": {"laps": 6, "wear": 2.0},
+	"tokyo": {"laps": 2, "wear": 1.0}, # the real C1 inner loop, 14.3 km with the spiral
 	"bielsko": {"laps": 5, "wear": 2.0},
 	"krakow": {"laps": 6, "wear": 2.0},
-	"oswiecim": {"laps": 8, "wear": 2.0},
+	"oswiecim": {"laps": 2, "wear": 2.0}, # the Soła bridges loop, 3.1 km, ~2:20 a lap (the invented circuit had 8)
 	"wilamowice": {"laps": 3, "wear": 2.0},
 	"brzeszcze": {"laps": 3, "wear": 2.0}, # Brzeszcze Kopalnia, 6.2 km (the invented 2.8 km circuit had 8)
 	"pszczyna": {"laps": 6, "wear": 2.0},
@@ -3334,6 +3334,12 @@ func _load_graphics_settings() -> void:
 		if retro_pipeline:
 			retro_pipeline.set_mode(graphics_retro_mode)
 		CmrStyle.apply_skin(CmrStyle.skin_for_mode(graphics_retro_mode)) # before the pages are built
+	else:
+		# first run: a preset for this machine (kept until the player changes a setting, which saves the file)
+		var auto := GraphicsPresets.auto_pick(RenderingServer.get_video_adapter_name(),
+			RenderingServer.get_video_adapter_type(), OS.get_processor_count())
+		_set_preset_values(auto)
+		print("Graphics: first run on %s, picked the %s preset" % [RenderingServer.get_video_adapter_name(), GraphicsPresets.NAMES[auto]])
 	if not _upscaler_available(graphics_upscaler):
 		graphics_upscaler = 0
 	graphics_preset = GraphicsPresets.match_index(_graphics_snapshot())
@@ -3357,14 +3363,7 @@ func _graphics_snapshot() -> Dictionary:
 func _on_preset_selected(index: int) -> void:
 	if index >= GraphicsPresets.PRESETS.size():
 		return # Custom: leave the settings as they are
-	var p := GraphicsPresets.preset(index)
-	graphics_quality = p.quality
-	graphics_upscaler = p.upscaler
-	graphics_upscale_preset = p.upscale_preset
-	graphics_antialiasing = p.antialiasing
-	graphics_ssao = p.ssao
-	graphics_shadows = p.shadows
-	graphics_reflections = p.reflections
+	_set_preset_values(index)
 	upscaler_picker.select(upscaler_picker.get_item_index(graphics_upscaler))
 	upscale_preset_picker.select(graphics_upscale_preset)
 	antialiasing_picker.select(graphics_antialiasing)
@@ -3378,6 +3377,17 @@ func _on_preset_selected(index: int) -> void:
 	if open_world != null:
 		open_world.apply_graphics(graphics_quality, graphics_ssao)
 	_save_graphics_settings()
+
+## Sets every setting a preset covers (no UI, nothing applied).
+func _set_preset_values(index: int) -> void:
+	var p := GraphicsPresets.preset(index)
+	graphics_quality = p.quality
+	graphics_upscaler = p.upscaler
+	graphics_upscale_preset = p.upscale_preset
+	graphics_antialiasing = p.antialiasing
+	graphics_ssao = p.ssao
+	graphics_shadows = p.shadows
+	graphics_reflections = p.reflections
 
 func _show_preset_state() -> void:
 	if is_instance_valid(preset_picker):

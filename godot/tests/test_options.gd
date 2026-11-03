@@ -34,6 +34,17 @@ func _presets(errors: Array[String]) -> void:
 	low.upscale_preset = 1
 	if GraphicsPresets.match_index(low) != GraphicsPresets.CUSTOM:
 		errors.append("Low with a different render resolution should read as Custom")
+	# first run: a preset picked for the machine (never Ultra, unknown hardware gets the default High)
+	var D := RenderingDevice
+	for case in [["Apple M4 Pro", D.DEVICE_TYPE_INTEGRATED_GPU, 14, 2], ["Apple M1", D.DEVICE_TYPE_INTEGRATED_GPU, 8, 1],
+			["Apple M2 Max", D.DEVICE_TYPE_INTEGRATED_GPU, 12, 2], ["Apple M3", D.DEVICE_TYPE_INTEGRATED_GPU, 8, 2],
+			["Intel(R) UHD Graphics 620", D.DEVICE_TYPE_INTEGRATED_GPU, 8, 0], ["Intel(R) Iris(R) Xe Graphics", D.DEVICE_TYPE_INTEGRATED_GPU, 8, 1],
+			["Intel(R) Arc(TM) A770 Graphics", D.DEVICE_TYPE_DISCRETE_GPU, 8, 2], ["AMD Radeon 780M", D.DEVICE_TYPE_INTEGRATED_GPU, 16, 1],
+			["NVIDIA GeForce RTX 3060", D.DEVICE_TYPE_DISCRETE_GPU, 12, 2], ["llvmpipe (LLVM 15.0.7, 256 bits)", D.DEVICE_TYPE_CPU, 8, 0],
+			["NVIDIA GeForce RTX 4090", D.DEVICE_TYPE_DISCRETE_GPU, 2, 0], ["", D.DEVICE_TYPE_OTHER, 8, 2]]:
+		var got := GraphicsPresets.auto_pick(case[0], case[1], case[2])
+		if got != case[3]:
+			errors.append("first-run preset for %s should be %s, got %s" % [case[0], GraphicsPresets.NAMES[case[3]], GraphicsPresets.NAMES[got]])
 	var costs := []
 	for p in GraphicsPresets.PRESETS:
 		costs.append(float(p.quality) + (1.0 if p.reflections > 0 else 0.0) + (1.0 if p.upscaler == 0 else 0.0))

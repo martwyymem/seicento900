@@ -168,6 +168,18 @@ func _surface_at(x: float, y: float) -> int:
 		return Physics.SURF_ASPHALT # a pavement grips like tarmac
 	return map.surface_of(hit)
 
+## What each wheel stands on (Physics.SURF_*, front left, front right, rear left, rear right), for the sounds and
+## the dust; the physics asks the same per wheel in its step.
+func wheel_surfaces() -> PackedInt32Array:
+	var out := PackedInt32Array()
+	var ch := cos(car.heading)
+	var sh := sin(car.heading)
+	for i in 4:
+		var ox := phys.WX[i] * ch - phys.WY[i] * sh
+		var oy := phys.WX[i] * sh + phys.WY[i] * ch
+		out.append(_surface_at(car.x + ox, car.y + oy))
+	return out
+
 ## One physics tick. Pedals 0..1, steer -1..1 (+ right).
 func step(dt: float, thr: float, brk: float, steer_in: float, shift_up := false, shift_down := false, handbrake := 0.0) -> void:
 	var spec := model.spec

@@ -77,9 +77,9 @@ Phase 0 is done. The Phase 1 backlog below is split into four phases, to be run 
 - Check which unchecked Pillar 7 boxes (time trial, rally HUD, menu wiring) are stale and tick or build them.
 
 **Phase 2 — Driving feel and look.**
-- Backlog 1: surface handling (gravel, dirt, tarmac, wet; dirt must not beat tarmac).
-- Backlog 8 (graphics mood pass): night-rain circuit and golden-hour open world; 8a presets seen on screen, auto-pick on first run.
-- Remaining Phase 0 gaps: corner quoins/cornices, real textures, tram rails in Kraków, Wilamowice church.
+- Backlog 1: surface handling (gravel, dirt, tarmac, wet; dirt must not beat tarmac). (2026-11-02: the open world now has surface feedback, `SurfaceFeedback` (`scripts/world/surface_feedback.gd`): `FreeCar.wheel_surfaces()` per wheel, the races' gravel crunch / grass / wind loops at WorldAudio's levels on CarFx, and the car visual's dust, gravel and grass kick-up and tyre smoke through `race_car_visual.gd surface_fx()` (shared with the races; tyre smoke now only on paved road, never with dust or grass). Test `test_surface_feedback.gd`. Still a human's: the feel by driving.)
+- Backlog 8 (graphics mood pass): night-rain circuit and golden-hour open world; 8a presets seen on screen, auto-pick on first run. (2026-11-02, windowed shots: **golden hour** in the open world: the golden window runs from 25 degrees of sun down (`OpenWorld.golden`), a stronger gold sun over a dimmer lavender fill, sunlit gold haze (fog density x2.4, sun scatter 0.6), sun halo, a warmer grade; the races' `LensFlare` now runs in the open world too (`source`, no race needed); Ultra (`volumetric_fog` preset flag, read at last) adds sun shafts. **Night rain** on circuits (after a guild of GPT-6.1 Sol, Claude Opus 5.5 (Low: Medium needs an API key), Muse Wonder, Gemini 4 Argon, all four agreeing: spots, decal pools, faked streaks): bluer night fill and fog; `road.gdshader` gets `night` (wet roughness 0.3 -> 0.18, puddles 0.05 after dark; by day unchanged); the pooled lamp lights are `SpotLight3D`s aimed down (masts at the road in front of them, 42 degrees; street lamps 68), so no light sprays the camera side of the wet tarmac; every lamp lays a `Decal` pool of emission on the ground (`_pool_decal`, masts faint 0.16 or they merge into a grey sheet, street lamps 0.55, +40% when wet) that reads on every preset; `shaders/lamp_streak.gdshader` (`_build_lamp_streaks`, one MultiMesh) draws each lamp's reflection as an additive streak on the wet road towards the camera, after dark only; glow blends `SCREEN` at night (softlight muted the halos); volumetric fog halved in the night rain. Seen windowed: GP start straight floodlit with pools and a lit crowd, Monaco warm pools and streaks, daytime wet unchanged. Bielsko (hilly, no lamps) night rain checked: no floating streaks; the glossier night road had turned the brake light and headlight beams into blinding blobs, fixed with `light_specular` 0.12 (brake) and 0.35 (beams). Not checked: Low preset. **Open-world grass on roads (fixed 2026-11-02):** vegetation planted from the blurred land map alone, so grass patches grew over road edges and unpainted dirt tracks (1244 of 38k plants at the festival field and ul. Bór); `vegetation.gd _clear_of_road()` now checks `TownMap.road_at` (at-grade roads only) and `kerb_at` for grass (1.0 m reach), flowers (0.75) and bushes (1.4); `test_vegetation.gd` checks it through `veg.record` (headless reads MultiMesh transforms back as identity). **Auto-pick:** `GraphicsPresets.auto_pick(adapter, type, cores)` picks Low/Medium/High (never Ultra) when graphics.cfg is missing, tested in `test_options.gd`. Presets on screen: not yet looked at.)
+- Remaining Phase 0 gaps: corner quoins/cornices, real textures, tram rails in Kraków, Wilamowice church. (2026-11-02, windowed: quoins, cornices, brick and tile textures look right in `tests/_building_shots.gd`; Kraków tram rails draw on the road; Wilamowice church not yet seen, it is not on the first 30 s of the lap.)
 
 **Phase 3 — Content and events.**
 - Backlog 2: campaign event variety (sprint, knockout, rally, drag, drift, off-road).
@@ -119,7 +119,7 @@ Order inside the phases (guild of GPT-6.1 Sol, Claude Opus 5.5, Muse Wonder, Gem
 |---|---|
 | Weathers (Pillar 1) | Done |
 | Retro styles (Pillar 2) | Retuned from an offline emulator; in-game check and fixes under way (QA pass) |
-| Real city tracks (Pillar 3) | Bór done from OSM; Bielsko, Wilamowice, Pszczyna, Kraków routes researched, being built; Brzeszcze, Oświęcim, Tokyo research unfinished |
+| Real city tracks (Pillar 3) | Bór and Tokyo C1 done from OSM; Bielsko, Wilamowice, Pszczyna, Kraków routes researched, being built; Brzeszcze, Oświęcim research unfinished |
 | Campaign (Pillar 4) | Flow fixed, difficulty curve and easing done, damage carry-over done; full on-screen loop being QA'd |
 | Menu & options (Pillar 5) | Controller-first menu, championship set-up, resolution/aspect/audio done; QA'd on screen in progress |
 | Rally & time trial (Pillar 7) | Rally sim (`rally.gd`) written; time trial module, HUD and menu wiring in progress |
@@ -198,13 +198,13 @@ Homages, not filters that ruin the picture: every style must keep the road edges
 | **Kraków** | The first ring round the Planty (the Planty itself is footpaths): Basztowa → Dunajewskiego → Podwale → Straszewskiego → Podzamcze (under Wawel) → św. Idziego → św. Gertrudy → Westerplatte; trams on ~1.85 km | 3.68 km | Route ready, building |
 | **Brzeszcze** | Mining/railway town loop, must not overlap Bór | — | Research unfinished |
 | **Oświęcim** | Town centre / Soła riverside only; keep clear of the Auschwitz-Birkenau memorial grounds and never name corners after it | — | Research unfinished |
-| **Tokyo** | Shuto C1 (14.8 km, multi-level, tunnels) vs a shorter real loop; the format can't yet express tunnels/levels | — | Research unfinished |
+| **Tokyo** | Shuto C1 inner loop (内回り): Nihonbashi → Kandabashi → Takebashi JCT → Kitanomaru → palace-moat tunnels (Miyakezaka, Kasumigaseki) → Tanimachi → Ichinohashi → Shibakoen → Hamazakibashi → Shiodome → Ginza trench → Takaracho → Edobashi. Heights from GSI's 5 m DEM plus each way's OSM bridge/tunnel/cutting tags; decks on piers (`viaduct`). **Not real (user's request, 2026-11-02):** the Hamarikyu Spiral, a two-turn helix off the Shiodome viaduct | 14.33 km (13.8 + 0.56 spiral) | Built: 7,012 real buildings within 260 m, 10 tunnel spans, no ramp barriers (ramps not modelled, parapet unbroken). Open: windowed look check, bot pace through the spiral |
 
 ### Implementation Checklist
 - [x] Track spline geometry, TrackDefs, surroundings, land textures and registration for every city key (first version, invented — being replaced).
 - [x] OSM pipeline and `street_stage` flag; Bór rebuilt.
 - [ ] Bielsko, Wilamowice, Pszczyna, Kraków rebuilt from their routes; laps in `TRACK_DEFAULTS` and the campaign adjusted to the new lengths (~4–6 min races).
-- [ ] Brzeszcze, Oświęcim, Tokyo researched and rebuilt.
+- [ ] Brzeszcze, Oświęcim researched and rebuilt. (Tokyo rebuilt 2026-11-02 from `tools/street_routes/tokyo.json`.)
 - [ ] Decide guardrails vs open verges on rural street stages.
 
 ---

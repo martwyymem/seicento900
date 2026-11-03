@@ -99,6 +99,88 @@ func run() -> Array:
 			continue
 		checked += 1
 		print("    %s: built in %d ms (n = %d, L = %.1f m)" % [c_key, Time.get_ticks_msec() - t0_city, c_tr.n, c_tr.L])
+		if c_key == "tokyo":
+			# the Shuto C1 inner loop from OpenStreetMap (tools/street_routes/tokyo.json): viaducts, the Ginza trench and
+			# the tunnels under the palace moats, plus the Hamarikyu Spiral, a helix the real road doesn't have
+			if not c_def.street_stage or not c_def.viaduct:
+				errors.append("tokyo: must be a street stage on viaducts")
+			if c_tr.L < 13800.0 or c_tr.L > 14800.0:
+				errors.append("tokyo: the C1 inner loop and the spiral are about 14.3 km, got %.0f m" % c_tr.L)
+			if c_tr.tunnels.size() < 3:
+				errors.append("tokyo: the Kitanomaru, palace and Ginza tunnels are missing (%d spans)" % c_tr.tunnels.size())
+			var t_names := []
+			for c in c_def.corners:
+				t_names.append(c.name)
+			for jct in ["Edobashi JCT", "Takebashi JCT", "Miyakezaka JCT", "Tanimachi JCT", "Hamazakibashi JCT", "Hamarikyu Spiral"]:
+				if jct not in t_names:
+					errors.append("tokyo: corner names should include %s" % jct)
+			# the spiral: stretches of the lap stacked over one another, every one clear of the deck below, and a car
+			# followed round it by its hint stays on its own ring
+			var spiral_s := -1.0
+			for c in c_def.corners:
+				if c.name == "Hamarikyu Spiral":
+					spiral_s = c.distance
+			var stacked := 0
+			var tight := INF
+			var first := int((spiral_s - 150.0) / c_tr.step)
+			var last := int((spiral_s + 800.0) / c_tr.step)
+			for i in range(first, last):
+				for j in range(i + 75, last):
+					if Vector2(c_tr.X[i] - c_tr.X[j], c_tr.Y[i] - c_tr.Y[j]).length() < c_tr.width:
+						stacked += 1
+						tight = minf(tight, absf(c_tr.H[i] - c_tr.H[j]))
+			if stacked < 100:
+				errors.append("tokyo: no spiral (only %d stacked samples)" % stacked)
+			if tight < 6.5:
+				errors.append("tokyo: stacked stretches only %.1f m apart" % tight)
+			var walk := spiral_s
+			while walk < spiral_s + 650.0:
+				var p := c_tr.pos(walk, 1.5)
+				var got := c_tr.project(p[0], p[1], walk - 1.0)
+				if absf(c_tr.rel(got[0] - walk)) > 3.0:
+					errors.append("tokyo: projection jumped rings at %.0f m (to %.0f m)" % [walk, got[0]])
+					break
+				walk += 1.0
+		if c_key == "oswiecim":
+			# a real street stage (tools/street_routes/oswiecim.json): the old town and both Soła bridges, from OSM
+			if not c_def.street_stage or c_def.grandstands or c_def.kerb_style != "none":
+				errors.append("oswiecim: must be a street stage without grandstands or kerbs")
+			if c_tr.L < 2900.0 or c_tr.L > 3400.0:
+				errors.append("oswiecim: the real loop is about 3.1 km, got %.0f m" % c_tr.L)
+			var o_names := []
+			for c in c_def.corners:
+				o_names.append(c.name)
+				for banned in ["auschwitz", "birkenau", "obóz", "oboz", "muzeum", "memorial"]:
+					if banned in c.name.to_lower():
+						errors.append("oswiecim: no corner may be named after the memorial (%s)" % c.name)
+			for street in ["ul. Legionów", "Most Piastowski (Soła)", "Rynek Główny", "ul. Jagiełły", "Most Jagielloński (Soła)"]:
+				if street not in o_names:
+					errors.append("oswiecim: corner names should include %s" % street)
+			if c_def.cobbles.size() != 1 or c_def.cobbles[0].x < 850.0 or c_def.cobbles[0].y > 1200.0:
+				errors.append("oswiecim: the setts of Plebańska and the Rynek should be the one cobbled stretch")
+			# keep clear of the Auschwitz I memorial: its fenced grounds (OSM way 29572443) in the track's frame
+			var fence := Rect2(Vector2(-1036.8, 829.1), Vector2(350.4, 364.7))
+			var closest := 1e9
+			for i in c_tr.n:
+				var p := Vector2(c_tr.X[i], c_tr.Y[i])
+				closest = minf(closest, p.distance_to(p.clamp(fence.position, fence.end)))
+			if closest < 650.0:
+				errors.append("oswiecim: the loop comes %.0f m from the memorial grounds (keep 650 m)" % closest)
+			var o_env = JSON.parse_string(FileAccess.get_file_as_string("res://data/tracks/oswiecim_env.json"))
+			if typeof(o_env) != TYPE_DICTIONARY:
+				errors.append("oswiecim: oswiecim_env.json failed to load")
+			else:
+				if not (o_env.get("bridges", []) as Array).is_empty():
+					errors.append("oswiecim: the loop's own Soła bridges must not be drawn as bridges over it")
+				if (o_env.get("road_blockages", []) as Array).size() < 20:
+					errors.append("oswiecim: expected a barrier across each side road")
+				if (o_env.get("buildings", []) as Array).size() < 1000:
+					errors.append("oswiecim: expected the real buildings of the town")
+				for b in o_env.get("buildings", []):
+					if fence.has_point(Vector2(b[3], b[4])):
+						errors.append("oswiecim: no memorial buildings in the scenery")
+						break
+			checked += 4
 		if c_key == "bor":
 			# a real street stage (tools/build_street_tracks.py, tools/street_routes/bor.json): ul. Bór, Strażacka,
 			# Borska and Lachowicka in Brzeszcze-Bór, from OpenStreetMap

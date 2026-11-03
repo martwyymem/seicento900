@@ -3,70 +3,101 @@
 [ext_resource type="Script" path="res://scripts/data/corner_name.gd" id="1"]
 [ext_resource type="Script" path="res://scripts/data/track_def.gd" id="2"]
 
-[sub_resource type="Resource" id="1"]
+[sub_resource type="Resource" id="c1"]
 script = ExtResource("1")
-d = 0.0
-name = "Bulwary Nadsoły"
+distance = 0.0
+name = "ul. Legionów"
 
-[sub_resource type="Resource" id="2"]
+[sub_resource type="Resource" id="c2"]
 script = ExtResource("1")
-d = 320.0
-name = "Zakole Rzeki Soły"
+distance = 301.9
+name = "Rondo Płonki"
 
-[sub_resource type="Resource" id="3"]
+[sub_resource type="Resource" id="c3"]
 script = ExtResource("1")
-d = 610.0
-name = "Wzgórze Zamku Piastowskiego"
+distance = 381.1
+name = "ul. Dąbrowskiego"
 
-[sub_resource type="Resource" id="4"]
+[sub_resource type="Resource" id="c4"]
 script = ExtResource("1")
-d = 880.0
-name = "Rynek Oświęcimski"
+distance = 494.2
+name = "Most Piastowski (Soła)"
 
-[sub_resource type="Resource" id="5"]
+[sub_resource type="Resource" id="c5"]
 script = ExtResource("1")
-d = 1140.0
-name = "Zakręt Jagiełły"
+distance = 697.6
+name = "Pod Zamkiem"
 
-[sub_resource type="Resource" id="6"]
+[sub_resource type="Resource" id="c6"]
 script = ExtResource("1")
-d = 1450.0
-name = "Aleja Zaborska"
+distance = 877.9
+name = "Dąbrowskiego / Plebańska"
 
-[sub_resource type="Resource" id="7"]
+[sub_resource type="Resource" id="c7"]
 script = ExtResource("1")
-d = 1780.0
-name = "Rondo Legionów"
+distance = 981.9
+name = "Rynek Główny"
 
-[sub_resource type="Resource" id="8"]
+[sub_resource type="Resource" id="c8"]
 script = ExtResource("1")
-d = 2040.0
-name = "Most Piastowski nad Sołą"
+distance = 1098.7
+name = "Rynek / Jagiełły"
 
-[sub_resource type="Resource" id="9"]
+[sub_resource type="Resource" id="c9"]
 script = ExtResource("1")
-d = 2320.0
-name = "Nadrzeczna S-Bends"
+distance = 1158.7
+name = "ul. Jagiełły"
+
+[sub_resource type="Resource" id="c10"]
+script = ExtResource("1")
+distance = 1711.1
+name = "Jagiełły / Przeczna"
+
+[sub_resource type="Resource" id="c11"]
+script = ExtResource("1")
+distance = 1847.7
+name = "Rondo Górnego"
+
+[sub_resource type="Resource" id="c12"]
+script = ExtResource("1")
+distance = 2143.9
+name = "Most Jagielloński (Soła)"
+
+[sub_resource type="Resource" id="c13"]
+script = ExtResource("1")
+distance = 2620.9
+name = "Rondo Solidarności"
+
+[sub_resource type="Resource" id="c14"]
+script = ExtResource("1")
+distance = 2711.8
+name = "ul. Legionów"
 
 [resource]
 script = ExtResource("2")
 key = "oswiecim"
-display_name = "Oświęcim Riverfront"
+display_name = "Oświęcim Soła Bridges"
 short_name = "Oświęcim"
-width = 7.4
+width = 8.0
 theme = "city"
-barrier = "armco"
-runoff = 3.0
+street_stage = true
+cobbles = PackedVector2Array(908.0, 1119.0)
+barrier = "guardrail"
+runoff = 1.5
 runoff_surface = "asphalt"
-runoff_paved = 1.2
-kerb_style = "red_white"
-kerb_width = 1.0
-tree_density = 0.35
-tree_patch = 0.55
+runoff_paved = 1.5
+kerb_style = "none"
+kerb_width = 0.0
+tree_density = 0.55
+tree_patch = 0.75
 tree_conifer = 0.15
-grandstands = true
-stand_tiers = 3
-pit_entry = -240.0
-pit_exit = 210.0
-pit_offset = 8.8
-corners = [SubResource("1") ,SubResource("2") ,SubResource("3") ,SubResource("4") ,SubResource("5") ,SubResource("6") ,SubResource("7") ,SubResource("8") ,SubResource("9")]
+grandstands = false
+stand_tiers = 0
+floodlight_spacing = 0.0
+pit_entry = -120.0
+pit_exit = 170.0
+pit_ramp = 50.0
+pit_offset = 9.0
+box_start = -65.0
+box_spacing = 9.0
+corners = Array[ExtResource("1")]([SubResource("c1"), SubResource("c2"), SubResource("c3"), SubResource("c4"), SubResource("c5"), SubResource("c6"), SubResource("c7"), SubResource("c8"), SubResource("c9"), SubResource("c10"), SubResource("c11"), SubResource("c12"), SubResource("c13"), SubResource("c14")])

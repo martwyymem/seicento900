@@ -407,6 +407,10 @@ func _build_bridges() -> void:
 		var s: float = near.x * track.step
 		if _in_tunnel(s, 30.0) or absf(track.rel(s)) < 50.0:
 			continue
+		# a bridge way within 25 degrees of the road is the route's own bridge (or its other carriageway or
+		# footway) weaving across the smoothed centreline, not one passing over it (tools/build_street_tracks.py)
+		if absf(Vector3(b[3], 0.0, b[4]).normalized().cross(_tangent(s)).y) < sin(deg_to_rad(25.0)):
+			continue
 		placed.append(at)
 		var dir := Vector3(b[3], 0.0, b[4]).normalized()
 		# centred where its line crosses the game's centreline, which need not be where OSM has it, so neither

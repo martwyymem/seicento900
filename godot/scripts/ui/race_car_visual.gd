@@ -70,6 +70,7 @@ var _fx_near := false ## this car shows effects: in a race, not a ghost, and the
 var _world: Node = null ## the RaceWorld this car races in (effects only there, not for menus or the ghost)
 var _fx_checked := false
 var _fx := {} ## effect kind -> GPUParticles3D, made the first time the car needs it
+var fx_quality := 2 ## graphics level for a car outside a race (the open world), which drives its effects with set_fx()
 
 func _ready() -> void:
 	var sh := _shared_resources()
@@ -413,6 +414,7 @@ func sync(car: RaceCar, dt: float, curvature: float, night: float, ghost: bool) 
 			_brake_light.spot_range = 7.0
 			_brake_light.spot_angle = 55.0
 			_brake_light.shadow_enabled = false
+			_brake_light.light_specular = 0.12 # a red wash on the road; on wet tarmac after dark full specular was a blinding blob
 			_brake_light.transform = Transform3D(Basis.looking_at(Vector3(0.0, -0.3, 1.0).normalized()), Vector3(0.0, 0.5, 2.1))
 			body_pivot.add_child(_brake_light)
 		_brake_light.light_energy = BRAKE_LIGHT_ENERGY if car.brake_on else 0.0 # one power: the sun drowns it by day, the dark shows it
@@ -470,6 +472,14 @@ func _update_fx(car: RaceCar) -> void:
 		if is_player or (cam and cam.global_position.distance_squared_to(global_position) < reach * reach):
 			_fx_near = true
 			want = _fx_strengths(race, car)
+	_apply_fx(want)
+
+## Effect strengths set from outside a race (the open world: OpenWorld works them out with surface_fx()).
+func set_fx(want: Dictionary) -> void:
+	if _world == null and visible:
+		_apply_fx(want)
+
+func _apply_fx(want: Dictionary) -> void:
 	for kind in want:
 		if want[kind] > 0.02 and not _fx.has(kind):
 			_fx[kind] = _make_emitter(kind)
@@ -482,17 +492,22 @@ func _update_fx(car: RaceCar) -> void:
 
 static func _fx_strengths(race, car: RaceCar) -> Dictionary:
 	var v := absf(car.speed)
-	var out := {}
 	if v < 1.5:
-		return out
-	var wet: float = race.weather.wet
-	var snow: float = race.weather.snow
+		return {}
 	# what the outer wheels run on: off the tarmac onto grass or gravel, or a loose rally stage
 	var tr: Track = race.track
 	var side := signf(car.d) if car.d != 0.0 else 1.0
 	var surf: int = race.surface_at(car, car.x + tr.sample(tr.NX, car.s) * side * 0.65,
 		car.y + tr.sample(tr.NY, car.s) * side * 0.65)
 	var loose: bool = race.s != null and race.s.surface != "tarmac"
+	return surface_fx(surf, v, car.slip, race.weather.wet, race.weather.snow, loose)
+
+## Effect strengths (kind -> 0..1) for a car at speed v (m/s) with tyre slip `slip` on surface surf (Physics.SURF_*),
+## in weather this wet and snowy; loose: the whole road is a loose rally stage.
+static func surface_fx(surf: int, v: float, slip: float, wet: float, snow: float, loose: bool) -> Dictionary:
+	var out := {}
+	if v < 1.5:
+		return out
 	var go := smoothstep(3.0, 22.0, v)
 	if surf == Physics.SURF_GRAVEL:
 		out.gravel = go * (1.0 - 0.7 * wet)
@@ -506,9 +521,9 @@ static func _fx_strengths(race, car: RaceCar) -> Dictionary:
 			out.snow = snow * smoothstep(5.0, 25.0, v)
 		if wet > 0.35 and v > 9.0:
 			out.splash = wet * smoothstep(9.0, 28.0, v)
-	# tyre smoke: wheelspin, lock-ups and slides on a dry road (the wet road sprays instead)
-	if wet < 0.5 and not loose:
-		out.smoke = clampf((car.slip - 0.3) / 0.6, 0.0, 1.0) * smoothstep(2.0, 8.0, v) * (1.0 - wet * 1.6)
+	# tyre smoke: wheelspin, lock-ups and slides on a dry paved road (the wet road sprays, loose ground throws dust)
+	if wet < 0.5 and not loose and not out.has("gravel") and not out.has("dust") and not out.has("grass"):
+		out.smoke = clampf((slip - 0.3) / 0.6, 0.0, 1.0) * smoothstep(2.0, 8.0, v) * (1.0 - wet * 1.6)
 	return out
 
 const PRESET_FOR_KIND := {
@@ -524,7 +539,7 @@ const PRESET_FOR_KIND := {
 func _make_emitter(kind: String) -> GPUParticles3D:
 	var preset: String = PRESET_FOR_KIND.get(kind, kind)
 	if FxParticles.PRESETS.has(preset):
-		var q: int = _world.quality if is_instance_valid(_world) and "quality" in _world else 2
+		var q: int = _world.quality if is_instance_valid(_world) and "quality" in _world else fx_quality
 		var p := FxParticles.attach(self, preset, q, 1.0 if is_player else 0.7)
 		if p:
 			p.position = FX_AXLE
