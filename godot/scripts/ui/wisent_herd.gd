@@ -12,7 +12,7 @@ const TURN_RATE := 0.7 ## rad/s
 const EDGE_KEEP := 3.0 ## m inside the fence
 const GRAZE_TIME := Vector2(7.0, 26.0) ## seconds on one patch (random between)
 const STRIDE := 1.6 ## m per step cycle: the body's rise and roll while walking
-const BODY := {"WisentBull": 1.82, "WisentCow": 1.52, "WisentCowLying": 1.57, "WisentCalf": 0.91, "HayRack": 2.12} ## m: footprint radius (wisents.glb) when the node has no mesh to measure
+const BODY := {"WisentBull": 1.82, "WisentCow": 1.53, "WisentCowLying": 1.57, "WisentCalf": 0.91, "HayRack": 2.12} ## m: footprint radius (wisents.glb) when the node has no mesh to measure
 const SPACE := 0.3 ## m two animals keep between their footprints
 const CALF_ROOM := 1.2 ## m a calf may stray past that from its mother
 

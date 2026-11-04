@@ -132,12 +132,16 @@ def bison(s=1.0, head="up", lying=False, calf=False):
 		ring(0.88, 0, z(1.18), 0.5, 0.6, top=1.4, s=s),
 		ring(1.05, 0, z(1.02), 0.38, 0.48, s=s),
 	]
-	loft(m, front, dark, cap0=False, cap1=False)
+	# closed in front: the head starts lower than the chest ends, and through an open end the body is hollow
+	loft(m, front, dark, cap0=False)
 	# the head: short, broad and carried low; grazing, it reaches the ground
 	if head == "graze":
 		hz = [z(0.92), z(0.6), z(0.3), z(0.12) + drop * 0.85]
 		hx = [1.12, 1.3, 1.42, 1.48]
-		pit = [0.5, 0.9, 1.1, 1.2]
+		# a hanging head's sections lean the other way, their top (the brow) forward, square to the head as it
+		# drops (the first half way from the upright chest): leaning back they lay along it and turned the loft
+		# inside out, so the head showed only from behind
+		pit = [-0.75, -1.12, -1.22, -1.25]
 	else:
 		hz = [z(0.98), z(0.86), z(0.7), z(0.6)]
 		hx = [1.12, 1.36, 1.56, 1.66]
@@ -146,7 +150,7 @@ def bison(s=1.0, head="up", lying=False, calf=False):
 		ring(hx[1], 0, hz[1], 0.33, 0.36, s=s, pitch=pit[1]),
 		ring(hx[2], 0, hz[2], 0.25, 0.26, s=s, pitch=pit[2]),
 		ring(hx[3], 0, hz[3], 0.19, 0.16, s=s, pitch=pit[3])]
-	loft(m, head_rings, dark, cap0=False, shade=False)
+	loft(m, head_rings, dark, shade=False)
 	# beard and the mane hanging under the neck
 	bx = hx[1] - 0.05
 	bz = hz[1] - 0.25
