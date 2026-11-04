@@ -188,13 +188,31 @@ void fragment() {
 	}
 	if (unp > 0.0) {
 		vec3 dirt_c = vec3(0.30, 0.215, 0.135);
-		vec3 grav_c = vec3(0.47, 0.43, 0.37);
+		vec3 grav_c = vec3(0.29, 0.258, 0.205); // grey-beige stone: any paler and the sun turns it into concrete
 		vec3 base = mix(dirt_c, grav_c, gravel_k) * (0.72 + 0.5 * broad + 0.16 * mid);
 		float stones = smoothstep(0.58, 0.8, texture(grain, vec2(d, s) * 3.1 + 0.3).r) * (0.4 + 0.6 * gravel_k);
 		base *= 1.0 + (stones - 0.35) * 0.4 + (micro - 0.5) * 0.3;
 		// two wheel ruts, pale loose berm down the middle and at the verges
 		float rut = exp(-pow((abs(abs(d) - half_width * 0.38) - 0.0) / 0.42, 2.0));
 		base *= 1.0 - 0.28 * rut;
+		if (gravel_k > 0.0) {
+			// gravel: between and beside the packed wheel tracks the loose stones lie heaped and paler, in
+			// patches, raked by the tyres into streaks along the road (narrow across it, so they still show far
+			// ahead, where a pixel spans a hand's breadth of road); near the car, pebbles of 2-5 cm and the dark
+			// gaps between them. The grain's mipmaps average whatever is finer than a pixel to its mean, so the far
+			// road doesn't shimmer.
+			float across = abs(d) / max(half_width, 0.5);
+			float berm = max(1.0 - smoothstep(0.1, 0.32, across), smoothstep(0.58, 0.8, across));
+			float patchy = texture(grain, vec2(d, s) * 0.55 + 0.37).r;
+			float rake = texture(grain, vec2(d * 2.6, s * 0.21) + 0.29).r;
+			float peb_a = texture(grain, vec2(d, s) * 2.3 + 0.13).r;
+			float peb_b = texture(grain, vec2(s, d) * 5.1 + 0.71).r;
+			float gaps = texture(grain, vec2(s, d) * 3.4 + 0.47).r;
+			float speck = smoothstep(0.6, 0.72, peb_a) * 0.34 + smoothstep(0.6, 0.72, peb_b) * 0.26 - smoothstep(0.4, 0.28, gaps) * 0.34;
+			vec3 loose = base * (0.8 + 0.4 * patchy) * (1.0 + 0.2 * berm) * (1.0 + (rake - 0.5) * 0.55 * (0.5 + 0.5 * berm));
+			loose *= 1.0 + speck * (0.55 + 0.45 * berm) * (1.0 - 0.45 * rut);
+			base = mix(base, loose, gravel_k);
+		}
 		float verge = smoothstep(half_width - 1.6, half_width, abs(d));
 		base = mix(base, base * 0.8 + vec3(0.02, 0.05, 0.015), verge * 0.7); // weeds creep in
 		col = mix(col, base, unp);

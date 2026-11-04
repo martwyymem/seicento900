@@ -7,7 +7,7 @@ var completed := false
 
 func run() -> Array:
 	var errors: Array[String] = []
-	for preset in ["kickup_grass", "kickup_gravel", "kickup_dirt", "kickup_snow", "sparks", "debris", "smoke", "splash", "spray", "exhaust", "backfire", "leaves", "dust_motes", "fog_wisp"]:
+	for preset in ["kickup_grass", "kickup_gravel", "kickup_dirt", "kickup_gravel_dust", "kickup_grit", "kickup_snow", "sparks", "debris", "smoke", "splash", "spray", "exhaust", "backfire", "leaves", "dust_motes", "fog_wisp"]:
 		if not FX.PRESETS.has(preset):
 			errors.append("missing FX preset %s" % preset)
 	var parent := Node3D.new()

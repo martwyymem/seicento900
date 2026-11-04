@@ -38,7 +38,10 @@ func run() -> Array:
 	var fx: Dictionary = CarVisual.surface_fx(Physics.SURF_DIRT, 20.0, 1.0, 0.0, 0.0, false)
 	check("a sliding car on a dirt road throws dust, not smoke: %s" % fx, fx.get("dust", 0.0) > 0.5 and not fx.has("smoke"))
 	fx = CarVisual.surface_fx(Physics.SURF_GRAVEL_ROAD, 20.0, 0.0, 0.0, 0.0, false)
-	check("a gravel road throws dust: %s" % fx, fx.get("dust", 0.0) > 0.5)
+	check("a gravel road throws its pale dust and a few stones, no smoke: %s" % fx,
+		fx.get("gravel_dust", 0.0) > 0.5 and fx.get("grit", 0.0) > 0.1 and not fx.has("smoke") and not fx.has("dust"))
+	var slide: Dictionary = CarVisual.surface_fx(Physics.SURF_GRAVEL_ROAD, 20.0, 1.0, 0.0, 0.0, false)
+	check("a slide on gravel flicks up more stones, still no smoke: %s" % slide, slide.get("grit", 0.0) > fx.grit and not slide.has("smoke"))
 	fx = CarVisual.surface_fx(Physics.SURF_GRASS, 20.0, 1.0, 0.0, 0.0, false)
 	check("grass kicks up grass, no smoke: %s" % fx, fx.get("grass", 0.0) > 0.5 and not fx.has("smoke"))
 	fx = CarVisual.surface_fx(Physics.SURF_TRACK, 20.0, 1.0, 0.0, 0.0, false)

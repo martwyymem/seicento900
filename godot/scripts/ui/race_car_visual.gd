@@ -511,8 +511,12 @@ static func surface_fx(surf: int, v: float, slip: float, wet: float, snow: float
 	var go := smoothstep(3.0, 22.0, v)
 	if surf == Physics.SURF_GRAVEL:
 		out.gravel = go * (1.0 - 0.7 * wet)
-	elif surf == Physics.SURF_DIRT or surf == Physics.SURF_GRAVEL_ROAD or (loose and surf != Physics.SURF_GRASS):
-		out.dust = go * (1.0 - 0.7 * wet) # a dirt or gravel road (a loose rally stage)
+	elif surf == Physics.SURF_GRAVEL_ROAD:
+		# a gravel road: a pale cloud, and stones flicked up by the tyres, more of them in a slide
+		out.gravel_dust = go * (1.0 - 0.7 * wet)
+		out.grit = go * clampf(0.25 + 0.6 * slip, 0.0, 0.85)
+	elif surf == Physics.SURF_DIRT or (loose and surf != Physics.SURF_GRASS):
+		out.dust = go * (1.0 - 0.7 * wet) # a dirt road, or anything but grass on a loose rally stage
 	elif surf == Physics.SURF_GRASS:
 		out.grass = go
 	else:
@@ -522,7 +526,7 @@ static func surface_fx(surf: int, v: float, slip: float, wet: float, snow: float
 		if wet > 0.35 and v > 9.0:
 			out.splash = wet * smoothstep(9.0, 28.0, v)
 	# tyre smoke: wheelspin, lock-ups and slides on a dry paved road (the wet road sprays, loose ground throws dust)
-	if wet < 0.5 and not loose and not out.has("gravel") and not out.has("dust") and not out.has("grass"):
+	if wet < 0.5 and not loose and not out.has("gravel") and not out.has("dust") and not out.has("gravel_dust") and not out.has("grass"):
 		out.smoke = clampf((slip - 0.3) / 0.6, 0.0, 1.0) * smoothstep(2.0, 8.0, v) * (1.0 - wet * 1.6)
 	return out
 
@@ -530,6 +534,8 @@ const PRESET_FOR_KIND := {
 	"spray": "spray",
 	"smoke": "smoke",
 	"dust": "kickup_dirt",
+	"gravel_dust": "kickup_gravel_dust",
+	"grit": "kickup_grit",
 	"grass": "kickup_grass",
 	"snow": "kickup_snow",
 	"gravel": "kickup_gravel",

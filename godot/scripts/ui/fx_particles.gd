@@ -10,6 +10,11 @@ const PRESETS := {
 	"kickup_grass": {"amount": 36, "life": 1.0, "color": Color(0.40, 0.38, 0.26, 0.35), "speed": Vector2(1.5, 3.8), "up": 0.25, "gravity": 6.0, "drag": 1.4, "scale": Vector2(0.14, 0.26), "grow": 1.8, "spread": 30.0, "inherit": 0.25},
 	"kickup_gravel": {"amount": 32, "life": 1.15, "color": Color(0.78, 0.72, 0.63, 0.72), "speed": Vector2(5.0, 11.0), "up": 0.38, "gravity": 10.0, "drag": 2.4, "scale": Vector2(0.045, 0.09), "grow": 1.0, "spread": 25.0, "inherit": 0.25},
 	"kickup_dirt": {"amount": 54, "life": 1.6, "color": Color(0.67, 0.57, 0.43, 0.28), "speed": Vector2(0.8, 2.4), "up": 0.12, "gravity": 1.0, "drag": 1.8, "scale": Vector2(0.18, 0.32), "grow": 3.0, "spread": 24.0, "inherit": 0.22},
+	# a gravel road: a pale cloud that lifts off the road and hangs behind the car, in puffs that grow to 3-4 m quads
+	# (the dirt road's half-metre ones at 28 % hardly show from the chase camera), and the small stones the tyres flick
+	# up (too small to soften into the ground: "soft")
+	"kickup_gravel_dust": {"amount": 150, "life": 3.0, "color": Color(0.96, 0.92, 0.84, 0.8), "speed": Vector2(1.4, 3.4), "up": 0.6, "gravity": -0.15, "drag": 1.1, "scale": Vector2(0.8, 1.2), "grow": 3.5, "spread": 36.0, "inherit": 0.2},
+	"kickup_grit": {"amount": 24, "life": 0.8, "color": Color(0.62, 0.58, 0.5, 0.9), "speed": Vector2(3.0, 7.0), "up": 0.3, "gravity": 11.0, "drag": 1.8, "scale": Vector2(0.04, 0.075), "grow": 1.0, "spread": 22.0, "inherit": 0.3, "soft": 0.06},
 	"kickup_snow": {"amount": 30, "life": 1.0, "color": Color(0.92, 0.95, 1.0, 0.72), "speed": Vector2(0.25, 0.7), "up": 0.35, "gravity": 0.3, "drag": 0.6, "scale": Vector2(0.12, 0.2), "grow": 1.5, "spread": 20.0, "inherit": 0.2},
 	"sparks": {"amount": 22, "life": 0.45, "color": Color(1.0, 0.58, 0.18, 0.95), "speed": Vector2(5.0, 12.0), "up": 0.18, "gravity": 18.0, "drag": 0.4, "scale": Vector2(0.025, 0.055), "grow": 0.35, "spread": 55.0, "emission": true},
 	"debris": {"amount": 18, "life": 0.85, "color": Color(0.56, 0.49, 0.39, 0.9), "speed": Vector2(3.0, 9.0), "up": 0.55, "gravity": 13.0, "drag": 0.7, "scale": Vector2(0.04, 0.11), "grow": 0.55, "spread": 65.0},
@@ -140,7 +145,7 @@ static func _build_resources() -> void:
 		pm.color_ramp = ramp
 		var material := ShaderMaterial.new()
 		material.shader = SHADER
-		material.set_shader_parameter("soft_distance", 0.55)
+		material.set_shader_parameter("soft_distance", float(spec.get("soft", 0.55))) # metres a particle fades out over into what is behind it
 		material.set_shader_parameter("camera_fade_distance", 3.0)
 		material.set_shader_parameter("camera_fade_min", 0.85)
 		material.set_shader_parameter("emissive", bool(spec.get("emission", false)))
