@@ -858,8 +858,10 @@ def extra_landmarks(cfg, env, pts):
     {"pieces": [[model, x, y, angle_deg]] (track metres; angle: the model's x axis, from +x towards +y),
      "fence": {"model", "bay" (m), "ring": [[x, y], ...] (the outline it follows, closed), "reach" (m: only the bays
      this near the route)}, "clear" (m: no trees, and no forest on the land map, this near a piece; the fence
-     line keeps a quarter of it), "clearings": [[x, y, r]] (more open ground, no trees)}. Appended to env "landmarks" ([model, x, y, length, width, angle, 0]);
-     surroundings.gd stands them on the ground and turns their +z side to the road."""
+     line keeps a quarter of it), "clearings": [[x, y, r]] (more open ground, no trees), "roam" (m: how far an animal
+     wanders from where it is placed)}. Appended to env "landmarks" ([model, x, y, length, width, angle, 0]);
+     surroundings.gd stands them on the ground and turns their +z side to the road. With a fence, env "herd"
+     {ring: [x, y, ...] (the fence outline), roam} lets wisent_herd.gd walk the animals about inside it."""
     ex = cfg['extra_landmarks']
     out = []
     for model, x, y, ang in ex.get('pieces', []):
@@ -884,6 +886,8 @@ def extra_landmarks(cfg, env, pts):
                             round(ang, 3), 0.0])
                 line.append(c)
     env.setdefault('landmarks', []).extend(out)
+    if fence:
+        env['herd'] = {'ring': [round(v, 1) for p in fence['ring'] for v in p], 'roam': ex.get('roam', 10.0)}
     clear = ex.get('clear', 0.0)
     fmodel = fence['model'] if fence else None
     spots = [(o[1], o[2], clear) for o in out if o[0] != fmodel and clear > 0.0]

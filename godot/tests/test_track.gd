@@ -292,6 +292,54 @@ const PSZCZYNA_ZUBRY := [-657, 383, -603, 335, -591, 305, -575, 264, -565, 240, 
 	-429, 469, -473, 510, -496, 518, -552, 521, -620, 513, -649, 509, -663, 507, -673, 498, -681, 497, -689, 500, -741, 488,
 	-752, 483, -756, 462, -730, 431, -706, 409, -682, 420, -663, 406, -671, 392]
 
+## Two simulated minutes of wisent_herd.gd: the standing animals move about, the lying ones stay put, nobody walks
+## into the hay rack or another animal, and every one stays inside the enclosure with room to the fence.
+func _check_herd_life(env, zubry: PackedVector2Array, errors: Array) -> void:
+	if typeof(env) != TYPE_DICTIONARY or not env.has("herd"):
+		return
+	var herd_script: GDScript = load("res://scripts/ui/wisent_herd.gd")
+	var animals: Array = []
+	var blocks: Array[Vector3] = []
+	for lm in env.get("landmarks", []):
+		if String(lm[0]).begins_with("Wisent"):
+			animals.append({"node": MeshInstance3D.new(), "part": String(lm[0]), "at": Vector2(lm[1], lm[2]), "rot": 0.0})
+		elif String(lm[0]) == "HayRack":
+			blocks.append(Vector3(lm[1], lm[2], herd_script.footprint(null, "HayRack")))
+	var life = herd_script.new()
+	life.setup(zubry, float(env.herd.get("roam", 10.0)), func(_x: float, _y: float) -> float: return 0.0, Vector2.ZERO, animals, blocks)
+	var bumped := ""
+	for k in 1200:
+		life._process(0.1)
+		# footprints as circles (wisent_herd.footprint): touching is fine, overlapping is a wisent inside another
+		for i in animals.size():
+			var at_i := Vector2((animals[i].node as MeshInstance3D).position.x, (animals[i].node as MeshInstance3D).position.z)
+			var r_i: float = herd_script.footprint(null, animals[i].part)
+			for b in blocks:
+				if bumped.is_empty() and at_i.distance_to(Vector2(b.x, b.y)) < r_i + b.z - 0.01:
+					bumped = "a %s walked into the hay rack" % animals[i].part
+			for j in range(i + 1, animals.size()):
+				var at_j := Vector2((animals[j].node as MeshInstance3D).position.x, (animals[j].node as MeshInstance3D).position.z)
+				if bumped.is_empty() and at_i.distance_to(at_j) < r_i + float(herd_script.footprint(null, animals[j].part)) - 0.01:
+					bumped = "a %s and a %s walked into each other" % [animals[i].part, animals[j].part]
+	if not bumped.is_empty():
+		errors.append("pszczyna: " + bumped)
+	var moved := 0
+	for a in animals:
+		var mi: MeshInstance3D = a.node
+		var p := Vector2(mi.position.x, mi.position.z)
+		var shift := p.distance_to(a.at)
+		if a.part == "WisentCowLying":
+			if shift > 0.01:
+				errors.append("pszczyna: a lying wisent should not walk (%.1f m)" % shift)
+		elif shift > 0.5:
+			moved += 1
+		if not Geometry2D.is_point_in_polygon(p, zubry):
+			errors.append("pszczyna: a wandering %s left the enclosure at %s" % [a.part, p])
+		mi.free()
+	if moved < 4:
+		errors.append("pszczyna: the herd should graze about, only %d wisents moved in two minutes" % moved)
+	life.free()
+
 static func _poly(flat: Array) -> PackedVector2Array:
 	var out := PackedVector2Array()
 	for k in range(0, flat.size(), 2):
@@ -337,6 +385,16 @@ func _check_pszczyna_park(tr: Track, def: TrackDef, errors: Array) -> void:
 		elif near[2] < 60.0 or near[2] > 250.0:
 			errors.append("pszczyna: %s should be off the road but in sight of it, %.0f m away" % [part, near[2]])
 		herd[part] = true
+	# the herd wanders (wisent_herd.gd) inside the fence the baker hands it, and the park alleys carry no paint
+	var area: Dictionary = env.get("herd", {}) if typeof(env) == TYPE_DICTIONARY else {}
+	if not area.has("ring") or (area.ring as Array).size() != PSZCZYNA_ZUBRY.size():
+		errors.append("pszczyna: env should carry the enclosure outline for the herd")
+	_check_herd_life(env, zubry, errors)
+	var bare := false
+	for z in def.unpainted:
+		bare = bare or (z.x <= first + 50.0 and z.y >= last - 10.0)
+	if not bare:
+		errors.append("pszczyna: the park alleys (%.0f-%.0f m) should have no road paint" % [first, last])
 	for part in ["WisentBull", "WisentCow", "WisentCowLying", "WisentCalf"]:
 		if not herd.has(part):
 			errors.append("pszczyna: the wisent herd should include a %s" % part)

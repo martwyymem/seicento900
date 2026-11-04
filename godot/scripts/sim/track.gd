@@ -286,6 +286,35 @@ func profile_for(cm: CarModel) -> PackedFloat64Array:
 	_prof_alt[id] = p
 	return p
 
+## The loose kind at lap distance s: 1 dirt, 2 gravel (Track.loose), 0 paved.
+func loose_at(s: float) -> int:
+	for z in loose:
+		if s >= z.x and s < z.y:
+			return int(z.z)
+	return 0
+
+## A speed profile slowed for the loose spans (TrackDef.loose_grip): through them the corner speeds scale with the
+## square root of the surface's grip (Physics.SURF_GRIP of dirt or gravel) and the braking into and through them
+## with the grip, so a driver on rails or following the profile is on the same terms as the car in the gravel.
+func loose_profile(base: PackedFloat64Array) -> PackedFloat64Array:
+	if loose.is_empty():
+		return base
+	var p := base.duplicate()
+	var mu := PackedFloat64Array()
+	mu.resize(n)
+	for i in n:
+		var kind := loose_at(i * step)
+		mu[i] = 1.0 if kind == 0 else Physics.SURF_GRIP[Physics.SURF_GRAVEL_ROAD if kind == 2 else Physics.SURF_DIRT]
+		p[i] *= sqrt(mu[i])
+	for pass_ in 2:
+		for q in range(n - 1, -1, -1):
+			var j := (q + 1) % n
+			var a_brake := G * mu[q] * maxf(0.5, 0.92 + GRADE[q])
+			var lim := sqrt(p[j] * p[j] + 2 * a_brake * RDS[q])
+			if p[q] > lim:
+				p[q] = lim
+	return p
+
 func build_bounds() -> void:
 	var min_x := INF
 	var min_y := INF

@@ -252,6 +252,8 @@ func _init(settings: RaceSettings, player_plan = null, seed_ := -1, models := {}
 		_steer_k = Physics.SURF_STEER[road_surf]
 	track = get_track(settings.track)
 	track.PROF = track.profile_for(car_model)
+	if track.cfg.loose_grip:
+		track.PROF = track.loose_profile(track.PROF) # the AI slows for the gravel it now meets (surface_at)
 	if spec.resource_name == "hypercar":
 		brake_k = spec.grip_k / 1.4
 		brake_aero = brake_k * 0.5 * 1.225 * maxf(0.0, -spec.lift_a) / car_model.mass_with_fuel(spec.tank * 0.5)
@@ -1753,6 +1755,11 @@ func surface_at(car: RaceCar, x: float, y: float) -> int:
 		# a cobbled stretch (street stages) grips less than the tarmac round it; tracks without cobbles are untouched
 		if not c.cobbles.is_empty() and ad <= tr.half and not (car.is_player and _monster_player) and in_cobbles(tr.wrap_s(car.s)):
 			return Physics.SURF_COBBLE
+		# a gravel or dirt stretch of a street stage (TrackDef.loose_grip: Pszczyna's park) grips as it looks
+		if c.loose_grip and ad <= tr.half:
+			var kind := tr.loose_at(tr.wrap_s(car.s))
+			if kind > 0:
+				return Physics.SURF_GRAVEL_ROAD if kind == 2 else Physics.SURF_DIRT
 		return road_surf
 	var p := tr.rel(car.s)
 	if signf(d) == signf(c.pit_offset) and p > c.pit_entry - 20.0 and p < c.pit_exit + 20.0:

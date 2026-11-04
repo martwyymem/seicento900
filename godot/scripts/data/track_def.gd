@@ -56,6 +56,8 @@ extends Resource
 ## ground is cut back only beside it.
 @export var viaduct := false
 @export var cobbles := PackedVector2Array() ## street stages: lap distances (from, to) of cobbled stretches, drawn in road.gdshader
+@export var unpainted := PackedVector2Array() ## lap distances (from, to) where the road has no painted lines (a park's alleys); cobbled and loose stretches never have any
+@export var loose_grip := false ## the baked loose spans (Track.loose, a street route's surface_spans) grip as gravel or dirt, not as the race's road; for every car, and the AI's speed profile slows to match
 ## A point-to-point rally stage baked as a loop (tools/plan_route.py): the stage, a run-off past the finish and a
 ## return leg. data/tracks/<key>.json has "stage": [from, to]. Rally only: kept out of the race and championship pickers.
 @export var point_to_point := false

@@ -16,6 +16,7 @@ const BANK_BRIDGE := 6.5 ## metres the ring is lifted where it passes over a roa
 const BANK_EASE := 80.0 ## metres over which the banking climbs from flat, at either end of a stretch
 const LANDMARKS_PATH := "res://models/landmarks.glb"
 const WISENTS_PATH := "res://models/wisents.glb" ## Pszczyna's wisent herd and paddock (build_wisents.py)
+const WISENT_HERD := preload("res://scripts/ui/wisent_herd.gd") ## walks the herd about its enclosure
 ## Small props placed as landmarks (a street route's extra_landmarks): they cast no occluder (the fence and the
 ## herd are seen through and past) and stand on the ground without a stone terrace.
 const LANDMARK_PROPS := ["WisentBull", "WisentCow", "WisentCowLying", "WisentCalf", "HayRack", "PaddockFence"]
@@ -1148,6 +1149,8 @@ func _build_hedges(root: Node3D) -> void:
 func _build_landmarks(root: Node3D) -> void:
 	var meshes := landmark_meshes()
 	var c: Vector2 = world.world_center
+	var herd: Array = [] # the wisents, for wisent_herd.gd
+	var herd_blocks: Array[Vector3] = [] # the props in their enclosure they walk round (the hay rack)
 	for lm in env.get("landmarks", []):
 		var part: String = lm[0]
 		if not meshes.has(part):
@@ -1213,6 +1216,10 @@ func _build_landmarks(root: Node3D) -> void:
 		mi.transform = Transform3D(Basis(Vector3.UP, rot) * Basis.from_scale(scale),
 				Vector3(at.x - c.x, y, at.y - c.y))
 		root.add_child(mi)
+		if part.begins_with("Wisent"):
+			herd.append({"node": mi, "part": part, "at": at, "rot": rot})
+		elif part == "HayRack":
+			herd_blocks.append(Vector3(at.x, at.y, WISENT_HERD.footprint(mi, part)))
 		if part not in ["TyreBridge", "MonzaPodio"] and part not in LANDMARK_PROPS: # the TV cameras see under those
 			var box: AABB = (meshes[part] as Mesh).get_aabb()
 			var foot := half if half.x > 0.0 and half.y > 0.0 else Vector2(box.size.x, box.size.z) * 0.5
@@ -1229,6 +1236,17 @@ func _build_landmarks(root: Node3D) -> void:
 			terrace.material_override = _terrace_material()
 			terrace.transform = Transform3D(Basis(Vector3.UP, rot), Vector3(at.x - c.x, (y + low) * 0.5 - 0.4, at.y - c.y))
 			root.add_child(terrace)
+
+	var area: Dictionary = env.get("herd", {})
+	if not herd.is_empty() and area.has("ring"):
+		var ring := PackedVector2Array()
+		var flat: Array = area.ring
+		for k in range(0, flat.size() - 1, 2):
+			ring.append(Vector2(flat[k], flat[k + 1]))
+		var life := WISENT_HERD.new()
+		life.name = "WisentHerd"
+		root.add_child(life)
+		life.setup(ring, float(area.get("roam", 10.0)), ground_height, c, herd, herd_blocks)
 
 func _terrace_material() -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()

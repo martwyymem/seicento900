@@ -1924,6 +1924,14 @@ func _add_ribbon(width: float, lift: float, material: Material, label: String) -
 			while zones.size() < 4:
 				zones.append(Vector4.ZERO)
 			sm.set_shader_parameter("cobble_zones", zones)
+		if label in ["Asphalt", "Runoff"] and not track.cfg.unpainted.is_empty(): # a paved verge's line too
+			var bare := PackedVector4Array()
+			for z in track.cfg.unpainted:
+				bare.append(Vector4(z.x, z.y, 0.0, 0.0))
+			sm.set_shader_parameter("nopaint_count", mini(bare.size(), 4))
+			while bare.size() < 4:
+				bare.append(Vector4.ZERO)
+			sm.set_shader_parameter("nopaint_zones", bare)
 	elif sm and sm.shader == GROUND_SHADER:
 		sm.set_shader_parameter("lush", 1.0)
 	var vertices := PackedVector3Array()
@@ -1992,6 +2000,15 @@ func _add_ribbon(width: float, lift: float, material: Material, label: String) -
 ## Painted white lines along both track edges, following the banking.
 const PAINT_SHADER := preload("res://shaders/road_paint.gdshader")
 
+## Whether the road at lap distance s has painted edge lines: not on setts (TrackDef.cobbles), dirt or gravel
+## (Track.loose) or where the track says there is none (TrackDef.unpainted, a park's alleys).
+func _painted_at(s: float) -> bool:
+	for zones: PackedVector2Array in [track.cfg.cobbles, track.cfg.unpainted]:
+		for z in zones:
+			if s >= z.x and s < z.y:
+				return false
+	return track.loose_at(s) == 0
+
 func _add_edge_lines() -> void:
 	var vertices := PackedVector3Array()
 	var uvs := PackedVector2Array() # (across the line 0..1, metres along the lap) for the paint shader
@@ -2010,6 +2027,8 @@ func _add_edge_lines() -> void:
 			uvs.append(Vector2(0.0, s))
 			uvs.append(Vector2(1.0, s))
 		for i in track.n:
+			if not _painted_at(i * track.step):
+				continue
 			var a := base + i * 2
 			var c := base + ((i + 1) % track.n) * 2
 			if side > 0.0:

@@ -1,7 +1,7 @@
 ## Scenery check (dev tool): builds a circuit and saves screenshots of its scenery.
 ## Env: TRACK (default gp), HOUR, OUT (directory), VIEWS (comma list):
 ##   pos:<x>;<y>[;<dist>;<height>] (a track point from the south-west), lm:<Name> (a landmark from its front), wall<S> (the first tyre wall after S metres), kerb (the kerb of the tightest bend), obj:<Name> (the first, or INDEX-th, of a furniture MultiMesh, from in front), stands, stands_near, stands_back, pits, pits_near, gantry, aerial, high, city, casino,
-##   top<S> (from above the road at S metres), down<S> (straight down from 60 m), lap<N> (driver's-eye view N/8 of the way round the lap, e.g. lap3), at<S> (driver's eye at S metres)
+##   top<S> (from above the road at S metres), from<S>;<x>;<y> (driver's eye at S towards track point x;y), down<S> (straight down from 60 m), lap<N> (driver's-eye view N/8 of the way round the lap, e.g. lap3), at<S> (driver's eye at S metres)
 ##   godot --path godot -s tests/_scenery_shot.gd
 extends SceneTree
 
@@ -106,6 +106,11 @@ func _initialize() -> void:
 			var s := float(v.substr(3))
 			eye = _pt(world, s - 70.0, 60.0, 45.0)
 			at = _pt(world, s, 0.0, 0.0)
+		elif v.begins_with("from"): # from<S>;<x>;<y>: from the driver's eye at S metres towards track point x;y
+			var a := v.substr(4).split(";")
+			var cw: Vector2 = world.world_center
+			eye = _pt(world, float(a[0]), 0.0, 1.3)
+			at = Vector3(float(a[1]) - cw.x, world.surroundings.ground_height(float(a[1]), float(a[2])) + 1.0, float(a[2]) - cw.y)
 		elif v.begins_with("lap") or v.begins_with("at"):
 			var s := float(v.substr(3)) / 8.0 * tr.L if v.begins_with("lap") else float(v.substr(2))
 			eye = _pt(world, s, 0.0, 1.3)

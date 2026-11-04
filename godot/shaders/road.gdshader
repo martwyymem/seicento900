@@ -27,6 +27,9 @@ uniform int cobble_count = 0;
 // loose stretches of a rally stage: x = from, y = to (m along the lap), z = 1 dirt / 2 gravel
 uniform vec4 loose_zones[16];
 uniform int loose_count = 0;
+// stretches with no painted lines (TrackDef.unpainted: a park's alleys): lap distances (from, to) in x, y
+uniform vec4 nopaint_zones[4];
+uniform int nopaint_count = 0;
 
 uniform sampler2D grain : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D grain_normal : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
@@ -234,6 +237,12 @@ void fragment() {
 	float edge_line = mix(smoothstep(0.09, 0.03, edge_dist), smoothstep(0.06 + line_aa, 0.06 - line_aa, edge_dist), step(0.001, detail)) * (1.0 - w * 0.35);
 	// town paint: faded, scuffed through by the wheels, and gone where the road was patched
 	float paint_wear = mix(1.0, (0.4 + 0.6 * smoothstep(0.3, 0.62, texture(grain, vec2(d * 2.0, s * 0.35) + 0.7).r)) * (1.0 - patch_mask * 0.85), street);
+	float bare = 0.0;
+	for (int i = 0; i < nopaint_count; i++) {
+		vec2 z = nopaint_zones[i].xy;
+		bare = max(bare, smoothstep(z.x, z.x + 4.0, s) * (1.0 - smoothstep(z.y - 4.0, z.y, s)));
+	}
+	paint_wear *= 1.0 - bare;
 	edge_line *= paint_wear * (1.0 - cob) * (1.0 - unp);
 	col = mix(col, vec3(0.92, 0.94, 0.96) * (0.85 + 0.15 * fine), edge_line * 0.9);
 	rough = mix(rough, 0.42, edge_line * 0.9);

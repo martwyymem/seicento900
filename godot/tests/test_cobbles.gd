@@ -78,6 +78,32 @@ func run() -> Array:
 	check("braking takes longer on setts", set.dist > tar.dist * 1.05, "(%.1f vs %.1f m)" % [set.dist, tar.dist])
 	check("lateral grip is lower on setts", set.lat < tar.lat * 0.95, "(%.2f vs %.2f m/s2)" % [set.lat, tar.lat])
 	race.dispose()
+	# Pszczyna's gravel western lobe (TrackDef.loose_grip) grips as gravel for every car, and the AI's speed
+	# profile slows there to match; the asphalt before it is untouched
+	st.track = "pszczyna"
+	var psz := Race.new(st, null, 1)
+	var lz: Array[Vector3] = psz.track.loose
+	check("pszczyna grips as its gravel looks", psz.track.cfg.loose_grip and not lz.is_empty())
+	if not lz.is_empty():
+		var g := lz[0]
+		var mid := (g.x + g.y) * 0.5
+		for car in [psz.player, psz.cars[1]]:
+			car.s = mid
+			car.d = 0.0
+			var on := psz.surface_at(car, car.x, car.y)
+			check("pszczyna gravel for car %d" % car.id, on == Physics.SURF_GRAVEL_ROAD, "(%d)" % on)
+			car.s = g.x - 40.0
+			var before := psz.surface_at(car, car.x, car.y)
+			check("pszczyna setts before the gravel for car %d" % car.id, before == Physics.SURF_COBBLE, "(%d)" % before)
+			car.s = mid
+			car.d = psz.track.half + 1.0
+			check("pszczyna run-off beside the gravel is not gravel road", psz.surface_at(car, car.x, car.y) != Physics.SURF_GRAVEL_ROAD)
+		var stock := psz.track.profile_for(psz.car_model)
+		var i := int(mid / psz.track.step)
+		var j := int((lz[0].x - 400.0) / psz.track.step)
+		check("pszczyna AI slows on the gravel", psz.track.PROF[i] < stock[i] * 0.85, "(%.1f vs %.1f m/s)" % [psz.track.PROF[i], stock[i]])
+		check("pszczyna AI profile unchanged well before it", is_equal_approx(psz.track.PROF[j], stock[j]))
+	psz.dispose()
 	# a track with no cobbles never reports the surface
 	st.track = "gp"
 	var gp := Race.new(st, null, 1)
