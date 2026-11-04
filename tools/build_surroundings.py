@@ -162,6 +162,9 @@ def number(text):
         return None
 
 
+DENSE_CITY = {}  # key -> True: plain mid-sized buildings are city blocks (set by build_street_tracks.py, "dense_city")
+
+
 def building_kind(tags, footprint):
     """(style, default height in m) for a building from its tags and footprint area."""
     b = tags.get('building', 'yes')
@@ -405,6 +408,9 @@ def build(key):
                     castle.append([cx, cy, wd / 2])
                 continue
             kind, height = building_kind(tags, fp)
+            if DENSE_CITY.get(key) and kind == 0 and tags.get('building', 'yes') == 'yes' and fp >= 120:
+                # a plain building in a dense city centre (Tokyo): a flat-roofed block of 3-9 storeys, not a house
+                kind, height = 1, 3.1 * (3 + (el['id'] * 2654435761) % 7) + 0.6
             levels = number(tags.get('building:levels'))
             if number(tags.get('height')):
                 height = number(tags['height'])

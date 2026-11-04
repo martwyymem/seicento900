@@ -26,6 +26,7 @@ extends Resource
 @export var runoff_paved_color := Color(0.3, 0.31, 0.32)
 @export_enum("armco", "tyres", "armco+fence", "safer", "guardrail", "plastic", "jersey") var barrier := "armco" ## tyres: tyre walls round the bends, armco between them; guardrail, plastic, jersey: street-stage looks (W-beam on posts, red-white water blocks, bannered concrete)
 @export var barrier_color := Color(0, 0, 0, 0) ## the barrier's colour; transparent for the usual (galvanised armco, dark wall, grey SAFER)
+@export var wooden_rails := PackedVector2Array() ## lap distances (from, to) where a wooden post-and-rail park fence stands instead of `barrier` (Pszczyna's castle park); visual only, the sim wall is the same
 @export_range(0.0, 35.0, 0.1, "suffix:°") var banking := 0.0 ## banking in the turns; the outside edge is higher
 @export var bank_zones := PackedVector3Array() ## banked turns one by one, instead of `banking`: (from s, to s, degrees), s from the start line
 

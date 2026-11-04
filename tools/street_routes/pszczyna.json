@@ -1,5 +1,5 @@
 {
-  "_comment": "Pszczyna, Poland: a closed loop of real streets and the real alleys of the Park Zamkowy (castle park), from OpenStreetMap. The park alleys are footways and paths, opened as a 7 m stage road for this one track (the user asked for a lap through the park; every other street stage keeps to public roads). The start line and the pit lane (on the park side) are on ul. Katowicka heading south below Rondo św. Jadwigi Śląskiej. The lap: south down ul. Katowicka over the Pszczynka, right at ul. Dworcowa into the cobbled ul. Piastowska, west across the Rynek and out past Brama Wybrańców to ul. Wojska Polskiego beside Pszczyna Castle, right (north) onto ul. Żorska over the Pszczynka past the Pokazowa Zagroda Żubrów (the wisent show enclosure, OSM way 977929799, its herd stands in the enclosure's east corner, 'extra_landmarks'), right through the park's west gate onto the asphalt alley along the big pond's north shore, south-east to a hairpin on the lawn north of the castle, north across the bridges between the two central ponds, the sett alley north-west, round the park's western lobe and out onto ul. Chopina by Dwór Ludwikówka, east along Chopina past the Staw Chuchółka pond, right at Rondo św. Jadwigi Śląskiej and back down ul. Katowicka. Piastowska and the Rynek's east side are tagged access=no / motor_vehicle=no (pedestrianised old town); the direction driven follows every one-way. The route ways and nodes were picked on the OSM footway graph (park alleys between waypoints), so the route lists its nodes. See tools/build_street_tracks.py for the keys.",
+  "_comment": "Pszczyna, Poland: a closed loop of real streets and the real alleys of the Park Zamkowy (castle park), from OpenStreetMap. The park alleys are footways and paths, opened as a 7 m stage road for this one track (the user asked for a lap through the park; every other street stage keeps to public roads). The start line and the pit lane (on the park side) are on ul. Katowicka heading south below Rondo św. Jadwigi Śląskiej. The lap: south down ul. Katowicka over the Pszczynka, right at ul. Dworcowa into the cobbled ul. Piastowska, west across the Rynek and out past Brama Wybrańców to ul. Wojska Polskiego beside Pszczyna Castle, right (north) onto ul. Żorska over the Pszczynka past the Pokazowa Zagroda Żubrów (the wisent show enclosure, OSM way 977929799, its herd stands in the enclosure's east corner, 'extra_landmarks': the herd, a hay rack and the paddock fence, tools/blender/build_wisents.py), right through the park's west gate onto the asphalt alley along the big pond's north shore, south-east to a hairpin on the lawn north of the castle, north across the bridges between the two central ponds, the sett alley north-west, round the park's western lobe and out onto ul. Chopina by Dwór Ludwikówka, east along Chopina past the Staw Chuchółka pond, right at Rondo św. Jadwigi Śląskiej and back down ul. Katowicka. Piastowska and the Rynek's east side are tagged access=no / motor_vehicle=no (pedestrianised old town); the direction driven follows every one-way. The route ways and nodes were picked on the OSM footway graph (park alleys between waypoints), so the route lists its nodes. Surfaces as mapped: the old town's setts (Piastowska, the Rynek and the sett end of Wojska Polskiego, cobbles 574-1008 m), the asphalt alley by the big pond, the sett and timber bridges and the sett alley (cobbles 2218-2508 m), and the untagged western-lobe paths drawn as fine resin-bound gravel (surface_spans 2508-2854 m, visual only: they grip like the tarmac). Through the park (1650-2854 m, the west gate to ul. Chopina) a low wooden post-and-rail fence lines the alley instead of the yellow water blocks (wooden_rails). See tools/build_street_tracks.py for the keys.",
   "key": "pszczyna",
   "origin": [
     49.9817,
@@ -379,12 +379,22 @@
     "street_stage": true,
     "cobbles": [
       [
-        603.9,
-        901.0
+        574.0,
+        1008.0
+      ],
+      [
+        2218.0,
+        2508.0
       ]
     ],
     "barrier": "plastic",
     "barrier_color": "Color(0.91, 0.72, 0.0, 1)",
+    "wooden_rails": [
+      [
+        1650.0,
+        2854.0
+      ]
+    ],
     "runoff": 1.5,
     "runoff_surface": "asphalt",
     "runoff_paved": 1.5,
@@ -402,5 +412,176 @@
     "pit_offset": 8.4,
     "box_start": -65.0,
     "box_spacing": 9.0
+  },
+  "surface_spans": [
+    [
+      2508.0,
+      2854.0,
+      "gravel"
+    ]
+  ],
+  "extra_landmarks": {
+    "_comment": "The Pokazowa Zagroda Żubrów (OSM way 977929799, tourism=zoo): its outline in track metres (x east, y south) as 'ring', the herd in its east corner 110-160 m west of ul. Żorska, seen across the meadow from Żorska and from the Wojska Polskiego / Żorska corner (lap 1240-1550 m). 'clearings' opens the lawn between the hairpin and the castle's north front, so the castle shows from the park alley.",
+    "pieces": [
+      [
+        "WisentBull",
+        -430,
+        425,
+        15
+      ],
+      [
+        "WisentCow",
+        -447,
+        440,
+        -25
+      ],
+      [
+        "WisentCow",
+        -455,
+        405,
+        40
+      ],
+      [
+        "WisentCowLying",
+        -442,
+        462,
+        5
+      ],
+      [
+        "WisentCalf",
+        -437,
+        448,
+        -10
+      ],
+      [
+        "HayRack",
+        -470,
+        425,
+        80
+      ]
+    ],
+    "fence": {
+      "model": "PaddockFence",
+      "bay": 6.0,
+      "reach": 200,
+      "ring": [
+        [
+          -657,
+          383
+        ],
+        [
+          -603,
+          335
+        ],
+        [
+          -591,
+          305
+        ],
+        [
+          -575,
+          264
+        ],
+        [
+          -565,
+          240
+        ],
+        [
+          -538,
+          245
+        ],
+        [
+          -465,
+          341
+        ],
+        [
+          -404,
+          417
+        ],
+        [
+          -403,
+          435
+        ],
+        [
+          -429,
+          469
+        ],
+        [
+          -473,
+          510
+        ],
+        [
+          -496,
+          518
+        ],
+        [
+          -552,
+          521
+        ],
+        [
+          -620,
+          513
+        ],
+        [
+          -649,
+          509
+        ],
+        [
+          -663,
+          507
+        ],
+        [
+          -673,
+          498
+        ],
+        [
+          -681,
+          497
+        ],
+        [
+          -689,
+          500
+        ],
+        [
+          -741,
+          488
+        ],
+        [
+          -752,
+          483
+        ],
+        [
+          -756,
+          462
+        ],
+        [
+          -730,
+          431
+        ],
+        [
+          -706,
+          409
+        ],
+        [
+          -682,
+          420
+        ],
+        [
+          -663,
+          406
+        ],
+        [
+          -671,
+          392
+        ]
+      ]
+    },
+    "clear": 30.0,
+    "clearings": [
+      [
+        18.0,
+        330.0,
+        48.0
+      ]
+    ]
   }
 }

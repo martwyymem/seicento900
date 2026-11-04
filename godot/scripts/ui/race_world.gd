@@ -1510,6 +1510,7 @@ func _build_track() -> void:
 
 	# 6. Armco barriers / guardrails along runoff edges, and covered sections (Monaco's tunnel)
 	_build_barriers()
+	_build_wooden_rails()
 	_build_tunnels()
 	_build_bridges()
 
@@ -2453,6 +2454,76 @@ func _add_part(parent: Node3D, parts: Dictionary, part: String, xf: Transform3D)
 	parent.add_child(inst)
 	return inst
 
+## Whether lap distance s lies in one of the track's wooden-rail zones (TrackDef.wooden_rails).
+func _in_wooden_rails(s: float) -> bool:
+	for z in track.cfg.wooden_rails:
+		if s >= z.x and s < z.y:
+			return true
+	return false
+
+## A low wooden post-and-rail fence both sides where TrackDef.wooden_rails says (a park's alleys), in place of the
+## street barrier: two rails as strips, a round post every 2.5 m. Visual only, like every street-stage barrier.
+func _build_wooden_rails() -> void:
+	var zones := track.cfg.wooden_rails
+	if zones.is_empty():
+		return
+	var bd := track.half + track.cfg.runoff + 0.3
+	var wood := _material(Color("#6e4f33"), 0.9)
+	wood.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var verts := PackedVector3Array()
+	var posts: Array[Transform3D] = []
+	var post_every := maxi(1, roundi(2.5 / track.step))
+	for side in [-1.0, 1.0]:
+		for i in track.n:
+			var s := i * track.step
+			if not _in_wooden_rails(s):
+				continue
+			var nxt := (i + 1) % track.n
+			var p0 := track.pos(s, side * bd)
+			var p1 := track.pos(nxt * track.step, side * bd)
+			var y0 := (track.H[i] - elevation_base) * ALTITUDE_SCALE
+			var y1 := (track.H[nxt] - elevation_base) * ALTITUDE_SCALE
+			var a := Vector3(p0[0] - world_center.x, y0, p0[1] - world_center.y)
+			var b := Vector3(p1[0] - world_center.x, y1, p1[1] - world_center.y)
+			for rail: Vector2 in [Vector2(0.38, 0.5), Vector2(0.78, 0.9)]:
+				var lo: Vector3 = Vector3.UP * rail.x
+				var hi: Vector3 = Vector3.UP * rail.y
+				verts.append_array(PackedVector3Array([a + lo, a + hi, b + lo, a + hi, b + hi, b + lo]))
+			if i % post_every == 0:
+				posts.append(Transform3D(Basis.IDENTITY, a + Vector3.UP * 0.5))
+	if verts.is_empty():
+		return
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	var st := SurfaceTool.new()
+	var raw := ArrayMesh.new()
+	raw.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	st.create_from(raw, 0)
+	st.generate_normals()
+	var rails := MeshInstance3D.new()
+	rails.name = "WoodenRails"
+	rails.mesh = st.commit()
+	rails.material_override = wood
+	track_root.add_child(rails)
+	var post := CylinderMesh.new()
+	post.top_radius = 0.07
+	post.bottom_radius = 0.08
+	post.height = 1.0
+	post.radial_segments = 6
+	post.rings = 0
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = post
+	mm.instance_count = posts.size()
+	for k in posts.size():
+		mm.set_instance_transform(k, posts[k])
+	var mmi := MultiMeshInstance3D.new()
+	mmi.name = "WoodenRailPosts"
+	mmi.multimesh = mm
+	mmi.material_override = wood
+	track_root.add_child(mmi)
+
 func _build_barriers() -> void:
 	var cfg := track.cfg
 	var bd := track.half + cfg.runoff + 0.3
@@ -2532,6 +2603,8 @@ func _build_barriers() -> void:
 					continue
 				side_bd = lerpf(bd, absf(po) + PIT_FENCE_D, track.pit_blend(s))
 			if tyre_cells.has(FURNITURE._cell_key(i, side)):
+				continue
+			if _in_wooden_rails(s): # a park fence there instead (_build_wooden_rails)
 				continue
 
 			var nxt := (i + 1) % track.n

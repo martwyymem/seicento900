@@ -34,7 +34,10 @@ tools/.tiles/gsi/); levels {bridge {layer: m}, tunnel {layer: m}, cutting, bridg
 clearance} puts the road over or under that ground by its ways' OSM bridge/tunnel/cutting tags (road_levels) and writes
 the tunnels as "tunnels" [[first sample, last sample]]; spiral {node, after, turns, radius, side, entry_level,
 exit_level, name} splices in a helix that isn't on the map (splice_spiral); building_reach (m) keeps only the
-buildings and trees that close to the route.
+buildings and trees that close to the route; dense_city (true) makes plain mid-sized buildings flat-roofed blocks of
+3-9 storeys instead of houses (a city centre that OSM maps without heights); surface_spans [[from m, to m, 'gravel' |
+'dirt']] (from the start line) draws those stretches unpaved (Track.loose, the road shader; the grip stays the race's);
+extra_landmarks places props OSM has no tag for (extra_landmarks(): Pszczyna's wisent enclosure).
 
 Data © OpenStreetMap contributors, ODbL. Elevation: EU-DEM via OpenTopoData; in Japan, GSI elevation tiles (国土地理院).
 """
@@ -760,6 +763,10 @@ def build(key, refetch=False, check=None):
             sf = cfg['_surfs'][j]
             if not track['surfaces'] or track['surfaces'][-1][1] != sf:
                 track['surfaces'].append([i, sf])
+    if cfg.get('surface_spans'):  # hand-set spans [[from m, to m, kind]] from the start line (paths OSM leaves untagged)
+        track['surfaces'] = [[0, 'paved']]
+        for a, b, kind in sorted(cfg['surface_spans']):
+            track['surfaces'] += [[int(round(a / step)), kind], [int(round(b / step)), 'paved']]
     if 'stage' in cfg:  # a point-to-point rally stage on the loop: [from, to], m from the start line
         track['stage'] = [round(node_s[cfg['stage']['start']], 1), round(node_s[cfg['stage']['finish']], 1)]
         print(f"  stage {track['stage'][0]:.0f} -> {track['stage'][1]:.0f} m ({track['stage'][1] - track['stage'][0]:.0f} m)")
@@ -794,6 +801,7 @@ def build(key, refetch=False, check=None):
         print('  fetching surroundings', fs.bbox(key), flush=True)
         os.makedirs(fs.OUT_DIR, exist_ok=True)
         json.dump(fs.fetch(key), open(env_src, 'w'), separators=(',', ':'))
+    bs.DENSE_CITY[key] = bool(cfg.get('dense_city'))
     bs.build(key)
     osm = json.load(open(env_src))
     half = cfg['trackdef'].get('width', 6.5) / 2
@@ -830,12 +838,78 @@ def build(key, refetch=False, check=None):
         env['stands'] = []  # no grandstands on a public road (OSM has none here anyway)
     if cfg.get('building_reach') or cfg.get('spiral'):
         trim_scenery(cfg, env, pts, half)
+    if cfg.get('extra_landmarks'):
+        extra_landmarks(cfg, env, pts)
     json.dump(env, open(env_path, 'w'), separators=(',', ':'))
     fh.build(key, ev)  # the distant land (its height and cover tiles are cached in tools/.tiles/)
     fl.build(key)
     print(f'  {len(blocks)} road blockages: ' + ', '.join(sorted({b[5] or str(b[4]) for b in blocks})))
     if check:
         check_image(key, pts, osm, blocks, corners, node_s, check)
+
+
+# footprints (length along the model's x, width) of the props extra_landmarks places (build_wisents.py)
+EXTRA_FOOT = {'WisentBull': (3.3, 1.3), 'WisentCow': (2.9, 1.1), 'WisentCowLying': (2.9, 1.3), 'WisentCalf': (1.7, 0.7),
+              'HayRack': (3.5, 2.2), 'PaddockFence': (6.0, 0.3)}
+
+
+def extra_landmarks(cfg, env, pts):
+    """Props that OSM has no landmark tag for, placed by the route file's "extra_landmarks" (Pszczyna's wisents):
+    {"pieces": [[model, x, y, angle_deg]] (track metres; angle: the model's x axis, from +x towards +y),
+     "fence": {"model", "bay" (m), "ring": [[x, y], ...] (the outline it follows, closed), "reach" (m: only the bays
+     this near the route)}, "clear" (m: no trees, and no forest on the land map, this near a piece; the fence
+     line keeps a quarter of it), "clearings": [[x, y, r]] (more open ground, no trees)}. Appended to env "landmarks" ([model, x, y, length, width, angle, 0]);
+     surroundings.gd stands them on the ground and turns their +z side to the road."""
+    ex = cfg['extra_landmarks']
+    out = []
+    for model, x, y, ang in ex.get('pieces', []):
+        ln, wd = EXTRA_FOOT.get(model, (0.0, 0.0))
+        out.append([model, round(x, 1), round(y, 1), ln, wd, round(math.radians(ang), 3), 0.0])
+    fence = ex.get('fence')
+    line = []
+    if fence:
+        ring = [tuple(p) for p in fence['ring']]
+        bay = fence.get('bay', 6.0)
+        reach2 = fence.get('reach', 1e9) ** 2
+        for a, b in zip(ring, ring[1:] + ring[:1]):
+            n = max(1, round(math.dist(a, b) / bay))
+            ang = math.atan2(b[1] - a[1], b[0] - a[0])
+            for k in range(n):
+                u = (k + 0.5) / n
+                c = (a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u)
+                if min((p[0] - c[0]) ** 2 + (p[1] - c[1]) ** 2 for p in pts[::5]) > reach2:
+                    continue
+                # each bay stretched to its share of the side, so the posts meet at the corners
+                out.append([fence['model'], round(c[0], 1), round(c[1], 1), round(math.dist(a, b) / n, 2), 0.3,
+                            round(ang, 3), 0.0])
+                line.append(c)
+    env.setdefault('landmarks', []).extend(out)
+    clear = ex.get('clear', 0.0)
+    fmodel = fence['model'] if fence else None
+    spots = [(o[1], o[2], clear) for o in out if o[0] != fmodel and clear > 0.0]
+    spots += [(x, y, clear * 0.25) for x, y in line if clear > 0.0]
+    spots += [tuple(c) for c in ex.get('clearings', [])]  # open lawns [x, y, radius] (a view the woods would hide)
+    if spots:
+        def bare(x, y):
+            return any((x - sx) ** 2 + (y - sy) ** 2 < r * r for sx, sy, r in spots)
+        trees = env.get('trees', [])
+        env['trees'] = [v for k in range(0, len(trees) - 1, 2) if not bare(trees[k], trees[k + 1]) for v in trees[k:k + 2]]
+        # and the forest the land map plants trees from: a meadow round the herd
+        from PIL import Image
+        path = os.path.join(GODOT_TRACKS, cfg['key'] + '_land.png')
+        land = env['land']
+        img = Image.open(path).convert('RGBA')
+        res = land['w'] / img.size[0]
+        px = img.load()
+        for sx, sy, r in spots:
+            for j in range(int((sy - r - land['y0']) / res), int((sy + r - land['y0']) / res) + 1):
+                for i in range(int((sx - r - land['x0']) / res), int((sx + r - land['x0']) / res) + 1):
+                    if 0 <= i < img.size[0] and 0 <= j < img.size[1] and \
+                            (land['x0'] + (i + 0.5) * res - sx) ** 2 + (land['y0'] + (j + 0.5) * res - sy) ** 2 < r * r:
+                        q = px[i, j]
+                        px[i, j] = (q[0], q[1], q[2], 0)
+        img.save(path, optimize=True)
+    print(f"  extra landmarks: {len(out)} ({len(line)} fence bays)")
 
 
 def trim_scenery(cfg, env, pts, half):

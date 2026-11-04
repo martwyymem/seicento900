@@ -8,7 +8,8 @@
   "dem": "gsi",
   "grid": 20,
   "margin": 400,
-  "building_reach": 260,
+  "building_reach": 400,
+  "dense_city": true,
   "ways": [
     4848875,
     4848933,

@@ -224,7 +224,7 @@ func run() -> Array:
 		var streets := {
 			"bielsko": [4800.0, 5300.0, ["al. Armii Krajowej", "ul. Karbowa", "ul. Karpacka", "ul. Gościnna", "Rondo PTTK"], 40, 1000],
 			"wilamowice": [7000.0, 7500.0, ["ul. Paderewskiego", "ul. Kęcka", "ul. Krakowska", "ul. Jana Pawła II", "ul. Latosińskiego", "ul. Jana III Sobieskiego"], 40, 1000],
-			"pszczyna": [3500.0, 3900.0, ["ul. Wojska Polskiego (Zamek)", "ul. Żorska", "ul. Szymanowskiego", "ul. Katowicka", "Rynek", "Brama Wybrańców"], 30, 1000],
+			"pszczyna": [3500.0, 3900.0, ["ul. Wojska Polskiego (Zamek)", "ul. Żorska (Zagroda Żubrów)", "Brama Parkowa", "Nawrót pod Zamkiem", "Mosty na Stawach", "ul. Chopina (Park Zamkowy)", "ul. Katowicka", "Rynek", "Brama Wybrańców"], 30, 1000],
 			"krakow": [3450.0, 3850.0, ["ul. Basztowa (Barbakan)", "ul. Dunajewskiego", "ul. Podwale", "ul. Straszewskiego", "ul. Podzamcze (Wawel)", "ul. św. Gertrudy", "ul. Westerplatte"], 30, 2000],
 		}
 		if streets.has(c_key):
@@ -255,7 +255,8 @@ func run() -> Array:
 				# landmark models only for real buildings drawn on their own OSM footprint (build_surroundings.py LANDMARKS)
 				var lm_ok := true
 				for lm in s_env.get("landmarks", []):
-					lm_ok = lm_ok and String(lm[0]) in ["Barbakan", "FloriaGate", "PszczynaCastle", "WilamowiceChurch"]
+					lm_ok = lm_ok and (String(lm[0]) in ["Barbakan", "FloriaGate", "PszczynaCastle", "WilamowiceChurch"]
+						or String(lm[0]) in SURROUNDINGS_GD.LANDMARK_PROPS) # (or a route's extra_landmarks: Pszczyna's wisents)
 				if not (s_env.get("stands", []) as Array).is_empty() or not lm_ok:
 					errors.append("%s: no grandstands, and no landmark models but real buildings, on a street stage" % c_key)
 				if (s_env.get("buildings", []) as Array).size() < exp[4]:
@@ -268,9 +269,76 @@ func run() -> Array:
 					errors.append("%s: road blockage %s stands in the pit lane" % [c_key, b])
 					break
 			checked += 5
+		if c_key == "pszczyna":
+			_check_pszczyna_park(c_tr, c_def, errors)
+			checked += 5
 
 	if checked < 1000:
 		errors.append("only %d values checked" % checked)
 	print("    %d values checked" % checked)
 	completed = true
 	return errors
+
+const SURROUNDINGS_GD := preload("res://scripts/ui/surroundings.gd")
+
+## Park Zamkowy (OSM way 172576408, leisure=park) simplified to 6 m, in Pszczyna's track metres (x east, y south).
+const PSZCZYNA_PARK := [108, 339, 114, 321, 108, 298, 210, 254, 197, 227, 261, 200, 263, 177, 296, 180, 359, 225, 416, 253,
+	421, 129, 551, -239, 470, -240, 409, -207, 359, -223, 335, -257, 243, -189, 147, -196, 73, -146, 45, -150, -36, -191,
+	-97, -246, -118, -225, -158, -251, -290, -130, -276, -1, -231, 23, -245, 66, -341, 158, -383, 178, -285, 410, -232, 481,
+	-205, 491, -116, 453, -44, 449, -43, 430, -10, 432, -4, 450, 98, 444, 123, 428, 133, 409, 102, 425, 90, 413, 67, 414,
+	66, 399, 41, 400, 42, 417, 26, 418, 24, 372, 87, 371, 92, 349]
+## The Pokazowa Zagroda Żubrów (OSM way 977929799), the wisent show enclosure west of ul. Żorska.
+const PSZCZYNA_ZUBRY := [-657, 383, -603, 335, -591, 305, -575, 264, -565, 240, -538, 245, -465, 341, -404, 417, -403, 435,
+	-429, 469, -473, 510, -496, 518, -552, 521, -620, 513, -649, 509, -663, 507, -673, 498, -681, 497, -689, 500, -741, 488,
+	-752, 483, -756, 462, -730, 431, -706, 409, -682, 420, -663, 406, -671, 392]
+
+static func _poly(flat: Array) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	for k in range(0, flat.size(), 2):
+		out.append(Vector2(flat[k], flat[k + 1]))
+	return out
+
+## Pszczyna's lap goes through the castle park (the user's ask): over a kilometre of it inside the Park Zamkowy
+## outline, lined with the wooden rails; and the wisent herd stands in its real enclosure, off the road but in
+## sight of it.
+func _check_pszczyna_park(tr: Track, def: TrackDef, errors: Array) -> void:
+	var park := _poly(PSZCZYNA_PARK)
+	# the longest unbroken run inside the outline (ul. Chopina skims its northern edge, a sample or two)
+	var first := 0.0
+	var last := -1.0
+	var run_from := -1.0
+	for i in tr.n + 1:
+		var in_park := i < tr.n and Geometry2D.is_point_in_polygon(Vector2(tr.X[i], tr.Y[i]), park)
+		if in_park and run_from < 0.0:
+			run_from = i * tr.step
+		elif not in_park and run_from >= 0.0:
+			if (i - 1) * tr.step - run_from > last - first:
+				first = run_from
+				last = (i - 1) * tr.step
+			run_from = -1.0
+	if last - first < 1100.0:
+		errors.append("pszczyna: the lap should run over 1.1 km through Park Zamkowy in one stretch, got %.0f m" % maxf(0.0, last - first))
+	var railed := false
+	for z in def.wooden_rails:
+		railed = railed or (z.x <= first + 10.0 and z.y >= last - 10.0)
+	if not railed:
+		errors.append("pszczyna: wooden rails should line the park alleys (%.0f-%.0f m)" % [first, last])
+	var env = JSON.parse_string(FileAccess.get_file_as_string("res://data/tracks/pszczyna_env.json"))
+	var zubry := _poly(PSZCZYNA_ZUBRY)
+	var herd := {}
+	for lm in (env.get("landmarks", []) if typeof(env) == TYPE_DICTIONARY else []):
+		var part := String(lm[0])
+		if not part.begins_with("Wisent"):
+			continue
+		var at := Vector2(lm[1], lm[2])
+		var near := tr.project(at.x, at.y)
+		if not Geometry2D.is_point_in_polygon(at, zubry):
+			errors.append("pszczyna: %s at %s should stand inside the wisent enclosure" % [part, at])
+		elif near[2] < 60.0 or near[2] > 250.0:
+			errors.append("pszczyna: %s should be off the road but in sight of it, %.0f m away" % [part, near[2]])
+		herd[part] = true
+	for part in ["WisentBull", "WisentCow", "WisentCowLying", "WisentCalf"]:
+		if not herd.has(part):
+			errors.append("pszczyna: the wisent herd should include a %s" % part)
+	if not SURROUNDINGS_GD.landmark_meshes().has("WisentBull"):
+		errors.append("pszczyna: wisents.glb should load with the landmarks")

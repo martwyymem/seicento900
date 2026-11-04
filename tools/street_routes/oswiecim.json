@@ -8,6 +8,7 @@
  "dem": "eudem25m",
  "grid": 30,
  "margin": 500,
+ "building_reach": 600,
  "ways": [
   1502658177,
   27122504,

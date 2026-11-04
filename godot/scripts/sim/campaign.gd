@@ -72,7 +72,7 @@ const STAGES := [
 		"act_name": "Act I: Silesian Grassroots",
 		"title": "Stage 4: Castle Park Trophy",
 		"track": "pszczyna",
-		"laps": 3,
+		"laps": 2,
 		"weather": "dry",
 		"time_of_day": 18.0,
 		"start_hour": 18.0,
@@ -83,8 +83,8 @@ const STAGES := [
 		"target_pos": 3,
 		"grid": "p3",
 		"trophy": "Princess Daisy Crown",
-		"desc": "Sunset battle through the historic cobblestones of Rynek Pszczyński and the grand avenues of Pałac Pszczyński.",
-		"tip": "Cobblestones offer less bite than asphalt — be gentle on the throttle out of the market square."
+		"desc": "Sunset battle over the setts of Piastowska and the Rynek, past the castle and the wisent enclosure on Żorska, then in through the park gate: the alley by the big pond, the hairpin under the castle, the bridges between the ponds and the gravel of the western lobe.",
+		"tip": "Setts offer less bite than asphalt, and the park alleys are barely wider than the car: brake early for the hairpin and the narrow bridges."
 	},
 	{
 		"id": "stage_5",

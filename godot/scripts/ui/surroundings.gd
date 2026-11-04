@@ -15,13 +15,17 @@ const BANK_RISE := 7.0 ## metres the banking climbs to its outer edge, on a curv
 const BANK_BRIDGE := 6.5 ## metres the ring is lifted where it passes over a road
 const BANK_EASE := 80.0 ## metres over which the banking climbs from flat, at either end of a stretch
 const LANDMARKS_PATH := "res://models/landmarks.glb"
+const WISENTS_PATH := "res://models/wisents.glb" ## Pszczyna's wisent herd and paddock (build_wisents.py)
+## Small props placed as landmarks (a street route's extra_landmarks): they cast no occluder (the fence and the
+## herd are seen through and past) and stand on the ground without a stone terrace.
+const LANDMARK_PROPS := ["WisentBull", "WisentCow", "WisentCowLying", "WisentCalf", "HayRack", "PaddockFence"]
 ## Footprint (length along the model's x, width along z; metres) each Blender landmark (build_landmarks.py) is
 ## modelled at. The mapped footprint stretches it to fit; pieces not listed keep their size.
 const LANDMARK_SIZE := {
 	"IndyPagoda": Vector2(57.5, 33.4), "SilverstoneWing": Vector2(374.0, 32.6), "Casino": Vector2(60.0, 160.0),
 	"CastleKeep": Vector2(9.5, 9.5), "CastleTower": Vector2(6.0, 6.0), "CastleWall": Vector2(1.0, 1.8),
 	"Barbakan": Vector2(38.0, 31.5), "FloriaGate": Vector2(10.0, 9.2), "PszczynaCastle": Vector2(58.0, 45.2),
-	"WilamowiceChurch": Vector2(49.6, 23.2),
+	"WilamowiceChurch": Vector2(49.6, 23.2), "PaddockFence": Vector2(6.0, 0.3),
 }
 const WATER_SHADER := preload("res://shaders/water.gdshader")
 const CHUNK := 256.0 ## metres: trees, canopy and buildings are split into tiles of this size for culling
@@ -197,11 +201,12 @@ func has_landmark(part: String) -> bool:
 ## The Blender landmarks and yachts (tools/blender/build_landmarks.py) by name.
 static func landmark_meshes() -> Dictionary:
 	if _landmark_meshes.is_empty():
-		var scene: Node = WORLD_ASSETS._load_model(LANDMARKS_PATH)
-		if scene:
-			for mi in scene.find_children("*", "MeshInstance3D", true, false):
-				_landmark_meshes[mi.name] = (mi as MeshInstance3D).mesh
-			scene.free()
+		for path in [LANDMARKS_PATH, WISENTS_PATH]:
+			var scene: Node = WORLD_ASSETS._load_model(path)
+			if scene:
+				for mi in scene.find_children("*", "MeshInstance3D", true, false):
+					_landmark_meshes[mi.name] = (mi as MeshInstance3D).mesh
+				scene.free()
 	return _landmark_meshes
 
 ## Binds the land map to a ground material (ground.gdshader), with the country's field and soil colours.
@@ -1208,14 +1213,14 @@ func _build_landmarks(root: Node3D) -> void:
 		mi.transform = Transform3D(Basis(Vector3.UP, rot) * Basis.from_scale(scale),
 				Vector3(at.x - c.x, y, at.y - c.y))
 		root.add_child(mi)
-		if part not in ["TyreBridge", "MonzaPodio"]: # the TV cameras see under those
+		if part not in ["TyreBridge", "MonzaPodio"] and part not in LANDMARK_PROPS: # the TV cameras see under those
 			var box: AABB = (meshes[part] as Mesh).get_aabb()
 			var foot := half if half.x > 0.0 and half.y > 0.0 else Vector2(box.size.x, box.size.z) * 0.5
 			var corners := PackedVector2Array()
 			for q in [Vector2(-foot.x, -foot.y), Vector2(foot.x, -foot.y), foot, Vector2(-foot.x, foot.y)]:
 				corners.append(Vector2(at.x + q.x * cs - q.y * sn, at.y + q.x * sn + q.y * cs) - c)
 			world.add_block_occluder(corners, y + box.end.y * scale.y)
-		if nominal != Vector2.ZERO and y - low > 0.4:
+		if nominal != Vector2.ZERO and y - low > 0.4 and part not in LANDMARK_PROPS:
 			var terrace := MeshInstance3D.new()
 			terrace.name = part + "Terrace"
 			var box := BoxMesh.new()

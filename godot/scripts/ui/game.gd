@@ -78,7 +78,7 @@ const TRACK_DEFAULTS := {
 	"oswiecim": {"laps": 2, "wear": 2.0}, # the Soła bridges loop, 3.1 km, ~2:20 a lap (the invented circuit had 8)
 	"wilamowice": {"laps": 3, "wear": 2.0},
 	"brzeszcze": {"laps": 3, "wear": 2.0}, # Brzeszcze Kopalnia, 6.2 km (the invented 2.8 km circuit had 8)
-	"pszczyna": {"laps": 6, "wear": 2.0},
+	"pszczyna": {"laps": 2, "wear": 2.0}, # through the castle park, 3.76 km, ~3:15 a lap (the old outside loop had 6)
 	"bor": {"laps": 7, "wear": 2.0},
 	"goliath": {"laps": 1, "wear": 1.0},
 	"s1_sprint": {"laps": 1, "wear": 1.0},

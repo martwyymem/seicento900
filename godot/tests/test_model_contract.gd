@@ -13,6 +13,8 @@ const CONTRACT := {
 	"res://models/roadside.glb": {"objects": ["BushCluster"], "materials": []},
 	"res://models/landmarks.glb": {"objects": ["Barbakan", "FloriaGate", "PszczynaCastle", "WilamowiceChurch"],
 		"materials": ["Plaster", "Roof", "Copper", "Glass"]},
+	"res://models/wisents.glb": {"objects": ["WisentBull", "WisentCow", "WisentCowLying", "WisentCalf", "PaddockFence", "HayRack"],
+		"materials": ["Fur", "FurDark", "Horn", "Wood"]},
 }
 
 ## model -> {object: [min size, max size]} in metres (x width, y height, z length): a prop built at the wrong scale fails here
@@ -35,6 +37,11 @@ const SIZES := {
 	"res://models/landmarks.glb": {
 		"WilamowiceChurch": [Vector3(45.0, 30.0, 18.0), Vector3(55.0, 55.0, 28.0)],
 		"Barbakan": [Vector3(30.0, 10.0, 25.0), Vector3(45.0, 40.0, 38.0)],
+	},
+	"res://models/wisents.glb": { # (x along the animal or the fence bay)
+		"WisentBull": [Vector3(2.8, 1.7, 0.9), Vector3(3.8, 2.3, 1.6)],
+		"WisentCalf": [Vector3(1.3, 0.8, 0.4), Vector3(2.0, 1.3, 0.9)],
+		"PaddockFence": [Vector3(5.8, 1.7, 0.2), Vector3(6.4, 2.1, 0.5)],
 	},
 	"res://models/roadside.glb": {
 		"HayBale": [Vector3(0.6, 0.5, 0.6), Vector3(1.6, 1.4, 1.6)],

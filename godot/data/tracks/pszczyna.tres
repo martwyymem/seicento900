@@ -51,7 +51,7 @@ name = "Wojska Polskiego / Żorska"
 [sub_resource type="Resource" id="c10"]
 script = ExtResource("1")
 distance = 1314.8
-name = "ul. Żorska"
+name = "ul. Żorska (Zagroda Żubrów)"
 
 [sub_resource type="Resource" id="c11"]
 script = ExtResource("1")
@@ -60,55 +60,71 @@ name = "Most na Pszczynce, Żorska"
 
 [sub_resource type="Resource" id="c12"]
 script = ExtResource("1")
-distance = 1895.0
-name = "Rondo Żorska / Wodzisławska"
+distance = 1607.8
+name = "Brama Parkowa"
 
 [sub_resource type="Resource" id="c13"]
 script = ExtResource("1")
-distance = 2005.1
-name = "Żorska / Szymanowskiego"
+distance = 1868.8
+name = "Aleja nad Stawem"
 
 [sub_resource type="Resource" id="c14"]
 script = ExtResource("1")
-distance = 2075.1
-name = "ul. Szymanowskiego"
+distance = 2021.5
+name = "Nawrót pod Zamkiem"
 
 [sub_resource type="Resource" id="c15"]
 script = ExtResource("1")
-distance = 2513.6
-name = "Szymanowskiego / Chopina"
+distance = 2186.8
+name = "Mosty na Stawach"
 
 [sub_resource type="Resource" id="c16"]
 script = ExtResource("1")
-distance = 2593.6
-name = "ul. Chopina (Park Zamkowy)"
+distance = 2301.9
+name = "Aleja Brukowana"
 
 [sub_resource type="Resource" id="c17"]
 script = ExtResource("1")
-distance = 2762.6
-name = "Chopina / Łowiecka (Ludwikówka)"
+distance = 2477.0
+name = "Park Zamkowy, aleja północna"
 
 [sub_resource type="Resource" id="c18"]
 script = ExtResource("1")
-distance = 3433.1
-name = "Rondo św. Jadwigi Śląskiej"
+distance = 2636.6
+name = "Pętla Zachodnia"
 
 [sub_resource type="Resource" id="c19"]
 script = ExtResource("1")
-distance = 3535.4
+distance = 2821.2
+name = "Wyjazd na Chopina (Ludwikówka)"
+
+[sub_resource type="Resource" id="c20"]
+script = ExtResource("1")
+distance = 2896.3
+name = "ul. Chopina (Park Zamkowy)"
+
+[sub_resource type="Resource" id="c21"]
+script = ExtResource("1")
+distance = 3496.8
+name = "Rondo św. Jadwigi Śląskiej"
+
+[sub_resource type="Resource" id="c22"]
+script = ExtResource("1")
+distance = 3599.1
 name = "ul. Katowicka"
 
 [resource]
 script = ExtResource("2")
 key = "pszczyna"
-display_name = "Pszczyna Castle Grounds"
+display_name = "Pszczyna Castle Park"
 short_name = "Pszczyna"
 width = 7.0
 theme = "city"
 street_stage = true
-cobbles = PackedVector2Array(603.9, 901.0)
+cobbles = PackedVector2Array(574.0, 1008.0, 2218.0, 2508.0)
 barrier = "plastic"
 barrier_color = Color(0.91, 0.72, 0.0, 1)
+wooden_rails = PackedVector2Array(1650.0, 2854.0)
 runoff = 1.5
 runoff_surface = "asphalt"
 runoff_paved = 1.5
@@ -126,4 +142,4 @@ pit_ramp = 50.0
 pit_offset = 8.4
 box_start = -65.0
 box_spacing = 9.0
-corners = Array[ExtResource("1")]([SubResource("c1"), SubResource("c2"), SubResource("c3"), SubResource("c4"), SubResource("c5"), SubResource("c6"), SubResource("c7"), SubResource("c8"), SubResource("c9"), SubResource("c10"), SubResource("c11"), SubResource("c12"), SubResource("c13"), SubResource("c14"), SubResource("c15"), SubResource("c16"), SubResource("c17"), SubResource("c18"), SubResource("c19")])
+corners = Array[ExtResource("1")]([SubResource("c1"), SubResource("c2"), SubResource("c3"), SubResource("c4"), SubResource("c5"), SubResource("c6"), SubResource("c7"), SubResource("c8"), SubResource("c9"), SubResource("c10"), SubResource("c11"), SubResource("c12"), SubResource("c13"), SubResource("c14"), SubResource("c15"), SubResource("c16"), SubResource("c17"), SubResource("c18"), SubResource("c19"), SubResource("c20"), SubResource("c21"), SubResource("c22")])
