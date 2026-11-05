@@ -602,6 +602,7 @@ func step(dt: float, input: PlayerInput) -> void:
 				if s.auto_rejoin:
 					player_rejoin(car, dt)
 				var ab := brake_assist(car) if s.brake_assist and s.assists == "full" else 0.0
+				car.brake = input.brake
 				step_free(car, dt, input.throttle * (1.0 - ab), maxf(input.brake, ab), input.steer, input)
 			else:
 				var c := bot_input(car, dt)

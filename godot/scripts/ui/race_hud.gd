@@ -343,8 +343,10 @@ func update(dt: float) -> void:
 		var bars := int(round(race.nitro * 10.0))
 		_nitro_label.text = "N2O  " + "█".repeat(bars) + "░".repeat(10 - bars)
 		_nitro_label.add_theme_color_override("font_color", Color("#7fe8ff") if race.nitro_burning else Color("#3aa8ff"))
-	var dash_key := _dash_state()
-	if dash_key != _dash_key:
+	# The keys stay untyped: a script error inside _dash_state / _pacenote_key returns null, and in an
+	# exported (release) build a typed Array `!=` on that null dereferences it and crashes the game.
+	var dash_key = _dash_state()
+	if dash_key is Array and dash_key != _dash_key:
 		_dash_key = dash_key
 		dash.queue_redraw()
 	if co_driver:
@@ -356,8 +358,8 @@ func update(dt: float) -> void:
 	if race.s.mode != "race":
 		_update_mode()
 		deltabar.queue_redraw()
-	var note_key := _pacenote_key()
-	if note_key != _note_key:
+	var note_key = _pacenote_key()
+	if note_key is Array and note_key != _note_key:
 		_note_key = note_key
 		pacenote.queue_redraw()
 	flagbar.queue_redraw()

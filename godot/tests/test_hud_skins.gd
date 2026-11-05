@@ -30,8 +30,44 @@ func run() -> Array:
 				await _check(errors, tree, race, state, skin, canvas)
 			race.dispose()
 	CmrStyle.apply_skin("cmr")
+	await _brake_alert(errors, tree)
 	completed = true
 	return errors
+
+## The player arriving at Wilamowice's first corners flat out, off the brakes: the brake alert lights and the
+## HUD's redraw keys stay Arrays. (It read a RaceCar.brake that did not exist; the script error made
+## _pacenote_key return null, which crashed the exported game at the typed `!=` in update.)
+func _brake_alert(errors: Array[String], tree: SceneTree) -> void:
+	var rs := RaceSettings.new()
+	rs.track = "wilamowice"
+	rs.opponents = 0
+	rs.race_control = false
+	var race := Race.new(rs, null, 7)
+	var host := Control.new()
+	host.size = Vector2(1600, 900)
+	tree.root.add_child(host)
+	var hud := RaceHud.new()
+	host.add_child(hud)
+	hud.start(race, null, null)
+	await tree.process_frame
+	var input := Race.PlayerInput.new()
+	input.throttle = 1.0
+	var lit := false
+	var dt := 1.0 / 120.0
+	while race.race_time < 40.0 and not lit:
+		race.step(dt, input)
+		race.step(dt, input)
+		var dash = hud._dash_state()
+		var note = hud._pacenote_key()
+		if not (dash is Array and note is Array):
+			errors.append("Wilamowice flat out: a HUD key went null at %.1f s (dash %s, note %s)" % [race.race_time, dash, note])
+			break
+		lit = note.size() >= 4 and note[-2] == true
+		hud.update(1.0 / 60.0)
+	if not lit:
+		errors.append("Wilamowice flat out: the brake alert never lit in 40 s")
+	host.queue_free()
+	race.dispose()
 
 static func _set_state(race: Race, state: String) -> void:
 	var p := race.player

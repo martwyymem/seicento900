@@ -61,6 +61,7 @@ var gear := 0
 var rpm := 850.0
 var throttle := 0.0
 var brake_on := false
+var brake := 0.0 ## the player's brake pedal (0..1) as pressed, before the brake assist adds to it (the HUD's brake alert)
 var shift_t := 0.0
 var hold_t := 0.0 ## s before the automatic gearbox may drop a gear again after an upshift (CarSpec.shift_hold)
 var slip := 0.0
