@@ -39,6 +39,28 @@ detail under **Options**.
   and a safety car, slipstreaming, and AI drivers that learn how you drive.
 - **Conditions:** day and night, rain and other weather, and eight camera views.
 
+## What's being worked on
+
+Last updated 2026-11-08. The full task list is in [`TASKS.md`](TASKS.md); the port status is in
+[`godot/README.md`](godot/README.md).
+
+**Now (Phase 2: driving feel and look)**
+
+- Surface handling: gravel, dirt, tarmac and wet tarmac should each drive differently, and dirt must not beat tarmac.
+  Open-world surface feedback has landed; grip tuning continues.
+- Graphics mood pass: a night-rain circuit and a golden-hour open world, aiming at the reference look.
+- Leftover city details: tram rails in Kraków and the Wilamowice church.
+- Handbrake and drift feel, tuned by driving.
+- Traffic variants and cycling traffic lights were finished on 2026-11-08.
+
+**Next**
+
+- Event variety in the campaign: sprint, knockout, rally, drag, drift and off-road events.
+- Rally stages and new routes cut from the open-world map, and discoverable points of interest on the map.
+- Remaining city tracks: Brzeszcze, Oświęcim and Tokyo.
+- Campaign progression: new cars (Volvo V50, Hyundai i20, VW Golf 4, Dacia Logan and Sandero, Ford Focus, Opel
+  Zafira B) are won by beating campaign missions. Fans are easter eggs, not a currency.
+
 ## Controls
 
 Keyboard and gamepad both work. Press **H** during a race to show the controls on screen.
