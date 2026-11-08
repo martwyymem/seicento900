@@ -2,7 +2,7 @@
 
 A map of the places you'll most likely want to change. All game paths are relative to `godot/`
 (the active Godot 4.7 project); `tools/` paths are relative to the repository root. The root-level
-`js/`, `css/` and `index.html` are the old browser game, kept only as a reference for the port.
+`js/`, `css/` and `index.html` are the old browser game. They are git-ignored and no longer on GitHub; the files stay local as a reference for the parity tools.
 
 Run the game with `godot --path godot`, the tests with `godot --headless --path godot -s tests/run_tests.gd`.
 For more background read [`godot/README.md`](godot/README.md).

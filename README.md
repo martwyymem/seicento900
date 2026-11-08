@@ -88,7 +88,7 @@ for extra detail. The game looks complete without them.
 |---|---|
 | `godot/` | **The game.** Scripts, shaders, scenes, baked track data and models. |
 | `tools/` | Generators: Blender scripts for the 3D models (`tools/blender/`), OpenStreetMap track, surroundings and open-world bakers, and the sound baker. |
-| repository root (`index.html`, `js/`, `css/`) | The original browser version, kept as a reference while the Godot port is finished. |
+| repository root (`index.html`, `js/`, `css/`, `vendor/`) | The original browser version. Git-ignored and no longer on GitHub; the files stay local as the parity reference. |
 
 The 3D models, tracks and sounds are built by scripts, so to change one, edit the script and rebuild it
 rather than editing the output. The developer documentation covers the details:

@@ -369,7 +369,7 @@ bit for bit. Rough costs on an M4 Pro: 57 µs per car-tick of full physics, ~0.5
   `tracks/*.json` (centrelines + elevation generated from OpenStreetMap, all eleven circuits; rebuild with
   `python3 tools/build_tracks.py`, after `python3 tools/fetch_elevation.py <key>` for a new track).
 - `scripts/data/` — resource classes (`CarSpec`, `TyreCompound`, `TrackDef`, `RaceSettings`).
-- `scripts/sim/` — simulation, ported from `js/` (`CarModel`/`Tyres` ← car.js, `Physics`, `Track`,
+- `scripts/sim/` — simulation, ported from the original browser game in `js/` (git-ignored; local only) (`CarModel`/`Tyres` ← car.js, `Physics`, `Track`,
   `Strategy`, `Race`, `Driver`, `Brain` (learning AI), `Weather` and helpers).
 - `scripts/ui/` — `game.gd` (menus, set-up, race loop, input, pause, results, championship),
   `race_world.gd` (3D circuit, sky, cameras), `world_assets.gd` (optional skies, textures and tree models), `race_car_visual.gd`, `race_hud.gd`, `race_audio.gd`, `world_audio.gd`,
