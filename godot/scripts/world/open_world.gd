@@ -81,6 +81,8 @@ var gamepad_device := -1
 var cam_mode := 0
 var cam_pos := Vector3.ZERO
 var cam_vel_dir := Vector2.RIGHT
+## Free look (right stick, B / R3 to look back, right-mouse drag); the chase cameras orbit the car with it
+var look := CameraLook.new()
 var _chase_cam: ChaseCam
 var hour := 18.5
 var night := 0.0
@@ -216,32 +218,58 @@ func _fit_view() -> void:
 func _build_world() -> void:
 	building = true
 	var by_frame := DisplayServer.get_name() != "headless"
-	hud.show_loading("Reading the map of Brzeszcze", 0.02)
-	if by_frame:
-		await get_tree().process_frame
-	map = TownMap.load_map(MAP_KEY)
-	if map == null:
-		hud.show_loading("The open-world map is missing: run tools/build_open_world.py", 0.0)
-		building = false
-		return
 	progress = WorldProgress.load_progress()
+	var hyper := progress.car_class == 1 and FanLevels.hypercar_unlocked(progress.fans)
+	hud.open_loading(Hypercar.spec() if hyper else load("res://data/seicento.tres"), "Hypercar Seicento" if hyper else "Fiat Seicento")
+	hud.show_loading("Reading the map of Brzeszcze", 0.02)
 	hour = progress.hour
 	world = Node3D.new()
 	world.name = "Brzeszcze"
-	viewport.add_child(world)
-	_build_environment()
-	builder = TownBuilder.new(map, world)
-	var steps: Array = builder.steps()
-	for i in steps.size():
-		hud.show_loading("Building %s" % String(steps[i][0]).to_lower(), 0.05 + 0.85 * float(i) / steps.size())
-		if by_frame:
+	var map_tex: Texture2D = null
+	if by_frame:
+		# twice: the frame that shows the cover must be drawn before the work starts
+		await get_tree().process_frame
+		await get_tree().process_frame
+		# the map and the town build on a worker thread into a world that is not in the tree yet, so this thread
+		# keeps drawing the cover (its spinner never stalls); the world joins the viewport when it is done
+		_build_status = ["Reading the map of Brzeszcze", 0.02]
+		var task := WorkerThreadPool.add_task(_build_town_threaded, true, "Open world build")
+		var fps_was := Engine.max_fps
+		Engine.max_fps = 30 # the cover needs few frames; leave the cores to the build
+		while not WorkerThreadPool.is_task_completed(task):
+			hud.show_loading(String(_build_status[0]), float(_build_status[1]))
 			await get_tree().process_frame
-		(steps[i][1] as Callable).call()
-	_apply_vegetation_quality()
+		WorkerThreadPool.wait_for_task_completion(task)
+		Engine.max_fps = fps_was
+		map_tex = _build_map_tex
+		_build_map_tex = null
+	else:
+		_build_town_threaded()
+	if map == null:
+		hud.show_loading("The open-world map is missing: run tools/build_open_world.py", 0.0)
+		world.free()
+		world = null
+		building = false
+		return
+	# the rest runs here, a piece a frame so the cover keeps drawing between them
 	hud.show_loading("Starting the engine", 0.95)
+	var t := Time.get_ticks_msec()
+	viewport.add_child(world)
+	_t_log("add world", t)
 	if by_frame:
 		await get_tree().process_frame
-	hud.setup(map, load("res://data/world/%s_map.png" % MAP_KEY) as Texture2D)
+	t = Time.get_ticks_msec()
+	_build_environment()
+	_apply_vegetation_quality()
+	_t_log("environment", t)
+	if by_frame:
+		await get_tree().process_frame
+	t = Time.get_ticks_msec()
+	hud.setup(map, map_tex if map_tex else load("res://data/world/%s_map.png" % MAP_KEY) as Texture2D)
+	_t_log("hud", t)
+	if by_frame:
+		await get_tree().process_frame
+	t = Time.get_ticks_msec()
 	drive = FreeCar.new(map)
 	car_visual = CAR_SCENE.instantiate()
 	world.add_child(car_visual)
@@ -253,12 +281,43 @@ func _build_world() -> void:
 	_build_headlights()
 	_build_lamp_lights()
 	_build_route_mesh()
+	_t_log("car and lights", t)
+	if by_frame:
+		await get_tree().process_frame
+	t = Time.get_ticks_msec()
 	traffic = Traffic.new(map, world, builder)
 	train = Train.new(map, world, builder)
 	_build_traps()
+	_t_log("traffic", t)
 	built = true
 	building = false
 	hud.hide_loading()
+
+## OW_BUILD_TIMES=1 prints how long each part of the build took.
+func _t_log(what: String, since: int) -> void:
+	if OS.get_environment("OW_BUILD_TIMES") != "":
+		print("built %s in %d ms" % [what, Time.get_ticks_msec() - since])
+
+var _build_status: Array = ["", 0.0] ## [what is building, fraction] the worker reports to the cover
+var _build_map_tex: Texture2D
+
+## Reads the map and runs every TownBuilder step into `world` (not yet in the tree, so this may run on a worker
+## thread). Nothing here may touch the scene tree; the steps never hand frames back here (frame_budget_usec 0).
+func _build_town_threaded() -> void:
+	map = TownMap.load_map(MAP_KEY)
+	if map == null:
+		return
+	builder = TownBuilder.new(map, world)
+	builder.mesh_cache_dir = TownBuilder.MESH_CACHE_DIR # warm starts load terrain, buildings and trees from disk
+	var steps: Array = builder.steps()
+	for i in steps.size():
+		_build_status = ["Building %s" % String(steps[i][0]).to_lower(), 0.05 + 0.85 * float(i) / steps.size()]
+		var t0 := Time.get_ticks_msec()
+		(steps[i][1] as Callable).call()
+		if OS.get_environment("OW_BUILD_TIMES") != "":
+			print("built %s in %d ms" % [steps[i][0], Time.get_ticks_msec() - t0])
+	_build_status = ["Starting the engine", 0.95]
+	_build_map_tex = load("res://data/world/%s_map.png" % MAP_KEY) as Texture2D
 
 # ================================================================================================ environment
 
@@ -621,6 +680,7 @@ func _spawn(spawn) -> void:
 	cam_pos = _prev_pos - f * 7.0 + Vector3.UP * 2.6
 	cam_vel_dir = Vector2(f.x, f.z)
 	_chase_cam = null # snaps to the car's new spot
+	look.reset()
 	_apply_time()
 	if not gps_waypoint and (gps_target < 0 or gps_target >= events.size() or events[gps_target].done):
 		gps_target = _next_open_event()
@@ -1101,10 +1161,10 @@ func _sync_car(delta: float) -> void:
 		_apply_look()
 
 ## The chase camera's spot with walls, fences and buildings between it and the car taken out (ChaseCam).
-func _clear_of_walls(p: Vector3, free: Vector3, delta: float) -> Vector3:
+func _clear_of_walls(p: Vector3, free: Vector3, delta: float, snap := false) -> Vector3:
 	if _chase_cam == null:
 		_chase_cam = ChaseCam.new()
-	return _chase_cam.update(map, p + Vector3.UP * 1.0, free, delta)
+	return _chase_cam.update(map, p + Vector3.UP * 1.0, free, delta, snap)
 
 func _update_camera(delta: float) -> void:
 	if drive == null:
@@ -1120,26 +1180,33 @@ func _update_camera(delta: float) -> void:
 	cam_vel_dir = cam_vel_dir.lerp(want_dir, 1.0 - exp(-delta * 4.0)).normalized()
 	var d3 := Vector3(cam_vel_dir.x, 0.0, cam_vel_dir.y)
 	var kmh := absf(car.speed) * 3.6
+	look.update(delta, not paused and not hud.map_open)
+	# swung round the car, the chase camera looks along the view and, more and more, at the car itself
+	var view := look.turn(d3)
+	var at_car := smoothstep(0.0, 1.2, absf(look.yaw)) * 0.7
 	match cam_mode:
 		1:
 			var target := p - d3 * 10.5 + Vector3.UP * 3.6
 			cam_pos = cam_pos.lerp(target, 1.0 - exp(-delta * 5.0))
-			camera.position = _clear_of_walls(p, cam_pos, delta)
-			camera.look_at(p + d3 * 5.0 + Vector3.UP * 1.0, Vector3.UP)
+			camera.position = _clear_of_walls(p, look.orbit(p, cam_pos), delta, look.cut)
+			camera.look_at((p + view * 5.0 * cos(look.pitch) + Vector3.UP * 1.0).lerp(p + Vector3.UP * 0.8, at_car), Vector3.UP)
 			camera.fov = 66.0 + kmh * 0.06
 		2:
 			camera.global_transform = car_visual.global_transform * Transform3D(Basis(), Vector3(0.0, 1.22, -0.35))
 			camera.rotate_object_local(Vector3.RIGHT, deg_to_rad(-2.0))
+			if look.active(): # the driver turns their head
+				camera.rotate_object_local(Vector3.UP, -look.yaw)
+				camera.rotate_object_local(Vector3.RIGHT, -look.pitch)
 			camera.fov = 78.0 + kmh * 0.05
 		_:
 			var back := 6.0 + kmh * 0.012
 			var target := p - d3 * back + Vector3.UP * (2.15 + kmh * 0.004)
 			cam_pos = cam_pos.lerp(target, 1.0 - exp(-delta * 7.0))
 			# keep it out of the walls and buildings (shortened or swung aside, ChaseCam) and above the ground
-			var spot := _clear_of_walls(p, cam_pos, delta)
+			var spot := _clear_of_walls(p, look.orbit(p, cam_pos), delta, look.cut)
 			spot.y = maxf(spot.y, map.ground(spot.x, spot.z) + 0.8)
 			camera.position = spot
-			camera.look_at(p + d3 * 3.5 + Vector3.UP * 1.05, Vector3.UP)
+			camera.look_at((p + view * 3.5 * cos(look.pitch) + Vector3.UP * 1.05).lerp(p + Vector3.UP * 0.8, at_car), Vector3.UP)
 			camera.fov = lerpf(camera.fov, 70.0 + clampf(kmh, 0.0, 140.0) * 0.1, 1.0 - exp(-delta * 3.0))
 
 # ================================================================================================ input

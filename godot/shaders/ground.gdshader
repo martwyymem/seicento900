@@ -20,6 +20,12 @@ uniform vec3 rock_color : source_color = vec3(0.42, 0.4, 0.37);
 // richer verges (race_world sets it; 0 keeps the plain look for other callers): broad hue drift between warm and
 // cool greens, clover and wild flowers up close, mowing stripes and a ragged dirt-and-gravel edge on the run-off
 uniform float lush : hint_range(0.0, 1.0) = 0.0;
+// the open world's meadows (land map grass that is no field, wood, yard or paving): the bare ground under and beyond
+// the planted grass takes the grass's own olive, drier in broad patches, so the edge of the planted ring (vegetation.gd)
+// shows no change of colour. 0 keeps the plain ground.
+uniform float meadow_amount : hint_range(0.0, 1.0) = 0.0;
+uniform vec3 meadow_color : source_color = vec3(0.45, 0.53, 0.2);
+uniform vec3 meadow_dry_color : source_color = vec3(0.56, 0.54, 0.25);
 
 uniform sampler2D grain : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D grain_normal : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
@@ -120,6 +126,11 @@ void fragment() {
 			col = mix(col, farm * (0.88 + 0.2 * broad), field);
 			col = mix(col, forest_floor_color * (0.7 + 0.5 * fine), lm.a * 0.9);
 			col = mix(col, bare_color * (0.8 + 0.3 * fine + 0.15 * micro), lm.b);
+			if (meadow_amount > 0.0) {
+				float meadow_px = (1.0 - field) * (1.0 - lm.a) * (1.0 - lm.b) * (1.0 - smoothstep(0.04, 0.1, lm.r));
+				vec3 mc = mix(meadow_color, meadow_dry_color, smoothstep(0.35, 0.75, macro));
+				col = mix(col, mc * (0.8 + 0.25 * fine + 0.1 * micro) * (0.9 + 0.2 * broad), meadow_px * meadow_amount);
+			}
 			paved = smoothstep(0.25, 0.75, lm.r);
 			col = mix(col, paved_color * (0.88 + 0.16 * fine + 0.08 * micro), paved);
 			rough = mix(rough, 0.82, paved);

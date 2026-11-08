@@ -97,6 +97,62 @@ static func _global_of(n: Node3D, top: Node) -> Transform3D:
 func has_model(name: String) -> bool:
 	return models.has(name)
 
+# ============================================================================================ mesh cache
+
+## Set to a folder (the open world uses MESH_CACHE_DIR) to keep the meshes of the slow, mesh-only steps (terrain,
+## buildings) between runs: a warm start loads them from disk in tens of milliseconds instead of rebuilding them for
+## seconds. Off by default so tests always build. The stamp covers the map, the code that builds them and the models.
+const MESH_CACHE_DIR := "user://open_world_cache"
+const MESH_CACHE_VERSION := "1"
+var mesh_cache_dir := ""
+var _cache_stamp := ""
+
+func _cache_path(tag: String) -> String:
+	if mesh_cache_dir == "":
+		return ""
+	if _cache_stamp == "":
+		var keys := models.keys()
+		keys.sort()
+		var parts := PackedStringArray([MESH_CACHE_VERSION, map.key, str(wall_plan_enabled), ",".join(PackedStringArray(keys))])
+		# the bake, the code that builds the meshes and the models whose names and meshes they use (trees)
+		for f in ["res://data/world/%s.json" % map.key, "res://scripts/world/town_builder.gd",
+				"res://scripts/world/town_map.gd", "res://scripts/world/mesh_batch.gd", "res://scripts/ui/surroundings.gd",
+				TOWN_MODELS, LANDMARK_MODELS, SURROUNDINGS.TREES_PATH]:
+			parts.append(FileAccess.get_md5(f) if FileAccess.file_exists(f) else "-")
+		# an exported game keeps neither script sources nor the source GLBs: its build stands in for them
+		if not OS.has_feature("editor"):
+			parts.append(str(ProjectSettings.get_setting("application/config/version", "")))
+			parts.append(str(FileAccess.get_modified_time(OS.get_executable_path())))
+			var pck := OS.get_executable_path().get_basename() + ".pck"
+			if FileAccess.file_exists(pck):
+				parts.append(str(FileAccess.get_modified_time(pck)))
+		_cache_stamp = "|".join(parts).md5_text().substr(0, 16)
+	return "%s/%s_%s.res" % [mesh_cache_dir, tag, _cache_stamp]
+
+## The meshes cached for step `tag` (in the order they were stored), or [] when there are none for this stamp.
+func _cached_meshes(tag: String) -> Array:
+	var path := _cache_path(tag)
+	if path == "" or not FileAccess.file_exists(path):
+		return []
+	var res := ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
+	if res == null or not res.has_meta("meshes"):
+		return []
+	return res.get_meta("meshes")
+
+## Keeps step `tag`'s meshes for the next run and drops the files older stamps left for it.
+func _store_meshes(tag: String, meshes: Array) -> void:
+	var path := _cache_path(tag)
+	if path == "":
+		return
+	DirAccess.make_dir_recursive_absolute(mesh_cache_dir)
+	for f in DirAccess.get_files_at(mesh_cache_dir):
+		if f.begins_with(tag + "_") and mesh_cache_dir.path_join(f) != path:
+			DirAccess.remove_absolute(mesh_cache_dir.path_join(f))
+	var res := Resource.new()
+	res.set_meta("meshes", meshes)
+	if ResourceSaver.save(res, path, ResourceSaver.FLAG_COMPRESS) != OK:
+		push_warning("Could not cache the open world's %s at %s" % [tag, path])
+
 ## The steps in order, for the caller to run one per frame: [label, Callable].
 func steps() -> Array:
 	return [["Terrain", build_terrain], ["Ponds and streams", build_water], ["Streets", build_roads],
@@ -158,12 +214,21 @@ func build_terrain() -> void:
 	mat.set_shader_parameter("paved_color", Color(0.46, 0.45, 0.42))
 	mat.set_shader_parameter("bare_color", Color(0.58, 0.5, 0.36))
 	mat.set_shader_parameter("slope_rock", 0.4)
+	# meadows take the grass's olive (vegetation.gd MEADOW_FAR), so the planted grass ends without a change of colour
+	mat.set_shader_parameter("meadow_amount", 0.8)
+	mat.set_shader_parameter("meadow_color", VEGETATION.MEADOW_FAR)
+	mat.set_shader_parameter("meadow_dry_color", VEGETATION.MEADOW_FAR_DRY)
 	var land := load("res://data/world/%s_land.png" % map.key) as Texture2D
 	if land:
 		mat.set_shader_parameter("use_land", true)
 		mat.set_shader_parameter("land_map", land)
 		mat.set_shader_parameter("land_origin", Vector2(map.tx0, map.ty0))
 		mat.set_shader_parameter("land_size", Vector2(land.get_width(), land.get_height()) * LAND_RES)
+	var cached := _cached_meshes("terrain")
+	if not cached.is_empty():
+		for mesh in cached:
+			_add_mesh(group, mesh, mat, "", false)
+		return
 	var ex := map.extent
 	var nx := int(ex.size.x / TERRAIN_STEP) + 1
 	var ny := int(ex.size.y / TERRAIN_STEP) + 1
@@ -201,6 +266,8 @@ func build_terrain() -> void:
 					mb.quad(a, a + w, a + w + 1, a + 1)
 			var inst := _add_mesh(group, mb.commit(), mat)
 			inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if mesh_cache_dir != "":
+		_store_meshes("terrain", group.get_children().map(func(n): return (n as MeshInstance3D).mesh))
 
 # ============================================================================================ water
 
@@ -1244,6 +1311,11 @@ func build_buildings() -> void:
 	mat.set_shader_parameter("frame_color", Color(0.95, 0.94, 0.9))
 	wet_materials.append(mat)
 	night_materials.append(mat)
+	var cached := _cached_meshes("buildings")
+	if not cached.is_empty():
+		for mesh in cached:
+			_add_mesh(group, mesh, mat)
+		return
 	var batches := {}
 	var shafts := shaft_towers()
 	var not_drawn := {} # landmark models and shaft houses: their walls hide nothing behind them
@@ -1271,8 +1343,11 @@ func build_buildings() -> void:
 		_add_building(batches[c], ring, String(b[0]), float(b[1]), String(b[3]), centre, extra)
 	_push = 0.0
 	_cur_bi = -1
+	var built: Array = []
 	for c in batches:
-		_add_mesh(group, (batches[c] as MeshBatch).commit(), mat)
+		built.append(_add_mesh(group, (batches[c] as MeshBatch).commit(), mat).mesh)
+	if mesh_cache_dir != "":
+		_store_meshes("buildings", built)
 
 ## The baked detail textures (tools/build_building_textures.py) building.gdshader multiplies onto its facades and roofs.
 static func apply_building_textures(mat: ShaderMaterial) -> void:
@@ -1655,6 +1730,11 @@ func build_trees() -> void:
 	var quad := QuadMesh.new()
 	quad.size = Vector2(1.0, 1.0)
 	quad.center_offset = Vector3(0.0, 0.5, 0.0)
+	var cached := _cached_meshes("trees")
+	if not cached.is_empty():
+		for rec in cached: # [species ("" for the far cards), instance buffer, count]
+			_add_trees(group, rec[0], rec[1], rec[2], meshes, foliage, quad, impostor_mat)
+		return
 	var trees: Array = map.raw.get("trees", [])
 	# chunk -> species -> [transforms, tints]; and chunk -> impostor [transforms, tints]
 	var near := {}
@@ -1688,18 +1768,30 @@ func build_trees() -> void:
 		far[cf][0].append(Transform3D(imp_basis, Vector3(x, g, y)))
 		var leaf := _species_colour(species)
 		far[cf][1].append(Color(leaf.r * tint, leaf.g * tint, leaf.b * tint, 1.0))
+	var recs: Array = []
 	for c in near:
 		for species in near[c]:
 			var lists: Array = near[c][species]
-			var mmi := _multimesh(group, meshes[species], lists[0], lists[1], foliage)
-			mmi.visibility_range_end = TREE_NEAR
-			mmi.visibility_range_end_margin = 40.0
-			_ranged.append([mmi, TREE_NEAR])
-			mmi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
-	# the far cards: big chunks (few draw calls); the shader drops the cards near the camera, where the
-	# real trees stand
+			recs.append([species, instance_buffer(lists[0], lists[1]), lists[0].size()])
 	for cf in far:
-		var imp := _multimesh(group, quad, far[cf][0], far[cf][1], impostor_mat)
+		recs.append(["", instance_buffer(far[cf][0], far[cf][1]), far[cf][0].size()])
+	for rec in recs:
+		_add_trees(group, rec[0], rec[1], rec[2], meshes, foliage, quad, impostor_mat)
+	if mesh_cache_dir != "":
+		_store_meshes("trees", recs)
+
+## One chunk's trees of one species (full meshes near the camera), or with species "" one big chunk's far cards
+## (few draw calls; the shader drops the cards near the camera, where the real trees stand).
+func _add_trees(group: Node3D, species: String, buf: PackedFloat32Array, count: int, meshes: Dictionary, foliage: Material,
+		quad: Mesh, impostor_mat: Material) -> void:
+	if species != "":
+		var mmi := _multimesh_buffer(group, meshes[species], buf, count, true, foliage)
+		mmi.visibility_range_end = TREE_NEAR
+		mmi.visibility_range_end_margin = 40.0
+		_ranged.append([mmi, TREE_NEAR])
+		mmi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+	else:
+		var imp := _multimesh_buffer(group, quad, buf, count, true, impostor_mat)
 		imp.visibility_range_end = TREE_FAR + IMPOSTOR_CHUNK
 		_ranged.append([imp, TREE_FAR + IMPOSTOR_CHUNK])
 		imp.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -1825,15 +1917,34 @@ func _fallback_fence() -> Mesh:
 	return mesh
 
 func _multimesh(parent: Node3D, mesh: Mesh, xfs: Array, tints: Array, mat: Material) -> MultiMeshInstance3D:
+	return _multimesh_buffer(parent, mesh, instance_buffer(xfs, tints), xfs.size(), not tints.is_empty(), mat)
+
+## MultiMesh's raw instance data for transforms (and colours): 12 floats a transform (its 3x4 rows), 4 a colour.
+## One buffer write is much faster than a set_instance_transform() call per instance.
+static func instance_buffer(xfs: Array, tints: Array) -> PackedFloat32Array:
+	var stride := 16 if not tints.is_empty() else 12
+	var buf := PackedFloat32Array()
+	buf.resize(xfs.size() * stride)
+	var o := 0
+	for i in xfs.size():
+		var t: Transform3D = xfs[i]
+		buf[o] = t.basis.x.x; buf[o + 1] = t.basis.y.x; buf[o + 2] = t.basis.z.x; buf[o + 3] = t.origin.x
+		buf[o + 4] = t.basis.x.y; buf[o + 5] = t.basis.y.y; buf[o + 6] = t.basis.z.y; buf[o + 7] = t.origin.y
+		buf[o + 8] = t.basis.x.z; buf[o + 9] = t.basis.y.z; buf[o + 10] = t.basis.z.z; buf[o + 11] = t.origin.z
+		if stride == 16:
+			var c: Color = tints[i]
+			buf[o + 12] = c.r; buf[o + 13] = c.g; buf[o + 14] = c.b; buf[o + 15] = c.a
+		o += stride
+	return buf
+
+func _multimesh_buffer(parent: Node3D, mesh: Mesh, buf: PackedFloat32Array, count: int, colors: bool, mat: Material) -> MultiMeshInstance3D:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.use_colors = not tints.is_empty()
+	mm.use_colors = colors
 	mm.mesh = mesh
-	mm.instance_count = xfs.size()
-	for i in xfs.size():
-		mm.set_instance_transform(i, xfs[i])
-		if mm.use_colors:
-			mm.set_instance_color(i, tints[i])
+	mm.instance_count = count
+	if count > 0:
+		mm.buffer = buf
 	var mmi := MultiMeshInstance3D.new()
 	mmi.multimesh = mm
 	mmi.material_override = mat

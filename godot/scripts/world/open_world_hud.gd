@@ -71,9 +71,7 @@ var pause_title: Label
 const PAUSE_ITEMS := [["resume", "RESUME"], ["car", "CAR: SEICENTO"], ["mods", "MODIFIERS"], ["map", "MAP"],
 	["stages", "CAMPAIGN STAGE LIST"], ["reset", "RESET CAR TO ROAD"], ["reset_campaign", "RESET CAMPAIGN"],
 	["time", "SKIP TO NEXT TIME OF DAY"], ["menu", "MAIN MENU"]]
-var loading: ColorRect
-var loading_label: Label
-var loading_bar: ProgressBar
+var loading: OpenWorldCover ## the Forza-style cover the town builds behind
 var help_label: Label
 var stats_box: VBoxContainer
 var _street := ""
@@ -228,7 +226,7 @@ func _build() -> void:
 	col.add_child(card_hint)
 	card.hide()
 	# controls reminder, faint, bottom centre
-	help_label = _label("W/S drive · A/D steer · Space handbrake · R reset · M map · G route to next event · C camera · Esc menu", 12, Color(1, 1, 1, 0.72), 500)
+	help_label = _label("W/S drive · A/D steer · Space handbrake · R reset · M map · G route to next event · C camera · B look back · Esc menu", 12, Color(1, 1, 1, 0.72), 500)
 	help_label.anchor_left = 0.5
 	help_label.anchor_right = 0.5
 	help_label.anchor_top = 1.0
@@ -324,46 +322,19 @@ func set_pause_text(index: int, text: String) -> void:
 		pause_buttons[index].text = text
 
 func _build_loading() -> void:
-	loading = ColorRect.new()
-	loading.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	loading.color = CmrStyle.TINT_HOME
+	loading = OpenWorldCover.new()
 	add_child(loading)
-	var col := VBoxContainer.new()
-	col.anchor_left = 0.5
-	col.anchor_right = 0.5
-	col.anchor_top = 0.5
-	col.anchor_bottom = 0.5
-	col.offset_left = -420
-	col.offset_right = 420
-	col.offset_top = -120
-	col.offset_bottom = 120
-	col.add_theme_constant_override("separation", 14)
-	loading.add_child(col)
-	var title := _label("BRZESZCZE", 72, Color.WHITE, 900)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	col.add_child(title)
-	var sub := _label("SEICENTO FEST · MAŁOPOLSKA · OPEN ROAD", 18, ORANGE, 800)
-	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	col.add_child(sub)
-	loading_bar = ProgressBar.new()
-	loading_bar.max_value = 1.0
-	loading_bar.show_percentage = false
-	loading_bar.custom_minimum_size = Vector2(0, 10)
-	col.add_child(loading_bar)
-	loading_label = _label("", 15, Color(1, 1, 1, 0.75), 600)
-	loading_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	col.add_child(loading_label)
-	var credit := _label("Map data © OpenStreetMap contributors · Elevation EU-DEM", 12, Color(1, 1, 1, 0.45), 500)
-	credit.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	col.add_child(credit)
-	loading.hide()
 
 # ------------------------------------------------------------------------------------------ updates
 
+## Puts up the loading cover: a still of the car somewhere in Brzeszcze and the figures of the one fitted.
+func open_loading(spec: CarSpec, car_name: String) -> void:
+	loading.open(spec, car_name)
+
 func show_loading(text: String, fraction: float) -> void:
-	loading.show()
-	loading_label.text = text
-	loading_bar.value = fraction
+	if not loading.visible:
+		loading.open(load("res://data/seicento.tres"), "Fiat Seicento")
+	loading.set_status(text, fraction)
 
 func hide_loading() -> void:
 	loading.hide()
@@ -550,7 +521,7 @@ func _skin_changed() -> void:
 		var sb := (b as Control).get_theme_stylebox("panel") as StyleBoxFlat
 		if sb:
 			sb.bg_color = Color(CmrStyle.PLATE, 0.88)
-	loading.color = CmrStyle.TINT_HOME
+	loading.restyle()
 	overlay.queue_redraw()
 	speedo.queue_redraw()
 	big_overlay.queue_redraw()

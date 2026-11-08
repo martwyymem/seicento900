@@ -178,6 +178,10 @@ var render_alpha := 1.0
 ## The next camera update jumps straight to its target (race start).
 var camera_snap := true
 var _cam_head := 0.0
+## Free look (right stick, B / R3 to look back, right-mouse drag) for the chase and on-car cameras
+var look := CameraLook.new()
+var _chase_base := Vector3.ZERO ## the chase camera's eased spot before the free look swings it round the car
+var _last_cam_mode := -1 ## the mode _update_camera ran in last frame (_chase_base is only good after a chase frame)
 var _focus_pos := Vector3.ZERO
 var _focus_heading := 0.0
 var _focus_s := 0.0
@@ -783,6 +787,11 @@ func _update_camera(delta: float) -> void:
 	var p := _focus_pos
 	var snap := camera_snap
 	camera_snap = false
+	look.update(delta, camera_mode in [0, 1, 2, 6, 7])
+	var was_mode := _last_cam_mode
+	_last_cam_mode = camera_mode
+	if snap:
+		look.reset()
 	if camera_mode == 5:
 		camera.projection = Camera3D.PROJECTION_ORTHOGONAL
 		camera.size = overview_distance * 1.65
@@ -809,23 +818,48 @@ func _update_camera(delta: float) -> void:
 			want.y = maxf(want.y, _road_y(_focus_s - dist) + height * 0.6)
 			if not snap and v > 26.0:
 				want.y += sin(Time.get_ticks_msec() * 0.05) * (v - 26.0) * 0.001
-			camera.global_position = camera.global_position.lerp(want, _ease(7.0 if far else 10.0, delta, snap))
-			var roll_tilt := clampf(-player.body_roll * 0.35, -0.06, 0.06)
-			var cam_up := Vector3.UP.rotated(fwd, roll_tilt)
-			camera.look_at(p + fwd * (10.0 if far else 7.0) + Vector3.UP * (0.6 if far else 1.0), cam_up)
+			if snap or was_mode not in [0, 1]:
+				_chase_base = camera.global_position
+			_chase_base = _chase_base.lerp(want, _ease(7.0 if far else 10.0, delta, snap))
+			var view := look.turn(fwd)
+			var spot := look.orbit(p, _chase_base)
+			if look.active():
+				# swung round in front of the car over a crest, it must not sink into the road there either
+				var s_at := _focus_s + (spot - p).dot(fwd)
+				spot.y = maxf(spot.y, _road_y(s_at) + 0.5)
+			camera.global_position = spot
+			var roll_tilt := clampf(-player.body_roll * 0.35, -0.06, 0.06) * cos(look.yaw)
+			var cam_up := Vector3.UP.rotated(view, roll_tilt)
+			var aim := p + view * (10.0 if far else 7.0) * cos(look.pitch) + Vector3.UP * (0.6 if far else 1.0)
+			if look.active():
+				# look at the car itself while swung round it, so it stays in the middle of the picture
+				aim = aim.lerp(p + Vector3.UP * 0.8, smoothstep(0.0, 1.2, absf(look.yaw)) * 0.7)
+			camera.look_at(aim, cam_up)
 		2: # roof cam
 			camera.global_position = p + fwd * 0.25 + Vector3.UP * 1.3
 			var ahead := p + fwd * 30.0
 			ahead.y = _road_y(_focus_s + 30.0) + 1.0
+			if look.active(): # a head turned on the roof
+				ahead = camera.global_position + look.turn(fwd) * 30.0 + Vector3.UP * (ahead.y - camera.global_position.y) * cos(look.yaw)
+				ahead.y -= sin(look.pitch) * 30.0
 			camera.look_at(ahead, Vector3.UP)
 			fov += 6.0
 		6, 7: # bumper cam just ahead of the front bumper, bonnet cam low on the bonnet in front of the screen
 			var bumper := camera_mode == 6
 			var along := 1.78 if bumper else 0.62
 			var up := 0.42 if bumper else 1.08
-			camera.global_position = p + fwd * along + Vector3.UP * up
 			var ahead := p + fwd * 40.0
 			ahead.y = _road_y(_focus_s + 40.0) + up * 0.75
+			if look.active():
+				# the camera swings round the car with the view, out past the bumpers and the sides; the bonnet
+				# one rises over the roof as it turns so it never looks out from inside the cabin
+				var view := look.turn(fwd)
+				if not bumper:
+					up = lerpf(up, 1.32, smoothstep(0.0, PI * 0.5, absf(look.yaw)))
+				camera.global_position = p + view * along + Vector3.UP * up
+				ahead = camera.global_position + view * 40.0 + Vector3.UP * ((ahead.y - camera.global_position.y) * cos(look.yaw) - sin(look.pitch) * 40.0)
+			else:
+				camera.global_position = p + fwd * along + Vector3.UP * up
 			camera.look_at(ahead, Vector3.UP)
 			fov += 4.0 if bumper else 2.0
 		3: # trackside TV: a camera ahead of the car picks it up, follows it past, then cuts to the next

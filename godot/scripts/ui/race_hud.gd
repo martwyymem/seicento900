@@ -53,8 +53,8 @@ var FEED_BORDER: Dictionary:
 const QUICK_HELP := "W Throttle  ·  S Brake  ·  A / D Steer  ·  R Reset  ·  H Controls"
 const QUICK_HELP_SECS := 7.0 ## s of racing the key strip stays up
 const GUIDE := [["W / ↑", "Throttle"], ["S / ↓", "Brake, reverse"], ["Space · pad A", "Handbrake"], ["A / D / ← →", "Steer"], ["E / Q", "Gear (manual)"],
-	["R / Backspace", "Reset car"], ["C · L", "Camera · line"], ["V", "Speed limiter"], ["O", "Autopilot"],
-	["G", "Ghost car"], ["M", "Mute"], ["P", "Request box"], ["[ ]  − =  F", "Tyre · fuel · mix"], ["Esc", "Pause"]]
+	["R / Backspace", "Reset car"], ["C · B", "Camera · look back"], ["V", "Speed limiter"], ["O", "Autopilot"],
+	["G · L", "Ghost · racing line"], ["M", "Mute"], ["P", "Request box"], ["[ ]  − =  F", "Tyre · fuel · mix"], ["Esc", "Pause"]]
 var _guide: Control
 var _feed_cache: Array = []
 var _feed_cache_n := -1

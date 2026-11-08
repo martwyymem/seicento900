@@ -26,9 +26,18 @@ const BUSH_STEP := 5.0
 const GRASS_REACH := 1.0 ## m: a grass patch's blades spread this far from its middle (0.8 m, widened up to 1.25x)
 const BUDGET_USEC := 2500 ## planting time per frame
 const HANDOVER := 14.0 ## m over which the dense patches give way to the sparse ones (grass.gdshader lod_out/lod_in)
-const FAR_FADE := 40.0 ## m over which the blades sink at the far edge (at most 45% of the reach)
+const FAR_FADE := 50.0 ## m over which the blades sink at the far edge (at most half the reach)
 const FIELD_MIN := 100 ## land map G (0-255) from which a pixel is a field
 const GRASS_SHADER := preload("res://shaders/grass.gdshader")
+const SHRUB_SHADER := preload("res://shaders/shrub.gdshader")
+const RACE_WORLD := preload("res://scripts/ui/race_world.gd")
+## The meadow's colour seen from afar: the grass fades to it towards the edge of the planted ring, and the ground shader
+## paints the bare meadows beyond with it (TownBuilder.build_terrain), so the ring has no edge of colour
+const MEADOW_FAR := Color(0.49, 0.55, 0.21)
+const MEADOW_FAR_DRY := Color(0.56, 0.54, 0.25)
+const BUSH_FADE := Vector2(55.0, 80.0) ## m: bushes fully there / not yet there (a cell is planted within RADIUS)
+const FLOWER_RANGE := 50.0 ## m: a flower cell's centre shows within this, fading out over the next FLOWER_MARGIN
+const FLOWER_MARGIN := 18.0
 ## per graphics preset (0 Low .. 3 Ultra): m between grass and wheat patches, how near a cell's centre must be for the
 ## dense patches (0: never), and where the grass has sunk away
 const GRASS_QUALITY := [{"step": 1.6, "near": 0.0, "far": 62.0}, {"step": 1.35, "near": 26.0, "far": 74.0},
@@ -51,6 +60,7 @@ var grass_mat: ShaderMaterial
 var wheat_mat: ShaderMaterial
 var grass_near_mat: ShaderMaterial ## the dense patches' copies: their blades leave across the hand-over band
 var wheat_near_mat: ShaderMaterial
+var bush_mat: ShaderMaterial
 var _areas := {} ## cell key -> [[kind, ring, rect], ...] of the pitches and parks over that cell
 ## Tests: when set, every committed plant's position by kind (headless reads MultiMesh transforms back as identity)
 var recorded: Dictionary = {}
@@ -89,8 +99,15 @@ func setup(m: TownMap) -> bool:
 	wheat_mat.set_shader_parameter("mid_color", Color(0.66, 0.6, 0.28))
 	wheat_mat.set_shader_parameter("tip_color", Color(0.86, 0.76, 0.42))
 	wheat_mat.set_shader_parameter("dry_color", Color(0.82, 0.68, 0.34))
+	wheat_mat.set_shader_parameter("far_color", Color(0.78, 0.66, 0.3)) # the ground shader's ripe field (farm_color_a)
 	wheat_mat.set_shader_parameter("wind_strength", 0.1)
+	grass_mat.set_shader_parameter("far_color", MEADOW_FAR)
 	grass_near_mat = grass_mat.duplicate() as ShaderMaterial
+	bush_mat = ShaderMaterial.new()
+	bush_mat.shader = SHRUB_SHADER
+	bush_mat.set_shader_parameter("grain", RACE_WORLD.noise_texture("grain"))
+	bush_mat.set_shader_parameter("fade_near", BUSH_FADE.x)
+	bush_mat.set_shader_parameter("fade_far", BUSH_FADE.y)
 	wheat_near_mat = wheat_mat.duplicate() as ShaderMaterial
 	set_quality(quality)
 	return land_w > 0 and not meshes.is_empty()
@@ -161,7 +178,7 @@ func set_quality(level: int) -> void:
 	var band := Vector2(maxf(0.0, float(q.near) - HANDOVER), float(q.near)) if float(q.near) > 0.0 else Vector2.ZERO
 	for mat in [grass_mat, wheat_mat, grass_near_mat, wheat_near_mat]:
 		if mat:
-			mat.set_shader_parameter("fade_start", float(q.far) - minf(FAR_FADE, float(q.far) * 0.45))
+			mat.set_shader_parameter("fade_start", float(q.far) - minf(FAR_FADE, float(q.far) * 0.5))
 			mat.set_shader_parameter("fade_end", float(q.far))
 	for mat in [grass_mat, wheat_mat]:
 		if mat:
@@ -478,7 +495,12 @@ func _plant_flowers(cell: Node3D, x0: float, y0: float) -> void:
 		var s := 1.2 + hash2(p[0], p[1], 22.0) * 0.9 # over the meadow grass
 		xfs.append(_place(p[0], p[1], hash2(p[0], p[1], 23.0) * TAU, Vector3(s, s * (0.9 + hash2(p[0], p[1], 24.0) * 0.5), s), -0.02))
 		cols.append(FLOWER_COLOURS[pick % FLOWER_COLOURS.size()])
-	_commit(cell, "Flower", xfs, cols, RADIUS - 40.0)
+	_commit(cell, "Flower", xfs, cols, FLOWER_RANGE)
+	var fl := cell.get_child(cell.get_child_count() - 1) as GeometryInstance3D if cell.get_child_count() > 0 else null
+	if fl and fl.name == "Flower":
+		# the cell's flowers dissolve in over the margin, not all at once when the cell is planted
+		fl.visibility_range_end_margin = FLOWER_MARGIN
+		fl.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 
 ## Thickets on the scrub (forest floor at about 40% in the land map), a few lone bushes on the grass.
 func _plant_bushes(cell: Node3D, x0: float, y0: float) -> void:
@@ -500,6 +522,8 @@ func _plant_bushes(cell: Node3D, x0: float, y0: float) -> void:
 			continue
 		var s := 0.7 + hash2(p[0], p[1], 27.0) * 0.9
 		xfs.append(_place(p[0], p[1], hash2(p[0], p[1], 28.0) * TAU, Vector3(s, s * (0.8 + hash2(p[0], p[1], 29.0) * 0.4), s), -0.1))
-		var t := 0.4 + hash2(p[0], p[1], 30.0) * 0.3
-		cols.append(Color(t * 0.85, t, t * 0.7))
-	_commit(cell, "BushCluster", xfs, cols, RADIUS + 40.0)
+		# a tint around 1 on the shrub shader's greens: some bushes yellower, some bluer, some darker
+		var t := 0.8 + hash2(p[0], p[1], 30.0) * 0.4
+		var hue := hash2(p[0], p[1], 31.0)
+		cols.append(Color(t * lerpf(0.85, 1.15, hue), t, t * lerpf(1.1, 0.8, hue)))
+	_commit(cell, "BushCluster", xfs, cols, RADIUS + 40.0, bush_mat)

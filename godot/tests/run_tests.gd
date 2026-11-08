@@ -23,6 +23,7 @@ const SUITES := [
 	"res://tests/test_retro_pipeline.gd",
 	"res://tests/test_fx_particles.gd",
 	"res://tests/test_open_world.gd",
+	"res://tests/test_open_world_cache.gd",
 	"res://tests/test_open_world_terrain.gd",
 	"res://tests/test_open_world_ramps.gd",
 	"res://tests/test_open_world_bridges.gd",
@@ -49,6 +50,7 @@ const SUITES := [
 	"res://tests/test_cobbles.gd",
 	"res://tests/test_street_tracks.gd",
 	"res://tests/test_chase_cam.gd",
+	"res://tests/test_camera_look.gd",
 	"res://tests/test_damage_policy.gd",
 	"res://tests/test_routes.gd"
 ]

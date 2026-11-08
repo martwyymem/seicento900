@@ -12,6 +12,8 @@ uniform vec3 mid_color : source_color = vec3(0.30, 0.50, 0.11);
 uniform vec3 tip_color : source_color = vec3(0.56, 0.68, 0.20);
 uniform vec3 dry_color : source_color = vec3(0.80, 0.68, 0.36);
 uniform vec3 ear_color : source_color = vec3(0.86, 0.70, 0.36);
+// what the blades turn towards the far edge: the bare meadow's colour beyond the planted ring (vegetation.gd MEADOW_FAR)
+uniform vec3 far_color : source_color = vec3(0.30, 0.50, 0.11);
 uniform float wind_strength = 0.16; // m of tip sway in a gust
 uniform float wind_speed = 1.0;
 uniform vec2 wind_dir = vec2(0.8, 0.6);
@@ -86,7 +88,7 @@ void fragment() {
 	col *= 0.85 + 0.3 * v_rnd;
 	col = mix(col, ear_color * (0.85 + 0.25 * v_rnd), v_ear);
 	col *= v_tint;
-	col = mix(col, mid_color * v_tint * 0.95, v_far * 0.7);
+	col = mix(col, far_color * mix(vec3(1.0), v_tint, 0.3), v_far * 0.85);
 	ALBEDO = col;
 	ROUGHNESS = 0.78;
 	SPECULAR = 0.3;
