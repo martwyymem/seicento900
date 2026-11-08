@@ -28,6 +28,8 @@ uniform vec3 meadow_color : source_color = vec3(0.45, 0.53, 0.2);
 uniform vec3 meadow_dry_color : source_color = vec3(0.56, 0.54, 0.25);
 
 uniform sampler2D grain : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D surf_micro : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D surf_macro : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D grain_normal : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
 
 uniform bool use_textures = false;
@@ -53,6 +55,12 @@ uniform vec3 forest_floor_color : source_color = vec3(0.2, 0.22, 0.13);
 
 varying vec3 world_pos;
 varying vec3 world_normal;
+
+float hash_p(vec2 p) {
+	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+	p3 += dot(p3, p3.yzx + 33.33);
+	return fract((p3.x + p3.y) * p3.z);
+}
 
 // vertex colours are stored as sRGB
 vec3 to_linear(vec3 c) {
@@ -132,7 +140,41 @@ void fragment() {
 				col = mix(col, mc * (0.8 + 0.25 * fine + 0.1 * micro) * (0.9 + 0.2 * broad), meadow_px * meadow_amount);
 			}
 			paved = smoothstep(0.25, 0.75, lm.r);
-			col = mix(col, paved_color * (0.88 + 0.16 * fine + 0.08 * micro), paved);
+			vec3 pave_c = paved_color * (0.88 + 0.16 * fine + 0.08 * micro);
+			if (paved > 0.01) {
+				// yards, plazas and car parks: concrete slabs 1 m square or paving blocks, cracked joints, patched dark and stained
+				vec2 cell = p / 0.9;
+				vec2 id = floor(cell);
+				vec2 f = fract(cell);
+				float blocks = step(0.45, hash_p(floor(p / 22.0) + 3.0)); // some stretches are laid in small blocks instead
+				if (blocks > 0.5) {
+					cell = vec2(p.x / 0.2 + 0.5 * mod(floor(p.y / 0.1), 2.0), p.y / 0.1);
+					id = floor(cell);
+					f = fract(cell);
+				}
+				vec2 cell_m = blocks > 0.5 ? vec2(0.2, 0.1) : vec2(0.9);
+				vec2 e = min(f, 1.0 - f) * cell_m;
+				vec2 fwp = vec2(length(vec2(dFdx(p.x), dFdy(p.x))), length(vec2(dFdx(p.y), dFdy(p.y))));
+				vec2 aa = fwp * 0.8 + 0.002;
+				float jw = blocks > 0.5 ? 0.008 : 0.016;
+				vec2 jj = 1.0 - smoothstep(vec2(jw * 0.5) - aa, vec2(jw * 0.5) + aa, e);
+				float joint = max(jj.x, jj.y) * (1.0 - smoothstep(0.03, 0.09, px));
+				float ih = hash_p(id + 9.0);
+				vec4 ma = texture(surf_macro, p * 0.25);
+				vec4 mi = texture(surf_micro, p);
+				pave_c *= (0.86 + 0.28 * ih) * (1.0 - 0.18 * smoothstep(0.35, 0.8, ma.b)) * (0.9 + 0.2 * mi.r);
+				pave_c *= 1.0 - 0.25 * ma.g * (1.0 - smoothstep(0.02, 0.07, px));
+				pave_c = mix(pave_c, vec3(0.06), joint * 0.7);
+				if (blocks > 0.5) {
+					float sel = hash_p(floor(p / 2.5) + 5.0);
+					pave_c = mix(pave_c, vec3(0.3, 0.14, 0.1) * (0.8 + 0.4 * ih), step(0.8, sel) * 0.9);
+				}
+				// fade to one tone far off, where a slab is a pixel
+				pave_c = mix(pave_c, paved_color * 0.85, smoothstep(0.08, 0.3, px));
+				col = mix(col, pave_c, paved);
+			} else {
+				col = mix(col, pave_c, paved);
+			}
 			rough = mix(rough, 0.82, paved);
 		}
 	}

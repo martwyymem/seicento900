@@ -87,12 +87,20 @@ void fragment() {
 				rough = 0.08;
 				metal = 0.4;
 				float lit = step(hash12(id + 19.7), ground_shop ? 0.7 : 0.42);
-				vec3 warm = mix(vec3(1.0, 0.72, 0.42), vec3(0.95, 0.9, 0.8), hash12(id + 3.3));
+				float hue = hash12(id + 3.3);
+				vec3 warm = hue < 0.55 ? vec3(1.0, 0.6, 0.28) : (hue < 0.8 ? vec3(1.0, 0.82, 0.55) : (hue < 0.92 ? vec3(0.85, 0.92, 1.0) : vec3(0.35, 0.5, 1.0)));
+				warm *= 0.7 + 0.6 * hash12(id + 41.0);
 				glow = warm * lit * night * (ground_shop ? 2.6 : 1.5);
 			}
-			// window sill shadow
+			// window sill shadow, and the reveal: shade under the lintel and on the jamb
 			if (in_window && f.y < 0.26) {
 				col *= 0.6;
+			}
+			if (in_window && !shut) {
+				float rev = smoothstep(0.7, 0.8, f.y) * 0.5 + smoothstep(0.32, 0.24, f.x) * 0.4;
+				col *= 1.0 - rev;
+				glow *= 1.0 - rev * 0.6;
+				col += vec3(0.1, 0.14, 0.2) * smoothstep(0.7, 0.3, f.y) * 0.6; // the sky in the pane
 			}
 		}
 		ALBEDO = col * mix(1.0, 0.75, wet);

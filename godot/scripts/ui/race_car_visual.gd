@@ -19,6 +19,7 @@ const WHEEL_SPOTS := [Vector3(-HALF_TRACK, WHEEL_RADIUS, -1.1), Vector3(HALF_TRA
 	Vector3(-HALF_TRACK, WHEEL_RADIUS, 1.1), Vector3(HALF_TRACK, WHEEL_RADIUS, 1.1)] ## FL, FR, RL, RR like the physics
 
 static var _shared := {}
+static var _env_materials: Array[ShaderMaterial] = [] ## every car_coat.gdshader material, see _env_material()
 
 var paint_material: StandardMaterial3D
 var stripe_material: StandardMaterial3D
@@ -34,6 +35,7 @@ var livery := 0 ## 0 gloss, 1 metallic flake, 2 Martini Racing, 3 Abarth, 4 Marl
 ## The sponsor livery meshes by livery number (martini_node is the 2)
 var livery_nodes := {}
 ## Liveries painted over a white car, without the twin stripes or the racing number decals
+const PLATE_ROWS := 8 ## rows in textures/car/plate_pl.png
 const WHITE_LIVERIES := [2, 4]
 const LIVERY_MESHES := {2: "Martini", 3: "Abarth", 4: "Marlboro"}
 var steer_pivots: Array[Node3D] = []
@@ -47,6 +49,8 @@ var _sill_decal_r: MeshInstance3D
 var car_number := 1:
 	set(value):
 		car_number = value
+		if is_instance_valid(_details_node):
+			_details_node.set_instance_shader_parameter("plate_id", float(posmod(car_number * 5 + 3, PLATE_ROWS)))
 		if is_instance_valid(number_label):
 			number_label.text = str(car_number)
 		_update_decals()
@@ -57,6 +61,10 @@ var grade_pitch := 0.0
 var _roll := 0.0
 var _spins := PackedFloat64Array([0.0, 0.0, 0.0, 0.0])
 var _tail_energy := -1.0
+var _sun: DirectionalLight3D ## the world's sun, for the paint's glint (found from the player's car)
+var _sun_tried := -1000
+var _sun_sig := Vector4.ZERO
+var _sky_mat: ShaderMaterial ## the open world's sky shader, which the mirror passes take their colours from
 var _ghost := false
 var _paint := Color.WHITE
 var _damage_shown := 0.0
@@ -134,6 +142,7 @@ func _ready() -> void:
 		details.set_surface_override_material(sh.bulb_surface, bulb_material)
 	body_pivot.add_child(details)
 	_details_node = details
+	details.set_instance_shader_parameter("plate_id", float(posmod(car_number * 5 + 3, PLATE_ROWS)))
 
 	var cabin := MeshInstance3D.new()
 	cabin.name = "Cabin"
@@ -360,8 +369,9 @@ func set_stripes(enabled: bool) -> void:
 ## Headlight glow is the same for every car, so it lives on the shared material.
 static func set_night(night: float) -> void:
 	var sh := _shared_resources()
-	sh.head.emission_energy_multiplier = 0.08 + 3.6 * night
-	sh.coat.set_shader_parameter("strength", 0.65 * (1.0 - 0.9 * night))
+	sh.head.set_shader_parameter("lit", 0.08 + 3.6 * night)
+	for m in _env_materials:
+		m.set_shader_parameter("strength", float(m.get_meta("day_strength")) * (1.0 - 0.9 * night))
 	var amb := Color(0.12, 0.14, 0.20).lerp(Color(0.52, 0.56, 0.62), 1.0 - night)
 	var sun_col := Color(0.08, 0.10, 0.15).lerp(Color(1.0, 0.95, 0.88), 1.0 - night)
 	FxParticles.set_environment_lighting(amb, sun_col, Vector3(0.3, 0.8, 0.3))
@@ -371,11 +381,42 @@ static func set_sky(top: Color, horizon: Color) -> void:
 	var coat: ShaderMaterial = _shared_resources().coat
 	if coat.get_meta("sky", []) != [top, horizon]:
 		coat.set_meta("sky", [top, horizon])
-		coat.set_shader_parameter("sky_top", top)
-		coat.set_shader_parameter("sky_horizon", horizon)
+		for m in _env_materials:
+			m.set_shader_parameter("sky_top", top)
+			m.set_shader_parameter("sky_horizon", horizon)
 		var ambient := horizon.lerp(top, 0.45) * 0.75
 		var sun_col := Color(1.05, 0.98, 0.92)
 		FxParticles.set_environment_lighting(ambient, sun_col, Vector3(0.42, 0.78, 0.46))
+## The sun's direction and colour for the mirror passes (shaders/car_coat.gdshader), read from the world's directional light.
+func _update_sun() -> void:
+	if not is_instance_valid(_sun):
+		var now := Engine.get_process_frames()
+		if now - _sun_tried < 180 or not is_inside_tree():
+			return
+		_sun_tried = now
+		for l in get_tree().root.find_children("*", "DirectionalLight3D", true, false):
+			if l.visible and (l as DirectionalLight3D).light_energy > 0.0:
+				_sun = l
+				break
+		for e in get_tree().root.find_children("*", "WorldEnvironment", true, false):
+			var env: Environment = (e as WorldEnvironment).environment
+			if env and env.sky and env.sky.sky_material is ShaderMaterial:
+				_sky_mat = env.sky.sky_material
+				break
+		if not is_instance_valid(_sun):
+			return
+	if _world == null and _sky_mat and _sky_mat.get_shader_parameter("top_color") is Color:
+		set_sky(_sky_mat.get_shader_parameter("top_color"), _sky_mat.get_shader_parameter("horizon_color"))
+	var dir := _sun.global_basis.z.normalized() # a light shines along -Z, so the sun lies along +Z
+	var power := clampf(_sun.light_energy, 0.0, 2.5) * (1.0 if _sun.visible else 0.0)
+	var sig := Vector4(dir.x, dir.y, dir.z, power)
+	if sig.distance_squared_to(_sun_sig) > 1e-6:
+		_sun_sig = sig
+		for m in _env_materials:
+			m.set_shader_parameter("sun_dir", dir)
+			m.set_shader_parameter("sun_color", _sun.light_color)
+			m.set_shader_parameter("sun_power", power)
+
 ## Per-frame presentation. curvature is the road curvature under the car (for rail-driven cars).
 func sync(car: RaceCar, dt: float, curvature: float, night: float, ghost: bool) -> void:
 	var physical: bool = car.control == "free" and car.phys != null
@@ -406,7 +447,10 @@ func sync(car: RaceCar, dt: float, curvature: float, night: float, ghost: bool) 
 		_tail_energy = tail
 		tail_material.emission_energy_multiplier = tail
 		bulb_material.emission_energy_multiplier = (4.0 + 1.5 * night) if car.brake_on else (0.35 + 0.8 * night)
+		# the lens (car_taillamp.gdshader): lit, with a prism glow, when braking; a dim running light otherwise
+		_details_node.set_instance_shader_parameter("glow", 1.0 if car.brake_on else 0.1 + 0.2 * night)
 	if is_player and not _ghost:
+		_update_sun()
 		if _brake_light == null:
 			# a spot behind the bumper shining away from the car, so it lights the road and not the cabin
 			_brake_light = SpotLight3D.new()
@@ -598,19 +642,18 @@ static func _shared_resources() -> Dictionary:
 	var details: Mesh = meshes.get("Details", BoxMesh.new())
 
 	# Glass and headlights are the same on every car, so they live on the shared meshes.
-	var glass := StandardMaterial3D.new()
-	glass.albedo_color = Color(0.03, 0.04, 0.05, 0.6)
+	var glass := StandardMaterial3D.new() # tinted dark and glossy, a little see-through, mirroring the sky on top
+	glass.albedo_color = Color(0.008, 0.012, 0.016, 0.7)
 	glass.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	glass.cull_mode = BaseMaterial3D.CULL_DISABLED
-	glass.roughness = 0.02
+	glass.roughness = 0.015
 	glass.metallic_specular = 1.0
-	var head := StandardMaterial3D.new()
-	head.albedo_color = Color("#d8dcdc")
-	head.metallic = 0.9
-	head.roughness = 0.1
-	head.emission_enabled = true
-	head.emission = Color("#fff3d6")
-	head.emission_energy_multiplier = 0.08
+	glass.clearcoat_enabled = true
+	glass.clearcoat = 1.0
+	glass.clearcoat_roughness = 0.0
+	glass.next_pass = _env_material(1.0, 0.10, 0.0, false)
+	var head := ShaderMaterial.new() # the reflector bowl (car_headlamp.gdshader): dark chrome facets, a bulb that lights at night
+	head.shader = load("res://shaders/car_headlamp.gdshader")
 	var glass_surface := _surface(shell, "Glass")
 	if glass_surface >= 0:
 		shell.surface_set_material(glass_surface, glass)
@@ -625,17 +668,13 @@ static func _shared_resources() -> Dictionary:
 	lens.rim_enabled = true
 	lens.rim = 0.0
 	lens.rim_tint = 0.2
+	lens.next_pass = _env_material(1.0, 0.12, 0.0, false)
 	var lens_surface := _surface(details, "LampGlass")
 	if lens_surface >= 0:
 		details.surface_set_material(lens_surface, lens)
-	var red_glass := StandardMaterial3D.new() # the tail lamps' red lens: glossy, so it picks up the sky and the lights
-	red_glass.albedo_color = Color(0.55, 0.015, 0.02, 0.5)
-	red_glass.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	red_glass.roughness = 0.04
-	red_glass.metallic_specular = 1.0
-	red_glass.clearcoat_enabled = true
-	red_glass.clearcoat = 1.0
-	red_glass.clearcoat_roughness = 0.0
+	var red_glass := ShaderMaterial.new() # the tail lamps' moulded red lens (car_taillamp.gdshader): prisms, a hard sheen, a glow
+	red_glass.shader = load("res://shaders/car_taillamp.gdshader")
+	red_glass.next_pass = _env_material(1.0, 0.12, 0.0, false)
 	var tail_glass_surface := _surface(details, "TailGlass")
 	if tail_glass_surface >= 0:
 		details.surface_set_material(tail_glass_surface, red_glass)
@@ -655,6 +694,18 @@ static func _shared_resources() -> Dictionary:
 	var head_surface := _surface(details, "Headlight")
 	if head_surface >= 0:
 		details.surface_set_material(head_surface, head)
+	var plate_surface := _surface(details, "Plate")
+	if plate_surface >= 0:
+		var plate := ShaderMaterial.new() # a Polish plate from the atlas on the bumpers (car_plate.gdshader)
+		plate.shader = load("res://shaders/car_plate.gdshader")
+		plate.set_shader_parameter("atlas", load("res://textures/car/plate_pl.png"))
+		plate.set_shader_parameter("rows", float(PLATE_ROWS))
+		details.surface_set_material(plate_surface, plate)
+	var grille_surface := _surface(details, "Grille")
+	if grille_surface >= 0:
+		var grille := ShaderMaterial.new() # the air intake's black diamond mesh (car_grille.gdshader)
+		grille.shader = load("res://shaders/car_grille.gdshader")
+		details.surface_set_material(grille_surface, grille)
 
 	# Soft dark ellipse under the car keeps it sitting on the road: a dense core under the floor (ambient
 	# occlusion) and a wide soft falloff past the sills and bumpers.
@@ -683,43 +734,22 @@ static func _shared_resources() -> Dictionary:
 		"paint_surface": maxi(0, _surface(shell, "Paint")), "tail_surface": maxi(0, _surface(details, "Taillight")), "bulb_surface": _surface(details, "TailBulb")}
 	return _shared
 
-## The clear coat's sharp horizon reflection, the line of light that runs along a glossy car's flanks (the
-## sky radiance map alone is too smooth to show it). An additive second pass over the paint: a bright band
-## just above the reflected horizon, the sky's gradient above it, Fresnel-weighted, kept out of the panel gaps,
-## fading with distance, at night (set_night) and on damaged paint (the per-car "coat" instance uniform).
-const COAT_SHADER := """
-shader_type spatial;
-render_mode blend_add, unshaded, depth_draw_never, cull_back, fog_disabled, shadows_disabled;
-uniform vec3 sky_top : source_color = vec3(0.38, 0.56, 0.82);
-uniform vec3 sky_horizon : source_color = vec3(0.78, 0.84, 0.9);
-uniform float strength = 0.75;
-instance uniform float coat = 1.0;
-void fragment() {
-	vec3 n = normalize(NORMAL);
-	vec3 v = normalize(VIEW);
-	vec3 r = (INV_VIEW_MATRIX * vec4(reflect(-v, n), 0.0)).xyz;
-	float nv = clamp(dot(n, v), 0.0, 1.0);
-	float f = 0.12 + 0.88 * pow(1.0 - nv, 3.0);
-	float h = r.y;
-	// Crisp FH1-style horizon reflection band: bright crisp waistline stripe with soft sky dome fill
-	float horizon_band = smoothstep(-0.015, 0.025, h) * exp(-abs(h - 0.035) * 24.0);
-	float sky_sheen = smoothstep(0.0, 0.5, h) * 0.06;
-	float band = horizon_band + sky_sheen;
-	vec3 sky = mix(sky_horizon, sky_top, smoothstep(0.05, 0.6, max(0.0, h)));
-	float fade = 1.0 - smoothstep(45.0, 140.0, length(VERTEX));
-	vec3 refl = sky * band * f * strength * coat * fade * COLOR.r;
-	// Soft shoulder compression prevents blowing out highlights on bright paint
-	ALBEDO = refl / (1.0 + refl * 0.5);
-}
-"""
+## The mirror pass (shaders/car_coat.gdshader) over the paint, glass and lamp lenses: a crisp horizon and sun glint on top of
+## the sky's soft radiance. Every one made here is kept in "env" so the world's sky, the sun and the night reach all of them.
+## strength is the weight at full day (set_night takes it down), f0 the reflectance face-on.
+static func _env_material(strength: float, f0: float, priority: float, vertex_colour: bool) -> ShaderMaterial:
+	var m := ShaderMaterial.new()
+	m.shader = load("res://shaders/car_coat.gdshader")
+	m.set_shader_parameter("f0", f0)
+	m.set_shader_parameter("use_vertex_color", 1.0 if vertex_colour else 0.0)
+	m.render_priority = int(priority) + 1
+	m.set_meta("day_strength", strength)
+	m.set_shader_parameter("strength", strength)
+	_env_materials.append(m)
+	return m
 
 static func _coat_material() -> ShaderMaterial:
-	var shader := Shader.new()
-	shader.code = COAT_SHADER
-	var m := ShaderMaterial.new()
-	m.shader = shader
-	m.render_priority = 1
-	return m
+	return _env_material(1.0, 0.06, 0.0, true)
 
 ## Metallic flake: a fine bumpy normal map, tiled triplanar (the model has no UVs) at a few millimetres a flake.
 static func _peel_texture() -> NoiseTexture2D:
