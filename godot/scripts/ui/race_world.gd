@@ -49,10 +49,10 @@ const RAIN_FULL_SPAN := 0.06
 const RAIN_GONE_SPAN := 0.16
 
 # Sky and light palette (parsed once, not every frame).
-const SKY_TOP_NIGHT := Color("#030611")
+const SKY_TOP_NIGHT := Color("#070e2a") ## a deep navy, not black
 const SKY_TOP_DAY := Color("#3b6eae")
 const SKY_TOP_OVERCAST := Color("#68727e")
-const HORIZON_NIGHT := Color("#121b2c")
+const HORIZON_NIGHT := Color("#172446")
 const HORIZON_DAY := Color("#9fbcdc")
 const HORIZON_OVERCAST := Color("#a2a7ad")
 const DUSK_GLOW := Color("#e98559")
@@ -97,6 +97,7 @@ var overview_target := Vector3.ZERO
 var overview_distance := 1000.0
 var overview := true
 var world_environment: Environment
+var reflections: CarReflections ## the circuit mirrored in the player's paint (presets with car_reflections)
 var sky_material: ShaderMaterial
 var sun: DirectionalLight3D
 var sky_top_color := SKY_TOP_DAY ## the procedural sky's colours, for the ray-traced reflections
@@ -272,6 +273,8 @@ func _ready() -> void:
 	if cfg.load(SaveData.read_path("graphics.cfg")) == OK:
 		quality = clampi(int(cfg.get_value("graphics", "quality", quality)), 0, QUALITY_NAMES.size() - 1)
 	_build_environment()
+	reflections = CarReflections.new()
+	add_child(reflections)
 	_build_beams()
 	add_child(preload("res://scripts/ui/lens_flare.gd").new()) # sun flare, drawn in this viewport under the HUD
 	apply_graphics(quality)
@@ -317,6 +320,8 @@ func apply_graphics(level: int) -> void:
 	for ambient_particles in [ambient_leaves, ambient_motes, ambient_fog]:
 		if ambient_particles:
 			ambient_particles.amount = [4, 7, 10, 12][quality]
+	if reflections:
+		reflections.visible = bool(GraphicsPresets.preset(quality).get("car_reflections", false))
 	if world_environment:
 		world_environment.ssil_enabled = quality >= 3
 		world_environment.sky.radiance_size = Sky.RADIANCE_SIZE_128 if quality < 2 else Sky.RADIANCE_SIZE_256
@@ -453,6 +458,8 @@ func _process(delta: float) -> void:
 	CAR_VISUAL.set_night(night)
 
 	var focus := race.player
+	if reflections:
+		reflections.follow(visuals.get(focus.id))
 	var a := clampf(render_alpha, 0.0, 1.0)
 	var rc := race.rc
 	for car in (race.cars + [rc.sc] if rc else race.cars):
@@ -573,7 +580,9 @@ func _update_atmosphere(hour: float, wet: float, rain: float, snow: float = 0.0,
 	sky_material.set_shader_parameter("sun_color", SUN_DAY.lerp(SUN_GOLDEN, golden * 0.6).lerp(DUSK_GLOW, glow * 0.7))
 	sky_material.set_shader_parameter("halo_amount", 0.35 * clear + 0.5 * golden)
 	sky_material.set_shader_parameter("cloud_paint", day_t) # after dark the clouds stay soft and unlit
-	sky_material.set_shader_parameter("star_amount", smoothstep(0.35, 0.95, night))
+	sky_material.set_shader_parameter("star_amount", smoothstep(0.35, 0.95, night) * 0.35) # they bloom under the night exposure
+	# the floodlights' and the town's glow low on the night horizon and under the clouds
+	sky_material.set_shader_parameter("city_glow", Color(0.45, 0.32, 0.22) * 0.16 * night * (1.0 - overcast * 0.5))
 	sky_material.set_shader_parameter("cloud_lit", CLOUD_NIGHT.lerp(CLOUD_LIT, day_t).lerp(HORIZON_OVERCAST, overcast * 0.5 * day_t))
 	sky_material.set_shader_parameter("cloud_shade", (CLOUD_NIGHT * 0.6).lerp(CLOUD_SHADE, day_t).lerp(SKY_TOP_OVERCAST.darkened(0.2), overcast * day_t))
 	var sky_luma := (top.srgb_to_linear().get_luminance() + horizon.srgb_to_linear().get_luminance() * 2.0) / 3.0
@@ -586,14 +595,17 @@ func _update_atmosphere(hour: float, wet: float, rain: float, snow: float = 0.0,
 	sky_material.set_shader_parameter("cloud_opacity", lerpf(1.0, 0.75, _hdri_weight))
 	# the clear panoramas are pale; a deeper blue overhead reads as a bright, clean CMR sky
 	sky_material.set_shader_parameter("hdri_saturation", lerpf(1.0, 1.3, clear))
+	# the night panoramas are near grey: a deep blue cast, as the procedural night sky has
+	sky_material.set_shader_parameter("hdri_tint", Color(1, 1, 1).lerp(Color(0.62, 0.8, 1.5), night * (1.0 - overcast * 0.6)))
 
 	# a clear sun about two and a half times the sky fill, and the fill a cool blue, so shadows are coloured
 	# rather than grey (the WRC stage sets' ratio); after dark and under cloud the fill is the sky's own
 	var fill: Color = (preset.fill as Color).lerp(FILL_GOLDEN, golden).lerp(FILL_OVERCAST, overcast)
 	world_environment.ambient_light_color = AMBIENT_NIGHT.lerp(fill, day_t)
-	world_environment.ambient_light_sky_contribution = lerpf(1.0, 0.5, clear)
-	world_environment.ambient_light_energy = lerpf(0.34, 0.95, day_t) * (1.0 - overcast * 0.2)
-	sun.light_energy = lerpf(0.1, 1.75, day_t) * (1.0 - overcast * 0.62) * lerpf(1.0, 0.8, golden)
+	world_environment.ambient_light_sky_contribution = lerpf(lerpf(0.6, 1.0, day_t), 0.5, clear) # after dark part moonlit blue
+	# a strong sun over a dimmer fill by day (crisp shadows); after dark a moonlit blue fill the night exposure lifts
+	world_environment.ambient_light_energy = lerpf(0.5, 0.72, day_t) * (1.0 - overcast * 0.2) * lerpf(1.0, 0.8, golden)
+	sun.light_energy = lerpf(0.14, 2.1, day_t) * (1.0 - overcast * 0.62) * lerpf(1.0, 0.85, golden)
 	sun.light_color = SUN_NIGHT.lerp(SUN_DAY, day_t).lerp(SUN_GOLDEN, golden * 0.85).lerp(DUSK_GLOW, glow * 0.35)
 	sun.shadow_opacity = lerpf(0.55, 1.0, day_t) * (1.0 - overcast * 0.45)
 	# haze takes on a paler, cooler horizon colour (gold toward a low sun) and thickens in the rain, so the
@@ -603,13 +615,10 @@ func _update_atmosphere(hour: float, wet: float, rain: float, snow: float = 0.0,
 	var haze := (0.00022 + 0.00022 * golden) * float(preset.haze)
 	world_environment.fog_density = haze + 0.00045 * overcast + 0.0024 * rain
 	world_environment.fog_sun_scatter = 0.18 * glow + (0.06 + 0.28 * golden) * clear
-	world_environment.adjustment_saturation = lerpf(1.02, float(preset.saturation) + 0.05 * golden, clear)
-	world_environment.glow_hdr_threshold = lerpf(1.0, 0.75, night)
+	# glow, exposure and grade with the light (SceneMood); ACES deepens colour, so the presets' saturation is eased
+	SceneMood.by_hour(world_environment, day_t, golden, night, lerpf(1.0, 1.0 + (float(preset.saturation) - 1.0) * 0.5, clear))
 	# after dark the lamps, headlights and tail lights wear soft halos, wider in the rain's mist
-	world_environment.glow_intensity = lerpf(0.55, 0.85, night)
-	# softlight mutes the halos; after dark the lamps glow over the picture (screen)
-	world_environment.glow_blend_mode = Environment.GLOW_BLEND_MODE_SCREEN if night > 0.5 else Environment.GLOW_BLEND_MODE_SOFTLIGHT
-	world_environment.glow_bloom = 0.03 + 0.03 * night * clampf(rain * 1.5, 0.0, 1.0)
+	world_environment.glow_bloom += 0.03 * night * clampf(rain * 1.5, 0.0, 1.0)
 	var is_fog := fog > 0.1 or (race and race.weather.mode == "fog")
 	# volumetric fog shows the headlight beams in the rain and after dark (High and Ultra only), or when in fog
 	var volumetric := is_fog or (quality >= 2 and (rain > 0.08 or night > 0.45 or hail > 0.08 or snow > 0.08))
@@ -1246,27 +1255,15 @@ func _build_environment() -> void:
 	world_environment.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	world_environment.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 	world_environment.ambient_light_energy = 0.65
-	# AgX keeps bright skies, headlights and sunsets from clipping to flat white
-	world_environment.tonemap_mode = Environment.TONE_MAPPER_AGX
-	world_environment.tonemap_exposure = 1.0
-	world_environment.tonemap_agx_contrast = 1.4
+	# tonemapper, glow and ambient occlusion shared with the open world (SceneMood)
+	SceneMood.base(world_environment)
 	world_environment.ssao_enabled = true
-	world_environment.ssao_radius = 1.6
-	world_environment.ssao_intensity = 1.6
-	world_environment.ssao_detail = 0.6
 	world_environment.ssil_radius = 4.0
 	world_environment.ssil_intensity = 0.8
 	world_environment.ssr_max_steps = 48
 	world_environment.ssr_fade_in = 0.12
 	world_environment.ssr_fade_out = 1.6
 	world_environment.ssr_depth_tolerance = 0.3
-	world_environment.glow_enabled = true
-	world_environment.glow_normalized = true
-	world_environment.glow_intensity = 0.55
-	world_environment.glow_strength = 1.0
-	world_environment.glow_bloom = 0.03
-	world_environment.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
-	world_environment.glow_hdr_threshold = 1.0
 	world_environment.fog_enabled = true
 	world_environment.fog_mode = Environment.FOG_MODE_EXPONENTIAL
 	world_environment.fog_density = 0.00035
@@ -1275,9 +1272,6 @@ func _build_environment() -> void:
 	world_environment.volumetric_fog_length = 90.0
 	world_environment.volumetric_fog_anisotropy = 0.3
 	world_environment.volumetric_fog_sky_affect = 0.0
-	world_environment.adjustment_enabled = true
-	world_environment.adjustment_saturation = 1.1
-	world_environment.adjustment_contrast = 1.04
 	env.environment = world_environment
 	add_child(env)
 
@@ -4548,6 +4542,7 @@ func _surface_material(shader: Shader, folder: String, weather := true) -> Shade
 	m.shader = shader
 	m.set_shader_parameter("grain", noise_texture("grain"))
 	m.set_shader_parameter("grain_normal", noise_texture("grain_normal"))
+	SurfaceTextures.apply(m)
 	# folder may list fallbacks: "pit_lane|asphalt"
 	var set: Dictionary = {}
 	for f in folder.split("|", false):

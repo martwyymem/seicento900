@@ -3398,7 +3398,7 @@ func _on_preset_selected(index: int) -> void:
 	_apply_upscaling()
 	_apply_world_graphics_settings()
 	if open_world != null:
-		open_world.apply_graphics(graphics_quality, graphics_ssao)
+		open_world.apply_graphics(graphics_quality, graphics_ssao, graphics_reflections)
 	_save_graphics_settings()
 
 ## Sets every setting a preset covers (no UI, nothing applied).
@@ -4694,6 +4694,7 @@ func _enter_open_world(spawn) -> void:
 		"audio": audio,
 		"quality": graphics_quality,
 		"ssao": graphics_ssao,
+		"reflections": graphics_reflections,
 		"render_size": _render_resolution,
 	})
 

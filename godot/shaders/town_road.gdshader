@@ -13,7 +13,12 @@ uniform vec3 sett_color : source_color = vec3(0.42, 0.4, 0.38);
 uniform vec3 gravel_color : source_color = vec3(0.5, 0.45, 0.36);
 uniform vec3 paint_color : source_color = vec3(0.93, 0.93, 0.9);
 uniform float wet = 0.0;
+uniform float rain = 0.0;
+uniform float night : hint_range(0.0, 1.0) = 0.0; // after dark the wet road mirrors the lamps
 uniform float snow : hint_range(0.0, 1.0) = 0.0;
+// tools/build_surface_textures.py: micro (1 m: R aggregate tone, GB normal, A sparkle), macro (4 m: R cloud, G cracks, B stains, A pores)
+uniform sampler2D surf_micro : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D surf_macro : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D grain : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D grain_normal : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform bool use_textures = false;
@@ -54,29 +59,75 @@ void fragment() {
 	float g1 = texture(grain, p * 0.37).r;
 	float g2 = texture(grain, p * 0.043).r;
 	float g3 = texture(grain, p * 2.9).r;
+	float px = length(fwidth(p)); // metres per pixel: detail finer than a pixel fades out instead of shimmering
 	vec3 col;
 	float rough = 0.88;
 	vec3 nmap = texture(grain_normal, p * 0.9).xyz;
 	float nmap_depth = 0.35;
+	float spark = 0.0;
+	float pores = 0.5;
+	float crack = 0.0;
+	float seam = 0.0;
+	float wheel_zone = 0.0;
+	float gutter = 0.0;
+	vec3 micro_n = vec3(0.0);
 	if (surf < 0.25) {
 		col = asphalt_color;
 		if (use_textures) {
-			col = mix(col, texture(albedo_tex, p * tex_scale).rgb * 0.75, 0.55);
+			col = mix(col, texture(albedo_tex, p * tex_scale).rgb * 0.75, 0.45);
 			nmap = texture(normal_tex, p * tex_scale).xyz;
-			nmap_depth = 0.6;
+			nmap_depth = 0.45;
 		}
-		col *= 0.86 + 0.24 * g1 + 0.1 * (g3 - 0.5);
-		// sun-bleached older surface in patches, darker tar repairs and the wheel tracks
-		float old = smoothstep(0.55, 0.75, g2);
-		col = mix(col, asphalt_old_color * (0.85 + 0.2 * g1), old * 0.45);
-		float patch_id = hash12(floor(vec2(s / 7.0, x / 2.2 + 13.0)));
-		float patch_m = step(0.93, patch_id) * step(abs(x), half_w - 0.4);
-		col = mix(col, asphalt_color * 0.62, patch_m * 0.8);
-		float track_l = band(x, half_w * 0.5 - 0.0, 0.9) + band(x, -half_w * 0.5, 0.9);
-		col *= 1.0 - 0.07 * track_l;
-		// crumbling, dusty edges
-		float edge = smoothstep(half_w - 0.6, half_w, abs(x));
-		col = mix(col, gravel_color * 0.75, edge * smoothstep(0.35, 0.75, g3) * 0.6);
+		// aggregate: pale stones against dark binder, a tangent normal and rare glints (mipmaps average them away)
+		vec4 mi = texture(surf_micro, p);
+		vec4 mi2 = texture(surf_micro, mat2(vec2(0.8, 0.6), vec2(-0.6, 0.8)) * p * 0.41 + 0.27);
+		micro_n = vec3(mi.gb - 0.5, 0.0) + vec3(mi2.gb - 0.5, 0.0) * 0.6;
+		spark = mi.a;
+		// cloudy older and newer surface, cracks, stains
+		vec4 ma = texture(surf_macro, p * 0.25);
+		vec4 mb = texture(surf_macro, mat2(vec2(0.8, 0.6), vec2(-0.6, 0.8)) * p * 0.093 + 0.41);
+		pores = ma.a;
+		float cloud = ma.r * 0.6 + mb.r * 0.4;
+		col *= 0.8 + 0.4 * cloud;
+		col *= 0.62 + 0.8 * mi.r;
+		col *= 1.22;
+		col *= 0.9 + 0.2 * (g1 - 0.5) + 0.06 * (g3 - 0.5);
+		// sun-bleached older surface in patches (soft, not blotches), darker tar repairs
+		float old = smoothstep(0.58, 0.85, g2);
+		col = mix(col, asphalt_old_color * (0.8 + 0.3 * mi.r), old * 0.22);
+		// cracks open in the worn zones: along the edges and the wheel tracks first
+		float worn = smoothstep(0.35, 0.7, mb.r + 0.25 * smoothstep(half_w - 1.8, half_w, abs(x)));
+		crack = max(ma.g, mb.g * 0.8) * worn * (1.0 - smoothstep(0.012, 0.06, px));
+		// patches: each its own age, with a sealed seam all round
+		vec2 pc = vec2(s / 9.0, (x + half_w) / (half_w * 0.7));
+		vec2 pid = floor(pc);
+		vec2 pf = fract(pc);
+		float pick = hash12(pid + 13.0);
+		vec2 plo = vec2(0.08, 0.08) + 0.25 * vec2(hash12(pid + 2.0), hash12(pid + 3.0));
+		vec2 phi = vec2(0.92, 0.92) - 0.25 * vec2(hash12(pid + 5.0), hash12(pid + 7.0));
+		float inside = step(0.9, pick) * step(plo.x, pf.x) * step(pf.x, phi.x) * step(plo.y, pf.y) * step(pf.y, phi.y);
+		inside *= step(abs(x), half_w - 0.3);
+		vec2 pm = pf * vec2(9.0, half_w * 0.7);
+		vec2 rim = min(pm - plo * vec2(9.0, half_w * 0.7), phi * vec2(9.0, half_w * 0.7) - pm);
+		float patch_aa = length(fwidth(pm));
+		seam = inside * (1.0 - smoothstep(0.03, 0.03 + patch_aa * 1.5 + 0.02, min(rim.x, rim.y))) * (1.0 - smoothstep(0.1, 0.4, patch_aa));
+		float fresh = hash12(pid + 21.0);
+		col = mix(col, col * mix(0.62, 1.15, fresh), inside * 0.9);
+		rough = mix(rough, 0.78, inside * 0.5);
+		crack *= 1.0 - inside;
+		// the cars' wheels polish two darker, oilier tracks in each lane
+		wheel_zone = exp(-pow((abs(abs(x) - half_w * 0.5) - 0.78) / 0.4, 2.0)) * step(half_w, 5.6);
+		float oil = smoothstep(0.35, 0.8, ma.b) * (0.5 + wheel_zone);
+		col *= 1.0 - 0.16 * wheel_zone - 0.35 * oil * 0.5;
+		rough -= 0.1 * wheel_zone + 0.12 * oil;
+		// the gutter along each kerb: a grimy dark strip with dust and grit heaped at its edge
+		float ea = abs(x) - (half_w - 0.75);
+		gutter = smoothstep(0.0, 0.25, ea) * (1.0 - smoothstep(0.55, 0.75, ea));
+		col *= 1.0 - 0.28 * gutter * (0.6 + 0.4 * pores);
+		float grit_edge = smoothstep(half_w - 0.4, half_w - 0.05, abs(x));
+		col = mix(col, gravel_color * 0.5 * (0.7 + 0.5 * mi.r), grit_edge * smoothstep(0.38, 0.7, pores + 0.3 * g3) * 0.7);
+		rough += 0.06 * gutter;
+		col *= 1.0 - 0.1 * smoothstep(1.5, 0.0, half_w - abs(x)) * (1.0 - old);
 	} else if (surf < 0.75) {
 		// setts in courses (ul. Dworcowa's old cobbles, the yards): stones about 0.12 x 0.18 m
 		vec2 q = vec2(s / 0.18, x / 0.12);
@@ -120,22 +171,54 @@ void fragment() {
 			}
 			m = max(m, band(abs(x), half_w - 0.45, 0.25));
 		}
-		col = mix(col, paint_color * (0.9 + 0.1 * g3), m * show * wear);
-		rough = mix(rough, 0.6, m * show);
+		// the paint wears through to the aggregate where the wheels cross it, and its edges are ragged
+		float chip = smoothstep(0.3, 0.62, pores + 0.35 * (spark * 0.0 + g3 - 0.5));
+		float paint_a = m * show * wear * mix(0.55, 1.0, chip) * (1.0 - 0.5 * wheel_zone);
+		col = mix(col, paint_color * (0.88 + 0.12 * g3), paint_a);
+		rough = mix(rough, 0.55, paint_a);
+		spark *= 1.0 - paint_a;
 	}
 
-	// rain: darker, glossier, with standing water in the dips of the wheel tracks
-	float puddle = wet * smoothstep(0.62, 0.8, g2) * (1.0 - smoothstep(half_w - 1.0, half_w, abs(x)));
-	col *= mix(1.0, 0.55, wet);
-	rough = mix(rough, 0.18, wet * 0.75);
-	rough = mix(rough, 0.03, puddle);
+	// cracks and seams: dark, matte
+	float sealed = max(seam, 0.0);
+	col = mix(col, col * 0.35, clamp(crack * 0.62 + sealed * 0.8, 0.0, 1.0) * (1.0 - float(surf > 0.25)));
+	rough = mix(rough, 0.9, clamp(crack + sealed, 0.0, 1.0));
+
+	// rain: darker, glossier, with standing water in the dips of the wheel tracks and along the gutters
+	float dip = clamp(smoothstep(0.62, 0.8, g2) + 0.55 * gutter + 0.35 * wheel_zone * smoothstep(0.4, 0.6, pores), 0.0, 1.0);
+	float puddle = wet * smoothstep(0.35, 0.8, dip) * (1.0 - smoothstep(half_w - 0.3, half_w, abs(x)));
+	float w = wet * (surf < 0.75 ? 1.0 : 0.85);
+	col *= mix(1.0, 0.55, w);
+	// a wet film is a sheen, not a mirror, and the pores keep it uneven; after dark the lamps streak across it
+	rough = mix(rough, mix(0.3, 0.16, night) + 0.18 * (pores - 0.5) * 0.0, w * 0.8);
+	rough = mix(rough, mix(0.04, 0.025, night), puddle);
+	spark *= 1.0 - w;
+	// rain rings in the puddles
+	vec2 ringv = vec2(0.0);
+	if (rain > 0.02 && puddle > 0.05) {
+		vec2 rp = p * 4.0;
+		vec2 rid = floor(rp);
+		vec2 rf = fract(rp) - 0.5;
+		float t = fract(TIME * 1.3 + hash12(rid) * 7.0);
+		float r = length(rf + (vec2(hash12(rid + 3.1), hash12(rid + 7.7)) - 0.5) * 0.4);
+		float ring = sin((r - t * 0.4) * 60.0) * smoothstep(0.04, 0.0, abs(r - t * 0.4)) * (1.0 - t) * step(hash12(rid + 1.3), 0.5);
+		ringv = normalize(rf + 1e-4) * ring * 0.12 * rain * puddle;
+	}
 	if (snow > 0.01) {
 		float wheel = band(x, half_w * 0.5, 1.2) + band(x, -half_w * 0.5, 1.2);
 		col = mix(col, vec3(0.9, 0.92, 0.96), snow * (0.95 - 0.55 * clamp(wheel, 0.0, 1.0)));
 	}
+	// the aggregate's own relief, flattened under water; sparkle: a few stones catch the light
+	float flat_k = clamp(w * 0.55 + puddle * 0.45, 0.0, 1.0);
+	vec2 bump = (nmap.xy - 0.5) * nmap_depth + micro_n.xy * 1.1 * (1.0 - 0.8 * flat_k);
+	float px_fade = 1.0 - smoothstep(0.004, 0.03, px) * 0.6;
+	bump = bump * px_fade + ringv;
+	float spec_k = 0.4 + 0.3 * w;
+	rough = mix(rough, 0.3, spark * 0.7 * (1.0 - flat_k));
+	spec_k += spark * 0.4;
 	ALBEDO = col;
 	ROUGHNESS = clamp(rough, 0.02, 1.0);
-	SPECULAR = 0.4 + 0.3 * wet;
-	NORMAL_MAP = nmap;
-	NORMAL_MAP_DEPTH = nmap_depth * (1.0 - 0.6 * puddle);
+	SPECULAR = spec_k;
+	NORMAL_MAP = vec3(0.5 + bump.x, 0.5 + bump.y, 1.0);
+	NORMAL_MAP_DEPTH = 1.0;
 }

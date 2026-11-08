@@ -29,6 +29,8 @@ uniform float cloud_opacity = 1.0;
 uniform float cloud_paint = 0.0; // 1 = painted clouds: crisper edges, lit sun-side rims, darker bellies
 uniform float halo_amount = 0.0; // a wide warm aureole round the sun
 uniform float hdri_saturation = 1.0; // > 1 deepens the clear panoramas' pale blue
+// after dark: a town's or a floodlit circuit's light glowing low on the horizon and lighting the cloud bellies
+uniform vec3 city_glow : source_color = vec3(0.0);
 
 // HDRI layers: A and B are two clear-sky times of day, O is an overcast sky.
 uniform sampler2D hdri_a : filter_linear, repeat_enable, hint_default_black;
@@ -44,6 +46,7 @@ uniform float hdri_ab = 0.0; // 0 = all A, 1 = all B
 uniform float hdri_mix = 0.0; // clear HDRI over the procedural sky
 uniform float hdri_o_mix = 0.0; // overcast HDRI over everything
 uniform float hdri_clamp = 48.0; // keeps a raw HDRI sun from flooding reflections and bloom
+uniform vec3 hdri_tint = vec3(1.0); // the clear panoramas' colour cast (a night blue over the grey night panoramas)
 
 
 float hash13(vec3 p) {
@@ -71,6 +74,7 @@ vec3 procedural(vec3 d) {
 	// the ground side fades to a dim, horizon-tinted floor
 	vec3 floor_col = mix(horizon_color * 0.62, ground_color, clamp(-up * 6.0, 0.0, 1.0));
 	col = up < 0.0 ? floor_col : col;
+	col += city_glow * exp(-abs(up) * 7.0);
 
 	if (up > 0.0) {
 		// stars, twinkling a little and hidden by cloud and daylight
@@ -105,6 +109,7 @@ vec4 clouds(vec3 d) {
 	float rim = pow(max(dot(d, normalize(sun_dir)), 0.0), 12.0) * (1.0 - core);
 	cloud += cloud_lit * rim * 0.5 * paint;
 	cloud = mix(cloud, glow_color * 1.2, glow_amount * 0.45 * (1.0 - overcast));
+	cloud += city_glow * 1.6 * exp(-up * 3.0);
 	return vec4(cloud, dens * 0.92);
 }
 
@@ -128,7 +133,7 @@ void sky() {
 	if (hdri_mix > 0.001) {
 		vec3 hd = mix(panorama(hdri_a, d, hdri_rot_a) * hdri_gain_a, panorama(hdri_b, d, hdri_rot_b) * hdri_gain_b, hdri_ab);
 		float hl = dot(hd, vec3(0.2126, 0.7152, 0.0722));
-		hd = max(mix(vec3(hl), hd, hdri_saturation), vec3(0.0));
+		hd = max(mix(vec3(hl), hd, hdri_saturation), vec3(0.0)) * hdri_tint;
 		col = mix(col, hd, hdri_mix);
 	}
 	vec4 cl = clouds(d);

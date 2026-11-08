@@ -32,6 +32,9 @@ uniform vec4 nopaint_zones[4];
 uniform int nopaint_count = 0;
 
 uniform sampler2D grain : filter_linear_mipmap_anisotropic, repeat_enable;
+// tools/build_surface_textures.py: micro (1 m: R aggregate tone, GB normal, A sparkle), macro (4 m: R cloud, G cracks, B stains, A pores)
+uniform sampler2D surf_micro : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D surf_macro : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D grain_normal : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
 
 uniform bool use_textures = false;
@@ -80,6 +83,7 @@ void fragment() {
 	float d = UV.x;
 	float s = UV.y;
 	vec2 wxz = world_pos.xz;
+	float px_m = length(fwidth(vec2(d, s)));
 	float broad = texture(grain, wxz * 0.021).r;
 	float mid = texture(grain, wxz * 0.13 + 0.37).r;
 	float fine = texture(grain, vec2(d, s) * 0.55).r;
@@ -101,6 +105,20 @@ void fragment() {
 	}
 	// large blotches of older and newer surface
 	col *= 0.72 + 0.5 * broad + 0.14 * mid;
+	// the baked aggregate: pale stones in dark binder, its own relief and a few glints (the mipmaps average it away far off)
+	vec4 mi = texture(surf_micro, vec2(d, s));
+	vec4 ma = texture(surf_macro, vec2(d, s) * 0.25);
+	float spark = 0.0;
+	vec2 micro_n = vec2(0.0);
+	if (detail > 0.0) {
+		col *= mix(1.0, 0.64 + 0.76 * mi.r, detail);
+		micro_n = (mi.gb - 0.5) * detail;
+		spark = mi.a * detail;
+		// oil and tyre dust, and hairline cracks opening towards the edges where the base is poorer
+		float edge_k = smoothstep(half_width * 0.45, half_width, abs(d));
+		col *= 1.0 - 0.22 * smoothstep(0.4, 0.85, ma.b) * (0.4 + 0.6 * (1.0 - edge_k)) * detail;
+		col *= 1.0 - 0.5 * ma.g * (0.15 + 0.5 * edge_k + 0.6 * street) * detail * (1.0 - smoothstep(0.012, 0.06, px_m));
+	}
 
 	// metres per pixel: detail finer than a pixel fades out instead of shimmering in the distance
 	float px = length(fwidth(vec2(d, s)));
@@ -311,10 +329,14 @@ void fragment() {
 		col = mix(col, vec3(0.92, 0.94, 0.98), snow * 0.85);
 	}
 
+	spark *= (1.0 - w) * (1.0 - unp);
+	rough = mix(rough, 0.28, spark * 0.65);
+	// the aggregate's relief shows dry and flattens under a film of water
+	nmap.xy += micro_n * 0.9 * (1.0 - 0.8 * (w * 0.55 + puddle * 0.45));
 	ALBEDO = col;
 	ROUGHNESS = clamp(rough, 0.02, 1.0);
 	METALLIC = 0.0;
-	SPECULAR = mix(0.35, mix(0.42, 0.46, night), w);
+	SPECULAR = mix(0.35, mix(0.42, 0.46, night), w) + spark * 0.35;
 	NORMAL_MAP = nmap;
 	NORMAL_MAP_DEPTH = use_textures ? 1.0 : 0.6;
 }

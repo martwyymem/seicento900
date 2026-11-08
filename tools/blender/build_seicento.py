@@ -304,9 +304,9 @@ MATERIALS = {
 	"Cage": ((0.55, 0.56, 0.58), 0.45, 0.6, {}),
 	"Tyre": ((0.03, 0.03, 0.03), 0.8, 0.0, {}),
 	"Sidewall": ((0.085, 0.085, 0.085), 0.7, 0.0, {}),
-	"Rim": ((0.5, 0.51, 0.53), 0.3, 0.75, {}),
+	"Rim": ((0.74, 0.75, 0.78), 0.2, 0.92, {}),
 	"Steel": ((0.36, 0.37, 0.38), 0.42, 0.5, {}),
-	"BrakeDisc": ((0.62, 0.63, 0.65), 0.28, 0.85, {}),
+	"BrakeDisc": ((0.20, 0.19, 0.19), 0.5, 0.7, {}),
 	"BrakeCaliper": ((0.80, 0.12, 0.09), 0.35, 0.1, {}),
 	"TowHook": ((0.92, 0.10, 0.06), 0.35, 0.0, {}),
 	"Yellow": ((0.95, 0.76, 0.06), 0.35, 0.0, {}),
@@ -995,8 +995,11 @@ def build_details(body):
 
 	# Exhaust: transverse rear silencer and a plain tailpipe poking out under the right of the bumper
 	mb.tube(bl(0.20, 2.86, 0.22), bl(-0.16, 2.86, 0.22), 0.08, "Steel", segs=14)
-	mb.tube(bl(0.30, 2.95, 0.215), bl(0.30, LENGTH + 0.02, 0.22), 0.024, "Exhaust", segs=14, caps=False)
-	mb.disc(bl(0.30, LENGTH + 0.019, 0.22), 0.021, "Under", normal=(0, 1, 0), segs=12)
+	mb.tube(bl(0.30, 2.95, 0.215), bl(0.30, LENGTH + 0.03, 0.22), 0.024, "Exhaust", segs=14, caps=False)
+	# a polished tip that sticks out past the bumper, with a dark bore and a rolled lip
+	mb.tube(bl(0.30, LENGTH + 0.03, 0.22), bl(0.30, LENGTH + 0.085, 0.22), 0.030, "Chrome", segs=16, caps=False)
+	mb.ring(bl(0.30, LENGTH + 0.085, 0.22), 0.024, 0.032, "Chrome", normal=(0, -1, 0), segs=16)
+	mb.disc(bl(0.30, LENGTH + 0.07, 0.22), 0.025, "Under", normal=(0, -1, 0), segs=16)
 
 	# Underbody: sump guard, engine bay and tail closed off, flat floor
 	mb.box(bl(0, 0.62, 0.20), (0.75, 0.6, 0.03), "Steel")
@@ -1308,36 +1311,54 @@ def build_wheel():
 				r * math.sin(a0 + 0.95 * j / 8))) for j in range(9)])
 		mb.grid(rows, "Sidewall", out=Vector((1, 0, 0)))
 
-	# Steel wheel rim profile with rolled bead lip and deep dish well
-	rim = [(hw - 0.004, 0.178), (hw - 0.012, 0.168), (0.045, 0.163), (0.032, 0.160), (0.028, 0.150), (0.030, 0.125),
-		(0.036, 0.10), (0.040, 0.075), (0.041, 0.04), (0.041, 0.0)]
-	mb.lathe(rim, 40, "Rim", out=lambda c: Vector((1.0, 0, 0)) - Vector((0, c.y, c.z)) * 2.0)
+	# Alloy wheel: a polished outer lip and barrel, five Y spokes that fork towards the rim, a hub plate with four chrome
+	# lug nuts and a blue-badged centre cap. The gaps show the inside of the barrel and the brake disc behind it.
+	barrel = [(hw - 0.004, 0.178), (hw - 0.010, 0.171), (0.058, 0.162), (0.050, 0.150), (0.030, 0.146), (-0.03, 0.146),
+		(-0.045, 0.156)]
+	mb.lathe(barrel, 48, "Rim", out=lambda c: Vector((1.0, 0, 0)) - Vector((0, c.y, c.z)) * 2.0)
+	mb.lathe([(hw - 0.004, 0.178), (hw - 0.010, 0.171)], 48, "Chrome", out=lambda c: Vector((1.0, c.y, c.z)))
 
-	# Cast steel brake disc rotor visible behind rim dish
-	mb.lathe([(0.012, 0.065), (0.012, 0.126), (0.003, 0.126), (0.003, 0.065)], 32, "BrakeDisc", out=lambda c: Vector((1.0, c.y, c.z)))
-	# Brake drum / backing carrier behind disc
-	mb.lathe([(0.0, 0.0), (0.0, 0.14), (-0.06, 0.14)], 24, "Under", out=lambda c: Vector((1.0, c.y, c.z)))
+	def bar(p0, p1, w0, w1, h0, h1, base0, base1):
+		"""A spoke segment from p0 to p1 (YZ plane points), tapering in width and height; base is the back plane x."""
+		d = Vector((0, p1.y - p0.y, p1.z - p0.z)).normalized()
+		t = Vector((0, -d.z, d.y))
+		rows = []
+		for k in range(2):  # a straight taper needs only its two ends
+			f = float(k)
+			c = Vector((0, lerp(p0.y, p1.y, f), lerp(p0.z, p1.z, f)))
+			w, h, xb = lerp(w0, w1, f), lerp(h0, h1, f), lerp(base0, base1, f)
+			sect = [(-w / 2, 0.0), (w / 2, 0.0), (w / 2, h * 0.55), (w * 0.28, h), (-w * 0.28, h), (-w / 2, h * 0.55)]
+			rows.append([Vector((xb + hh, 0, 0)) + c + t * ww for ww, hh in sect])
+		def outward(q):  # away from the bar's centre line
+			v = Vector((q.x - (base0 + h0 / 2), q.y - p0.y, q.z - p0.z))
+			return v - Vector((0, d.y, d.z)) * (v.y * d.y + v.z * d.z)
+		mb.grid(rows, "Rim", closed=True, out=outward, cap_ends=True)
 
-	# 12 stamped oval ventilation cooling holes around steel wheel dish
-	for k in range(12):
-		a = 2 * math.pi * (k + 0.5) / 12
-		c = Vector((0.0335, 0.118 * math.cos(a), 0.118 * math.sin(a)))
-		ring_pts = [c + Vector((0.0, 0.012 * math.cos(2 * math.pi * j / 10), 0.008 * math.sin(2 * math.pi * j / 10)))
-			for j in range(10)]
-		rot = Vector((0, math.cos(a), math.sin(a)))
-		tang = Vector((0, -math.sin(a), math.cos(a)))
-		ring_pts = [c + rot * ((p - c).y) + tang * ((p - c).z) for p in ring_pts]
-		mb.poly(ring_pts, "Grille", Vector((1, 0, 0)))
+	for k in range(5):
+		a = 2 * math.pi * k / 5 + 0.3
+		ca, sa = math.cos(a), math.sin(a)
+		p_hub = Vector((0, 0.04 * ca, 0.04 * sa))
+		p_fork = Vector((0, 0.098 * ca, 0.098 * sa))
+		bar(p_hub, p_fork, 0.034, 0.026, 0.016, 0.014, 0.040, 0.043)
+		for sgn in (-1, 1):
+			a2 = a + sgn * 0.17
+			p_end = Vector((0, 0.150 * math.cos(a2), 0.150 * math.sin(a2)))
+			bar(p_fork, p_end, 0.024, 0.020, 0.014, 0.012, 0.043, 0.046)
+	mb.lathe([(0.040, 0.066), (0.052, 0.062), (0.056, 0.0)], 24, "Rim", out=lambda c: Vector((1, c.y, c.z)))
 
 	# 4 chrome hexagonal lug nuts
 	for k in range(4):
 		a = 2 * math.pi * k / 4 + math.pi / 4
-		p = Vector((0.041, 0.049 * math.cos(a), 0.049 * math.sin(a)))
-		mb.tube(p, p + Vector((0.013, 0, 0)), 0.0095, "Chrome", segs=6)
+		p = Vector((0.054, 0.049 * math.cos(a), 0.049 * math.sin(a)))
+		mb.tube(p, p + Vector((0.012, 0, 0)), 0.0095, "Chrome", segs=6)
 
-	# Central hub grease cap with stepped circular boss & stamped Fiat roundel
-	mb.lathe([(0.041, 0.030), (0.050, 0.028), (0.056, 0.018), (0.058, 0.0)], 20, "Steel", out=lambda c: Vector((1, c.y, c.z)))
-	mb.disc(Vector((0.0585, 0, 0)), 0.014, "BadgeBlue", normal=(1, 0, 0), segs=12)
+	# Brake disc seen through the spokes (a cast rotor with a hat) and its drum shadow
+	mb.lathe([(0.012, 0.065), (0.012, 0.126), (0.003, 0.126), (0.003, 0.065)], 32, "BrakeDisc", out=lambda c: Vector((1.0, c.y, c.z)))
+	mb.lathe([(0.0, 0.0), (0.0, 0.14), (-0.06, 0.14)], 24, "Under", out=lambda c: Vector((1.0, c.y, c.z)))
+
+	# Centre cap with a stepped boss and the blue Fiat roundel
+	mb.lathe([(0.054, 0.034), (0.062, 0.030), (0.066, 0.018), (0.0675, 0.0)], 20, "Steel", out=lambda c: Vector((1, c.y, c.z)))
+	mb.disc(Vector((0.0678, 0, 0)), 0.015, "BadgeBlue", normal=(1, 0, 0), segs=12)
 
 	# Valve stem angled out from rim well
 	a_valve = 0.82
@@ -1372,6 +1393,7 @@ def render_views(cam, out_dir):
 		"side_l": ((-7.5, 0.0, 0.75), 30, None),
 		"nose": ((-1.2, 3.4, 0.95), 30, (-0.15, Y0 - 0.15, 0.55)),
 		"tail": ((1.0, -3.2, 1.0), 30, (0.15, Y0 - LENGTH + 0.1, 0.6)),
+		"wheel": ((-1.7, Y0 - FRONT_AXLE_S + 0.5, 0.55), 30, (-TRACK / 2, Y0 - FRONT_AXLE_S, TYRE_R)),
 	}
 	for name, (pos, lens_deg, aim) in views.items():
 		cam.location = pos

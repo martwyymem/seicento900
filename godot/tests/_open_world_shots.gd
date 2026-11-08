@@ -45,7 +45,9 @@ func _initialize() -> void:
 		ow.drive.place(p, h)
 		ow.drive.respawn()
 		ow.hour = shot[2]
-		ow.cam_pos = Vector3(ow.drive.car.x, ow.drive.z + 3.0, ow.drive.car.y)
+		# a cut, as in the game: the chase camera kept the last shot's heading and, swinging round to a car facing
+		# the other way, once ended up straight over it looking down (station_night after festival_golden)
+		ow.snap_camera()
 		ow.active = true
 		for i in 50:
 			ow.hour = shot[2]

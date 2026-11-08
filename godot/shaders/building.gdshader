@@ -95,17 +95,52 @@ float brick_mortar(vec2 uv, vec2 fw) {
 	return max(lines(uv.y, 0.075, 0.012, fw.y), lines(bx, 0.25, 0.012, fw.x));
 }
 
-// Glass with a sky reflection fading up the pane, a curtain behind some, a mullion, lit at random after dark.
-vec3 glass(vec3 w, vec2 uv, float storey, float bay, out vec3 glow, float lit_share) {
-	vec3 g = glass_color * (0.85 + 0.35 * w.y);
-	float sky_fade = smoothstep(0.0, 1.0, fract((uv.y - 0.9) / storey));
-	g = mix(g, g * 1.35 + vec3(0.05, 0.09, 0.15), sky_fade * 0.45);
-	float curtain = step(0.45, fract(w.y * 13.7));
-	g = mix(g, CURTAINS[int(fract(w.y * 31.1) * 4.0)] * 0.32, curtain * 0.55 * smoothstep(0.35, 0.75, fract((uv.y - 0.9) / storey)));
+// Window light after dark: mostly warm, some white, a few the blue of a television (linear, before the energy).
+vec3 lamp_colour(float h) {
+	if (h < 0.55) {
+		return vec3(1.0, 0.6, 0.27);
+	} else if (h < 0.8) {
+		return vec3(1.0, 0.82, 0.55);
+	} else if (h < 0.92) {
+		return vec3(0.85, 0.92, 1.0);
+	}
+	return vec3(0.35, 0.5, 1.0);
+}
+
+// Glass in a recess: a sky reflection fading up the pane, reveals that shade the top and the sunny-side jamb, a roller
+// blind or a curtain behind some, a mullion, and after dark a lit room (its own colour and brightness) or a dark one.
+// `ww`, `wh` and `sill` are the window's size on the wall; its position in the pane comes from the bay and storey.
+vec3 glass(vec3 w, vec2 uv, float storey, float bay, float ww, float wh, float sill, float first, out vec3 glow, float lit_share) {
+	float hw = ww / bay * 0.5;
+	float lx = (fract(uv.x / bay) - (0.5 - hw)) / (2.0 * hw);
+	float ly = (fract((uv.y - first) / storey) - sill / storey) / (wh / storey);
+	// the glass: what it mirrors (a bright sky above, dark ground below) over a dim room
+	float refl = 0.55 + 0.45 * fract(w.y * 53.7); // some panes are tilted open or cleaner than others
+	vec3 sky = mix(vec3(0.22, 0.3, 0.4), vec3(0.62, 0.74, 0.9), smoothstep(0.0, 1.0, ly)) * refl;
+	vec3 g = mix(glass_color * 0.35, sky, 0.5 + 0.2 * w.y);
+	// a roller blind or a curtain, more in the upper part of the pane
+	float blind_h = 0.2 + 0.7 * fract(w.y * 9.31);
+	float blind = step(0.62, fract(w.y * 13.7)) * step(1.0 - blind_h, ly);
+	vec3 cloth = CURTAINS[int(fract(w.y * 31.1) * 4.0)];
+	g = mix(g, cloth * 0.55 * (0.8 + 0.2 * ly), blind * 0.9);
+	float curtain = step(0.45, fract(w.y * 17.3)) * (1.0 - blind);
+	float side = min(lx, 1.0 - lx);
+	g = mix(g, cloth * 0.32, curtain * smoothstep(0.32, 0.12, side) * 0.8);
+	// the reveal: shadow under the lintel, on the jamb, light on the sill
+	float rev = smoothstep(0.88, 1.0, ly) * 0.55 + smoothstep(0.1, 0.0, lx) * 0.45 + smoothstep(0.0, 0.1, 0.05 - ly) * 0.0;
+	g *= 1.0 - rev;
+	g += vec3(0.14, 0.14, 0.13) * smoothstep(0.14, 0.0, ly) * 0.4;
 	// the mullion splitting the pane in two
 	float mull = 1.0 - smoothstep(0.03, 0.05, abs(fract(uv.x / bay) - 0.5) * bay);
 	g = mix(g, frame_color, mull);
-	glow = vec3(1.0, 0.85, 0.6) * step(w.y, lit_share) * night * 1.6 * (1.0 - mull);
+	// a lit room
+	float on = step(w.y, lit_share) * night;
+	float hue = fract(w.y * 71.3);
+	float strength = 0.55 + 0.9 * fract(w.y * 23.9);
+	vec3 lamp = lamp_colour(hue) * strength;
+	float room = 0.65 + 0.35 * smoothstep(0.0, 0.7, ly) * (1.0 - 0.5 * abs(lx - 0.5)); // brighter near the ceiling light, dimmer at the jambs
+	lamp *= room * (1.0 - 0.65 * blind) * (1.0 - 0.45 * curtain * smoothstep(0.32, 0.12, side));
+	glow = lamp * on * (1.0 - mull) * (1.0 - rev * 0.6);
 	return g;
 }
 
@@ -232,17 +267,34 @@ void fragment() {
 		}
 		if (shop && uv.y < 3.0) {
 			// a glazed shop front under a coloured sign band, a darker pillar between the windows
-			vec3 sign = ACCENTS[int(fract(v_seed * 7.7) * 6.0)];
+			vec3 sign_c = ACCENTS[int(fract(v_seed * 7.7) * 6.0)];
+			float unit = floor(uv.x / 6.0 + v_seed); // one shop per 6 m of front
+			float uh = hash12(vec2(unit, v_seed * 13.0));
 			float pillar = step(abs(fract(uv.x / 6.0 + v_seed) - 0.5) * 6.0, 0.35);
 			if (uv.y > 2.45) {
-				col = mix(sign, vec3(0.95), lines(uv.y - 2.725, 10.0, 0.18, fw.y) * step(0.5, fract(uv.x / 0.9)) * 0.5);
-				glow = sign * night * 0.5;
+				// the sign: lettering blocks on a coloured board, backlit after dark
+				vec3 board = mix(sign_c, ACCENTS[int(fract(uh * 5.1) * 6.0)], step(0.6, uh));
+				float letters = step(0.35, hash12(vec2(floor(uv.x / 0.22), unit))) * step(abs(uv.y - 2.725), 0.12) * step(abs(fract(uv.x / 6.0 + v_seed) - 0.5) * 6.0, 2.3);
+				col = mix(board * 0.85, vec3(0.95, 0.94, 0.9), letters);
+				col = mix(col, board * 0.5, 1.0 - smoothstep(0.0, 0.05, min(uv.y - 2.45, 3.0 - uv.y)));
+				glow = (board * 0.35 + vec3(1.0, 0.95, 0.85) * letters * 1.3) * night * 1.4;
+				rough = 0.35;
 			} else if (uv.y > 0.35 && pillar < 0.5) {
 				is_window = true;
-				col = glass_color * 0.8 + vec3(0.04, 0.05, 0.06);
-				col = mix(col, frame_color * 0.4, max(lines(uv.x, 1.5, 0.06, fw.x), step(2.35, uv.y)));
-				col = mix(col, vec3(0.9, 0.85, 0.7) * 0.3, step(0.4, uv.y) * step(uv.y, 1.6) * 0.25 * g);
-				glow = vec3(1.0, 0.9, 0.75) * night * (0.25 + 0.35 * step(0.5, fract(floor(uv.x / 6.0) * 0.618 + v_seed)));
+				float ly = (uv.y - 0.35) / 2.1;
+				// day: the street and the sky in the glass over a dim interior with shelves
+				vec3 sky = mix(vec3(0.18, 0.24, 0.3), vec3(0.45, 0.58, 0.72), smoothstep(0.0, 1.0, ly));
+				vec3 inside = mix(vec3(0.05, 0.045, 0.04), vec3(0.2, 0.17, 0.12), step(0.5, fract(uv.y * 2.4)) * 0.3);
+				col = mix(sky, inside + sky * 0.35, 0.5);
+				float mul = max(lines(uv.x, 1.5, 0.06, fw.x), step(2.35, uv.y));
+				col = mix(col, frame_color * 0.4, mul);
+				col = mix(col, vec3(0.9, 0.85, 0.7) * 0.3, step(0.4, uv.y) * step(uv.y, 1.6) * 0.15 * g);
+				// night: a lit interior, each shop in its own light, shelves and a brighter floor
+				float open_ = step(0.3, hash12(vec2(unit, 5.0)));
+				vec3 shop_l = mix(lamp_colour(uh), vec3(1.0, 0.92, 0.78), 0.4);
+				float shelf = 0.75 + 0.25 * step(0.5, fract(uv.y * 2.4 + uh));
+				float up = 0.7 + 0.5 * smoothstep(0.0, 1.0, ly);
+				glow = shop_l * open_ * shelf * up * night * 0.6 * (1.0 - mul);
 				rough = 0.08;
 			} else {
 				col = base * 0.6;
@@ -251,7 +303,7 @@ void fragment() {
 			is_window = w.z < 0.5;
 			bool shutter = kind == 0 && w.y > 0.82;
 			vec3 lit;
-			vec3 pane = glass(w, uv, storey, bay, lit, block ? 0.4 : 0.35);
+			vec3 pane = glass(w, uv, storey, bay, ww, wh, kind == 5 ? 3.0 : 0.9, first, lit, block ? 0.42 : 0.36);
 			col = shutter ? base * vec3(0.55, 0.62, 0.55) * (1.0 - 0.2 * lines(uv.y, 0.1, 0.02, fw.y)) : mix(pane, frame_color, w.z);
 			rough = shutter ? 0.8 : 0.12;
 			glow = shutter ? vec3(0.0) : lit * (1.0 - w.z);
@@ -264,6 +316,20 @@ void fragment() {
 			float variant = kind == 1 ? pl.b : (pick < 0.5 ? pl.r : pl.g);
 			col *= 0.84 + 0.32 * variant;
 			col = mix(col, vec3(0.82, 0.8, 0.76), sill_band * 0.8);
+			// rain runs off every sill and stains the wall below it; prefab panels are each a shade apart
+			float drip = step(in_bay, ww * 0.42) * smoothstep(0.0, 0.86, in_row) * (1.0 - smoothstep(0.86, 0.9, in_row)) * step(first, uv.y) * step(storey * 0.99, uv.y + first);
+			float drip_n = smoothstep(0.35, 0.8, texture(grain, vec2(uv.x * 1.7, uv.y * 0.2 + v_seed)).r);
+			col *= 1.0 - 0.16 * drip * (0.45 + 0.55 * drip_n) * (1.0 - smoothstep(0.1, 0.4, fw.x));
+			if (kind == 1) {
+				col *= 0.95 + 0.1 * hash12(vec2(floor(uv.x / (bay * 2.0)), floor(uv.y / storey)) + v_seed * 31.0);
+			}
+			// a moulded band at each floor on some houses and halls, a lit edge over a shadow
+			if (kind != 1 && fract(v_seed * 3.7) > 0.5 && uv.y > first + storey * 0.9) {
+				float bh = mod(uv.y - first, storey);
+				float lit_edge = 1.0 - smoothstep(0.05, 0.09, abs(bh - 0.05));
+				float shade_b = smoothstep(0.02, 0.0, bh - 0.0) * 0.0 + (1.0 - smoothstep(0.1, 0.3, bh)) * step(0.1, bh);
+				col = col * (1.0 + 0.1 * lit_edge * (1.0 - smoothstep(0.1, 0.4, fw.y))) * (1.0 - 0.1 * shade_b * (1.0 - smoothstep(0.1, 0.4, fw.y)));
+			}
 			col = mix(col, col * 1.1 + 0.03, lintel);
 			if (kind == 1 && fract(uv.y / storey) < 0.06) {
 				col *= 1.08;

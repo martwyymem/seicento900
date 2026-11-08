@@ -11,6 +11,7 @@ const SURROUNDINGS := preload("res://scripts/ui/surroundings.gd")
 const WORLD_ASSETS := preload("res://scripts/ui/world_assets.gd")
 const GROUND_SHADER := preload("res://shaders/ground.gdshader")
 const ROAD_SHADER := preload("res://shaders/town_road.gdshader")
+const PAVEMENT_SHADER := preload("res://shaders/pavement.gdshader")
 const BUILDING_SHADER := preload("res://shaders/building.gdshader")
 const FOLIAGE_SHADER := preload("res://shaders/foliage.gdshader")
 const WATER_SHADER := preload("res://shaders/water.gdshader")
@@ -214,6 +215,7 @@ func build_terrain() -> void:
 	mat.set_shader_parameter("paved_color", Color(0.46, 0.45, 0.42))
 	mat.set_shader_parameter("bare_color", Color(0.58, 0.5, 0.36))
 	mat.set_shader_parameter("slope_rock", 0.4)
+	SurfaceTextures.apply(mat)
 	# meadows take the grass's olive (vegetation.gd MEADOW_FAR), so the planted grass ends without a change of colour
 	mat.set_shader_parameter("meadow_amount", 0.8)
 	mat.set_shader_parameter("meadow_color", VEGETATION.MEADOW_FAR)
@@ -342,6 +344,8 @@ const BRIDGE_CAP_DEPTH := 0.6 ## m, the cross-head on a pier
 func build_roads() -> void:
 	var group := _group("Streets")
 	var mat := _surface_material(ROAD_SHADER, "asphalt")
+	SurfaceTextures.apply(mat)
+	night_materials.append(mat)
 	var kerb_mat := StandardMaterial3D.new()
 	kerb_mat.vertex_color_use_as_albedo = true
 	kerb_mat.roughness = 0.9
@@ -530,7 +534,13 @@ func build_roads() -> void:
 		if not (bank_b[c] as MeshBatch).is_empty():
 			_add_mesh(group, (bank_b[c] as MeshBatch).commit(), bank_mat)
 	_build_junction_patches(group, mat, node_width, node_roads)
-	_build_pavements(group, kerb_mat, bank_mat)
+	var pave_mat := ShaderMaterial.new()
+	pave_mat.shader = PAVEMENT_SHADER
+	pave_mat.set_shader_parameter("grain", WORLD.noise_texture("grain"))
+	SurfaceTextures.apply(pave_mat)
+	wet_materials.append(pave_mat)
+	night_materials.append(pave_mat)
+	_build_pavements(group, pave_mat, bank_mat)
 
 ## The pavements: TownMap's merged shapes, flat at kerb height over the street surface. A kerb face drops to the
 ## carriageway; every other edge runs down to the grass in a short verge (grass material), so the slab never stands
@@ -545,6 +555,15 @@ func _build_pavements(group: Node3D, kerb_mat: Material, verge_mat: Material) ->
 			batches[c] = MeshBatch.new(false, true)
 		var kb: MeshBatch = batches[c]
 		var tris := Geometry2D.triangulate_polygon(poly)
+		# the courses of slabs and paving blocks run along the pavement's longest edge
+		var long_edge := Vector2.RIGHT
+		var long_len := 0.0
+		for k in poly.size():
+			var ed := poly[(k + 1) % poly.size()] - poly[k]
+			if ed.length_squared() > long_len:
+				long_len = ed.length_squared()
+				long_edge = ed
+		var course := long_edge.normalized()
 		for t in range(0, tris.size(), 3):
 			var v: Array[Vector3] = []
 			var cen := Vector2.ZERO
@@ -553,7 +572,7 @@ func _build_pavements(group: Node3D, kerb_mat: Material, verge_mat: Material) ->
 				cen += q / 3.0
 				v.append(Vector3(q.x, map.ground(q.x, q.y) + top_y, q.y))
 			var pc := Color(0.38, 0.37, 0.35) if hash2(floorf(cen.x / 3.0), floorf(cen.y / 3.0), 4.0) > 0.5 else Color(0.34, 0.33, 0.32)
-			kb.flat_tri(v[0], v[1], v[2], Vector3.UP, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, pc)
+			kb.flat_tri(v[0], v[1], v[2], Vector3.UP, course, course, course, pc)
 		var sign_ := 1.0 if TownMap._area_of(poly) > 0.0 else -1.0
 		var np := poly.size()
 		# each edge: its outward normal and what it gets (0 nothing, 1 kerb face, 2 plain face, 3 grass verge)
