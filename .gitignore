@@ -10,3 +10,9 @@ build/
 tools/open_world/cache/gugik/
 # GUGiK building extract (tools/gugik_buildings.py, 11 MB): only needed to re-bake the town; kept local
 tools/open_world/cache/brzeszcze_gugik.json
+
+# Old browser game (root index.html, js/, css/, vendor/): removed from git; kept locally as the parity reference for the Godot port
+/index.html
+/js/
+/css/
+/vendor/
