@@ -284,8 +284,15 @@ extract because its source imagery is large and costly to fetch for this build.
   surfaces (asphalt, setts, gravel tracks, grass). It rides the ground heights and the bridge decks and
   embankments. Buildings, trees, lamp posts and parked cars are solid, the ponds can't be driven through, and
   you can jump off the embankments.
-- **Traffic** (`traffic.gd`) drives the real road graph in lane at the limit, picks a way at junctions and gets
-  shoved when hit.
+- **Traffic** (`traffic.gd`) drives the real road graph in lane. Every car has its own driver (pace, pull-away,
+  braking, following gap, cornering, reaction time; Maluch drivers gentle, the odd one in a hurry). Speed follows
+  the Intelligent Driver Model behind the car ahead or the player, with braking for the bends and the turn picked in
+  advance. Junction rules: the smaller road gives way, the car from the right goes first on equal roads, left turns
+  wait for oncoming cars. The drawn car steers for a point ahead on its lane, so it arcs through corners. It pitches
+  and leans, lights its brake lamps and signals its turns, goes round a parked car or the stopped player when the
+  other lane is clear, and turns back out of a jam that never moves. It stops for closed crossings and the train,
+  and gets shoved when hit. `tests/test_traffic.gd` covers this; `tests/_traffic_probe.gd` measures it round three
+  spots.
 - **HUD** (`open_world_hud.gd`): a satnav disc that turns with the car, with the GPS route (G routes to the
   next stage, and chevrons light the road), the full map on M (pick an event, Enter sets the route), a
   speedometer, the street and district names, and banners. Esc opens the pause menu: map, campaign stage

@@ -15,6 +15,8 @@ func run() -> Array:
 	_piers(map, errors)
 	_parapets(map, errors)
 	_tunnels(map, errors)
+	_tunnel_banks(map, errors)
+	_bank_collision(map, errors)
 	completed = true
 	return errors
 
@@ -160,6 +162,157 @@ func _tunnels(map: TownMap, errors: Array[String]) -> void:
 		var g := map.ground(c.x, c.y)
 		if absf(fc.support(c.x, c.y) - g) > 0.6:
 			errors.append("%s: support height %.2f in the bore, ground %.2f" % [label, fc.support(c.x, c.y), g])
+
+## Around every underpass the drawn railway (bed, rails and embankment) has no holes and nothing floats: just outside
+## each wing wall the embankment mesh is there at the height the car rides it at (TownMap.rail_bank), inside the cut
+## beyond the bore nothing of the railway hangs over the street, and every raised track that crosses the street
+## there is over the bore (a double line's second track too).
+func _tunnel_banks(map: TownMap, errors: Array[String]) -> void:
+	var root := Node3D.new()
+	var builder := TownBuilder.new(map, root)
+	builder.build_rail()
+	builder.build_tunnels()
+	var tris := PackedVector3Array()
+	for mi in root.find_children("*", "MeshInstance3D", true, false):
+		var mesh: Mesh = (mi as MeshInstance3D).mesh
+		if mesh == null:
+			continue
+		for si in mesh.get_surface_count():
+			var arr := mesh.surface_get_arrays(si)
+			var vs: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var ix = arr[Mesh.ARRAY_INDEX]
+			var idx := PackedInt32Array(ix) if ix != null else PackedInt32Array()
+			var count := idx.size() if not idx.is_empty() else vs.size()
+			for k in range(0, count, 3):
+				var a := vs[idx[k] if not idx.is_empty() else k]
+				var b := vs[idx[k + 1] if not idx.is_empty() else k + 1]
+				var c := vs[idx[k + 2] if not idx.is_empty() else k + 2]
+				var near := false
+				for t in map.tunnels:
+					if Vector2(a.x, a.z).distance_to(t.c) < float(t.cut_len) + 12.0:
+						near = true
+						break
+				if near:
+					tris.append_array(PackedVector3Array([a, b, c]))
+	root.free()
+	for t in map.tunnels:
+		var c: Vector2 = t.c
+		var v: Vector2 = t.v
+		var n := Vector2(-v.y, v.x)
+		var label := "underpass on street %d at %s" % [t.road, c]
+		var hb := float(t.half_bore)
+		var holes := 0
+		var floating := 0
+		var first := ""
+		for sd: float in [-1.0, 1.0]:
+			var s := hb + 0.5
+			while s < float(t.half_foot):
+				for e: float in [-1.0, 1.0]:
+					var out := c + v * s * e + n * sd * (float(t.cut_half) + 0.15)
+					var want := map.rail_bank(out.x, out.y)
+					if want > map.ground(out.x, out.y) + 0.2:
+						var got := _mesh_top(tris, out)
+						if absf(got - want) > 0.06:
+							holes += 1
+							if first == "":
+								first = "at %s the embankment is drawn at %.2f, the car rides it at %.2f" % [out, got, want]
+					var inn := c + v * s * e + n * sd * (float(t.cut_half) - 0.15)
+					if _mesh_top(tris, inn) > map.ground(inn.x, inn.y) + 0.3:
+						floating += 1
+						if first == "":
+							first = "at %s the railway hangs %.2f m over the cut" % [inn, _mesh_top(tris, inn) - map.ground(inn.x, inn.y)]
+				s += 0.5
+		if holes > 0:
+			errors.append("%s: %d holes beside the wing walls (%s)" % [label, holes, first])
+		if floating > 0:
+			errors.append("%s: %d spots of railway over the open cut (%s)" % [label, floating, first])
+		# over the bore the bed is drawn at the header's height
+		var over := _mesh_top(tris, c)
+		if over < float(t.top) - 0.5 or over > float(t.top) + 0.4:
+			errors.append("%s: the railway over the bore is at %.2f, the header's top at %.2f" % [label, over, float(t.top)])
+
+## Highest point of the triangles over p (map x, y), -INF where none covers it.
+func _mesh_top(tris: PackedVector3Array, p: Vector2) -> float:
+	var best := -INF
+	for k in range(0, tris.size(), 3):
+		var a := Vector2(tris[k].x, tris[k].z)
+		var b := Vector2(tris[k + 1].x, tris[k + 1].z)
+		var c := Vector2(tris[k + 2].x, tris[k + 2].z)
+		if p.x < minf(a.x, minf(b.x, c.x)) - 0.01 or p.x > maxf(a.x, maxf(b.x, c.x)) + 0.01:
+			continue
+		if p.y < minf(a.y, minf(b.y, c.y)) - 0.01 or p.y > maxf(a.y, maxf(b.y, c.y)) + 0.01:
+			continue
+		var den := (b - a).cross(c - a)
+		if absf(den) < 1e-6:
+			continue
+		var wb := (p - a).cross(c - a) / den
+		var wc := (b - a).cross(p - a) / den
+		if wb < -1e-4 or wc < -1e-4 or wb + wc > 1.0001:
+			continue
+		best = maxf(best, tris[k].y * (1.0 - wb - wc) + tris[k + 1].y * wb + tris[k + 2].y * wc)
+	return best
+
+## The railway embankment is solid: a car driven off the street at the green slope beside an underpass rides up
+## it (never through it, never jumping), and a car in the cut steered at a wing wall stays in the cut.
+func _bank_collision(map: TownMap, errors: Array[String]) -> void:
+	var climbed := 0
+	for t in map.tunnels:
+		var c: Vector2 = t.c
+		var v: Vector2 = t.v
+		var n := Vector2(-v.y, v.x)
+		var label := "underpass on street %d at %s" % [t.road, c]
+		for e: float in [-1.0, 1.0]:
+			for sd: float in [-1.0, 1.0]:
+				# beside the street, beyond the foot of the embankment, heading along the street into the slope
+				var start := c - v * e * (float(t.half_foot) + 6.0) + n * sd * (float(t.cut_half) + 3.0)
+				if not map.buildings_near(start, 6.0).is_empty() or not map.walls_near(start, 4.0).is_empty():
+					continue
+				var fc := FreeCar.new(map)
+				fc.place(start, (v * e).angle())
+				fc.z = fc.support(start.x, start.y)
+				fc.car.vx = v.x * e * 8.0
+				fc.car.vy = v.y * e * 8.0
+				fc.car.gear = 1
+				var worst := 0.0
+				var worst_at := Vector2.ZERO
+				var top := -INF
+				var last := fc.z
+				var jump := 0.0
+				for i in int(3.0 / DT):
+					fc.step(DT, 0.6, 0.0, 0.0)
+					var p := Vector2(fc.car.x, fc.car.y)
+					var bank := map.rail_bank(p.x, p.y)
+					if bank - fc.z > worst:
+						worst = bank - fc.z
+						worst_at = p
+					top = maxf(top, fc.z - map.ground(p.x, p.y))
+					jump = maxf(jump, absf(fc.z - last))
+					last = fc.z
+				if worst > 0.4:
+					errors.append("%s: a car driven at the embankment beside the cut went %.2f m into it at %s" % [label, worst, worst_at])
+				if jump > 0.3:
+					errors.append("%s: the car's height jumped %.2f m driving onto the embankment" % [label, jump])
+				if top > 1.0:
+					climbed += 1
+		# in the cut, past the bore's end, steered hard at each wing wall: it never gets through it
+		for sd: float in [-1.0, 1.0]:
+			var start := c - v * (float(t.half_bore) + 3.0)
+			var fc := FreeCar.new(map)
+			fc.place(start, v.angle())
+			fc.z = fc.support(start.x, start.y)
+			fc.car.vx = v.x * 6.0
+			fc.car.vy = v.y * 6.0
+			fc.car.gear = 1
+			var widest := 0.0
+			for i in int(2.0 / DT):
+				fc.step(DT, 0.7, 0.0, sd)
+				var rel := Vector2(fc.car.x, fc.car.y) - c
+				if absf(rel.dot(v)) < float(t.half_foot) - 1.0:
+					widest = maxf(widest, absf(rel.dot(n)))
+			if widest > float(t.cut_half) + 0.3:
+				errors.append("%s: a car steered at the wing wall got %.2f m off the centre line (the wall stands at %.2f)" % [label, widest, float(t.cut_half)])
+	if climbed < 6:
+		errors.append("only %d cars rode up an embankment beside an underpass" % climbed)
 
 func _steer_to(fc: FreeCar, target: Vector2) -> float:
 	var want := (target - Vector2(fc.car.x, fc.car.y)).angle()

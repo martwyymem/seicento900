@@ -256,6 +256,23 @@ func _build(map: TownMap, errors: Array[String]) -> void:
 			if train._cars[k].mesh == null or train._cars[k].mesh is BoxMesh:
 				errors.append("train car %d has no EN57 model (box stand-in)" % k)
 		print("    train: line %.0f m, moved %.0f m in 40 s, stop at %.0f" % [train.total, moved, train.stop_s])
+	# the graphics presets' draw distances reach every range-limited prop and the trees
+	var fences: GeometryInstance3D = null
+	for pair: Array in builder._ranged:
+		if float(pair[1]) == 280.0: # the plot fence panels
+			fences = pair[0]
+			break
+	var ranged := builder._ranged.size()
+	if ranged < 100 or fences == null:
+		errors.append("only %d range-limited instances for the presets' draw distances" % ranged)
+	else:
+		var full := fences.visibility_range_end
+		builder.set_draw_scale(float(GraphicsPresets.preset(0).ow_draw_scale))
+		if not is_equal_approx(fences.visibility_range_end, full * 0.6):
+			errors.append("the Low preset left a prop drawing to %.0f m (full %.0f m)" % [fences.visibility_range_end, full])
+		builder.set_draw_scale(1.0)
+		if not is_equal_approx(fences.visibility_range_end, full):
+			errors.append("draw scale 1 did not restore the prop's %.0f m range" % full)
 	builder.add_beacon("test", Vector2(map.spots.festival[0], map.spots.festival[1]), Color.ORANGE, "TEST")
 	if not builder.beacon_nodes.has("test"):
 		errors.append("add_beacon didn't register the beacon")

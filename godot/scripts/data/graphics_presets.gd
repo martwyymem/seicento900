@@ -12,20 +12,21 @@ const CUSTOM := 4 ## index the picker uses for settings that match no preset
 
 ## upscaler: index into game.gd UPSCALERS (0 off, 1 FSR 1); upscale_preset: index into UPSCALE_PRESETS (1 Quality 67%,
 ## 3 Performance 50%); antialiasing: 0 SMAA, 1 FXAA, 2 off; reflections: 0 off, 1 screen-space
-## ow_shadow_distance / ow_shadow_splits: the open world's sun shadows; volumetric_fog: open-world and race fog and sun
+## ow_shadow_distance / ow_shadow_splits: the open world's sun shadows; ow_draw_scale: how far its trees and small
+## props draw (TownBuilder.set_draw_scale, High's ranges = 1); volumetric_fog: open-world and race fog and sun
 ## shafts, only where the preset can afford them
 const PRESETS := [
 	{"quality": 0, "upscaler": 1, "upscale_preset": 3, "antialiasing": 1, "ssao": false, "shadows": true, "reflections": 0,
-		"ow_shadow_distance": 120.0, "ow_shadow_splits": 2, "volumetric_fog": false,
+		"ow_shadow_distance": 120.0, "ow_shadow_splits": 2, "ow_draw_scale": 0.6, "volumetric_fog": false,
 		"blurb": "Smoothest on older machines: 50% render resolution with FSR 1, FXAA, no ambient occlusion, short shadows."},
 	{"quality": 1, "upscaler": 1, "upscale_preset": 1, "antialiasing": 0, "ssao": true, "shadows": true, "reflections": 0,
-		"ow_shadow_distance": 190.0, "ow_shadow_splits": 4, "volumetric_fog": false,
+		"ow_shadow_distance": 190.0, "ow_shadow_splits": 4, "ow_draw_scale": 0.8, "volumetric_fog": false,
 		"blurb": "Balanced: 67% render resolution with FSR 1, SMAA, ambient occlusion."},
 	{"quality": 2, "upscaler": 0, "upscale_preset": 1, "antialiasing": 0, "ssao": true, "shadows": true, "reflections": 0,
-		"ow_shadow_distance": 260.0, "ow_shadow_splits": 4, "volumetric_fog": false,
+		"ow_shadow_distance": 260.0, "ow_shadow_splits": 4, "ow_draw_scale": 1.0, "volumetric_fog": false,
 		"blurb": "The default: native resolution, SMAA, ambient occlusion, full shadows."},
 	{"quality": 3, "upscaler": 0, "upscale_preset": 1, "antialiasing": 0, "ssao": true, "shadows": true, "reflections": 1,
-		"ow_shadow_distance": 400.0, "ow_shadow_splits": 4, "volumetric_fog": true,
+		"ow_shadow_distance": 400.0, "ow_shadow_splits": 4, "ow_draw_scale": 1.25, "volumetric_fog": true,
 		"blurb": "Everything on: MSAA, soft sun shadows, screen-space reflections, ambient light bounce and volumetric fog."},
 ]
 

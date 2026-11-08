@@ -1105,6 +1105,11 @@ func decide(car: RaceCar) -> void:
 		if car.obs_wear > 0.0:
 			wear_ratio = car.obs_wear / maxf(nominal_wear, 1e-9)
 			per_lap_wear = car.obs_wear * 1.05
+		else:
+			# a fresh set not measured yet: the driver's wear so far still holds. Reading it as nominal (1.0) made a
+			# tyre-gentle driver's out-lap look like a 10-20% drift, re-planned on nominal wear with an extra stop
+			wear_ratio = car.plan_wear_ratio
+			per_lap_wear = nominal_wear * wear_ratio
 		if car.fuel_lap > 0.0:
 			fuel_ratio = car.fuel_lap / fpl
 			lap_fuel = car.fuel_lap * 1.03 * Strategy.mix_fuel(cal, stint_mix(car))
@@ -1130,9 +1135,13 @@ func decide(car: RaceCar) -> void:
 		var fuel_up := fuel_ratio > car.plan_fuel_ratio
 		car.plan_wear_ratio = wear_ratio
 		car.plan_fuel_ratio = fuel_ratio
+		# a gentle driver's ratio is measured on this set only; another compound or set need not wear as kindly
+		# (Prost: 0.86 on mediums, 0.91 on softs), and a plan that banked all of it ran its last stint down to the
+		# 4% floor and stopped again a lap from the flag. Half the saving is planned on; a harsh ratio counts in full.
+		var plan_wear := wear_ratio if wear_ratio >= 1.0 else lerpf(wear_ratio, 1.0, 0.5)
 		var opts := strategy.plan(plan_opts({
 			"laps": rem_after, "wet": wet, "agg": car.agg, "max_stops": 4,
-			"wear_mult": s.wear_mult * wear_ratio, "fuel_mult": s.fuel_mult * fuel_ratio,
+			"wear_mult": s.wear_mult * plan_wear, "fuel_mult": s.fuel_mult * fuel_ratio,
 			"current": {"c": cur, "wear": maxf(0.0, wear_end), "fuel": maxf(0.0, fuel_end), "mask": car.used_mask, "stops_done": car.stops},
 		}))
 		if opts.size():

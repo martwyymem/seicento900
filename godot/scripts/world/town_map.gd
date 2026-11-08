@@ -93,9 +93,14 @@ var water_rings: Array[PackedVector2Array] = []
 var water_rects: Array[Rect2] = []
 var water_level := PackedFloat32Array()
 var bed_mask := {} ## terrain vertex index (row-major over extent at BED_STEP) -> water surface height; ponds sink the ground
-var trains: Array = [] ## the train's cars: [Vector2 centre, heading (rad, map frame), half length, half width, height]
+var trains: Array = [] ## the train's cars: [Vector2 centre, heading (rad, map frame), half length, half width, height,
+## Vector2 velocity (m/s, map frame)]
+var train_hit := 0.0 ## closing speed of the hardest knock on the train's leading cab this tick (FreeCar sets it, Train reads it)
 var booms: Array = [] ## level crossing booms: [Vector2 hinge, Vector2 tip, bool closed, float angle
 ## (rad, 0 = down)]; TownBuilder swings them
+var signal_t := 0.0 ## s: the traffic signals' clock (Traffic.step advances it, TownBuilder.update_signals shows it)
+var _signal_heads: Array = [] ## see signal_heads()
+var _signal_heads_built := false
 var areas: Array = []
 var places: Array = []
 var spots := {}
@@ -144,6 +149,7 @@ func _load(map_key: String) -> bool:
 	_load_obstacles()
 	_load_rails()
 	_load_tunnels()
+	_load_rail_banks()
 	_build_bridge_solids()
 	areas = raw.get("areas", [])
 	places = raw.get("places", [])
@@ -781,6 +787,136 @@ func terrain(x: float, y: float) -> float:
 	var h10 := _bed_vertex(i + 1, j, nx)
 	return h00 + (h10 - h00) * u + (h11 - h10) * v
 
+## Traffic signals. OSM maps them three ways: on a junction's node, at the stop line of each arm a few tens of metres
+## out, or alone at a pedestrian crossing. Signals within SIGNAL_JUNCTION of a junction share its controller and run
+## in two phases split by the arms' axis; a lone crossing gives the road most of the cycle. Each controller starts
+## its cycle at an offset of its own, so the town's lights aren't in step.
+const SIGNAL_CYCLE := 44.0 ## s
+const SIGNAL_GREEN := 18.0 ## s each phase of a junction is green
+const SIGNAL_GREEN_LONE := 30.0 ## s a lone crossing lets the road go
+const SIGNAL_AMBER := 3.0 ## s
+const SIGNAL_RED_AMBER := 1.5 ## s of red and amber together before the green (as Polish signals show it)
+const SIGNAL_JUNCTION := 35.0 ## m
+const SIGNAL_AT_NODE := 6.0 ## m: a signal this near a junction node stands for every arm of it
+enum { SIG_GREEN, SIG_AMBER, SIG_RED, SIG_RED_AMBER }
+
+## One entry per signal head: [Vector2 where the head stands (kerb side), Vector2 direction of the traffic it stops,
+## Vector2 stop line (on the road's centre line), float cycle offset (s), float green (s), float half road width].
+## Built once, on first call, from the baked signal points.
+func signal_heads() -> Array:
+	if _signal_heads_built:
+		return _signal_heads
+	_signal_heads_built = true
+	var ctrl := {} # controller key -> [ [travel, stop, half width], ... ]
+	var order: Array = []
+	var pts := _flat(raw.get("signals", []))
+	for k in pts.size():
+		var p := pts[k]
+		var near := nearest_road(p, 20.0)
+		if near.is_empty():
+			continue
+		var jn: Variant = null
+		var jd := SIGNAL_JUNCTION
+		for nid in node_edges:
+			var streets := 0 # arms that are streets (not tracks or service ways, which signals don't control)
+			for e in node_edges[nid]:
+				if road_rank[e[1]] >= 3:
+					streets += 1
+			if streets < 3:
+				continue
+			var d: float = (node_pos[nid] as Vector2).distance_to(p)
+			if d < jd:
+				jd = d
+				jn = nid
+		var key: Variant = jn if jn != null else "lone%d" % k
+		if not ctrl.has(key):
+			ctrl[key] = []
+			order.append(key)
+		var arms: Array = ctrl[key]
+		var half: float = road_w[near.road] * 0.5
+		if jn != null and jd < SIGNAL_AT_NODE:
+			# on the junction itself: a head on every arm a car can come in by, back from the widest road's edge
+			var j: Vector2 = node_pos[jn]
+			var back := 0.0
+			for e in node_edges[jn]:
+				back = maxf(back, road_w[e[1]] * 0.5)
+			for e in node_edges[jn]:
+				var ri: int = e[1]
+				if road_rank[ri] < 3 or (road_oneway[ri] and e[5]):
+					continue # a track, or a one-way street that only leads out
+				var rp := road_pts[ri]
+				var i0: int = e[2]
+				var i1: int = i0 + (1 if int(e[3]) > i0 else -1)
+				var out := (rp[i1] - rp[i0]).normalized()
+				_add_arm(arms, -out, j + out * (back + 2.5), road_w[ri] * 0.5)
+		elif jn != null:
+			# at an arm's stop line: it stops the traffic heading into the junction
+			var dir: Vector2 = near.dir
+			var travel := dir if (node_pos[jn] - near.pos).dot(dir) > 0.0 else -dir
+			_add_arm(arms, travel, near.pos, half)
+		else:
+			# a crossing on its own: both ways, a few metres short of the zebra
+			for s: float in [-1.0, 1.0]:
+				var travel: Vector2 = near.dir * s
+				_add_arm(arms, travel, near.pos - travel * 3.0, half)
+	for key in order:
+		var arms: Array = ctrl[key]
+		if arms.is_empty():
+			continue
+		var rng := RandomNumberGenerator.new()
+		rng.seed = hash(str(key))
+		var start := rng.randf() * SIGNAL_CYCLE
+		var ref: Vector2 = arms[0][0]
+		var two := false
+		for a in arms:
+			if absf((a[0] as Vector2).dot(ref)) < 0.7071:
+				two = true
+		for a in arms:
+			var travel: Vector2 = a[0]
+			var cross := absf(travel.dot(ref)) < 0.7071
+			var stop: Vector2 = a[1]
+			var right := Vector2(-travel.y, travel.x) # the lane side (Traffic drives on +side)
+			var off := start + (SIGNAL_CYCLE * 0.5 if cross else 0.0)
+			_signal_heads.append([stop + right * (float(a[2]) + 1.0), travel, stop, off,
+				SIGNAL_GREEN if two else SIGNAL_GREEN_LONE, float(a[2])])
+	return _signal_heads
+
+## One arm per direction at a stop line (two signal points mapped on one arm make one head).
+static func _add_arm(arms: Array, travel: Vector2, stop: Vector2, half: float) -> void:
+	for a in arms:
+		if (a[0] as Vector2).dot(travel) > 0.9 and (a[1] as Vector2).distance_to(stop) < 8.0:
+			return
+	arms.append([travel, stop, half])
+
+## What signal head h shows at clock t (SIG_GREEN, SIG_AMBER, SIG_RED or SIG_RED_AMBER).
+static func signal_state(h: Array, t: float) -> int:
+	var x := fposmod(t - float(h[3]), SIGNAL_CYCLE)
+	var g: float = h[4]
+	if x < g:
+		return SIG_GREEN
+	if x < g + SIGNAL_AMBER:
+		return SIG_AMBER
+	if x >= SIGNAL_CYCLE - SIGNAL_RED_AMBER:
+		return SIG_RED_AMBER
+	return SIG_RED
+
+## The nearest signal head ahead of a car at p heading dir, in its lane, within look metres: [head, distance to
+## its stop line] or [] if none.
+func signal_ahead(p: Vector2, dir: Vector2, look: float) -> Array:
+	var best: Array = []
+	var bd := look
+	for h in signal_heads():
+		var travel: Vector2 = h[1]
+		if travel.dot(dir) < 0.8:
+			continue
+		var rel: Vector2 = (h[2] as Vector2) - p
+		var d := rel.dot(travel)
+		if d < 0.0 or d > bd or absf(rel.cross(travel)) > float(h[5]) + 1.0:
+			continue
+		bd = d
+		best = [h, d]
+	return best
+
 func add_post(p: Vector2, radius: float) -> void:
 	var ck := _cell_key(int(floor(p.x / BCELL)), int(floor(p.y / BCELL)))
 	if not _post_cells.has(ck):
@@ -897,10 +1033,108 @@ func rail_distance(p: Vector2, r: float) -> float:
 						best = minf(best, Geometry2D.get_closest_point_to_segment(p, pts[j], pts[j + 1]).distance_to(p))
 	return best
 
+## The drawn cross-section of railway segment a-b with deck heights za, zb over the ground and ballast width bw
+## (TownBuilder.build_rail draws exactly these quads, and rail_bank() holds the car up on them): "ballast" the bed's
+## top and its two shoulders, "bank" (only on raised track) the two grassy 1:1.5 slopes from the shoulders down to
+## 0.3 m under the ground. Each quad is [p0, p1, p2, p3] as MeshBatch.flat_quad takes them.
+func rail_section(a: Vector2, b: Vector2, za: float, zb: float, bw: float) -> Dictionary:
+	var t := (b - a).normalized()
+	var side := Vector3(-t.y, 0.0, t.x)
+	var up := Vector3.UP
+	var A := Vector3(a.x, ground(a.x, a.y) + za + 0.05, a.y)
+	var B := Vector3(b.x, ground(b.x, b.y) + zb + 0.05, b.y)
+	var h := bw * 0.5
+	var ballast := [
+		[A - side * h, B - side * h, B + side * h, A + side * h],
+		[A + side * h, B + side * h, B + side * (h + 0.6) - up * 0.35, A + side * (h + 0.6) - up * 0.35],
+		[B - side * h, A - side * h, A - side * (h + 0.6) - up * 0.35, B - side * (h + 0.6) - up * 0.35]]
+	var bank := []
+	if za > 0.3 or zb > 0.3:
+		for g: float in [-1.0, 1.0]:
+			var o := side * (h + 0.6) * g
+			var e0 := A + o - up * 0.35
+			var e1 := B + o - up * 0.35
+			var b0 := e0 + side * g * maxf(0.5, za * EMBANKMENT)
+			var b1 := e1 + side * g * maxf(0.5, zb * EMBANKMENT)
+			b0.y = ground(b0.x, b0.z) - 0.3
+			b1.y = ground(b1.x, b1.z) - 0.3
+			bank.append([e0, e1, b1, b0])
+	return {"ballast": ballast, "bank": bank}
+
+## Every raised railway's drawn bed and embankment as triangles in a spatial hash, for rail_bank().
+var _bank_tris := PackedFloat32Array() ## x0, y0, h0, x1, y1, h1, x2, y2, h2 per triangle (map x, y and height)
+var _bank_cells := {}
+
+func _load_rail_banks() -> void:
+	for r in raw.get("rail", []):
+		var zs := PackedFloat32Array(r.get("z", []))
+		if zs.is_empty():
+			continue
+		var pts := _flat(r.p)
+		var bw := 2.4 if int(r.get("g", 0)) else 3.6
+		for i in pts.size() - 1:
+			if zs[i] <= 0.3 and zs[i + 1] <= 0.3:
+				continue
+			var sec := rail_section(pts[i], pts[i + 1], zs[i], zs[i + 1], bw)
+			for q in sec.ballast + sec.bank:
+				for tri in [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]:
+					var k := _bank_tris.size() / 9
+					var lo := Vector2(INF, INF)
+					var hi := Vector2(-INF, -INF)
+					for p: Vector3 in tri:
+						_bank_tris.append_array(PackedFloat32Array([p.x, p.z, p.y]))
+						lo = lo.min(Vector2(p.x, p.z))
+						hi = hi.max(Vector2(p.x, p.z))
+					for cx in range(int(floor(lo.x / BCELL)), int(floor(hi.x / BCELL)) + 1):
+						for cy in range(int(floor(lo.y / BCELL)), int(floor(hi.y / BCELL)) + 1):
+							var ck := _cell_key(cx, cy)
+							if not _bank_cells.has(ck):
+								_bank_cells[ck] = PackedInt32Array()
+							_bank_cells[ck].append(k)
+
+## Height (sea level) of the drawn railway bed or embankment over (x, y), -INF where there is none. The cut a
+## street's underpass makes through the embankment (in_tunnel_cut) is no bank unless keep_cut.
+func rail_bank(x: float, y: float, keep_cut := false) -> float:
+	var ck := _cell_key(int(floor(x / BCELL)), int(floor(y / BCELL)))
+	if not _bank_cells.has(ck):
+		return -INF
+	var best := -INF
+	var p := Vector2(x, y)
+	for k: int in _bank_cells[ck]:
+		var o: int = k * 9
+		var a := Vector2(_bank_tris[o], _bank_tris[o + 1])
+		var b := Vector2(_bank_tris[o + 3], _bank_tris[o + 4])
+		var c := Vector2(_bank_tris[o + 6], _bank_tris[o + 7])
+		var den := (b - a).cross(c - a)
+		if absf(den) < 1e-6:
+			continue
+		var wb := (p - a).cross(c - a) / den
+		var wc := (b - a).cross(p - a) / den
+		if wb < -1e-4 or wc < -1e-4 or wb + wc > 1.0001:
+			continue
+		best = maxf(best, _bank_tris[o + 2] * (1.0 - wb - wc) + _bank_tris[o + 5] * wb + _bank_tris[o + 8] * wc)
+	if best > -INF and not keep_cut and in_tunnel_cut(p):
+		return -INF
+	return best
+
+## Whether p lies in the cut an underpass makes through the railway embankment: between its wing walls (cut_half
+## either side of the street's centre line), from one foot of the embankment to the other.
+func in_tunnel_cut(p: Vector2) -> bool:
+	for t in tunnels:
+		var rel: Vector2 = p - t.c
+		var v: Vector2 = t.v
+		if absf(rel.dot(v)) < float(t.cut_len) and absf(rel.dot(Vector2(-v.y, v.x))) < float(t.cut_half):
+			return true
+	return false
+
 ## The baker's underpasses (a street that goes through a railway embankment or under a railway bridge) with the
 ## geometry TownBuilder and the car need: c centre, u railway direction, v street direction, w street width, z deck
 ## height of the railway over the ground (m), half_bore (the roofed length either side of c along the street) and
 ## half_foot (where the embankment's slope ends and the wing walls reach the ground). Side walls keep the car in the bore.
+## The baker records one underpass per street and line; the other track of a double line (or a parallel line close
+## by) crosses the same street a few metres on, so the bore, the cut and c (the bore's middle) span every raised
+## track that crosses the street there, and top is the highest one's rail level (the header beam's top).
+## cut_half / cut_len: the strip of the embankment the street's cut takes out (rail_bank(), TownBuilder._bank_quad).
 func _load_tunnels() -> void:
 	for t in raw.get("tunnels", []):
 		var u := Vector2(t.u[0], t.u[1])
@@ -908,9 +1142,41 @@ func _load_tunnels() -> void:
 		var c := Vector2(t.c[0], t.c[1])
 		var sin_t := maxf(absf(u.cross(v)), 0.35)
 		var z := float(t.z)
-		var rec := {"c": c, "u": u, "v": v, "w": float(t.w), "z": z, "road": int(t.road), "tn": int(t.get("tn", 0)),
-			"half_bore": (RAIL_HALF + 0.3) / sin_t, "half_foot": minf((RAIL_HALF + 0.6 + EMBANKMENT * z) / sin_t, 42.0),
-			"ground": ground(c.x, c.y)}
+		# the raised tracks crossing the street within 14 m of the baked centre: their offsets along it and heights
+		var s_lo := 0.0
+		var s_hi := 0.0
+		var top := ground(c.x, c.y) + z
+		var z_max := z
+		var a0 := c - v * 14.0
+		var a1 := c + v * 14.0
+		for r in raw.get("rail", []):
+			var zs := PackedFloat32Array(r.get("z", []))
+			if zs.is_empty():
+				continue
+			var pts := _flat(r.p)
+			for i in pts.size() - 1:
+				if maxf(zs[i], zs[i + 1]) < 3.0:
+					continue
+				var x = Geometry2D.segment_intersects_segment(pts[i], pts[i + 1], a0, a1)
+				if x == null:
+					continue
+				var f: float = pts[i].distance_to(x) / maxf(pts[i].distance_to(pts[i + 1]), 1e-6)
+				var zx := lerpf(zs[i], zs[i + 1], f)
+				var y := lerpf(ground(pts[i].x, pts[i].y) + zs[i], ground(pts[i + 1].x, pts[i + 1].y) + zs[i + 1], f)
+				var s: float = ((x as Vector2) - c).dot(v)
+				s_lo = minf(s_lo, s)
+				s_hi = maxf(s_hi, s)
+				top = maxf(top, y)
+				z_max = maxf(z_max, zx)
+		var mid := (s_lo + s_hi) * 0.5
+		var span := (s_hi - s_lo) * 0.5
+		c += v * mid
+		# a skewed crossing's bed reaches further along the street at the bore's sides than on its centre line
+		var skew := absf(u.dot(v)) / sin_t * (float(t.w) * 0.5 + 0.5)
+		var hf := span + skew + minf((RAIL_HALF + 0.6 + EMBANKMENT * z_max) / sin_t, 42.0)
+		var rec := {"c": c, "u": u, "v": v, "w": float(t.w), "z": top - ground(c.x, c.y), "road": int(t.road),
+			"tn": int(t.get("tn", 0)), "half_bore": span + skew + (RAIL_HALF + 0.3) / sin_t, "half_foot": hf, "top": top,
+			"cut_half": float(t.w) * 0.5 + 0.2, "cut_len": hf + 2.0, "ground": ground(c.x, c.y)}
 		tunnels.append(rec)
 		var n := Vector2(-v.y, v.x)
 		var off := float(t.w) * 0.5 + 0.45

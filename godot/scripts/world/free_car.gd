@@ -10,6 +10,8 @@ const HALF_L := 1.68 ## half the Seicento's length (3.34 m) and width (1.51 m)
 const HALF_W := 0.76
 const WALL_STEP := 0.9 ## m: a deck this much above the car is a wall (the side of an embankment), not a ramp
 const UNDER_DECK := 3.6 ## m: a deck this far above the car is a bridge it passes under
+const TRAIN_TOP := 3.6 ## m: a car this far over the rails clears the train's roof
+const SLOPE_BREAK := 0.3 ## m: the two sides of the car's slope sample differ this much: one is off a ledge
 const BOOM_R := 0.12 ## m: half the thickness of a level crossing boom
 const KERB_BUMP_MIN := 0.05 ## m: a step up at least this high is a bump (a kerb is 0.13)
 const WATER_RESPAWN := 2.2 ## s in deep water before the car is put back on the road
@@ -121,6 +123,9 @@ func support(x: float, y: float) -> float:
 	var lowest := map.road_at(x, y)
 	if lowest.is_empty():
 		g = map.terrain(x, y) + map.kerb_at(x, y)
+	# a railway embankment is solid earth: the car rides up its 1:1.5 slopes like a road embankment's, and a cut's
+	# vertical face (or a steep step onto one) stops it (_vertical). Not in an underpass's cut, where the street runs.
+	g = maxf(g, map.rail_bank(x, y))
 	var best := g
 	var best_d := absf(g - z)
 	# a raised road that is no bridge stands on a solid embankment: where it is the lowest road on the spot the bare
@@ -210,8 +215,9 @@ func step(dt: float, thr: float, brk: float, steer_in: float, shift_up := false,
 			car.shift_t = 0.18
 
 	# slope of what the car stands on
-	var dz_dx := (support(car.x + 1.5, car.y) - support(car.x - 1.5, car.y)) / 3.0
-	var dz_dy := (support(car.x, car.y + 1.5) - support(car.x, car.y - 1.5)) / 3.0
+	var zc := support(car.x, car.y)
+	var dz_dx := _slope(support(car.x - 1.5, car.y), zc, support(car.x + 1.5, car.y))
+	var dz_dy := _slope(support(car.x, car.y - 1.5), zc, support(car.x, car.y + 1.5))
 	if airborne:
 		dz_dx = 0.0
 		dz_dy = 0.0
@@ -255,6 +261,17 @@ func step(dt: float, thr: float, brk: float, steer_in: float, shift_up := false,
 		surface = Physics.SURF_ASPHALT
 	var n := Vector3(-dz_dx, 1.0, -dz_dy).normalized()
 	tilt = tilt.slerp(Basis(Quaternion(Vector3.UP, n)), minf(1.0, dt * 10.0)) if not airborne else tilt
+
+## Slope over 1.5 m either side of the car (heights lo, mid, hi). Where one side falls off a ledge (a sample off the
+## edge of a bridge reads the ground metres below, past a parapet the car can't cross) the two sides disagree: that
+## side is no surface the car stands on, so the gentler side alone gives the slope. A real slope (a ramp, an
+## embankment, a rail bank) rises alike on both sides and keeps its tilt.
+func _slope(lo: float, mid: float, hi: float) -> float:
+	var a := mid - lo
+	var b := hi - mid
+	if absf(b - a) <= SLOPE_BREAK:
+		return (hi - lo) / 3.0
+	return (a if absf(a) < absf(b) else b) / 1.5
 
 ## Ground following, jumps and landings; the steep side of an embankment stops the car like a wall.
 func _vertical(dt: float, px: float, py: float, mass: float) -> void:
@@ -400,29 +417,10 @@ func _collide(mass: float) -> void:
 	# fences, walls and hedges: treat each segment as a thin capsule against the car's box
 	for wall in map.walls_near(c, HALF_L + 1.0):
 		_wall_push(c, wall, mass)
-	# the train's cars: boxes that push the car out of them (they don't give way)
+	# the train's cars: moving boxes that push the car out of them (they don't give way)
 	for tc in map.trains:
-		if tc == null or absf(float(tc[4]) - z) > 3.0:
-			continue
-		var tcen: Vector2 = tc[0]
-		if tcen.distance_to(c) > float(tc[2]) + HALF_L + 2.0:
-			continue
-		var f := Vector2.from_angle(float(tc[1]))
-		var r := Vector2(-f.y, f.x)
-		var hl: float = tc[2]
-		var hw: float = tc[3]
-		var ring := PackedVector2Array([tcen + f * hl + r * hw, tcen + f * hl - r * hw, tcen - f * hl - r * hw, tcen - f * hl + r * hw])
-		for q in corners():
-			var lq := q - tcen
-			var ax := lq.dot(f)
-			var ay := lq.dot(r)
-			if absf(ax) < hl and absf(ay) < hw:
-				# out through the nearer side (a car hits a train side-on, not its buffers, almost always)
-				var dx := hl - absf(ax)
-				var dy := hw - absf(ay)
-				var n_out := f * signf(ax) if dx < dy else r * signf(ay)
-				_push(n_out * (minf(dx, dy) + 0.02), q - c, n_out, mass)
-		_vertex_push(ring, mass)
+		if tc != null:
+			_train_push(tc, mass)
 	# a level crossing's boom once it is (nearly) down: a thin bar the car's box can't pass
 	for bm in map.booms:
 		if float(bm[3]) > 0.3:
@@ -452,6 +450,86 @@ func _collide(mass: float) -> void:
 		var push := map.edge_push(q)
 		if push != Vector2.ZERO:
 			_push(push, q - Vector2(car.x, car.y), push.normalized(), mass)
+
+## One car of the train [centre, heading, half length, half width, rail height, velocity] against the car's box:
+## a separating-axis test over both boxes' axes finds the shallowest way out, the car is moved out along it and
+## bounced in the train's frame (so a moving train shoves it rather than acting like a wall). Hit by the front of
+## a moving unit, the car is thrown aside off the track instead of being pushed along ahead of it, and the
+## driver brakes (TownMap.train_hit).
+func _train_push(tc: Array, mass: float) -> void:
+	var h: float = tc[4]
+	if z < h - 2.0 or z > h + TRAIN_TOP:
+		return # under a rail bridge, or over the roof
+	var tcen: Vector2 = tc[0]
+	var hl: float = tc[2]
+	var hw: float = tc[3]
+	var c := Vector2(car.x, car.y)
+	var d := c - tcen
+	if d.length_squared() > (hl + HALF_L + 1.0) * (hl + HALF_L + 1.0):
+		return
+	var f := Vector2.from_angle(float(tc[1]))
+	var r := Vector2(-f.y, f.x)
+	var cf := Vector2.from_angle(car.heading)
+	var cr := Vector2(-cf.y, cf.x)
+	var best := INF
+	var n := Vector2.ZERO
+	var train_face := true
+	var axes := [f, r, cf, cr]
+	for i in 4:
+		var ax: Vector2 = axes[i]
+		var reach := hl * absf(f.dot(ax)) + hw * absf(r.dot(ax)) + HALF_L * absf(cf.dot(ax)) + HALF_W * absf(cr.dot(ax))
+		var sep := d.dot(ax)
+		var overlap := reach - absf(sep)
+		if overlap <= 0.0:
+			return # a separating axis: no contact
+		# the train's own faces win a near tie (the car's axes are the same ones when it lies alongside)
+		if overlap < best - (0.0 if i < 2 else 0.02):
+			best = overlap
+			n = ax * (1.0 if sep >= 0.0 else -1.0)
+			train_face = i < 2
+	# the contact: the car's corners deepest in a train face, or the train's corners deepest in the car
+	var pts := PackedVector2Array()
+	if train_face:
+		pts = corners()
+	else:
+		for sx: float in [-1.0, 1.0]:
+			for sy: float in [-1.0, 1.0]:
+				pts.append(tcen + f * hl * sx + r * hw * sy)
+	var sgn := 1.0 if train_face else -1.0
+	var deepest := INF
+	for q in pts:
+		deepest = minf(deepest, (q - c).dot(n) * sgn)
+	var at := Vector2.ZERO
+	var count := 0
+	for q in pts:
+		if (q - c).dot(n) * sgn < deepest + 0.05:
+			at += q
+			count += 1
+	at /= float(count)
+	var rr := at - c
+	if not train_face:
+		var lr := rr.rotated(-car.heading)
+		rr = Vector2(clampf(lr.x, -HALF_L, HALF_L), clampf(lr.y, -HALF_W, HALF_W)).rotated(car.heading)
+	car.x += n.x * (best + 0.01)
+	car.y += n.y * (best + 0.01)
+	var tv: Vector2 = tc[5] if tc.size() > 5 else Vector2.ZERO
+	car.vx -= tv.x
+	car.vy -= tv.y
+	var hit := phys.barrier_hit(car, -n.x, -n.y, rr.x, rr.y, mass)
+	var tspeed := tv.length()
+	if tspeed > 1.0 and n.dot(tv) > 0.7 * tspeed:
+		# the cab's front: fling the car off the line to the side it is already on, and spin it
+		var side := signf(d.dot(r)) if absf(d.dot(r)) > 0.05 else (1.0 if (cf.dot(r)) >= 0.0 else -1.0)
+		var throw := minf(tspeed, 8.0) * (0.55 if hit > 1.0 else 0.004) # a knock, or a steady shove (per 1/120 s tick)
+		car.vx += r.x * side * throw
+		car.vy += r.y * side * throw
+		if hit > 1.0:
+			car.yaw_rate += side * signf(cf.dot(f)) * clampf(hit * 0.12, 0.0, 2.5)
+		map.train_hit = maxf(map.train_hit, hit)
+	car.vx += tv.x
+	car.vy += tv.y
+	if hit > 1.0:
+		hits.append([car.x + rr.x, car.y + rr.y, hit])
 
 func _vertex_push(ring: PackedVector2Array, mass: float) -> void:
 	var c := Vector2(car.x, car.y)

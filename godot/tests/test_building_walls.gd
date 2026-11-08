@@ -14,14 +14,28 @@ func run() -> Array:
 		completed = true
 		return errors
 	_textures(errors)
+	_step_runs(errors)
 	var raw := _overlaps(map, false, errors)
 	var fixed := _overlaps(map, true, errors)
-	if raw < 20:
+	# ~3100 before the baker slid each LoD2 roof onto its OSM footprint (2026-11-07): misaligned neighbours' measured
+	# walls overlapped in one plane; the few left are footprint walls, still enough to show the plan at work
+	if raw < 5:
 		errors.append("only %d coplanar wall overlaps without the plan: the fixture no longer exercises it" % raw)
 	if fixed > 0:
 		errors.append("%d coplanar overlapping wall faces between neighbouring buildings remain (%d without the plan)" % [fixed, raw])
 	completed = true
 	return errors
+
+## A step in a measured roof: plane B rises from A's height at one corner to 2 m over it at the other, along the edge
+## they share on the map. B's edge needs a wall over A everywhere the two edges are more than 0.15 m apart (all but
+## the last 0.3 m of the edge, t ~ 0.925). Run ends found at the 0.5 m sampling alone stopped at 0.5 m and left a sliver of sky.
+func _step_runs(errors: Array[String]) -> void:
+	var polys: Array[PackedVector3Array] = [
+		PackedVector3Array([Vector3(0, 3, 0), Vector3(4, 3, 0), Vector3(4, 3, 4), Vector3(0, 3, 4)]),
+		PackedVector3Array([Vector3(4, 3, 0), Vector3(8, 3, 0), Vector3(8, 5, 4), Vector3(4, 5, 4)])]
+	var runs := TownBuilder._open_runs(polys, 1, Vector3(4, 5, 4), Vector3(4, 3, 0), Vector2(-1, 0))
+	if runs.size() != 1 or float(runs[0][0]) != 0.0 or float(runs[0][1]) < 0.9 or float(runs[0][1]) > 0.93:
+		errors.append("roof step wall runs %s, expected [[0, ~0.925]]" % [runs])
 
 func _textures(errors: Array[String]) -> void:
 	var size := Vector2i.ZERO
@@ -82,8 +96,39 @@ func _overlaps(map: TownMap, plan: bool, errors: Array[String]) -> int:
 						errors.append("example: buildings %d and %d, wall %s / %s" % [log[i][0], log[j][0], log[i].slice(1, 7), log[j].slice(1, 7)])
 	if plan:
 		_mesh_data(root, errors)
+		_facing(map, log, errors)
 	root.free()
 	return count
+
+## Every footprint wall faces out of its building: the building shader culls back faces, so an inward wall is a hole
+## seen from the street. A centroid test turned the walls in the notch of L, T and U footprints inward (1541 of them).
+## A few LoD2 walls whose roof edges happen to run along the footprint read wrongly here, hence the allowance.
+func _facing(map: TownMap, log: Array, errors: Array[String]) -> void:
+	var tested := 0
+	var inward := 0
+	for w in log:
+		var ring := map.bld_rings[int(w[0])]
+		var a: Vector2 = w[1]
+		var b: Vector2 = w[2]
+		if a.distance_to(b) < 0.5 or not _on_ring(ring, a) or not _on_ring(ring, b):
+			continue
+		var m := (a + b) * 0.5
+		var front := Geometry2D.is_point_in_polygon(m + (w[7] as Vector2) * 0.1, ring)
+		if front == Geometry2D.is_point_in_polygon(m - (w[7] as Vector2) * 0.1, ring):
+			continue # not across the outline here (a pushed wall, a LoD2 wall off the footprint)
+		tested += 1
+		if front:
+			inward += 1
+	if tested < 10000:
+		errors.append("only %d footprint walls checked for facing" % tested)
+	elif inward > 100:
+		errors.append("%d of %d footprint walls face into their building (culled from outside)" % [inward, tested])
+
+func _on_ring(ring: PackedVector2Array, p: Vector2) -> bool:
+	for i in ring.size():
+		if Geometry2D.get_closest_point_to_segment(p, ring[i], ring[(i + 1) % ring.size()]).distance_to(p) < 0.15:
+			return true
+	return false
 
 func _coplanar(w: Array, v: Array) -> bool:
 	if w[0] == v[0] or (w[7] as Vector2).dot(v[7]) < 0.99:

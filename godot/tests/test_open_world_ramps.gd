@@ -15,9 +15,43 @@ func run() -> Array:
 		completed = true
 		return errors
 	_drive(map, errors)
+	_edge_tilt(map, errors)
 	_camera(map, errors)
 	completed = true
 	return errors
+
+## Alongside a bridge's parapet the car stays level: its slope samples 1.5 m out land past the deck's edge, on the
+## ground metres below, and once rolled the car 60-70 degrees toward the parapet, sinking its side under the deck.
+func _edge_tilt(map: TownMap, errors: Array[String]) -> void:
+	var fc := FreeCar.new(map)
+	var spots := 0
+	var tilted := 0
+	var worst := 0.0
+	for ri in map.road_pts.size():
+		if map.road_z[ri].is_empty() or map.road_bridge[ri] != 1:
+			continue
+		var pts := map.road_pts[ri]
+		var zs := map.road_z[ri]
+		var half := map.road_w[ri] * 0.5
+		for i in pts.size() - 1:
+			if minf(zs[i], zs[i + 1]) < 3.0 or absf(zs[i + 1] - zs[i]) > 0.3:
+				continue
+			var m := (pts[i] + pts[i + 1]) * 0.5
+			var d := (pts[i + 1] - pts[i]).normalized()
+			for s: float in [-1.0, 1.0]:
+				var p := m + Vector2(-d.y, d.x) * s * (half - FreeCar.HALF_W - 0.05)
+				fc.z = fc.support(p.x, p.y)
+				var dx := fc._slope(fc.support(p.x - 1.5, p.y), fc.z, fc.support(p.x + 1.5, p.y))
+				var dy := fc._slope(fc.support(p.x, p.y - 1.5), fc.z, fc.support(p.x, p.y + 1.5))
+				var tilt := rad_to_deg(atan(Vector2(dx, dy).length()))
+				spots += 1
+				worst = maxf(worst, tilt)
+				if tilt > 6.0:
+					tilted += 1
+	if spots < 50:
+		errors.append("bridge edge tilt: only %d level deck spots by a parapet" % spots)
+	if tilted > 0:
+		errors.append("bridge edge tilt: the car leans over %d of %d spots by a parapet (worst %.0f deg)" % [tilted, spots, worst])
 
 func _drive(map: TownMap, errors: Array[String]) -> void:
 	var fc := FreeCar.new(map)

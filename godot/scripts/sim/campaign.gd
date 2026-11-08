@@ -23,14 +23,14 @@ const STAGES := [
 		"target_pos": 3,
 		"grid": "p3",
 		"trophy": "Wilamowice Bronze Piston",
-		"desc": "Your mechanic uncle handed you the keys to a stock 1998 Fiat Seicento 900 (39 bhp). Prove your racecraft on the narrow, undulating village lanes of Wilamowice.",
-		"tip": "Maintain momentum through the fast crests — scrub as little speed as possible in corners."
+		"desc": "Your mechanic uncle handed you the keys to a stock 1998 Fiat Seicento 900 (39 bhp). Prove your racecraft round Wilamowice: from the Rynek past Holy Trinity church, down Kęcka and Krakowska into Hecznarowice, back through the fields and the esses by the pond.",
+		"tip": "The lefts at Hecznarowice and Handlowa are sharp: brake early, then carry momentum along the open field lane."
 	},
 	{
 		"id": "stage_2",
 		"act": 1,
 		"act_name": "Act I: Silesian Grassroots",
-		"title": "Stage 2: Coal & Cobblestones",
+		"title": "Stage 2: Coal & Crossroads",
 		"track": "brzeszcze",
 		"laps": 2,
 		"weather": "fog",
@@ -63,8 +63,8 @@ const STAGES := [
 		"target_pos": 3,
 		"grid": "p3",
 		"trophy": "Bór Forester Pine",
-		"desc": "Blast through the deep pine forests of Brzeszcze Bór, dodging across the railway line and sweeping along the embankment of Staw Bór.",
-		"tip": "Gravel runoffs penalize mistakes heavily. Keep your throttle smooth between the tall trees."
+		"desc": "Blast through the pine woods of Brzeszcze Bór: past the OSP Bór fire station, over the railway twice at the Borska and Lachowicka level crossings, and past the fishponds back to ul. Bór.",
+		"tip": "Guardrail lines the road and the verges are only grass: a mistake ends on the steel, so keep your throttle smooth between the trees."
 	},
 	{
 		"id": "stage_4",
@@ -103,7 +103,7 @@ const STAGES := [
 		"target_pos": 2,
 		"grid": "p2",
 		"trophy": "Bielsko FSM Golden Gear",
-		"desc": "Return to the home of the Fiat 126p and the Seicento, where bus 8 still runs from the factory gates to Szyndzielnia. Climb al. Armii Krajowej to the cable-car car park at Rondo Fieldorfa, then plunge 70 m down Karbowa and Karpacka under Dębowiec.",
+		"desc": "Back in the Seicento's home town, at the foot of Szyndzielnia. Climb al. Armii Krajowej to the cable-car car park at Rondo Fieldorfa, then plunge 70 m down Karbowa past the Dębowiec ski slope, over the Kamieniczanka and home along Gościnna.",
 		"tip": "Use the draft up the long Armii Krajowej drag, then brake hard for Rondo Fieldorfa at the top: the descent to Karpacka comes at you fast."
 	},
 	{
@@ -143,8 +143,8 @@ const STAGES := [
 		"target_pos": 3,
 		"grid": "p3",
 		"trophy": "Wawel Dragon Sceptre",
-		"desc": "Dusk falls over Kraków as the championship roars around the historic Planty ring and under the ramparts of Wawel Castle.",
-		"tip": "The Basztowa straight is your best overtaking opportunity — tuck into the slipstream."
+		"desc": "Dusk falls over Kraków as the championship roars round the ring road outside the Planty: Basztowa past the Barbakan and Brama Floriańska, Podwale and Straszewskiego, then the setts of Podzamcze and św. Idziego under Wawel.",
+		"tip": "Tram rails run along half the lap. Brake before the setts under Wawel, and tuck into the slipstream on the long run along św. Gertrudy over the line."
 	},
 	{
 		"id": "stage_8",
@@ -164,7 +164,7 @@ const STAGES := [
 		"grid": "p3",
 		"trophy": "Tor Fiata Test Cup",
 		"desc": "An exclusive invitation to the factory test track (Tor Fiata in Tychy) to battle factory test drivers in tuned machinery.",
-		"tip": "Aero slipstream is massive on the back straight — time your pass before the west banking."
+		"tip": "The slipstream is strongest on the kilometre-long back straight: time your pass before the West Turn, a long, flat 185° right-hander."
 	},
 	{
 		"id": "stage_9",

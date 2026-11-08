@@ -91,6 +91,7 @@ var gps_target := -1
 var gps_waypoint := false ## the route runs to the player's own waypoint instead of a stage
 var wp_pos := Vector2.ZERO
 var wp_on := false
+const WAYPOINT_REACH := 18.0 ## m from the waypoint that counts as having arrived
 var _reset_armed := false ## RESET CAMPAIGN was pressed once and waits for its confirmation
 var route := PackedVector2Array()
 var _route_t := 0.0
@@ -277,6 +278,8 @@ func apply_graphics(level: int, ssao := true) -> void:
 	if sky_mat:
 		_apply_time()
 	_apply_vegetation_quality()
+	if builder:
+		builder.set_draw_scale(float(p.get("ow_draw_scale", 1.0)))
 
 ## The grass's density and reach follow the preset (vegetation.gd).
 func _apply_vegetation_quality() -> void:
@@ -549,6 +552,34 @@ func _update_markers() -> void:
 	if wp_on:
 		list.append({"pos": wp_pos, "color": OpenWorldHud.PURPLE, "label": "WAYPOINT", "kind": "waypoint", "info": "Your waypoint"})
 	hud.set_markers(list)
+	_place_waypoint_beacon()
+
+## The waypoint stands in the world too: a purple light column like the stages', so it can be found by eye.
+func _place_waypoint_beacon() -> void:
+	if builder == null:
+		return
+	var old: Variant = builder.beacon_nodes.get("waypoint")
+	if old != null and is_instance_valid(old):
+		var at: Vector3 = (old as Node3D).position
+		if wp_on and Vector2(at.x, at.z).distance_to(wp_pos) < 0.5:
+			return
+		(old as Node3D).queue_free()
+	builder.beacon_nodes.erase("waypoint")
+	if wp_on:
+		builder.add_beacon("waypoint", wp_pos, OpenWorldHud.PURPLE, "WAYPOINT")
+
+## Driving up to the waypoint clears it, as reaching a stage beacon does: the route and the column go.
+func _check_waypoint_reached() -> void:
+	if not wp_on or drive == null:
+		return
+	if Vector2(drive.car.x, drive.car.y).distance_to(wp_pos) > WAYPOINT_REACH:
+		return
+	wp_on = false
+	if gps_waypoint:
+		gps_waypoint = false
+		_recompute_route()
+	_update_markers()
+	hud.notify("WAYPOINT REACHED", "Set another on the map", OpenWorldHud.PURPLE)
 
 ## The first open stage that isn't cleared yet (the unlock cap stays on the last stage once the campaign is
 ## finished, so "unlocked" alone would point at stage 9 for ever); -1 when everything is done.
@@ -1009,6 +1040,7 @@ func _process(delta: float) -> void:
 		hud.notify("BACK ON THE ROAD", "The Seicento doesn't swim", Color("#4aa3ff"))
 		drive.respawn()
 	builder.update_crossings(delta)
+	builder.update_signals()
 	hour = fmod(hour + delta * DAY_RATE, 24.0)
 	_apply_time()
 	_sync_car(delta)
@@ -1033,6 +1065,7 @@ func _process(delta: float) -> void:
 	_route_t -= delta
 	if _route_t <= 0.0:
 		_route_t = 0.5
+		_check_waypoint_reached()
 		if _has_target() and _off_route():
 			_recompute_route()
 		else:

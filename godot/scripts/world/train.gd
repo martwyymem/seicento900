@@ -1,7 +1,8 @@
 ## A PKP EN57 electric unit shuttling along Brzeszcze's main railway line: it runs end to end at line speed,
 ## calls at the station, waits and comes back. The level crossings on its way close ahead of it and open behind
 ## it (TownBuilder swings the booms), and it is a solid, moving obstacle for the player's car (FreeCar reads
-## TownMap.trains).
+## TownMap.trains) and for traffic, which also stops short of it and of a closed crossing. When its leading cab
+## hits something (TownMap.train_hit) the driver brakes to a stand, waits and carries on.
 class_name Train
 extends RefCounted
 
@@ -18,6 +19,9 @@ const STATION_WAIT := 25.0 ## s
 const END_WAIT := 18.0 ## s at either end of the line before it comes back
 const CLOSE_AHEAD := 320.0 ## m: crossings this far ahead of a running train close
 const CLEAR_BEHIND := 25.0 ## m: and open again once the last car is this far past them
+const EMERGENCY_DECEL := 1.5 ## m/s²: the driver's emergency brake after the cab hits something
+const STRUCK_WAIT := 8.0 ## s standing after an emergency stop before it carries on
+const STRUCK_MIN := 2.0 ## m/s: a knock on the cab front softer than this goes unnoticed
 
 var map: TownMap
 var builder: TownBuilder
@@ -31,6 +35,7 @@ var v := 0.0
 var wait := 6.0
 var stop_s := -1.0 ## arc length of the station stop (where the unit's middle halts), -1 for none
 var _stopped_here := false
+var braking := false ## emergency braking after a collision (TownMap.train_hit)
 var _crossing_s: Array = [] ## [crossing index, arc length] for the crossings on the line
 var _cars: Array[MeshInstance3D] = []
 var _locals: Array[Transform3D] = []
@@ -208,9 +213,19 @@ func _at(s: float) -> Vector3:
 func step(dt: float) -> void:
 	if pts.is_empty():
 		return
+	if map.train_hit > STRUCK_MIN and v > 0.5:
+		braking = true
+	map.train_hit = 0.0
 	if wait > 0.0:
 		wait -= dt
 		v = 0.0
+	elif braking:
+		# the cab hit something: full brake to a stand, wait, then carry on where it was going
+		v = maxf(0.0, v - EMERGENCY_DECEL * dt)
+		tail += v * dir * dt
+		if v <= 0.0:
+			braking = false
+			wait = STRUCK_WAIT
 	else:
 		# where it has to stop next: the station (once per pass) or the end of the line
 		var front := tail + LENGTH if dir > 0.0 else tail
@@ -249,7 +264,8 @@ func _place() -> void:
 		var look := -fwd if k == 0 else fwd
 		var basis := Basis.looking_at(look, Vector3.UP)
 		_cars[k].transform = Transform3D(basis, mid) * _locals[k]
-		map.trains[k] = [Vector2(mid.x, mid.z), atan2(fwd.z, fwd.x), CAR_PITCH * 0.5, HALF_W, mid.y]
+		var f2 := Vector2(fwd.x, fwd.z).normalized()
+		map.trains[k] = [Vector2(mid.x, mid.z), atan2(f2.y, f2.x), CAR_PITCH * 0.5, HALF_W, mid.y, f2 * v * dir]
 
 func _update_crossings() -> void:
 	var front := tail + LENGTH if dir > 0.0 else tail

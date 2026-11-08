@@ -424,6 +424,8 @@ var strategy_choice := 0 ## index into strategy_options, or -1 while a custom pl
 var custom_stints: Array = [] ## [{c, laps}]
 var current_plan = null ## the plan the next single race starts with, null when none is valid
 var _strategy_pending := false
+const STRATEGY_REST_MS := 300 ## how long the circuit picker rests before the strategist plans for it
+var _strategy_rest_msec := 0 ## Time.get_ticks_msec() before which _refresh_strategy holds off
 var _loading_settings := false
 
 # Player Inputs
@@ -545,6 +547,7 @@ func _process(delta: float) -> void:
 	if retro_pipeline:
 		retro_pipeline.update_time(delta)
 	_pump_track_prefetch()
+	_pump_track_rush()
 	_sync_rendering()
 	if _starting:
 		return
@@ -1698,11 +1701,27 @@ func _queue_strategy_refresh(reset_choice := true) -> void:
 	_refresh_strategy.call_deferred()
 
 func _refresh_strategy() -> void:
-	var hyper := is_instance_valid(car_class_picker) and car_class_picker.selected == 1 and _hypercar_open()
+	# a run of ◂ ▸ circuit presses plans once (4-14 ms), for the circuit the selection rests on
+	while Time.get_ticks_msec() < _strategy_rest_msec:
+		await get_tree().process_frame
+	var hyper :=is_instance_valid(car_class_picker) and car_class_picker.selected == 1 and _hypercar_open()
 	var models: Dictionary = _models_for("hypercar" if hyper else "stock")
 	var strat: Strategy = models.strategy
 	var cm: CarModel = models.car_model
-	var track := Race.get_track(TRACK_KEYS[track_picker.selected])
+	var key: String = TRACK_KEYS[track_picker.selected]
+	var track := _menu_track(key)
+	if track == null:
+		# a first visit's Track is still being built off the main thread: wait for it (still pending, as for the
+		# calibration below, so START waits too) rather than build it here and freeze the page
+		strategy_info.text = "Loading %s…" % Track.load_def(key).display_name
+		current_plan = null
+		while track == null:
+			await get_tree().process_frame
+			if key != TRACK_KEYS[track_picker.selected]:
+				_strategy_pending = false
+				_queue_strategy_refresh(false)
+				return
+			track = _menu_track(key)
 	if not hyper and track.cal.is_empty():
 		# the first plan on a circuit simulates reference laps (up to a couple of seconds)
 		strategy_info.text = "Working out lap times at %s…" % track.name
@@ -1714,9 +1733,9 @@ func _refresh_strategy() -> void:
 		await get_tree().process_frame
 		# the prefetcher works it out off the main thread: wait for it rather than freeze the page
 		_prioritise_track_prefetch(track.key)
-		while track.cal.is_empty() and _track_prefetch_pending(track.key) and track == Race.get_track(TRACK_KEYS[track_picker.selected]):
+		while track.cal.is_empty() and _track_prefetch_pending(track.key) and track == _menu_track(TRACK_KEYS[track_picker.selected]):
 			await get_tree().process_frame
-		if track != Race.get_track(TRACK_KEYS[track_picker.selected]):
+		if track != _menu_track(TRACK_KEYS[track_picker.selected]):
 			_strategy_pending = false
 			_queue_strategy_refresh(false)
 			return
@@ -1933,8 +1952,8 @@ func _update_ai_memory() -> void:
 	if not is_instance_valid(ai_memory_label):
 		return
 	var key: String = _calendar()[_champ_round()] if is_championship_mode else TRACK_KEYS[track_picker.selected]
-	var track := Race.get_track(key)
-	var name: String = track.cfg.short_name if track.cfg and track.cfg.short_name != "" else track.name
+	var def := Track.load_def(key) # the name only: no need to wait for (or build) the Track
+	var name: String = def.short_name if def.short_name != "" else def.display_name
 	var m := Brain.summary(key)
 	ai_forget_button.visible = false
 	if ai_learning_picker.selected == 1:
@@ -2277,7 +2296,7 @@ func _refresh_car_setup() -> void:
 		(setup_sliders[k] as HSlider).value = st[k]
 		(setup_values[k] as Label).text = "%+d" % st[k] if st[k] != 0 else "0"
 	_loading_settings = was
-	_set_section_summary("car", "%s  ·  %s" % ["STOCK" if CarSetup.is_stock(st) else "TUNED", Race.get_track(key).name.to_upper()])
+	_set_section_summary("car", "%s  ·  %s" % ["STOCK" if CarSetup.is_stock(st) else "TUNED", Track.load_def(key).display_name.to_upper()])
 
 func _car_setup_changed(value: float, setting: String) -> void:
 	if _loading_settings:
@@ -2397,6 +2416,7 @@ func _build_menu_car_preview() -> void:
 	circuit_map_frame.add_theme_stylebox_override("panel", map_style)
 	add_child(circuit_map_frame)
 	information_map = MENU_TRACK_ART.new()
+	information_map.env_on_demand = false # the circuit prefetcher / rush worker prepares the surroundings
 	information_map.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	circuit_map_frame.add_child(information_map)
 	circuit_facts = _label("", 14, CmrStyle.ORANGE_SOFT)
@@ -2418,7 +2438,7 @@ func _menu_track_key() -> String:
 func _update_menu_car_summary() -> void:
 	if not is_instance_valid(menu_car_summary) or not is_instance_valid(track_picker):
 		return
-	var current_track: Track = Race.get_track(_menu_track_key())
+	var current_track: Track = _menu_track(_menu_track_key()) # null while it is built off the main thread
 	if is_instance_valid(player_color_picker) and is_instance_valid(menu_preview_car):
 		menu_preview_car.call("set_paint", player_color_picker.color)
 		menu_preview_car.call("set_livery", player_finish_picker.selected)
@@ -2438,7 +2458,10 @@ func _update_menu_car_summary() -> void:
 		race_label = "TIME TRIAL  ·  %s START" % ("ROLLING" if is_instance_valid(tt_start_picker) and tt_start_picker.selected == 1 else "STANDING")
 	elif format_picker.selected == 1:
 		race_label = "%s ENDURANCE" % _fmt_hours(hours_picker.value).to_upper()
-	menu_car_summary.text = "%s    |    %.1f KM\n%s" % [current_track.name.to_upper(), current_track.L / 1000.0, race_label]
+	if current_track:
+		menu_car_summary.text = "%s    |    %.1f KM\n%s" % [current_track.name.to_upper(), current_track.L / 1000.0, race_label]
+	else:
+		menu_car_summary.text = "%s    |    … KM\n%s" % [Track.load_def(_menu_track_key()).display_name.to_upper(), race_label]
 	_refresh_car_setup()
 
 func _build_menu_header() -> void:
@@ -3686,7 +3709,7 @@ func _update_information_page() -> void:
 		race_length = "Timed race · %s" % _fmt_hours(hours_picker.value)
 	else:
 		race_length = "%d lap%s" % [int(laps_picker.value), "" if int(laps_picker.value) == 1 else "s"]
-	var current_track: Track = Race.get_track(track_key)
+	var current_track: Track = _menu_track(track_key) # null while a first visit's Track is built off the main thread
 	var weather_options: Array[String] = ["Dry", "Wet", "Snow", "Hail", "Fog", "Variable"]
 	var weather_name: String = str(CampaignData.get_stage(campaign_stage_index).weather).capitalize() if is_campaign_mode else weather_options[weather_picker.selected]
 	var opponents_count: int = CampaignData.get_stage(campaign_stage_index).opponents if is_campaign_mode else int(opponents_picker.value)
@@ -3699,9 +3722,11 @@ func _update_information_page() -> void:
 	circuit_facts.text = "%s  ·  START %s  ·  %s\n%s" % [weather_name.to_upper(), _format_start_time(start_time_val),
 		"SOLO" if opponents_count == 0 else "%d OPPONENT%s" % [opponents_count, "" if opponents_count == 1 else "S"],
 		_records_text(track_key).strip_edges().to_upper()]
+	if current_track and not MENU_TRACK_ART.has_env(track_key):
+		_track_waiting = track_key # the map's surroundings: prepared off the main thread, drawn when they land
 	if information_map.has_method("set_track"):
-		information_map.set_track(current_track, true)
-	if is_instance_valid(menu_home_art) and not is_championship_mode and not is_campaign_mode:
+		information_map.set_track(current_track, true) # rebuilds only when the circuit (or the frame) changed
+	if is_instance_valid(menu_home_art) and not is_championship_mode and not is_campaign_mode and current_track:
 		menu_home_art.set_track(current_track)
 
 ## The player's lap records on a circuit, for the Information page.
@@ -3828,8 +3853,7 @@ func _pump_track_prefetch() -> void:
 		_prefetch_task = -1
 		var key: String = _prefetch_job[0]
 		if _prefetch_job[1] == "track":
-			if not Race._track_cache.has(key) and _prefetch_result is Track:
-				Race._track_cache[key] = _prefetch_result
+			_store_prefetched(key, _prefetch_result)
 		elif _prefetch_result is Dictionary and not (_prefetch_result as Dictionary).is_empty():
 			var cached: Track = Race._track_cache.get(key)
 			if cached and cached.cal.is_empty():
@@ -3853,21 +3877,79 @@ func _pump_track_prefetch() -> void:
 	while not _prefetch_queue.is_empty():
 		var job: Array = _prefetch_queue.pop_front()
 		var cached: Track = Race._track_cache.get(job[0])
-		if job[1] == "track" and cached:
+		if job[1] == "track" and cached and MENU_TRACK_ART.has_env(job[0]):
 			continue
 		if job[1] == "cal" and cached and not cached.cal.is_empty():
 			continue
+		if job[1] == "track" and job[0] == _rush_key and _rush_task != -1:
+			continue # the rush worker is building it for the page
 		_prefetch_job = job
-		_prefetch_task = WorkerThreadPool.add_task(_prefetch_work.bind(job[0], job[1]), false, "Prefetch %s %s" % job)
+		_prefetch_task = WorkerThreadPool.add_task(_prefetch_work.bind(job[0], job[1], cached == null), false, "Prefetch %s %s" % job)
 		return
 
 ## Worker thread: touches nothing shared (a Track of its own; for "cal", one that is never handed over).
-func _prefetch_work(key: String, phase: String) -> void:
-	var tr := Track.new(Track.load_def(key))
+## "track" leaves [Track or null if one is cached already, the circuit map's prepared surroundings].
+func _prefetch_work(key: String, phase: String, build_track := true) -> void:
 	if phase == "track":
-		_prefetch_result = tr
+		_prefetch_result = [Track.new(Track.load_def(key)) if build_track else null, MENU_TRACK_ART.prepare_env(key)]
 	else:
-		_prefetch_result = Strategy.new(CarModel.new(), Tyres.new()).calibrate(tr)
+		_prefetch_result = Strategy.new(CarModel.new(), Tyres.new()).calibrate(Track.new(Track.load_def(key)))
+
+## Main thread: a worker's [Track, map surroundings] into Race's track cache and the map's, unless already there.
+func _store_prefetched(key: String, result) -> void:
+	if not result is Array or (result as Array).size() != 2:
+		return
+	if result[0] is Track and not Race._track_cache.has(key):
+		Race._track_cache[key] = result[0]
+	if result[1] is Dictionary:
+		MENU_TRACK_ART.store_env(key, result[1])
+
+# The circuit the set-up page is on but whose Track is not built yet (a first visit before the prefetcher got
+# there). Building it here froze the page for 0.15-1.3 s; instead a second worker ("rush") builds it beside the
+# background one, the page shows what it can without it, and fills in the map, length and plan once it lands.
+var _track_waiting := ""
+var _rush_task := -1
+var _rush_key := ""
+var _rush_result = null
+
+## The circuit's Track for the front end, or null while it is being built off the main thread (quick-race set-up
+## only; _pump_track_rush refreshes the page when it lands). Elsewhere, or mid-race, it is built here as before.
+func _menu_track(key: String) -> Track:
+	if Race._track_cache.has(key):
+		return Race._track_cache[key]
+	if race or _starting or is_championship_mode or is_campaign_mode or is_rally_mode:
+		return Race.get_track(key)
+	_track_waiting = key
+	return null
+
+func _pump_track_rush() -> void:
+	if _rush_task != -1:
+		if not WorkerThreadPool.is_task_completed(_rush_task):
+			return
+		WorkerThreadPool.wait_for_task_completion(_rush_task)
+		_rush_task = -1
+		_store_prefetched(_rush_key, _rush_result)
+		_rush_result = null
+	if _track_waiting == "":
+		return
+	var key := _track_waiting
+	if Race._track_cache.has(key) and MENU_TRACK_ART.has_env(key):
+		_track_waiting = ""
+		_update_information_page() # rebuilds the map only if it is on this circuit and it changed
+		if is_instance_valid(track_picker) and TRACK_KEYS[track_picker.selected] == key:
+			_update_menu_car_summary()
+			_queue_strategy_refresh(false)
+		return
+	if race or _starting:
+		return
+	if _prefetch_task != -1 and _prefetch_job == [key, "track"]:
+		return # the background worker is on it already
+	_rush_key = key # one at a time: a quick ◂ ▸ run builds only the circuit it rests on next
+	_rush_task = WorkerThreadPool.add_task(_rush_work.bind(key, not Race._track_cache.has(key)), false, "Build %s" % key)
+
+## Worker thread, as _prefetch_work.
+func _rush_work(key: String, build_track: bool) -> void:
+	_rush_result = [Track.new(Track.load_def(key)) if build_track else null, MENU_TRACK_ART.prepare_env(key)]
 
 ## Moves a circuit's prefetch to the front of the queue (the page is on it now).
 func _prioritise_track_prefetch(key: String) -> void:
@@ -3888,6 +3970,9 @@ func _exit_tree() -> void:
 	if _prefetch_task != -1:
 		WorkerThreadPool.wait_for_task_completion(_prefetch_task)
 		_prefetch_task = -1
+	if _rush_task != -1:
+		WorkerThreadPool.wait_for_task_completion(_rush_task)
+		_rush_task = -1
 
 func _notification(what: int) -> void:
 	# keep what the bots learned if the window is closed mid-race
@@ -4564,9 +4649,11 @@ func _select_track(index: int) -> void:
 		fuel_picker.value = defaults.get("fuel", 1.0)
 		_loading_settings = false
 	_prioritise_track_prefetch(key)
+	_track_waiting = "" # moved on: the updates below wait for this circuit instead, if it is not built yet
 	_update_information_page()
 	_update_menu_car_summary()
 	_update_ai_memory()
+	_strategy_rest_msec = Time.get_ticks_msec() + STRATEGY_REST_MS
 	_queue_strategy_refresh()
 
 ## Main menu → CAMPAIGN: the briefing of the furthest stage unlocked. The stage dictates the race (circuit,

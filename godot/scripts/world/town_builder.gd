@@ -28,6 +28,9 @@ const SMALL_CHUNK := 128.0 ## m: cells of the distance-culled small things (fenc
 const IMPOSTOR_CHUNK := 512.0
 const TREE_NEAR := 380.0 ## m: full tree meshes this far, impostors beyond
 const TREE_FAR := 1800.0
+var _ranged: Array = [] ## [instance, its range at draw scale 1] for set_draw_scale
+var _impostor_mat: StandardMaterial3D
+var draw_scale := 1.0
 const ROAD_LIFT := 0.09 ## streets sit this far over the ground; the bigger road wins at a junction
 const KERB_H := TownMap.KERB_H
 const PAVEMENT_W := TownMap.PAVEMENT_W
@@ -264,6 +267,11 @@ func _style(ri: int) -> int:
 		return 1
 	return 0
 
+const BRIDGE_GIRDER_DEPTH := 0.45 ## m the two girders hang under a road bridge's soffit
+const BRIDGE_GIRDER_WIDTH := 0.6
+const BRIDGE_GIRDER_CLEAR := 3.0 ## m of deck over the ground before the girders are drawn (lower decks: a plain slab)
+const BRIDGE_CAP_DEPTH := 0.6 ## m, the cross-head on a pier
+
 func build_roads() -> void:
 	var group := _group("Streets")
 	var mat := _surface_material(ROAD_SHADER, "asphalt")
@@ -360,6 +368,12 @@ func build_roads() -> void:
 			var db: MeshBatch = deck_b[c]
 			var bb: MeshBatch = bank_b[c]
 			var bridge := map.road_bridge[ri] == 1
+			# whether segment k of the deck has girders under it (a deck, not an embankment, standing clear of the ground)
+			var has_girders := func(k: int) -> bool:
+				if k < 0 or k >= n - 1:
+					return false
+				var lo := minf(zs[k], zs[k + 1])
+				return lo > BRIDGE_GIRDER_CLEAR and (bridge or lo > 4.0)
 			for side: float in [-1.0, 1.0]:
 				var edge: PackedVector3Array = left if side < 0.0 else right
 				for i in n - 1:
@@ -380,13 +394,54 @@ func build_roads() -> void:
 						db.flat_quad(e0 + Vector3.UP * 0.95, e1 + Vector3.UP * 0.95, e1 + out * 0.4 + Vector3.UP * 0.95,
 							e0 + out * 0.4 + Vector3.UP * 0.95, Vector3.UP, concrete)
 						db.flat_quad(e1, e0, e0 + Vector3.UP * 0.95, e1 + Vector3.UP * 0.95, -out, concrete.darkened(0.08))
-						# underside
-						db.flat_quad(e0 - Vector3.UP * 0.9, e1 - Vector3.UP * 0.9, e1 - Vector3.UP * 0.9 - out * (half * 2.0 + 0.4),
-							e0 - Vector3.UP * 0.9 - out * (half * 2.0 + 0.4), Vector3.DOWN, concrete.darkened(0.3))
+						# underside: each side's half of the soffit, from under its parapet to the centre line (one slab
+						# each, not two over the whole width in one plane), and where the deck stands clear of the ground
+						# a girder under each half, so from below it reads as a beam bridge, not a floating sheet
+						# the inner edge is the centre line's own vertex (shared by both halves and both neighbouring
+						# segments), not e - out * half, which on a bend leaves a wedge of sky between the segments
+						var down := Vector3.UP * 0.9
+						var soffit := concrete.darkened(0.3)
+						var m0 := (left[i] + right[i]) * 0.5
+						var m1 := (left[i + 1] + right[i + 1]) * 0.5
+						# (each slab runs 5 cm into its neighbours: the outer corners, offset per segment, don't meet)
+						var lap := Vector3(t2.x, 0.0, t2.y) * 0.05
+						db.flat_quad(e0 + out * 0.4 - down - lap, e1 + out * 0.4 - down + lap, m1 - down + lap, m0 - down - lap,
+							Vector3.DOWN, soffit)
+						var girders: bool = has_girders.call(i)
+						if girders:
+							var gd := Vector3.UP * BRIDGE_GIRDER_DEPTH
+							var gc0 := e0.lerp(m0, 0.5) - down
+							var gc1 := e1.lerp(m1, 0.5) - down
+							var gw := out * (BRIDGE_GIRDER_WIDTH * 0.5)
+							var girder := concrete.darkened(0.22)
+							var tuck := Vector3.UP * 0.03 # the sides start inside the slab: no seam of sky along the top
+							db.flat_quad(gc0 + gw + tuck, gc1 + gw + tuck, gc1 + gw - gd, gc0 + gw - gd, out, girder)
+							db.flat_quad(gc1 - gw + tuck, gc0 - gw + tuck, gc0 - gw - gd, gc1 - gw - gd, -out, girder)
+							db.flat_quad(gc0 + gw - gd, gc1 + gw - gd, gc1 - gw - gd, gc0 - gw - gd, Vector3.DOWN, soffit)
+							# close the girder's end where the next segment has none
+							var t3 := Vector3(t2.x, 0.0, t2.y)
+							if not has_girders.call(i - 1):
+								db.flat_quad(gc0 - gw, gc0 + gw, gc0 + gw - gd, gc0 - gw - gd, -t3, girder)
+							if not has_girders.call(i + 1):
+								db.flat_quad(gc1 + gw, gc1 - gw, gc1 - gw - gd, gc1 + gw - gd, t3, girder)
 						if side > 0.0 and map.has_pier(ri, i):
 							var cpt := (left[i] + right[i]) * 0.5
-							db.beam(Vector3(cpt.x, map.ground(cpt.x, cpt.z) - 0.5, cpt.z),
-								Vector3(cpt.x + t2.x * 0.01, 0.0, cpt.z + t2.y * 0.01), 1.4, cpt.y - map.ground(cpt.x, cpt.z) - 0.4, concrete.darkened(0.15))
+							var cg := map.ground(cpt.x, cpt.z)
+							var cap_top := cpt.y - 0.9 - (BRIDGE_GIRDER_DEPTH if girders else 0.0)
+							var cap_lo := maxf(cap_top - BRIDGE_CAP_DEPTH, cg)
+							# the pier (its footprint is TownMap's pier collision) up to a cross-head under the girders
+							# beam() runs a to b, so the pier spans 0.7 m either side along the road: 1.4 m square, not a 1 cm sheet
+							db.beam(Vector3(cpt.x - t2.x * 0.7, cg - 0.5, cpt.z - t2.y * 0.7), Vector3(cpt.x + t2.x * 0.7, cg - 0.5, cpt.z + t2.y * 0.7), 1.4,
+								cap_lo - cg + 0.5, concrete.darkened(0.15))
+							if cap_top - cap_lo > 0.1:
+								var across := (right[i] - left[i])
+								across.y = 0.0
+								var ha := across.normalized() * (half + 0.2)
+								var ca := Vector3(cpt.x - ha.x, cap_lo, cpt.z - ha.z)
+								var cb := Vector3(cpt.x + ha.x, cap_lo, cpt.z + ha.z)
+								db.beam(ca, cb, 1.2, cap_top - cap_lo, concrete.darkened(0.12))
+								var along := Vector3(t2.x, 0.0, t2.y) * 0.6
+								db.flat_quad(ca - along, cb - along, cb + along, ca + along, Vector3.DOWN, soffit) # beam() has no bottom
 					else:
 						# grassy embankment at 1:1.5
 						var w0 := maxf(0.5, (e0.y - g0) * 1.5)
@@ -569,16 +624,15 @@ func build_rail() -> void:
 			var nrm := Vector2(-t.y, t.x)
 			var za := (zs[i] if not zs.is_empty() else 0.0)
 			var zb := (zs[i + 1] if not zs.is_empty() else 0.0)
-			var ya := map.ground(a.x, a.y) + za + 0.05
-			var yb := map.ground(b.x, b.y) + zb + 0.05
-			var A := Vector3(a.x, ya, a.y)
-			var B := Vector3(b.x, yb, b.y)
+			# the bed and the embankment as TownMap.rail_section gives them (the car rides the same surfaces)
+			var sec := map.rail_section(a, b, za, zb, bw)
+			var A: Vector3 = (sec.ballast[0][0] + sec.ballast[0][3]) * 0.5
+			var B: Vector3 = (sec.ballast[0][1] + sec.ballast[0][2]) * 0.5
 			var side := Vector3(nrm.x, 0.0, nrm.y)
-			ballast.flat_quad(A - side * bw * 0.5, B - side * bw * 0.5, B + side * bw * 0.5, A + side * bw * 0.5, Vector3.UP, ballast_col)
-			ballast.flat_quad(A + side * bw * 0.5, B + side * bw * 0.5, B + side * (bw * 0.5 + 0.6) - Vector3.UP * 0.35,
-				A + side * (bw * 0.5 + 0.6) - Vector3.UP * 0.35, (side + Vector3.UP).normalized(), ballast_col.darkened(0.1))
-			ballast.flat_quad(B - side * bw * 0.5, A - side * bw * 0.5, A - side * (bw * 0.5 + 0.6) - Vector3.UP * 0.35,
-				B - side * (bw * 0.5 + 0.6) - Vector3.UP * 0.35, (-side + Vector3.UP).normalized(), ballast_col.darkened(0.1))
+			var bq: Array = sec.ballast
+			ballast.flat_quad(bq[0][0], bq[0][1], bq[0][2], bq[0][3], Vector3.UP, ballast_col)
+			ballast.flat_quad(bq[1][0], bq[1][1], bq[1][2], bq[1][3], (side + Vector3.UP).normalized(), ballast_col.darkened(0.1))
+			ballast.flat_quad(bq[2][0], bq[2][1], bq[2][2], bq[2][3], (-side + Vector3.UP).normalized(), ballast_col.darkened(0.1))
 			for g: float in [-1.0, 1.0]:
 				var o: Vector3 = side * gauge * 0.5 * g
 				steel.beam(A + o + Vector3.UP * 0.08, B + o + Vector3.UP * 0.08, 0.08, 0.14, rail_col)
@@ -594,22 +648,14 @@ func build_rail() -> void:
 				d += 0.65
 			acc += seg
 			# embankments under raised track
-			if za > 0.3 or zb > 0.3:
-				for g: float in [-1.0, 1.0]:
-					var o: Vector3 = side * (bw * 0.5 + 0.6) * g
-					var e0 := A + o - Vector3.UP * 0.35
-					var e1 := B + o - Vector3.UP * 0.35
-					var out := side * g
-					var w0 := maxf(0.5, za * 1.5)
-					var w1 := maxf(0.5, zb * 1.5)
-					var b0 := e0 + out * w0
-					var b1 := e1 + out * w1
-					b0.y = map.ground(b0.x, b0.z) - 0.3
-					b1.y = map.ground(b1.x, b1.z) - 0.3
-					var nn := (e1 - e0).cross(b0 - e0).normalized()
-					if nn.y < 0.0:
-						nn = -nn
-					_bank_quad(bank, e0, e1, b1, b0, nn, (a + b) * 0.5)
+			for q in sec.bank:
+				var e0: Vector3 = q[0]
+				var e1: Vector3 = q[1]
+				var b0: Vector3 = q[3]
+				var nn := (e1 - e0).cross(b0 - e0).normalized()
+				if nn.y < 0.0:
+					nn = -nn
+				_bank_quad(bank, e0, e1, q[2], b0, nn, (a + b) * 0.5)
 	var mat_v := StandardMaterial3D.new()
 	mat_v.vertex_color_use_as_albedo = true
 	mat_v.roughness = 0.95
@@ -630,33 +676,57 @@ func build_rail() -> void:
 			_add_mesh(group, (parts[3] as MeshBatch).commit(), bank_mat)
 	_find_level_crossings(rail_lines)
 
-## One slope of a railway embankment, with the strip a street's tunnel passes through left out of it.
+## One slope of a railway embankment, with the cut a street's underpass makes through it (TownMap.in_tunnel_cut:
+## between the wing walls, from foot to foot of the embankment) clipped out exactly, so the slope's cut edge lies in
+## the wing wall's plane. The quad is drawn as flat_quad draws it (two triangles e0 e1 b1, e0 b1 b0, which is what
+## TownMap.rail_bank() holds the car up on), each triangle cut down to the pieces outside the strip.
 func _bank_quad(bank: MeshBatch, e0: Vector3, e1: Vector3, b1: Vector3, b0: Vector3, nn: Vector3, mid: Vector2) -> void:
 	var cut := []
 	for t in map.tunnels:
-		if (t.c as Vector2).distance_to(mid) < float(t.half_foot) + 16.0:
+		if (t.c as Vector2).distance_to(mid) < float(t.cut_len) + 16.0:
 			cut.append(t)
 	if cut.is_empty():
 		bank.flat_quad(e0, e1, b1, b0, nn, Color.WHITE)
 		return
-	var nt := 10
-	var nu := 4
-	for ti in nt:
-		for ui in nu:
-			var corners: Array[Vector3] = []
-			for k in [[0, 0], [1, 0], [1, 1], [0, 1]]:
-				var tt := float(ti + k[0]) / nt
-				var uu := float(ui + k[1]) / nu
-				corners.append(e0.lerp(e1, tt).lerp(b0.lerp(b1, tt), uu))
-			var inside := false
-			for q in corners:
-				for t in cut:
-					var rel := Vector2(q.x, q.z) - (t.c as Vector2)
-					var v: Vector2 = t.v
-					if absf(rel.dot(Vector2(-v.y, v.x))) < float(t.w) * 0.5 + 0.9 and absf(rel.dot(v)) < float(t.half_foot) + 1.0:
-						inside = true
-			if not inside:
-				bank.flat_quad(corners[0], corners[1], corners[2], corners[3], nn, Color.WHITE)
+	var polys := [[e0, e1, b1], [e0, b1, b0]]
+	for t in cut:
+		var c: Vector2 = t.c
+		var v: Vector2 = t.v
+		var n := Vector2(-v.y, v.x)
+		var ch := float(t.cut_half)
+		var cl := float(t.cut_len)
+		# the strip's complement as four convex pieces (keep where (p - c) . dir >= k for each [dir, k])
+		var pieces := [[[n, ch]], [[-n, ch]], [[n, -ch], [-n, -ch], [v, cl]], [[n, -ch], [-n, -ch], [-v, cl]]]
+		var kept := []
+		for poly in polys:
+			for piece in pieces:
+				var q: Array = poly
+				for hp in piece:
+					q = _clip_half(q, c, hp[0], float(hp[1]))
+					if q.size() < 3:
+						break
+				if q.size() >= 3:
+					kept.append(q)
+		polys = kept
+	for poly in polys:
+		for k in range(1, poly.size() - 1):
+			bank.flat_tri(poly[0], poly[k], poly[k + 1], nn, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, Color.WHITE)
+
+## Sutherland-Hodgman: the part of polygon poly (Vector3, map x = X, y = Z) where (p - c) . dir >= k, heights
+## interpolated along the cut edges (the polygon is planar, so the piece lies in its plane).
+func _clip_half(poly: Array, c: Vector2, dir: Vector2, k: float) -> Array:
+	var out := []
+	var m := poly.size()
+	for i in m:
+		var p: Vector3 = poly[i]
+		var q: Vector3 = poly[(i + 1) % m]
+		var fp := (Vector2(p.x, p.z) - c).dot(dir) - k
+		var fq := (Vector2(q.x, q.z) - c).dot(dir) - k
+		if fp >= 0.0:
+			out.append(p)
+		if (fp >= 0.0) != (fq >= 0.0):
+			out.append(p.lerp(q, fp / (fp - fq)))
+	return out
 
 ## Where a street crosses the railway at grade (for the barriers and the crossing signs).
 func _find_level_crossings(rail_lines: Array) -> void:
@@ -717,10 +787,8 @@ func build_tunnels() -> void:
 		var hb: float = t.half_bore
 		var hf: float = t.half_foot
 		var hw: float = float(t.w) * 0.5 + 0.2
-		var gc: float = t.ground
-		var deck_top: float = gc + float(t.z)
+		var deck_top: float = t.top # the highest track's rail level: the header beam's top
 		var roof: float = deck_top - 0.9
-		var sin_t := maxf(absf((t.u as Vector2).cross(v)), 0.35)
 		var at := func(s: float, l: float, y: float) -> Vector3:
 			var q := c + v * s + n * l
 			return Vector3(q.x, y, q.y)
@@ -730,6 +798,10 @@ func build_tunnels() -> void:
 		# roof underside and the header beams that close the bore's ends
 		mb.flat_quad(at.call(-hb, -hw - 0.3, roof), at.call(hb, -hw - 0.3, roof), at.call(hb, hw + 0.3, roof),
 			at.call(-hb, hw + 0.3, roof), Vector3.DOWN, lining.darkened(0.3))
+		# the deck's top under the ballast: between the tracks and at the header's edge it is what shows from above,
+		# not the open cut
+		mb.flat_quad(at.call(-hb, hw + 0.3, deck_top - 0.4), at.call(hb, hw + 0.3, deck_top - 0.4), at.call(hb, -hw - 0.3, deck_top - 0.4),
+			at.call(-hb, -hw - 0.3, deck_top - 0.4), Vector3.UP, face.darkened(0.15))
 		for e: float in [-1.0, 1.0]:
 			mb.flat_quad(at.call(e * hb, -hw - 0.3, roof), at.call(e * hb, hw + 0.3, roof), at.call(e * hb, hw + 0.3, deck_top),
 				at.call(e * hb, -hw - 0.3, deck_top), Vector3(v.x, 0.0, v.y) * e, face)
@@ -737,32 +809,31 @@ func build_tunnels() -> void:
 			mb.flat_quad(at.call(e * (hb + 0.02), -hw - 0.3, roof), at.call(e * (hb + 0.02), hw + 0.3, roof),
 				at.call(e * (hb + 0.02), hw + 0.3, roof + 0.35), at.call(e * (hb + 0.02), -hw - 0.3, roof + 0.35),
 				Vector3(v.x, 0.0, v.y) * e, face.darkened(0.25))
-		# walls: lining inside the bore, concrete wing walls outside it, rising to the slope of the embankment
-		var steps := [-hf]
-		var k := -hf + 2.0
+		# walls: lining inside the bore, concrete wing walls outside it in the plane the embankment is cut along
+		# (TownMap.in_tunnel_cut), their top a hand over the slope as drawn (TownMap.rail_bank), down to the foot
+		var steps := []
+		var k := -hf
 		while k < hf - 0.01:
-			if absf(k) < hb - 0.01 or absf(k) > hb + 0.01:
+			if absf(absf(k) - hb) > 0.05:
 				steps.append(k)
-			k += 2.0
+			k += 1.0
 		steps.append(-hb)
 		steps.append(hb)
 		steps.append(hf)
 		steps.sort()
 		for sd: float in [-1.0, 1.0]:
 			var l := hw * sd
+			var top_at := func(s: float) -> float:
+				var q := c + v * s + n * l
+				return maxf(map.rail_bank(q.x, q.y, true) + 0.08, map.ground(q.x, q.y) + 0.1)
 			for j in steps.size() - 1:
 				var s0: float = steps[j]
 				var s1: float = steps[j + 1]
 				if s1 - s0 < 0.01:
 					continue
 				var inside := absf((s0 + s1) * 0.5) < hb
-				var top0 := roof
-				var top1 := roof
-				if not inside:
-					var slope := func(s: float) -> float:
-						return deck_top - 0.35 - maxf(absf(s) * sin_t - 2.4, 0.0) / TownMap.EMBANKMENT
-					top0 = maxf(slope.call(s0), lo.call(s0, l) + 0.4)
-					top1 = maxf(slope.call(s1), lo.call(s1, l) + 0.4)
+				var top0: float = roof if inside else top_at.call(s0)
+				var top1: float = roof if inside else top_at.call(s1)
 				var col := lining if inside else face
 				var nrm := Vector3(n.x, 0.0, n.y) * -sd
 				mb.flat_quad(at.call(s0, l, lo.call(s0, l)), at.call(s1, l, lo.call(s1, l)), at.call(s1, l, top1),
@@ -836,9 +907,7 @@ func _wall_plan(skip := {}) -> Dictionary:
 			if ln < 0.1:
 				continue
 			var t := (b - a) / ln
-			var out := Vector2(t.y, -t.x)
-			if out.dot((a + b) * 0.1 - (we[2] as Vector2)) < 0.0:
-				out = -out
+			var out: Vector2 = we[2]
 			var ei := edges.size()
 			edges.append([bi, a, t, ln, out, float(we[3]), float(we[4])])
 			# every 10 m cell the edge passes through, so a long wall meets a neighbour beside any part of it
@@ -1037,7 +1106,7 @@ func _wall(mb: MeshBatch, a: Vector2, b: Vector2, y_lo: float, top_a: float, top
 			if log_walls:
 				wall_log.append([_cur_bi, Vector2(pa.x, pa.y) + Vector2(po.x, po.z), Vector2(pb.x, pb.y) + Vector2(po.x, po.z), y0a, y0b, y1a, y1b, Vector2(out.x, out.z)])
 
-## The outline walls of building bi as [a, b, centre of its ring or roof plane, absolute top height at a, at b]: the
+## The outline walls of building bi as [a, b, outward unit normal on the map, absolute top height at a, at b]: the
 ## footprint's edges, or for a measured (LoD2) building the roof plane edges that no other plane shares, which is where
 ## _add_lod2_roof builds walls.
 func _wall_edges(bi: int, ring: PackedVector2Array) -> Array:
@@ -1074,44 +1143,95 @@ func _wall_edges(bi: int, ring: PackedVector2Array) -> Array:
 		ground_hi = maxf(ground_hi, map.ground(p.x, p.y))
 	var res: Array = []
 	if planes.is_empty():
-		var centre := Vector2.ZERO
-		for p in ring:
-			centre += p
-		centre /= ring.size()
+		# facing from the winding, as _add_building does: the centre of an L lies outside it and turned walls inward
+		var turn := -signf(ring_area(ring))
 		var top := _bld_range(bi).y
 		for i in ring.size():
-			res.append([ring[i], ring[(i + 1) % ring.size()], centre, top, top])
+			var d := (ring[(i + 1) % ring.size()] - ring[i]).normalized()
+			res.append([ring[i], ring[(i + 1) % ring.size()], Vector2(-d.y, d.x) * turn, top, top])
 		return res
+	# a shared edge (ridge, hip, valley) is judged in 3D, as _add_lod2_roof does: two planes' edges can overlap on
+	# the map while one is a gable wall edge far above the other
+	var polys: Array[PackedVector3Array] = []
 	for pi in planes.size():
-		var pl := planes[pi]
-		var cen := Vector2.ZERO
-		for q in pl:
-			cen += q
-		cen /= pl.size()
-		for k in pl.size():
-			var a := pl[k]
-			var c := pl[(k + 1) % pl.size()]
-			# a shared edge (ridge, hip, valley) is judged in 3D, as _add_lod2_roof does: two planes' edges can overlap on
-			# the map while one is a gable wall edge far above the other
-			var a3 := Vector3(a.x, heights[pi][k], a.y)
-			var c3 := Vector3(c.x, heights[pi][(k + 1) % pl.size()], c.y)
-			var mid3 := (a3 + c3) * 0.5
-			var shared := false
-			for pj in planes.size():
-				if pj == pi:
-					continue
-				var other := planes[pj]
-				for m in other.size():
-					var m2 := (m + 1) % other.size()
-					var cp := Geometry3D.get_closest_point_to_segment(mid3, Vector3(other[m].x, heights[pj][m], other[m].y), Vector3(other[m2].x, heights[pj][m2], other[m2].y))
-					if cp.distance_to(mid3) < 0.15:
-						shared = true
-						break
-				if shared:
-					break
-			if not shared:
-				res.append([a, c, cen, ground_hi + heights[pi][k], ground_hi + heights[pi][(k + 1) % pl.size()]])
+		var poly := PackedVector3Array()
+		for k in planes[pi].size():
+			poly.append(Vector3(planes[pi][k].x, heights[pi][k], planes[pi][k].y))
+		polys.append(poly)
+	for pi in polys.size():
+		var poly := polys[pi]
+		var wind := 1.0 if ring_area(planes[pi]) > 0.0 else -1.0
+		for k in poly.size():
+			var a3 := poly[k]
+			var c3 := poly[(k + 1) % poly.size()]
+			var e2 := Vector2(c3.x - a3.x, c3.z - a3.z)
+			if e2.length() < 0.05:
+				continue
+			var out2 := Vector2(e2.y, -e2.x).normalized() * wind
+			for run in _open_runs(polys, pi, a3, c3, out2):
+				var p0 := a3.lerp(c3, float(run[0]))
+				var p1 := a3.lerp(c3, float(run[1]))
+				res.append([Vector2(p0.x, p0.z), Vector2(p1.x, p1.z), out2, ground_hi + p0.y, ground_hi + p1.y])
 	return res
+
+## True if point p (x, height, y) on an edge of plane pi lies on an edge of another plane that continues the roof
+## past it (on the side out2, the edge's outward direction on the map): a ridge, hip or valley, not an outer edge.
+static func _on_other_plane_edge(polys: Array[PackedVector3Array], pi: int, p: Vector3, out2: Vector2) -> bool:
+	var beyond := Vector2(p.x, p.z) + out2 * 0.2
+	for pj in polys.size():
+		if pj == pi:
+			continue
+		var other := polys[pj]
+		for m in other.size():
+			if Geometry3D.get_closest_point_to_segment(p, other[m], other[(m + 1) % other.size()]).distance_to(p) < 0.15:
+				var flat := PackedVector2Array()
+				for q in other:
+					flat.append(Vector2(q.x, q.z))
+				if Geometry2D.is_point_in_polygon(beyond, flat):
+					return true
+				break
+	return false
+
+## The stretches of plane pi's edge a-b that no other plane shares, as [[from, to], ...] fractions of a-b, where
+## _add_lod2_roof stands walls. Planes need not share corners, so an edge can be a ridge or valley for part of its
+## length and an outer wall for the rest; judging it by its midpoint alone left that rest open.
+static func _open_runs(polys: Array[PackedVector3Array], pi: int, a: Vector3, b: Vector3, out2: Vector2) -> Array:
+	var probe: Array[bool] = []
+	for f in [0.05, 0.25, 0.5, 0.75, 0.95]:
+		probe.append(_on_other_plane_edge(polys, pi, a.lerp(b, f), out2))
+	if not probe.has(true):
+		return [[0.0, 1.0]]
+	# (all five on another plane's edge is not enough to skip the samples: a metre of open edge between two of them
+	# would get no wall, a hole)
+	var steps := maxi(4, ceili(Vector2(a.x, a.z).distance_to(Vector2(b.x, b.z)) / 0.5))
+	var open: Array[bool] = []
+	for s in steps:
+		open.append(not _on_other_plane_edge(polys, pi, a.lerp(b, (float(s) + 0.5) / float(steps)), out2))
+	# each change between two samples is narrowed down by bisection: a step in the roof, where a higher plane's edge
+	# runs over a lower one's and they meet at one corner, otherwise lost up to a whole sample (0.5 m) of wall there,
+	# a sliver of sky between the planes
+	var runs: Array = []
+	var start := 0.0 if open[0] else -1.0
+	for s in range(1, steps):
+		if open[s] == open[s - 1]:
+			continue
+		var lo := (float(s) - 0.5) / float(steps)
+		var hi := (float(s) + 0.5) / float(steps)
+		for _i in 6:
+			var mid := (lo + hi) * 0.5
+			if (not _on_other_plane_edge(polys, pi, a.lerp(b, mid), out2)) == open[s - 1]:
+				lo = mid
+			else:
+				hi = mid
+		var cut := (lo + hi) * 0.5
+		if open[s]:
+			start = cut
+		else:
+			runs.append([start, cut])
+			start = -1.0
+	if start >= 0.0:
+		runs.append([start, 1.0])
+	return runs
 
 func build_buildings() -> void:
 	var group := _group("Buildings")
@@ -1289,9 +1409,9 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 		var ln := a.distance_to(b)
 		if ln < 0.01:
 			continue
+		# r runs clockwise on the map (negative shoelace area), so the outside is always on this side of a-b; the
+		# centre of a concave (L, U, T) footprint can lie outside it and would turn walls inward, culled from outside
 		var out := Vector3(-(b.y - a.y), 0.0, b.x - a.x).normalized()
-		if out.dot(Vector3((a.x + b.x) * 0.5 - centre.x, 0.0, (a.y + b.y) * 0.5 - centre.y)) < 0.0:
-			out = -out
 		_wall(mb, a, b, base, eave, eave, out, wall, hi, seed, float(code))
 	if pitched and roof_surfaces.is_empty():
 		var cen: Vector2 = rect[0]
@@ -1370,9 +1490,7 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 				var a := r[i]
 				var b := r[(i + 1) % n]
 				var t := (b - a).normalized()
-				var inn := Vector2(-t.y, t.x)
-				if inn.dot(centre - (a + b) * 0.5) < 0.0:
-					inn = -inn
+				var inn := Vector2(t.y, -t.x) # inward, from the ring's winding (see the walls above)
 				var ai := a + inn * 0.3
 				var bi := b + inn * 0.3
 				mb.flat_quad(Vector3(ai.x, eave, ai.y), Vector3(bi.x, eave, bi.y), Vector3(bi.x, eave + parapet, bi.y),
@@ -1488,13 +1606,14 @@ func _add_lod2_roof(mb: MeshBatch, faces: Array, hi: float, base: float, roof: C
 			drawn += 1
 	if drawn == 0:
 		return false
-	# outline edges: an edge whose midpoint lies on another plane's edge is a ridge, hip or valley
+	# outline edges: the stretches of a plane's edge that no other plane's edge runs along (not ridges, hips or valleys)
 	for pi in polys.size():
 		var poly := polys[pi]
-		var cen := Vector2.ZERO
+		# the plane's winding on the map says which side of each edge is outside (its centre can lie outside a concave plane)
+		var flat2 := PackedVector2Array()
 		for q in poly:
-			cen += Vector2(q.x, q.z)
-		cen /= poly.size()
+			flat2.append(Vector2(q.x, q.z))
+		var wind := 1.0 if ring_area(flat2) > 0.0 else -1.0
 		for k in poly.size():
 			var a := poly[k]
 			var b := poly[(k + 1) % poly.size()]
@@ -1503,28 +1622,12 @@ func _add_lod2_roof(mb: MeshBatch, faces: Array, hi: float, base: float, roof: C
 			var ln := a2.distance_to(b2)
 			if ln < 0.05:
 				continue # a vertical edge: the walls either side carry it
-			var mid := (a + b) * 0.5
-			var shared := false
-			for pj in polys.size():
-				if pj == pi:
-					continue
-				var other := polys[pj]
-				for m in other.size():
-					var c := other[m]
-					var d := other[(m + 1) % other.size()]
-					var cp := Geometry3D.get_closest_point_to_segment(mid, c, d)
-					if cp.distance_to(mid) < 0.15:
-						shared = true
-						break
-				if shared:
-					break
-			if shared:
-				continue
 			var t := (b2 - a2) / ln
-			var out := Vector3(t.y, 0.0, -t.x)
-			if Vector2(out.x, out.z).dot((a2 + b2) * 0.5 - cen) < 0.0:
-				out = -out
-			_wall(mb, a2, b2, base, a.y, b.y, out, wall, hi, uv2_wall.x, uv2_wall.y)
+			var out := Vector3(t.y, 0.0, -t.x) * wind
+			for run in _open_runs(polys, pi, a, b, Vector2(out.x, out.z)):
+				var p0 := a.lerp(b, float(run[0]))
+				var p1 := a.lerp(b, float(run[1]))
+				_wall(mb, Vector2(p0.x, p0.z), Vector2(p1.x, p1.z), base, p0.y, p1.y, out, wall, hi, uv2_wall.x, uv2_wall.y)
 	return true
 
 # ============================================================================================ trees
@@ -1548,6 +1651,7 @@ func build_trees() -> void:
 	foliage.set_shader_parameter("linear_colors", true)
 	wet_materials.append(foliage)
 	var impostor_mat := _impostor_material()
+	_impostor_mat = impostor_mat
 	var quad := QuadMesh.new()
 	quad.size = Vector2(1.0, 1.0)
 	quad.center_offset = Vector3(0.0, 0.5, 0.0)
@@ -1590,12 +1694,14 @@ func build_trees() -> void:
 			var mmi := _multimesh(group, meshes[species], lists[0], lists[1], foliage)
 			mmi.visibility_range_end = TREE_NEAR
 			mmi.visibility_range_end_margin = 40.0
+			_ranged.append([mmi, TREE_NEAR])
 			mmi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 	# the far cards: big chunks (few draw calls); the shader drops the cards near the camera, where the
 	# real trees stand
 	for cf in far:
 		var imp := _multimesh(group, quad, far[cf][0], far[cf][1], impostor_mat)
 		imp.visibility_range_end = TREE_FAR + IMPOSTOR_CHUNK
+		_ranged.append([imp, TREE_FAR + IMPOSTOR_CHUNK])
 		imp.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 ## Plot fences are baked as short independent segments so gaps remain clear for driveways.
@@ -1789,6 +1895,19 @@ func _impostor_material() -> StandardMaterial3D:
 
 # ============================================================================================ props
 
+## How far the trees and the range-limited props (fences, hedges, garden beds, lamps, signals, shelters, parked
+## cars) draw, as a share of their full ranges: the graphics preset's ow_draw_scale. The impostor cards hand over at
+## the near trees' new range.
+func set_draw_scale(k: float) -> void:
+	draw_scale = k
+	for pair in _ranged:
+		var inst: GeometryInstance3D = pair[0]
+		if is_instance_valid(inst):
+			inst.visibility_range_end = float(pair[1]) * k
+	if _impostor_mat:
+		_impostor_mat.distance_fade_min_distance = TREE_NEAR * k - 50.0
+		_impostor_mat.distance_fade_max_distance = TREE_NEAR * k - 5.0
+
 ## A town.glb mesh by name, or the fallback built here.
 func _model(name: String, fallback: Callable) -> Array:
 	if models.has(name):
@@ -1831,6 +1950,7 @@ func _multimesh_chunked(parent: Node3D, mesh: Mesh, xfs: Array, tints: Array, ma
 		var mmi := _multimesh(parent, mesh, cells[c][0], cells[c][1], mat)
 		mmi.visibility_range_end = range_end
 		mmi.visibility_range_end_margin = 20.0
+		_ranged.append([mmi, range_end])
 		out.append(mmi)
 	return out
 
@@ -1898,22 +2018,7 @@ func build_closures() -> void:
 func build_props() -> void:
 	var group := _group("Props")
 	_build_lamps(group)
-	# traffic signals at the mapped nodes, facing along the road
-	var signal_xfs := []
-	var sig := TownMap._flat(map.raw.get("signals", []))
-	for p in sig:
-		var near := map.nearest_road(p, 20.0)
-		if near.is_empty():
-			continue
-		var dir: Vector2 = near.dir
-		var side := Vector2(-dir.y, dir.x)
-		var half := map.road_w[near.road] * 0.5 + 1.0
-		for s: float in [-1.0, 1.0]:
-			var q: Vector2 = near.pos + side * half * s
-			var face := -dir * s # each head faces the traffic coming at it
-			signal_xfs.append(Transform3D(Basis(Vector3.UP, atan2(-face.x, -face.y)), Vector3(q.x, map.ground(q.x, q.y), q.y)))
-			map.add_post(q, 0.15)
-	_place_many(group, "TrafficLights", _model("TrafficLight", _fallback_signal), signal_xfs, [], null, 500.0)
+	_build_signals(group)
 	# bus shelters at the stops, back to the pavement, facing the road
 	var stop_xfs := []
 	for s in map.raw.get("stops", []):
@@ -2031,6 +2136,70 @@ func update_crossings(delta: float) -> void:
 		_boom_angle[k] = move_toward(_boom_angle[k], target, BOOM_RATE * delta)
 		map.booms[k][3] = _boom_angle[k]
 		_boom_mmi.multimesh.set_instance_transform(k, _boom_transform(k) * _boom_local)
+
+## Traffic signals: one head per arm a signal controls (TownMap.signal_heads), at the kerb beside its stop line,
+## facing the traffic it stops. Each is a node of its own so update_signals() can light its lenses.
+const SIGNAL_RANGE := 500.0
+var _signal_nodes: Array[MeshInstance3D] = []
+var _signal_shown := PackedInt32Array()
+var _signal_lens := PackedInt32Array() ## surface index of the red, amber and green lens (-1: the fallback mesh has none)
+static var _lens_mats := {} ## lens (0 red, 1 amber, 2 green) * 2 + 1 if lit -> material
+
+func _build_signals(group: Node3D) -> void:
+	var heads := map.signal_heads()
+	if heads.is_empty():
+		return
+	var parent := Node3D.new()
+	parent.name = "TrafficLights"
+	group.add_child(parent)
+	var mx := _model("TrafficLight", _fallback_signal)
+	var mesh: Mesh = mx[0]
+	var local: Transform3D = mx[1]
+	_signal_lens = PackedInt32Array([-1, -1, -1])
+	for i in mesh.get_surface_count():
+		var m := mesh.surface_get_material(i)
+		var k := ["SignalRed", "SignalAmber", "SignalGreen"].find(m.resource_name if m else "")
+		if k >= 0:
+			_signal_lens[k] = i
+			if not _lens_mats.has(k * 2 + 1) and m is StandardMaterial3D:
+				var lit := (m as StandardMaterial3D).duplicate() as StandardMaterial3D
+				lit.emission_enabled = true
+				lit.emission = lit.albedo_color
+				lit.emission_energy_multiplier = 4.0
+				var off := (m as StandardMaterial3D).duplicate() as StandardMaterial3D
+				off.emission_enabled = false
+				off.albedo_color = off.albedo_color.darkened(0.75)
+				_lens_mats[k * 2 + 1] = lit
+				_lens_mats[k * 2] = off
+	for h in heads:
+		var q: Vector2 = h[0]
+		var face: Vector2 = -(h[1] as Vector2) # the head looks at the traffic coming at it
+		var mi := MeshInstance3D.new()
+		mi.mesh = mesh
+		mi.transform = Transform3D(Basis(Vector3.UP, atan2(-face.x, -face.y)), Vector3(q.x, map.ground(q.x, q.y), q.y)) * local
+		mi.visibility_range_end = SIGNAL_RANGE
+		mi.visibility_range_end_margin = 20.0
+		_ranged.append([mi, SIGNAL_RANGE])
+		parent.add_child(mi)
+		_signal_nodes.append(mi)
+		_signal_shown.append(-1)
+		map.add_post(q, 0.15)
+	update_signals()
+
+## Lights each head's lenses for what it shows at the map's signal clock (only the heads whose state changed).
+func update_signals() -> void:
+	if _signal_nodes.is_empty() or _signal_lens[0] < 0 or not _lens_mats.has(1):
+		return
+	var heads := map.signal_heads()
+	for i in _signal_nodes.size():
+		var st := TownMap.signal_state(heads[i], map.signal_t)
+		if st == _signal_shown[i]:
+			continue
+		_signal_shown[i] = st
+		var on := [st == TownMap.SIG_RED or st == TownMap.SIG_RED_AMBER,
+			st == TownMap.SIG_AMBER or st == TownMap.SIG_RED_AMBER, st == TownMap.SIG_GREEN]
+		for k in 3:
+			_signal_nodes[i].set_surface_override_material(_signal_lens[k], _lens_mats[k * 2 + (1 if on[k] else 0)])
 
 ## Cars parked along the residential streets and in the car parks: mostly the cars Poles drove, all colours.
 func _build_parked_cars(group: Node3D) -> void:

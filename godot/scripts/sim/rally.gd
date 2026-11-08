@@ -59,7 +59,7 @@ const EVENTS := [
 			{"name": "Babudy–Góra", "track": "babudy_gora", "baked": true, "surface": "gravel", "weather": "wet", "hour": 19.5, "service": 0},
 		]},
 	{"key": "beskidy", "name": "Rajd Beskidów", "short": "BESKIDY", "difficulty": "medium",
-		"blurb": "Mountain tarmac above the Seicento's home town: Szyndzielnia in the morning fog, then the rain.",
+		"blurb": "Mountain tarmac at the foot of Szyndzielnia, in the Seicento's home town: morning fog, then the rain.",
 		"stages": [
 			{"name": "Szyndzielnia Podjazd", "track": "bielsko", "from": 2400.0, "to": 0.0, "surface": "tarmac", "weather": "fog", "hour": 8.0, "service": 0},
 			{"name": "Szyndzielnia Zjazd", "track": "bielsko", "from": 400.0, "to": 2400.0, "surface": "tarmac", "weather": "dry", "hour": 9.5, "service": 0},

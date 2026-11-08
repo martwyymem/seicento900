@@ -529,6 +529,129 @@ def _inside_ring(x, y, ring):
     return inside
 
 
+ROOF_ALIGN_PX = 0.2  # m, raster cell of the roof-to-footprint alignment
+ROOF_ALIGN_MAX = 4.0  # m, the farthest a measured roof is slid onto its OSM footprint
+ROOF_ALIGN_GAIN = 0.02  # IoU a slide must win before it is applied (noise in the raster stays put)
+
+
+def _raster(polys, x0, y0, nx, ny):
+    """Boolean mask (ny, nx) of cells whose centre lies inside any of polys (even-odd per polygon)."""
+    import numpy as np
+    xs = x0 + (np.arange(nx) + 0.5) * ROOF_ALIGN_PX
+    ys = y0 + (np.arange(ny) + 0.5) * ROOF_ALIGN_PX
+    gx, gy = np.meshgrid(xs, ys)
+    mask = np.zeros((ny, nx), dtype=bool)
+    for poly in polys:
+        inside = np.zeros((ny, nx), dtype=bool)
+        n = len(poly)
+        for i in range(n):
+            xi, yi = poly[i]
+            xj, yj = poly[i - 1]
+            if yi == yj:
+                continue
+            cross = ((yi > gy) != (yj > gy)) & (gx < (xj - xi) * (gy - yi) / (yj - yi) + xi)
+            inside ^= cross
+        mask |= inside
+    return mask
+
+
+def align_roofs(ring, roofs):
+    """Slides measured (GUGiK LoD2) roof planes onto the OSM footprint they were matched to. The two surveys sit
+    a metre or more apart building by building (not as a whole), so walls built under the planes stood off the
+    footprint the car collides with. Returns (roofs, (dx, dy)); the roofs are unchanged when no slide of at most
+    ROOF_ALIGN_MAX improves the overlap by ROOF_ALIGN_GAIN."""
+    import numpy as np
+    faces = []
+    for face in roofs:
+        pts = [(float(face[i]), float(face[i + 1])) for i in range(0, len(face) - 2, 3)]
+        if len(pts) >= 3:
+            faces.append(pts)
+    if not faces:
+        return roofs, (0.0, 0.0)
+    allp = list(ring) + [p for f in faces for p in f]
+    pad = ROOF_ALIGN_MAX + 1.0
+    x0 = min(p[0] for p in allp) - pad
+    y0 = min(p[1] for p in allp) - pad
+    nx = int(math.ceil((max(p[0] for p in allp) + pad - x0) / ROOF_ALIGN_PX))
+    ny = int(math.ceil((max(p[1] for p in allp) + pad - y0) / ROOF_ALIGN_PX))
+    if nx * ny > 2_000_000:
+        return roofs, (0.0, 0.0)  # a huge hall: leave it be
+    a = _raster([ring], x0, y0, nx, ny).astype(np.float64)
+    b = _raster(faces, x0, y0, nx, ny).astype(np.float64)
+    na, nb = float(a.sum()), float(b.sum())
+    if na < 4 or nb < 4:
+        return roofs, (0.0, 0.0)
+    # overlap of the footprint with the roof shifted by (sx, sy) cells, for every shift at once: whole cell counts,
+    # rounded so that equal overlaps compare equal and the tie goes to the shortest slide (float32 FFT noise, as some
+    # NumPy builds keep, picked a random one of them)
+    corr = np.rint(np.real(np.fft.ifft2(np.fft.fft2(a) * np.conj(np.fft.fft2(b)))))
+    r = int(ROOF_ALIGN_MAX / ROOF_ALIGN_PX)
+    best, bi, bj = -1.0, 0, 0
+    for sy in range(-r, r + 1):
+        for sx in range(-r, r + 1):
+            if (sx * sx + sy * sy) > r * r:
+                continue
+            v = corr[sy % ny, sx % nx]
+            if v > best or (v == best and sx * sx + sy * sy < bi * bi + bj * bj):
+                best, bi, bj = v, sx, sy
+    inter0 = float(corr[0, 0])
+    iou0 = inter0 / max(1.0, na + nb - inter0)
+    iou1 = best / max(1.0, na + nb - best)
+    if iou1 - iou0 < ROOF_ALIGN_GAIN:
+        return roofs, (0.0, 0.0)
+    dx, dy = bi * ROOF_ALIGN_PX, bj * ROOF_ALIGN_PX
+    out = []
+    for face in roofs:
+        f = list(face)
+        for i in range(0, len(f) - 2, 3):
+            f[i] = round(float(f[i]) + dx, 2)
+            f[i + 1] = round(float(f[i + 1]) + dy, 2)
+        out.append(f)
+    return out, (dx, dy)
+
+
+ROOF_OFF_DIST = 1.0  # m: an outline stretch farther than this from the footprint stands off the collision
+ROOF_OFF_MAX = 0.3  # share of a measured roof's outline that may stand off; beyond it the footprint walls are built
+
+
+def roof_outline_off(ring, roofs):
+    """Share of the measured roof's outline (plane edges no other plane continues past: where the game stands its
+    walls) lying farther than ROOF_OFF_DIST from the OSM footprint, which the car collides with."""
+    import numpy as np
+    faces = []
+    for face in roofs:
+        pts = [(float(face[i]), float(face[i + 1])) for i in range(0, len(face) - 2, 3)]
+        if len(pts) >= 3:
+            faces.append(pts)
+    rx = np.array([p[0] for p in ring])
+    ry = np.array([p[1] for p in ring])
+    ax, ay = rx, ry
+    bx, by = np.roll(rx, -1), np.roll(ry, -1)
+    ex, ey = bx - ax, by - ay
+    el2 = np.maximum(ex * ex + ey * ey, 1e-9)
+    total = off = 0
+    for fi, f in enumerate(faces):
+        area2 = sum(f[i][0] * f[i - 1][1] - f[i - 1][0] * f[i][1] for i in range(len(f)))
+        wind = -1.0 if area2 > 0 else 1.0
+        for i in range(len(f)):
+            (x0, y0), (x1, y1) = f[i - 1], f[i]
+            ln = math.hypot(x1 - x0, y1 - y0)
+            if ln < 0.05:
+                continue
+            nx_, ny_ = (y1 - y0) / ln * wind, -(x1 - x0) / ln * wind
+            for k in range(max(1, int(ln / 0.5))):
+                t = (k + 0.5) / max(1, int(ln / 0.5))
+                px, py = x0 + (x1 - x0) * t, y0 + (y1 - y0) * t
+                qx, qy = px + nx_ * 0.2, py + ny_ * 0.2
+                if any(_inside_ring(qx, qy, g) for gi, g in enumerate(faces) if gi != fi):
+                    continue  # another plane carries the roof on past this edge: a ridge, hip or valley
+                u = np.clip(((px - ax) * ex + (py - ay) * ey) / el2, 0.0, 1.0)
+                d = np.min(np.hypot(ax + ex * u - px, ay + ey * u - py))
+                total += 1
+                off += d > ROOF_OFF_DIST
+    return off / total if total else 0.0
+
+
 def _intersection_area_sampled(a, b, bounds):
     """Approximate polygon intersection with 1 m cell-centre samples for robust non-convex footprints."""
     x0, y0, x1, y1 = bounds
@@ -578,7 +701,14 @@ def conflate_building(ring, osm_id, osm_type, measurements):
     if l2:
         extra['src'] = 'GUGiK LoD2 2017'
         if l2.get('roofs'):
-            extra['rs'] = l2['roofs']
+            rs, shift = align_roofs(ring, l2['roofs'])
+            measurements.setdefault('shifts', []).append(math.hypot(*shift))
+            # a measured roof whose outline stands well off the footprint (another shape, or two houses as one) would
+            # raise its walls away from the collision: its heights stay, the game builds the footprint walls and roof
+            if roof_outline_off(ring, rs) <= ROOF_OFF_MAX:
+                extra['rs'] = rs
+            else:
+                measurements['off'] = measurements.get('off', 0) + 1
         rt = int(l2.get('rt', 0))
         extra['roof_code'] = rt
         # GUGiK's roofType uses CityGML's code list.
@@ -972,20 +1102,34 @@ def build(check_png=None):
     # a level crossing stays on the ground: a ramp reaches it no steeper than CROSSING_GRADE (the lines that carry it
     # lose the part of the ramp above that cone, they never rise at the crossing itself)
     lcs = [proj(e['lat'], e['lon']) for e in els if e['type'] == 'node' and e.get('tags', {}).get('railway') == 'level_crossing']
-    def under_cone(lines, z, grade):
+    def seg_dist(q, a, b):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        l2 = dx * dx + dy * dy
+        t = 0.0 if l2 < 1e-9 else max(0.0, min(1.0, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / l2))
+        return math.dist(q, (a[0] + dx * t, a[1] + dy * t))
+
+    def under_cone(lines, z, grade, own=None):
         out = []
         for l, zz in zip(lines, z):
             v = []
+            # own: only the crossings on this line (or the other track of its double line, within `own` m) bring it
+            # down; a crossing on a siding 40 m away must not sink an underpass's deck
+            near = lcs if own is None else [q for q in lcs if any(seg_dist(q, a, b) < own for a, b in zip(l['p'], l['p'][1:]))]
             for p, h in zip(l['p'], zz):
                 if h > 0.0:
-                    d = min((math.dist(p, q) for q in lcs), default=1e9)
+                    d = min((math.dist(p, q) for q in near), default=1e9)
                     h = min(h, grade * max(d - 1.0, 0.0))
                 v.append(h)
             out.append(v)
         return out
     zr = under_cone(out_roads, zr, 0.07)
     zl = ease(rails, zl, lambda l: l['e'], lambda l, li: UNDERPASS_Z)
-    zl = under_cone(rails, zl, CROSSING_GRADE)
+    zl = under_cone(rails, zl, CROSSING_GRADE, own=6.0)
+    for t in tunnels:  # the underpass's deck as the line now stands (no later pass may sink it under the portal)
+        li = t['rail']
+        k = min(range(len(rails[li]['p'])), key=lambda k: math.dist(rails[li]['p'][k], t['c']))
+        if zl[li][k] < t['z'] - 0.05:
+            print('WARNING: underpass on street', t['road'], 'at', t['c'], 'deck', t['z'], 'but the line stands', round(zl[li][k], 2))
     print(len(tunnels), 'underpasses through railway embankments:', [(t['road'], t['z']) for t in tunnels])
     n_raised = sum(1 for zz in zr if max(zz) > 0.3)
     print(n_raised, 'roads raised on bridges or ramps;', sum(1 for zz in zl if max(zz) > 0.3), 'railway lines raised')
@@ -1044,6 +1188,12 @@ def build(check_png=None):
         print('GUGiK conflation:', sum(1 for b in buildings if len(b) > 6 and any(k in b[6] for k in ('eh', 'rs', 'bd'))),
               'buildings with measured height/roof/storeys; orthophoto roof colours:',
               sum(1 for b in buildings if len(b) > 6 and 'rc' in b[6]), flush=True)
+        sh = sorted(measurements.get('shifts', []))
+        if sh:
+            moved = [v for v in sh if v > 0.0]
+            print('LoD2 roofs slid onto their footprint: %d of %d, median %.1f m, max %.1f m'
+                  % (len(moved), len(sh), moved[len(moved) // 2] if moved else 0.0, sh[-1]), flush=True)
+            print('LoD2 roofs left off for an outline standing off the footprint:', measurements.get('off', 0), flush=True)
 
     # ---- land cover areas
     areas = []

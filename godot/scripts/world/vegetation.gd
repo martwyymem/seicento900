@@ -25,6 +25,8 @@ const FLOWER_STEP := 1.6
 const BUSH_STEP := 5.0
 const GRASS_REACH := 1.0 ## m: a grass patch's blades spread this far from its middle (0.8 m, widened up to 1.25x)
 const BUDGET_USEC := 2500 ## planting time per frame
+const HANDOVER := 14.0 ## m over which the dense patches give way to the sparse ones (grass.gdshader lod_out/lod_in)
+const FAR_FADE := 40.0 ## m over which the blades sink at the far edge (at most 45% of the reach)
 const FIELD_MIN := 100 ## land map G (0-255) from which a pixel is a field
 const GRASS_SHADER := preload("res://shaders/grass.gdshader")
 ## per graphics preset (0 Low .. 3 Ultra): m between grass and wheat patches, how near a cell's centre must be for the
@@ -47,6 +49,8 @@ var counts := {} ## kind -> instances alive, for the probes
 var quality := 2
 var grass_mat: ShaderMaterial
 var wheat_mat: ShaderMaterial
+var grass_near_mat: ShaderMaterial ## the dense patches' copies: their blades leave across the hand-over band
+var wheat_near_mat: ShaderMaterial
 var _areas := {} ## cell key -> [[kind, ring, rect], ...] of the pitches and parks over that cell
 ## Tests: when set, every committed plant's position by kind (headless reads MultiMesh transforms back as identity)
 var recorded: Dictionary = {}
@@ -86,6 +90,8 @@ func setup(m: TownMap) -> bool:
 	wheat_mat.set_shader_parameter("tip_color", Color(0.86, 0.76, 0.42))
 	wheat_mat.set_shader_parameter("dry_color", Color(0.82, 0.68, 0.34))
 	wheat_mat.set_shader_parameter("wind_strength", 0.1)
+	grass_near_mat = grass_mat.duplicate() as ShaderMaterial
+	wheat_near_mat = wheat_mat.duplicate() as ShaderMaterial
 	set_quality(quality)
 	return land_w > 0 and not meshes.is_empty()
 
@@ -152,10 +158,17 @@ func _area_at(key: int, p: Vector2) -> String:
 func set_quality(level: int) -> void:
 	quality = clampi(level, 0, GRASS_QUALITY.size() - 1)
 	var q: Dictionary = GRASS_QUALITY[quality]
+	var band := Vector2(maxf(0.0, float(q.near) - HANDOVER), float(q.near)) if float(q.near) > 0.0 else Vector2.ZERO
+	for mat in [grass_mat, wheat_mat, grass_near_mat, wheat_near_mat]:
+		if mat:
+			mat.set_shader_parameter("fade_start", float(q.far) - minf(FAR_FADE, float(q.far) * 0.45))
+			mat.set_shader_parameter("fade_end", float(q.far))
 	for mat in [grass_mat, wheat_mat]:
 		if mat:
-			mat.set_shader_parameter("fade_start", float(q.far) - 28.0)
-			mat.set_shader_parameter("fade_end", float(q.far))
+			mat.set_shader_parameter("lod_in", band)
+	for mat in [grass_near_mat, wheat_near_mat]:
+		if mat:
+			mat.set_shader_parameter("lod_out", band)
 	for k in cells.keys():
 		_free_cell(k)
 	queue.clear()
@@ -390,9 +403,11 @@ func _commit_patches(cell: Node3D, kind: String, xfs: Array, cols: Array, mat: M
 	var q: Dictionary = GRASS_QUALITY[quality]
 	var near := float(q.near)
 	var far := float(q.far) + CELL * 0.75 # the cell centre's distance; the shader sinks the blades by their own
+	# visibility ranges go by the cell's centre, so both kinds are drawn wherever the cell may reach into the
+	# hand-over band; the shader hands each blade over at its own distance
 	if near > 0.0:
-		_commit(cell, kind, xfs, cols, near, mat)
-	_commit(cell, kind + "Low", xfs, cols, far, mat, near)
+		_commit(cell, kind, xfs, cols, near + CELL * 0.75, wheat_near_mat if mat == wheat_mat else grass_near_mat)
+	_commit(cell, kind + "Low", xfs, cols, far, mat, maxf(0.0, near - HANDOVER - CELL * 0.75))
 
 func _plant_corn(cell: Node3D, x0: float, y0: float) -> void:
 	var xfs := []
