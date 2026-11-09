@@ -4229,7 +4229,25 @@ func _open_loading_screen(settings: RaceSettings, qualifying := false) -> void:
 	elif is_campaign_mode:
 		var st := CampaignData.get_stage(campaign_stage_index)
 		segments.insert(0, st.get("title", "Campaign Stage"))
-	loading_screen.open(segments, "Circuit Length", "%.2f km" % (track.L / 1000.0))
+	# the circuit's hero still, the conditions and a tip (the race loader's picture); a stage or a time trial is not laps
+	var field_text := "solo" if settings.opponents <= 0 or settings.mode != "race" else "%d cars" % (settings.opponents + 1)
+	var caption := "Circuit Length"
+	var length_km := track.L / 1000.0
+	var facts: Array = [["FIELD", field_text]]
+	if settings.mode == "rally" and is_rally_mode:
+		var ev := _rally()
+		var i := mini(ev.stage_index, ev.stage_count() - 1)
+		segments = [str(ev.stage_def(i).get("name", track.name)), "stage %d of %d" % [i + 1, ev.stage_count()]]
+		caption = "Stage Length"
+		length_km = Rally.stage_length(ev.stage_def(i), track.L) / 1000.0
+		facts = [["SURFACE", str(settings.surface).capitalize()]]
+	elif settings.mode == "time_trial":
+		segments = [track.name, "time trial"]
+		caption = "Lap Length"
+		facts = [["RUN", "Rolling start" if settings.rolling_start else "Standing start"]]
+	loading_screen.open(segments, caption, "%.2f km" % length_km, {
+		"track": settings.track, "hour": settings.start_hour, "weather": settings.weather, "mode": settings.mode,
+		"facts": facts})
 	await _loading_progress(0.15)
 
 func _loading_progress(fraction: float) -> void:

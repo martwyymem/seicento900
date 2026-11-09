@@ -31,6 +31,9 @@ func _initialize() -> void:
 	await ow.open("industrial_sprint")
 	if ow.get("hud") != null:
 		ow.hud.visible = false
+	if OS.get_environment("PROBE") == "0": # diagnostic: the car's reflection probe off
+		for pr in root.find_children("*", "ReflectionProbe", true, false):
+			pr.visible = false
 	var only := OS.get_environment("ONLY").split(",", false)
 	var brake := OS.get_environment("BRAKE") == "1"
 	for k in SETS:

@@ -1544,44 +1544,227 @@ def build(check_png=None):
     print(belt, 'edge trees')
     print(len(trees), 'trees (', n_wood, 'in woods );', len(fences), 'fence segments (', generated, 'generated )')
 
-    # ---- generated street lamps along town roads
-    def in_town(x, y):
-        return not boundary or point_in_ring(x, y, boundary)
-
-    built_up = [(ring, holes) for _, _, kind, ring, holes, _, _ in areas if kind in ('residential', 'industrial')]
-    lamp_grid = set((int(x // 10), int(y // 10)) for x, y in lamps)
-    for r in out_roads:
-        if r['kn'] not in ('primary', 'secondary', 'tertiary', 'residential', 'unclassified', 'living_street') and not r['lit']:
+    # ---- generated street lamps
+    # OSM maps hardly any lamps here, so the town's lighting follows Polish practice on the roads that have houses: one
+    # row on the side with more buildings every LAMP_GAP m along residential streets, a staggered zig-zag on the
+    # through roads (secondary, tertiary), a lamp at the corner of each junction, nothing on tracks, field roads, the
+    # S1 (motorway), bridges, or roads through woods and fields far from buildings. A mapped lamp within MAPPED_SKIP
+    # keeps its place. Each lamp stands on the verge (road edge + LAMP_VERGE), off driveways (a gap in a plot's front
+    # fence), buildings, fences, trees, rails, water and other roads' mouths. TownBuilder turns the arm towards the
+    # nearest road, as for a mapped lamp.
+    LAMP_GAP = {'residential': 36.0, 'living_street': 30.0, 'unclassified': 38.0, 'service': 36.0,
+                'tertiary': 30.0, 'secondary': 28.0, 'primary': 28.0, 'trunk': 28.0}
+    MAIN_ROADS = ('primary', 'secondary', 'tertiary', 'trunk')
+    LAMP_VERGE = 1.4  # m from the road edge to the pole
+    MAPPED_SKIP, LAMP_SEP = 25.0, 14.0
+    DENSITY_R = 45.0
+    chead = {}
+    for b in buildings:
+        if b[0] in ('shed', 'garage'):
             continue
-        if r['b']:
+        fl = b[4]
+        n_ = len(fl) // 2
+        chead.setdefault((int(sum(fl[0::2]) / n_ // 40), int(sum(fl[1::2]) / n_ // 40)), []).append(
+            (sum(fl[0::2]) / n_, sum(fl[1::2]) / n_, b[0]))
+
+    def houses_around(x, y, r):
+        out = []
+        for gx in range(int((x - r) // 40), int((x + r) // 40) + 1):
+            for gy in range(int((y - r) // 40), int((y + r) // 40) + 1):
+                for q in chead.get((gx, gy), ()):
+                    if math.hypot(q[0] - x, q[1] - y) <= r:
+                        out.append(q)
+        return out
+
+    fgrid = SegGrid(10.0)
+    for f_ax, f_ay, f_bx, f_by, _ in fences:
+        fgrid.add((f_ax, f_ay), (f_bx, f_by), 0)
+    tgrid = {}
+    for t_x, t_y, _ in trees:
+        tgrid.setdefault((int(t_x // 8), int(t_y // 8)), []).append((t_x, t_y))
+    lgrid = {}  # generated lamps, 15 m cells
+    mgrid = {}  # mapped lamps, 30 m cells
+
+    def lamp_near(grid, cell, x, y, r):
+        for gx in range(int((x - r) // cell), int((x + r) // cell) + 1):
+            for gy in range(int((y - r) // cell), int((y + r) // cell) + 1):
+                for q in grid.get((gx, gy), ()):
+                    if math.hypot(q[0] - x, q[1] - y) < r:
+                        return True
+        return False
+
+    for q in lamps:
+        mgrid.setdefault((int(q[0] // 30), int(q[1] // 30)), []).append(q)
+    n_mapped = len(lamps)
+
+    def lamp_ok(lx, ly, own, tan, sep=LAMP_SEP, other_road=2.2):
+        """Is (lx, ly) a place where a pole can stand? own: the lit road's index in out_roads, tan: its direction."""
+        if not in_zone(lx, ly, 0.0) or in_water(lx, ly):
+            return False
+        for a, b, i in rgrid.near(lx, ly, 14.0):
+            rw = out_roads[i]['w'] / 2
+            d = dist_seg(lx, ly, a, b)
+            if i == own:
+                if d < rw + 0.8:
+                    return False
+                continue
+            if d < rw + 0.9:
+                return False
+            if d < rw + other_road:
+                sl = math.dist(a, b)
+                par = sl > 1e-6 and tan is not None and abs(((b[0] - a[0]) * tan[0] + (b[1] - a[1]) * tan[1]) / sl) > 0.94
+                if not par:  # a side street's mouth or a driveway
+                    return False
+        if not building_clear(lx, ly, 2.0) or inside_building(lx, ly):
+            return False
+        for a, b, _i in fgrid.near(lx, ly, 3.0):
+            if dist_seg(lx, ly, a, b) < 0.9:
+                return False
+        for gx in range(int((lx - 2) // 8), int((lx + 2) // 8) + 1):
+            for gy in range(int((ly - 2) // 8), int((ly + 2) // 8) + 1):
+                for q in tgrid.get((gx, gy), ()):
+                    if math.hypot(q[0] - lx, q[1] - ly) < 1.8:
+                        return False
+        if any(dist_seg(lx, ly, ra, rb) < 5.0 for ra, rb, _ in railgrid.near(lx, ly, 6.0)):
+            return False
+        if any(math.hypot(lx - c['x'], ly - c['y']) < c['w'] / 2 + 10 for c in closures):
+            return False
+        if lamp_near(lgrid, 15, lx, ly, sep) or lamp_near(mgrid, 30, lx, ly, MAPPED_SKIP):
+            return False
+        return True
+
+    def gate_gap(lx, ly, px, py):
+        """A lamp in front of a plot's fence would block its gate. px, py: the same spot on the fence line."""
+        near = fgrid.near(px, py, 7.0)
+        if not near:
+            return False
+        has_near = any(dist_seg(px, py, a, b) < 7.0 for a, b, _ in near)
+        on_line = any(dist_seg(px, py, a, b) < 1.1 for a, b, _ in near)
+        return has_near and not on_line
+
+    # public places are lit however few houses stand round them: the station, the stadium, schools, shops, the church
+    anchors = [(p['x'], p['y'], 130.0 if p['k'] in ('station', 'stadium') else 70.0) for p in places
+               if p['k'] in ('station', 'stadium', 'school', 'church', 'townhall', 'post_office', 'police', 'fire_station',
+                             'fuel', 'shop', 'restaurant', 'fast_food', 'pub', 'bar', 'cinema', 'marketplace', 'hotel')]
+
+    def lit_here(x, y, r):
+        """Built-up enough for street lighting: houses (not sheds) within DENSITY_R, a public place close by, or the
+        way is mapped lit."""
+        if r['lit'] or len(houses_around(x, y, DENSITY_R)) >= (2 if r['kn'] in MAIN_ROADS else 3):
+            return True
+        return any(math.hypot(x - ax, y - ay) < ar for ax, ay, ar in anchors)
+
+    def add_lamp(x, y):
+        lamps.append((x, y))
+        lgrid.setdefault((int(x // 15), int(y // 15)), []).append((x, y))
+
+    # junction corners first, so the rows around them keep their distance
+    arms = {}
+    for ri, r in enumerate(out_roads):
+        if r['b'] or r['tn'] or r['kn'] not in LAMP_GAP or r['kn'] == 'service':
             continue
         pts = r['p']
-        spacing = 30.0 if r['kn'] in ('primary', 'secondary', 'tertiary') else 36.0
-        acc = spacing * 0.5
-        side = 1 if (r['id'] % 2) else -1
+        for idx, nid in r['e']:
+            for j in (idx - 1, idx + 1):
+                if 0 <= j < len(pts) and pts[j] != pts[idx]:
+                    arms.setdefault(nid, []).append((math.atan2(pts[j][1] - pts[idx][1], pts[j][0] - pts[idx][0]),
+                                                    r['w'], ri, pts[idx]))
+    n_junction = 0
+    for nid, arm in arms.items():
+        if len(arm) < 3:
+            continue
+        cx, cy = arm[0][3]
+        if len(houses_around(cx, cy, 55.0)) < 3 and not any(out_roads[a[2]]['lit'] for a in arm):
+            continue
+        arm.sort(key=lambda a: a[0])
+        gaps = []
+        for k in range(len(arm)):
+            a0, a1 = arm[k], arm[(k + 1) % len(arm)]
+            g = (a1[0] - a0[0]) % (2 * math.pi)
+            if g < 1e-3:
+                g = 2 * math.pi
+            gaps.append((g, a0, a1))
+        g, a0, a1 = max(gaps, key=lambda t: t[0])
+        if g < math.radians(75):
+            continue
+        mid = a0[0] + g / 2
+        half_w = max(a0[1], a1[1]) / 2
+        d0 = (half_w + LAMP_VERGE + 0.6) / max(math.sin(min(g, math.pi) / 2), 0.55)
+        for extra in (0.0, 1.5, 3.0, 4.5):
+            lx, ly = cx + math.cos(mid) * (d0 + extra), cy + math.sin(mid) * (d0 + extra)
+            if lamp_ok(lx, ly, -1, None, sep=18.0, other_road=1.0):
+                add_lamp(lx, ly)
+                n_junction += 1
+                break
+
+    # rows along the roads
+    n_rows = 0
+    for ri, r in enumerate(out_roads):
+        kind = r['kn']
+        if kind not in LAMP_GAP or r['b'] or r['tn']:
+            continue
+        pts = r['p']
+        total = sum(math.dist(a, b) for a, b in zip(pts, pts[1:]))
+        if kind == 'service' and not r['lit'] and total < 100.0:
+            continue  # a driveway or a yard track, not a street
+        gap = LAMP_GAP[kind]
+        cum = [0.0]
         for a, b in zip(pts, pts[1:]):
-            ln = math.dist(a, b)
-            if ln < 1e-6:
+            cum.append(cum[-1] + math.dist(a, b))
+
+        def at(s):
+            k = 1
+            while k < len(cum) - 1 and cum[k] < s:
+                k += 1
+            seg = max(cum[k] - cum[k - 1], 1e-6)
+            u = min(max((s - cum[k - 1]) / seg, 0.0), 1.0)
+            a, b = pts[k - 1], pts[k]
+            return a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, (b[0] - a[0]) / seg, (b[1] - a[1]) / seg
+
+        s = gap * 0.5
+        side = 0
+        flip = 1
+        while s < total - 3.0:
+            x, y, tx_, ty_ = at(s)
+            if math.hypot(tx_, ty_) < 0.5 or not lit_here(x, y, r):
+                s += 6.0
                 continue
-            tx_, ty_ = (b[0] - a[0]) / ln, (b[1] - a[1]) / ln
-            s0 = 0.0
-            while acc <= ln - s0 + 1e-9:
-                s0 += acc
-                acc = spacing
-                x = a[0] + tx_ * s0
-                y = a[1] + ty_ * s0
-                off = r['w'] / 2 + 1.3
-                lx, ly = x - ty_ * off * side, y + tx_ * off * side
-                key = (int(lx // 10), int(ly // 10))
-                if key in lamp_grid:
+            nx_, ny_ = -ty_, tx_
+            cnt = [0, 0]
+            for hx, hy, _k in houses_around(x, y, 45.0):
+                if abs((hx - x) * tx_ + (hy - y) * ty_) < 28.0:
+                    lat = (hx - x) * nx_ + (hy - y) * ny_
+                    if abs(lat) > r['w'] / 2:
+                        cnt[0 if lat > 0 else 1] += 1
+            if not side:
+                side = 1 if cnt[0] >= cnt[1] else -1
+            elif cnt[0 if side < 0 else 1] > cnt[0 if side > 0 else 1] + 2 and kind not in MAIN_ROADS:
+                side = -side
+            use = side
+            if kind in MAIN_ROADS:  # zig-zag, or one side where the other has no houses
+                use = flip
+                if cnt[0 if use > 0 else 1] == 0 and cnt[0 if use < 0 else 1] > 0:
+                    use = -use
+            off = r['w'] / 2 + LAMP_VERGE
+            placed = None
+            for sh in (0.0, 2.0, -2.0, 4.0, -4.0, 6.0, -6.0, 8.0, -8.0):
+                if s + sh < 1.0 or s + sh > total - 1.0:
                     continue
-                if not any(point_in_ring(lx, ly, ring) for ring, _ in built_up) and not r['lit']:
-                    continue
-                if road_clear(lx, ly, 0.6) and building_clear(lx, ly, 1.0):
-                    lamps.append((lx, ly))
-                    lamp_grid.add(key)
-            acc -= (ln - s0)
-    print(len(lamps), 'lamps')
+                x, y, tx_, ty_ = at(s + sh)
+                nx_, ny_ = -ty_ * use, tx_ * use
+                lx, ly = x + nx_ * off, y + ny_ * off
+                fo = r['w'] / 2 + 2.2  # where the plot fence stands
+                if lamp_ok(lx, ly, ri, (tx_, ty_)) and not gate_gap(lx, ly, x + nx_ * fo, y + ny_ * fo):
+                    placed = (lx, ly, sh)
+                    break
+            if placed:
+                add_lamp(placed[0], placed[1])
+                n_rows += 1
+                s += placed[2] + gap
+                flip = -flip
+            else:
+                s += 5.0
+    print(len(lamps), 'lamps (', n_mapped, 'mapped,', n_junction, 'at junctions,', n_rows, 'in rows )')
 
     # ---- named spots: where the campaign's events stand
     def road_named(name, near=None):

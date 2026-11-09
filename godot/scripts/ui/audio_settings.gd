@@ -60,8 +60,8 @@ static func apply() -> void:
 			if i < 0:
 				continue
 			AudioServer.set_bus_volume_db(i, db(level(ch.key)))
-			if bus_name != "World": # WorldAudio mutes World with M itself, and asks effects_silent()
-				AudioServer.set_bus_mute(i, level(ch.key) <= 0)
+			# World too: during a race WorldAudio re-applies it every frame with the M mute on top
+			AudioServer.set_bus_mute(i, level(ch.key) <= 0)
 
 static func effects_silent() -> bool:
 	return level("effects") <= 0

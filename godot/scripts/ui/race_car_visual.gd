@@ -694,6 +694,18 @@ static func _shared_resources() -> Dictionary:
 	var head_surface := _surface(details, "Headlight")
 	if head_surface >= 0:
 		details.surface_set_material(head_surface, head)
+	# Unpainted plastic (bumpers, sills, trim, gaskets): the world's warm sun, ACES and the car's reflection probe lifted the
+	# glTF's dark grey to tan, so these get an explicit near-black, satin, low-specular material.
+	for pair in [[details, "Bumper", 0.21, 0.55], [details, "Trim", 0.10, 0.5], [details, "Gasket", 0.07, 0.8],
+			[shell, "Trim", 0.10, 0.5], [shell, "Gasket", 0.07, 0.8]]:
+		var plastic_surface := _surface(pair[0], pair[1])
+		if plastic_surface >= 0:
+			var plastic := StandardMaterial3D.new()
+			plastic.resource_name = pair[1]
+			plastic.albedo_color = Color(pair[2] * 0.95, pair[2] * 0.97, pair[2])
+			plastic.roughness = pair[3]
+			plastic.metallic_specular = 0.22
+			(pair[0] as Mesh).surface_set_material(plastic_surface, plastic)
 	var plate_surface := _surface(details, "Plate")
 	if plate_surface >= 0:
 		var plate := ShaderMaterial.new() # a Polish plate from the atlas on the bumpers (car_plate.gdshader)

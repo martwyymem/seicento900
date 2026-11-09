@@ -92,6 +92,8 @@ class FlatTown extends TownMap:
 		return {"road": 0, "i": 0, "t": 0.0, "dist": 0.0, "half": 50.0, "deck": 0.0, "surface": 0, "height": 0.0}
 	func surface_of(hit: Dictionary) -> int:
 		return Physics.SURF_GRASS if hit.is_empty() else force_surf
+	func road_lift(_ri: int) -> float:
+		return 0.0
 	func decks_at(_x: float, _y: float, _reach: float) -> Array:
 		return []
 	func water_at(_p: Vector2) -> float:

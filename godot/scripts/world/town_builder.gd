@@ -32,7 +32,7 @@ const TREE_FAR := 1800.0
 var _ranged: Array = [] ## [instance, its range at draw scale 1] for set_draw_scale
 var _impostor_mat: StandardMaterial3D
 var draw_scale := 1.0
-const ROAD_LIFT := 0.09 ## streets sit this far over the ground; the bigger road wins at a junction
+const ROAD_LIFT := TownMap.ROAD_LIFT ## streets sit this far over the ground (TownMap.road_lift): the car rides on it, and the bigger road wins at a junction
 const KERB_H := TownMap.KERB_H
 const PAVEMENT_W := TownMap.PAVEMENT_W
 const VERGE_W := 1.2 ## m: the grass slope from a pavement's outer edge down to the lawn
@@ -59,6 +59,9 @@ var lamp_material: StandardMaterial3D ## street lamp heads, glowing after dark
 var window_glow := 0.0
 var lamp_spots := PackedVector3Array() ## lamp head positions, for the pool of real lights
 var lamp_dirs := PackedVector3Array()
+const LAMP_RANGE := 600.0 ## m: street lamps draw this far (a 8.6 m pole is under a degree tall beyond it); 4,500 of them
+const LAMP_CELL := 64.0 ## m: cells of the lamp lookup (lamps_near)
+var _lamp_cells := {} ## Vector2i cell -> PackedInt32Array of indices into lamp_spots
 var beacon_nodes := {} ## spot name -> Node3D
 var festival_pos := Vector3.ZERO
 var crossing_points: Array = [] ## [Vector2 position, road index] where a street crosses the railway at grade
@@ -100,59 +103,114 @@ func has_model(name: String) -> bool:
 
 # ============================================================================================ mesh cache
 
-## Set to a folder (the open world uses MESH_CACHE_DIR) to keep the meshes of the slow, mesh-only steps (terrain,
-## buildings) between runs: a warm start loads them from disk in tens of milliseconds instead of rebuilding them for
-## seconds. Off by default so tests always build. The stamp covers the map, the code that builds them and the models.
+## Set to a folder (the open world uses MESH_CACHE_DIR) to keep what the slow steps (terrain, streets, railway, buildings,
+## trees, fences) build between runs: a warm start loads it from disk in tens of milliseconds instead of rebuilding it for
+## seconds. Off by default so tests always build.
+##
+## Each step has its own stamp (CACHE_STEPS), made of only what it reads: the sections of the baked map it uses, the
+## code that builds it (CodeHash: its mesh-building function and everything that names, in this script and in TownMap)
+## and the model files. Editing the lamps or the HUD leaves the buildings' cache valid; editing _wall() does not.
+## Keep CACHE_STEPS true: a step that reads a section or file not listed there would serve stale meshes after it changes
+## (tests/test_open_world_cache.gd checks the lists against the map's sections).
 const MESH_CACHE_DIR := "user://open_world_cache"
-const MESH_CACHE_VERSION := "1"
+const MESH_CACHE_VERSION := "2" ## bump to drop every cache (a change to how records are stored)
+const CODE_HASH := preload("res://scripts/world/code_hash.gd")
+const SELF_PATH := "res://scripts/world/town_builder.gd"
+const MAP_PATH := "res://scripts/world/town_map.gd"
+const ROADSIDE_MODELS := "res://models/roadside.glb"
 var mesh_cache_dir := ""
-var _cache_stamp := ""
+var _stamps := {} ## tag -> stamp
+var cache_log: Array[String] = [] ## "tag hit" / "tag miss" per cached step, for the loading probe
+
+## What each cached step reads. "data": sections of the baked map (TownMap.section_hash). "code": the function that
+## builds its meshes (the cache holds that function's result, so nothing else of it counts). "files": other files it
+## reads. "models": it reads which models town.glb and the landmarks hold. "plan": it reads wall_plan_enabled.
+## "map_code": the functions of TownMap it uses that CodeHash cannot see (none yet).
+static func cache_spec(tag: String) -> Dictionary:
+	match tag:
+		"terrain":
+			return {"data": ["terrain", "extent", "areas"], "code": "_terrain_meshes"}
+		"streets":
+			return {"data": ["roads", "terrain", "buildings", "boundary"], "code": "_street_meshes"}
+		"rail":
+			return {"data": ["rail", "tunnels", "terrain"], "code": "_rail_meshes"}
+		"buildings":
+			return {"data": ["buildings", "terrain", "places"], "code": "_building_meshes", "models": true, "plan": true,
+				"files": [TOWN_MODELS, LANDMARK_MODELS]}
+		"trees":
+			return {"data": ["trees", "terrain"], "code": "_tree_records", "files": [SURROUNDINGS.TREES_PATH]}
+		"fences":
+			return {"data": ["fences", "garden_beds", "terrain"], "code": "_fence_records", "files": [TOWN_MODELS, ROADSIDE_MODELS]}
+	return {}
+
+## Sections of the baked map that no cached step reads (the test checks that every section is in one list or the other).
+const UNCACHED_SECTIONS := ["name", "origin", "bounds", "play", "closures", "nodes", "waterways", "lamps", "signals", "level_crossings",
+	"stops", "spots", "credits"] ## ("extent" and "areas" are read by the terrain step only)
+const CACHED_TAGS := ["terrain", "streets", "rail", "buildings", "trees", "fences"]
+
+func _stamp(tag: String) -> String:
+	if _stamps.has(tag):
+		return _stamps[tag]
+	var spec := cache_spec(tag)
+	var parts := PackedStringArray([MESH_CACHE_VERSION, tag, map.key])
+	for section in spec.data:
+		parts.append(map.section_hash(section))
+	var code := CODE_HASH.closure(SELF_PATH, [spec.code], MAP_PATH, ["_load"])
+	parts.append(code)
+	parts.append(FileAccess.get_md5("res://scripts/world/mesh_batch.gd") if FileAccess.file_exists("res://scripts/world/mesh_batch.gd") else "-")
+	for f in spec.get("files", []):
+		parts.append(FileAccess.get_md5(f) if FileAccess.file_exists(f) else "-")
+	if spec.get("models", false):
+		var keys := models.keys()
+		keys.sort()
+		parts.append(",".join(PackedStringArray(keys)))
+	if spec.get("plan", false):
+		parts.append(str(wall_plan_enabled))
+	# an exported game keeps neither script sources nor the source GLBs: its build stands in for them
+	if code == "" or not OS.has_feature("editor"):
+		parts.append(str(ProjectSettings.get_setting("application/config/version", "")))
+		parts.append(str(FileAccess.get_modified_time(OS.get_executable_path())))
+		var pck := OS.get_executable_path().get_basename() + ".pck"
+		if FileAccess.file_exists(pck):
+			parts.append(str(FileAccess.get_modified_time(pck)))
+	_stamps[tag] = "|".join(parts).md5_text().substr(0, 16)
+	return _stamps[tag]
 
 func _cache_path(tag: String) -> String:
 	if mesh_cache_dir == "":
 		return ""
-	if _cache_stamp == "":
-		var keys := models.keys()
-		keys.sort()
-		var parts := PackedStringArray([MESH_CACHE_VERSION, map.key, str(wall_plan_enabled), ",".join(PackedStringArray(keys))])
-		# the bake, the code that builds the meshes and the models whose names and meshes they use (trees)
-		for f in ["res://data/world/%s.json" % map.key, "res://scripts/world/town_builder.gd",
-				"res://scripts/world/town_map.gd", "res://scripts/world/mesh_batch.gd", "res://scripts/ui/surroundings.gd",
-				TOWN_MODELS, LANDMARK_MODELS, SURROUNDINGS.TREES_PATH]:
-			parts.append(FileAccess.get_md5(f) if FileAccess.file_exists(f) else "-")
-		# an exported game keeps neither script sources nor the source GLBs: its build stands in for them
-		if not OS.has_feature("editor"):
-			parts.append(str(ProjectSettings.get_setting("application/config/version", "")))
-			parts.append(str(FileAccess.get_modified_time(OS.get_executable_path())))
-			var pck := OS.get_executable_path().get_basename() + ".pck"
-			if FileAccess.file_exists(pck):
-				parts.append(str(FileAccess.get_modified_time(pck)))
-		_cache_stamp = "|".join(parts).md5_text().substr(0, 16)
-	return "%s/%s_%s.res" % [mesh_cache_dir, tag, _cache_stamp]
+	return "%s/%s_%s.res" % [mesh_cache_dir, tag, _stamp(tag)]
 
-## The meshes cached for step `tag` (in the order they were stored), or [] when there are none for this stamp.
+## What step `tag` stored (in the order it was stored), or [] when there is nothing for this stamp.
 func _cached_meshes(tag: String) -> Array:
 	var path := _cache_path(tag)
-	if path == "" or not FileAccess.file_exists(path):
+	if path == "":
 		return []
-	var res := ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
-	if res == null or not res.has_meta("meshes"):
-		return []
-	return res.get_meta("meshes")
+	var hit: Array = []
+	if FileAccess.file_exists(path):
+		var res := ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
+		if res != null and res.has_meta("meshes"):
+			hit = res.get_meta("meshes")
+	cache_log.append("%s %s" % [tag, "hit" if not hit.is_empty() else "miss"])
+	return hit
 
-## Keeps step `tag`'s meshes for the next run and drops the files older stamps left for it.
+## Keeps what step `tag` built for the next run and drops the files older stamps left for it. Written to a temporary
+## name and renamed, so a game or test running at the same time never reads half a file.
 func _store_meshes(tag: String, meshes: Array) -> void:
 	var path := _cache_path(tag)
 	if path == "":
 		return
 	DirAccess.make_dir_recursive_absolute(mesh_cache_dir)
-	for f in DirAccess.get_files_at(mesh_cache_dir):
-		if f.begins_with(tag + "_") and mesh_cache_dir.path_join(f) != path:
-			DirAccess.remove_absolute(mesh_cache_dir.path_join(f))
 	var res := Resource.new()
 	res.set_meta("meshes", meshes)
-	if ResourceSaver.save(res, path, ResourceSaver.FLAG_COMPRESS) != OK:
+	var tmp := "%s/%s_%s.tmp%d.res" % [mesh_cache_dir, tag, _stamp(tag), OS.get_process_id()]
+	if ResourceSaver.save(res, tmp) != OK or DirAccess.rename_absolute(tmp, path) != OK:
 		push_warning("Could not cache the open world's %s at %s" % [tag, path])
+		DirAccess.remove_absolute(tmp)
+		return
+	for f in DirAccess.get_files_at(mesh_cache_dir):
+		if f.begins_with(tag + "_") and ".tmp" not in f and mesh_cache_dir.path_join(f) != path:
+			DirAccess.remove_absolute(mesh_cache_dir.path_join(f))
 
 ## The steps in order, for the caller to run one per frame: [label, Callable].
 func steps() -> Array:
@@ -226,11 +284,16 @@ func build_terrain() -> void:
 		mat.set_shader_parameter("land_map", land)
 		mat.set_shader_parameter("land_origin", Vector2(map.tx0, map.ty0))
 		mat.set_shader_parameter("land_size", Vector2(land.get_width(), land.get_height()) * LAND_RES)
-	var cached := _cached_meshes("terrain")
-	if not cached.is_empty():
-		for mesh in cached:
-			_add_mesh(group, mesh, mat, "", false)
-		return
+	var meshes := _cached_meshes("terrain")
+	if meshes.is_empty():
+		meshes = _terrain_meshes()
+		_store_meshes("terrain", meshes)
+	for mesh in meshes:
+		_add_mesh(group, mesh, mat, "", false)
+
+## The terrain's meshes, one per TERRAIN_CHUNK square of quads (cached as the "terrain" step).
+func _terrain_meshes() -> Array:
+	var meshes: Array = []
 	var ex := map.extent
 	var nx := int(ex.size.x / TERRAIN_STEP) + 1
 	var ny := int(ex.size.y / TERRAIN_STEP) + 1
@@ -266,10 +329,8 @@ func build_terrain() -> void:
 					var a := j * w + i
 					# counter-clockwise seen from above (x east, z south): a, a+w, a+w+1, a+1
 					mb.quad(a, a + w, a + w + 1, a + 1)
-			var inst := _add_mesh(group, mb.commit(), mat)
-			inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	if mesh_cache_dir != "":
-		_store_meshes("terrain", group.get_children().map(func(n): return (n as MeshInstance3D).mesh))
+			meshes.append(mb.commit())
+	return meshes
 
 # ============================================================================================ water
 
@@ -355,6 +416,31 @@ func build_roads() -> void:
 	var bank_mat := _surface_material(GROUND_SHADER, "grass")
 	bank_mat.set_shader_parameter("base_color", Color(0.34, 0.5, 0.19))
 	bank_mat.set_shader_parameter("slope_rock", 0.0)
+	var pave_mat := ShaderMaterial.new()
+	pave_mat.shader = PAVEMENT_SHADER
+	pave_mat.set_shader_parameter("grain", WORLD.noise_texture("grain"))
+	SurfaceTextures.apply(pave_mat)
+	wet_materials.append(pave_mat)
+	night_materials.append(pave_mat)
+	var slots: Array = [mat, kerb_mat, deck_mat, bank_mat, pave_mat] # what STREET_* name
+	var recs := _cached_meshes("streets")
+	if recs.is_empty():
+		recs = _street_meshes()
+		_store_meshes("streets", recs)
+	for rec in recs:
+		_add_mesh(group, rec[0], slots[rec[1]], "", rec[2])
+
+## Material slots of the street step's meshes (build_roads' `slots`).
+const STREET_ROAD := 0
+const STREET_KERB := 1
+const STREET_DECK := 2
+const STREET_BANK := 3
+const STREET_PAVEMENT := 4
+
+## The street step's meshes as [mesh, material slot, casts shadows], cached as "streets": the carriageways with their
+## bridge decks and embankments, the junction patches and the pavements.
+func _street_meshes() -> Array:
+	var recs: Array = []
 	var road_b := {}
 	var kerb_b := {}
 	var deck_b := {}
@@ -380,7 +466,7 @@ func build_roads() -> void:
 			bank_b[c] = MeshBatch.new()
 		var mb: MeshBatch = road_b[c]
 		var half := map.road_w[ri] * 0.5
-		var lift := ROAD_LIFT + map.road_rank[ri] * 0.006
+		var lift := map.road_lift(ri)
 		var style := _style(ri)
 		var surf: float = [0.0, 0.5, 1.0][clampi(map.road_surface[ri], 0, 2)]
 		var lanes := float(map.road_lanes[ri]) / 8.0
@@ -526,29 +612,24 @@ func build_roads() -> void:
 							nrm3 = -nrm3
 						bb.flat_quad(e0, e1, b1, b0, nrm3, Color.WHITE)
 	for c in road_b:
-		_add_mesh(group, (road_b[c] as MeshBatch).commit(), mat, "", false)
+		recs.append([(road_b[c] as MeshBatch).commit(), STREET_ROAD, false])
 		if not (kerb_b[c] as MeshBatch).is_empty():
-			_add_mesh(group, (kerb_b[c] as MeshBatch).commit(), kerb_mat)
+			recs.append([(kerb_b[c] as MeshBatch).commit(), STREET_KERB, true])
 		if not (deck_b[c] as MeshBatch).is_empty():
-			_add_mesh(group, (deck_b[c] as MeshBatch).commit(), deck_mat)
+			recs.append([(deck_b[c] as MeshBatch).commit(), STREET_DECK, true])
 		if not (bank_b[c] as MeshBatch).is_empty():
-			_add_mesh(group, (bank_b[c] as MeshBatch).commit(), bank_mat)
-	_build_junction_patches(group, mat, node_width, node_roads)
-	var pave_mat := ShaderMaterial.new()
-	pave_mat.shader = PAVEMENT_SHADER
-	pave_mat.set_shader_parameter("grain", WORLD.noise_texture("grain"))
-	SurfaceTextures.apply(pave_mat)
-	wet_materials.append(pave_mat)
-	night_materials.append(pave_mat)
-	_build_pavements(group, pave_mat, bank_mat)
+			recs.append([(bank_b[c] as MeshBatch).commit(), STREET_BANK, true])
+	_build_junction_patches(recs, node_width, node_roads)
+	_build_pavements(recs)
+	return recs
 
 ## The pavements: TownMap's merged shapes, flat at kerb height over the street surface. A kerb face drops to the
 ## carriageway; every other edge runs down to the grass in a short verge (grass material), so the slab never stands
 ## proud of the lawn like a concrete barrier.
-func _build_pavements(group: Node3D, kerb_mat: Material, verge_mat: Material) -> void:
+func _build_pavements(recs: Array) -> void:
 	var batches := {}
 	var verges := {}
-	var top_y := ROAD_LIFT + 0.03 + KERB_H
+	var top_y := TownMap.PAVEMENT_TOP
 	for poly in map.pave_polys:
 		var c := _chunk_of(poly[0])
 		if not batches.has(c):
@@ -636,19 +717,19 @@ func _build_pavements(group: Node3D, kerb_mat: Material, verge_mat: Material) ->
 			var bb := Vector3(b.x, map.ground(b.x, b.y) - 0.2, b.y)
 			kb.flat_quad(ta, tb, bb, ba, Vector3(n2.x, 0.0, n2.y), col)
 	for c in batches:
-		_add_mesh(group, (batches[c] as MeshBatch).commit(), kerb_mat)
+		recs.append([(batches[c] as MeshBatch).commit(), STREET_PAVEMENT, true])
 	for c in verges:
-		_add_mesh(group, (verges[c] as MeshBatch).commit(), verge_mat)
+		recs.append([(verges[c] as MeshBatch).commit(), STREET_BANK, true])
 
 ## A disc of plain asphalt over each junction, so the meeting streets' ends and corners join up.
-func _build_junction_patches(group: Node3D, mat: Material, node_width: Dictionary, node_roads: Dictionary) -> void:
+func _build_junction_patches(recs: Array, node_width: Dictionary, node_roads: Dictionary) -> void:
 	var batches := {}
 	var node_lift := {}
 	var node_deck := {}
 	for ri in map.road_pts.size():
 		for m in map.road_marks[ri]:
 			var nid := str(m[1])
-			node_lift[nid] = maxf(float(node_lift.get(nid, 0.0)), ROAD_LIFT + map.road_rank[ri] * 0.006)
+			node_lift[nid] = maxf(float(node_lift.get(nid, 0.0)), map.road_lift(ri))
 			if map.road_z[ri].size() > int(m[0]):
 				node_deck[nid] = maxf(float(node_deck.get(nid, 0.0)), map.road_z[ri][int(m[0])])
 	for nid in node_roads:
@@ -677,23 +758,51 @@ func _build_junction_patches(group: Node3D, mat: Material, node_width: Dictionar
 			# angles grow clockwise seen from above (y south): centre, b, a is counter-clockwise -> reverse
 			mb.tri(center, a, b)
 	for c in batches:
-		_add_mesh(group, (batches[c] as MeshBatch).commit(), mat, "", false)
+		recs.append([(batches[c] as MeshBatch).commit(), STREET_ROAD, false])
 
 # ============================================================================================ railway
 
 func build_rail() -> void:
 	var group := _group("Railway")
+	var mat_v := StandardMaterial3D.new()
+	mat_v.vertex_color_use_as_albedo = true
+	mat_v.roughness = 0.95
+	var steel_mat := StandardMaterial3D.new()
+	steel_mat.vertex_color_use_as_albedo = true
+	steel_mat.metallic = 0.85
+	steel_mat.roughness = 0.35
+	var bank_mat := _surface_material(GROUND_SHADER, "grass")
+	bank_mat.set_shader_parameter("base_color", Color(0.34, 0.5, 0.19))
+	var slots: Array = [mat_v, steel_mat, bank_mat] # what RAIL_* name
+	var recs := _cached_meshes("rail")
+	if recs.is_empty():
+		recs = _rail_meshes()
+		_store_meshes("rail", recs)
+	for rec in recs:
+		var inst := _add_mesh(group, rec[0], slots[rec[1]], "", rec[2])
+		if rec[3] > 0.0:
+			inst.visibility_range_end = rec[3]
+	var rail_lines := []
+	for r in map.raw.get("rail", []):
+		rail_lines.append([TownMap._flat(r.p), PackedFloat32Array(r.get("z", []))])
+	_find_level_crossings(rail_lines)
+
+## Material slots of the railway step's meshes (build_rail's `slots`).
+const RAIL_BED := 0
+const RAIL_STEEL := 1
+const RAIL_BANK := 2
+
+## The railway step's meshes as [mesh, material slot, casts shadows, visibility range end (0: none)], cached as "rail".
+func _rail_meshes() -> Array:
 	var chunks := {} # chunk -> [ballast, steel, sleepers, bank]
 	var ballast_col := Color(0.42, 0.39, 0.36)
 	var rail_col := Color(0.33, 0.3, 0.28)
 	var sleeper_col := Color(0.28, 0.22, 0.17)
-	var rail_lines := []
 	for r in map.raw.get("rail", []):
 		var pts := TownMap._flat(r.p)
 		var zs := PackedFloat32Array(r.get("z", []))
 		var gauge := 0.75 if int(r.get("g", 0)) else 1.435
 		var bw := 2.4 if int(r.get("g", 0)) else 3.6
-		rail_lines.append([pts, zs])
 		var n := pts.size()
 		var acc := 0.0
 		for i in n - 1:
@@ -742,25 +851,15 @@ func build_rail() -> void:
 				if nn.y < 0.0:
 					nn = -nn
 				_bank_quad(bank, e0, e1, q[2], b0, nn, (a + b) * 0.5)
-	var mat_v := StandardMaterial3D.new()
-	mat_v.vertex_color_use_as_albedo = true
-	mat_v.roughness = 0.95
-	var steel_mat := StandardMaterial3D.new()
-	steel_mat.vertex_color_use_as_albedo = true
-	steel_mat.metallic = 0.85
-	steel_mat.roughness = 0.35
-	var bank_mat := _surface_material(GROUND_SHADER, "grass")
-	bank_mat.set_shader_parameter("base_color", Color(0.34, 0.5, 0.19))
+	var recs: Array = []
 	for ck in chunks:
 		var parts: Array = chunks[ck]
-		_add_mesh(group, (parts[0] as MeshBatch).commit(), mat_v, "", false)
-		var sl := _add_mesh(group, (parts[2] as MeshBatch).commit(), mat_v, "", false)
-		sl.visibility_range_end = 260.0
-		var rl := _add_mesh(group, (parts[1] as MeshBatch).commit(), steel_mat, "", false)
-		rl.visibility_range_end = 700.0
+		recs.append([(parts[0] as MeshBatch).commit(), RAIL_BED, false, 0.0])
+		recs.append([(parts[2] as MeshBatch).commit(), RAIL_BED, false, 260.0])
+		recs.append([(parts[1] as MeshBatch).commit(), RAIL_STEEL, false, 700.0])
 		if not (parts[3] as MeshBatch).is_empty():
-			_add_mesh(group, (parts[3] as MeshBatch).commit(), bank_mat)
-	_find_level_crossings(rail_lines)
+			recs.append([(parts[3] as MeshBatch).commit(), RAIL_BANK, true, 0.0])
+	return recs
 
 ## One slope of a railway embankment, with the cut a street's underpass makes through it (TownMap.in_tunnel_cut:
 ## between the wing walls, from foot to foot of the embankment) clipped out exactly, so the slope's cut edge lies in
@@ -943,8 +1042,8 @@ func build_tunnels() -> void:
 
 # ============================================================================================ buildings
 
-## How far (metres) the current building's walls stand out from their footprint; see _wall_pushes().
-var _push := 0.0
+## (How far a building's walls stand out from their footprint, _wall_pushes(), and its index travel through
+## _add_building as `push` and `bi`, so buildings can be built on several threads.)
 
 ## Terraced houses, garages and sheds put walls in one plane facing one way. Both draw, they z-fight, and each
 ## has its own window layout, so patches of facade flip with every camera move.
@@ -957,7 +1056,6 @@ var wall_plan_enabled := true ## tests switch it off to see the raw overlaps
 var log_walls := false ## tests set it to collect every wall rectangle drawn into wall_log
 var wall_log: Array = [] ## [building, a, b, bottom at a, bottom at b, top at a, top at b, outward] in map x, y
 var _cuts := {} ## building -> [[a, b, s0, s1, y0, y1, covered_to], ...] stretches of its wall edge a-b that are not drawn
-var _cur_bi := -1
 
 func _wall_pushes(skip := {}) -> Dictionary:
 	return _wall_plan(skip).push
@@ -1097,9 +1195,9 @@ func _edge_top(edge: Array, p: Vector2) -> float:
 
 ## The stretches of wall a-b (either direction) of the current building that _wall_plan() leaves out, as
 ## [[s0, s1, y0, y1 at s0, y1 at s1], ...] with s in metres from a: the wall is not drawn from y0 up to the line y1.
-func _wall_cuts_for(a: Vector2, b: Vector2) -> Array:
+func _wall_cuts_for(a: Vector2, b: Vector2, bi: int) -> Array:
 	var res: Array = []
-	var recs: Array = _cuts.get(_cur_bi, [])
+	var recs: Array = _cuts.get(bi, [])
 	if recs.is_empty():
 		return res
 	var ln := a.distance_to(b)
@@ -1113,25 +1211,25 @@ func _wall_cuts_for(a: Vector2, b: Vector2) -> Array:
 	return res
 
 ## True if the plan leaves the whole of wall a-b out from y_from to y_to because a taller building's wall covers it.
-func _parapet_covered(a: Vector2, b: Vector2, y_from: float, y_to: float) -> bool:
+func _parapet_covered(a: Vector2, b: Vector2, y_from: float, y_to: float, bi: int) -> bool:
 	var ln := a.distance_to(b)
-	for c in _wall_cuts_for(a, b):
+	for c in _wall_cuts_for(a, b, bi):
 		if float(c[0]) <= 0.05 and float(c[1]) >= ln - 0.05 and float(c[2]) <= y_from + 0.01 and float(c[3]) >= y_to - 0.01 and float(c[4]) >= y_to - 0.01:
 			return true
 	return false
 
-## One wall a-b (map x, y) from y_lo up to the heights top_a (at a) and top_b (at b): quads standing `_push` out of the
+## One wall a-b (map x, y) from y_lo up to the heights top_a (at a) and top_b (at b): quads standing `push` out of the
 ## plane, minus the stretches _wall_plan() cut. UV.x is metres from the wall's start, UV.y metres over `hi`; UV2 carries
 ## the seed, kind, the wall's length and (when the top is level) its height, which the shader turns into quoins and a
 ## cornice (see building.gdshader).
-func _wall(mb: MeshBatch, a: Vector2, b: Vector2, y_lo: float, top_a: float, top_b: float, out: Vector3, color: Color, hi: float, seed: float, code: float) -> void:
+func _wall(mb: MeshBatch, a: Vector2, b: Vector2, y_lo: float, top_a: float, top_b: float, out: Vector3, color: Color, hi: float, seed: float, code: float, bi := -1, push := 0.0) -> void:
 	var ln := a.distance_to(b)
 	if ln < 0.01:
 		return
 	var t := (b - a) / ln
 	var level := absf(top_a - top_b) < 0.05
 	var uv2 := Vector2(seed + (roundf((top_a - hi) * 10.0) if level else 0.0), code + 20.0 * minf(roundf(ln * 10.0), 4000.0))
-	var cuts := _wall_cuts_for(a, b)
+	var cuts := _wall_cuts_for(a, b, bi)
 	# slice the wall at every cut boundary; within a slice a cut either covers it or it does not
 	var marks := [0.0, ln]
 	for c in cuts:
@@ -1139,7 +1237,7 @@ func _wall(mb: MeshBatch, a: Vector2, b: Vector2, y_lo: float, top_a: float, top
 			if s > 0.01 and s < ln - 0.01:
 				marks.append(s)
 	marks.sort()
-	var po := out * _push
+	var po := out * push
 	for k in marks.size() - 1:
 		var s0: float = marks[k]
 		var s1: float = marks[k + 1]
@@ -1190,7 +1288,7 @@ func _wall(mb: MeshBatch, a: Vector2, b: Vector2, y_lo: float, top_a: float, top
 			mb.flat_quad(Vector3(pa.x, y0a, pa.y) + po, Vector3(pb.x, y0b, pb.y) + po, Vector3(pb.x, y1b, pb.y) + po, Vector3(pa.x, y1a, pa.y) + po, out, color,
 				[Vector2(s0, y0a - hi), Vector2(s1, y0b - hi), Vector2(s1, y1b - hi), Vector2(s0, y1a - hi)], uv2)
 			if log_walls:
-				wall_log.append([_cur_bi, Vector2(pa.x, pa.y) + Vector2(po.x, po.z), Vector2(pb.x, pb.y) + Vector2(po.x, po.z), y0a, y0b, y1a, y1b, Vector2(out.x, out.z)])
+				wall_log.append([bi, Vector2(pa.x, pa.y) + Vector2(po.x, po.z), Vector2(pb.x, pb.y) + Vector2(po.x, po.z), y0a, y0b, y1a, y1b, Vector2(out.x, out.z)])
 
 ## The outline walls of building bi as [a, b, outward unit normal on the map, absolute top height at a, at b]: the
 ## footprint's edges, or for a measured (LoD2) building the roof plane edges that no other plane shares, which is where
@@ -1244,6 +1342,7 @@ func _wall_edges(bi: int, ring: PackedVector2Array) -> Array:
 		for k in planes[pi].size():
 			poly.append(Vector3(planes[pi][k].x, heights[pi][k], planes[pi][k].y))
 		polys.append(poly)
+	var boxes := _plane_boxes(polys)
 	for pi in polys.size():
 		var poly := polys[pi]
 		var wind := 1.0 if ring_area(planes[pi]) > 0.0 else -1.0
@@ -1254,37 +1353,85 @@ func _wall_edges(bi: int, ring: PackedVector2Array) -> Array:
 			if e2.length() < 0.05:
 				continue
 			var out2 := Vector2(e2.y, -e2.x).normalized() * wind
-			for run in _open_runs(polys, pi, a3, c3, out2):
+			for run in _open_runs(polys, pi, a3, c3, out2, boxes):
 				var p0 := a3.lerp(c3, float(run[0]))
 				var p1 := a3.lerp(c3, float(run[1]))
 				res.append([Vector2(p0.x, p0.z), Vector2(p1.x, p1.z), out2, ground_hi + p0.y, ground_hi + p1.y])
 	return res
 
-## True if point p (x, height, y) on an edge of plane pi lies on an edge of another plane that continues the roof
-## past it (on the side out2, the edge's outward direction on the map): a ridge, hip or valley, not an outer edge.
-static func _on_other_plane_edge(polys: Array[PackedVector3Array], pi: int, p: Vector3, out2: Vector2) -> bool:
-	var beyond := Vector2(p.x, p.z) + out2 * 0.2
+## The 3D box of every plane (a hit test for _open_runs needs only the planes whose box meets an edge's).
+static func _plane_boxes(polys: Array[PackedVector3Array]) -> Array[AABB]:
+	var boxes: Array[AABB] = []
+	for poly in polys:
+		var lo := poly[0]
+		var hi := poly[0]
+		for q in poly:
+			lo = lo.min(q)
+			hi = hi.max(q)
+		boxes.append(AABB(lo, hi - lo))
+	return boxes
+
+## The edges of the other planes that come within 0.15 m of the edge a-b, in plane then edge order, as flat
+## [plane, from, to] triples: the only edges a point on a-b can lie on (see _on_other_plane_edge).
+static func _edge_candidates(polys: Array[PackedVector3Array], boxes: Array[AABB], pi: int, a: Vector3, b: Vector3) -> Array:
+	var lo := a.min(b) - Vector3.ONE * 0.15
+	var span := a.max(b) + Vector3.ONE * 0.15 - lo
+	var reach := AABB(lo, span)
+	var cands: Array = []
 	for pj in polys.size():
-		if pj == pi:
+		if pj == pi or not boxes[pj].intersects(reach):
 			continue
 		var other := polys[pj]
-		for m in other.size():
-			if Geometry3D.get_closest_point_to_segment(p, other[m], other[(m + 1) % other.size()]).distance_to(p) < 0.15:
+		var m := other.size()
+		for k in m:
+			var e0 := other[k]
+			var e1 := other[(k + 1) % m]
+			var elo := e0.min(e1)
+			if elo.x > lo.x + span.x or elo.y > lo.y + span.y or elo.z > lo.z + span.z:
+				continue
+			var ehi := e0.max(e1)
+			if ehi.x < lo.x or ehi.y < lo.y or ehi.z < lo.z:
+				continue
+			cands.append(pj)
+			cands.append(e0)
+			cands.append(e1)
+	return cands
+
+## True if point p (x, height, y) on an edge of plane pi lies on an edge of another plane that continues the roof
+## past it (on the side out2, the edge's outward direction on the map): a ridge, hip or valley, not an outer edge.
+## `cands` is _edge_candidates() of the edge p is on; `flats` caches the planes' outlines on the map.
+static func _on_other_plane_edge(polys: Array[PackedVector3Array], cands: Array, flats: Dictionary, p: Vector3, out2: Vector2) -> bool:
+	var beyond := Vector2(p.x, p.z) + out2 * 0.2
+	var skip := -1
+	for c in range(0, cands.size(), 3):
+		var pj: int = cands[c]
+		if pj == skip:
+			continue
+		if Geometry3D.get_closest_point_to_segment(p, cands[c + 1], cands[c + 2]).distance_to(p) < 0.15:
+			if not flats.has(pj):
 				var flat := PackedVector2Array()
-				for q in other:
+				for q in polys[pj]:
 					flat.append(Vector2(q.x, q.z))
-				if Geometry2D.is_point_in_polygon(beyond, flat):
-					return true
-				break
+				flats[pj] = flat
+			if Geometry2D.is_point_in_polygon(beyond, flats[pj]):
+				return true
+			skip = pj # only the first of a plane's edges near p counts
 	return false
 
 ## The stretches of plane pi's edge a-b that no other plane shares, as [[from, to], ...] fractions of a-b, where
 ## _add_lod2_roof stands walls. Planes need not share corners, so an edge can be a ridge or valley for part of its
 ## length and an outer wall for the rest; judging it by its midpoint alone left that rest open.
-static func _open_runs(polys: Array[PackedVector3Array], pi: int, a: Vector3, b: Vector3, out2: Vector2) -> Array:
+## boxes: _plane_boxes(polys), when the caller has it (one building's edges share it).
+static func _open_runs(polys: Array[PackedVector3Array], pi: int, a: Vector3, b: Vector3, out2: Vector2, boxes: Array[AABB] = []) -> Array:
+	if boxes.is_empty():
+		boxes = _plane_boxes(polys)
+	var cands := _edge_candidates(polys, boxes, pi, a, b)
+	if cands.is_empty():
+		return [[0.0, 1.0]]
+	var flats := {}
 	var probe: Array[bool] = []
 	for f in [0.05, 0.25, 0.5, 0.75, 0.95]:
-		probe.append(_on_other_plane_edge(polys, pi, a.lerp(b, f), out2))
+		probe.append(_on_other_plane_edge(polys, cands, flats, a.lerp(b, f), out2))
 	if not probe.has(true):
 		return [[0.0, 1.0]]
 	# (all five on another plane's edge is not enough to skip the samples: a metre of open edge between two of them
@@ -1292,7 +1439,7 @@ static func _open_runs(polys: Array[PackedVector3Array], pi: int, a: Vector3, b:
 	var steps := maxi(4, ceili(Vector2(a.x, a.z).distance_to(Vector2(b.x, b.z)) / 0.5))
 	var open: Array[bool] = []
 	for s in steps:
-		open.append(not _on_other_plane_edge(polys, pi, a.lerp(b, (float(s) + 0.5) / float(steps)), out2))
+		open.append(not _on_other_plane_edge(polys, cands, flats, a.lerp(b, (float(s) + 0.5) / float(steps)), out2))
 	# each change between two samples is narrowed down by bisection: a step in the roof, where a higher plane's edge
 	# runs over a lower one's and they meet at one corner, otherwise lost up to a whole sample (0.5 m) of wall there,
 	# a sliver of sky between the planes
@@ -1305,7 +1452,7 @@ static func _open_runs(polys: Array[PackedVector3Array], pi: int, a: Vector3, b:
 		var hi := (float(s) + 0.5) / float(steps)
 		for _i in 6:
 			var mid := (lo + hi) * 0.5
-			if (not _on_other_plane_edge(polys, pi, a.lerp(b, mid), out2)) == open[s - 1]:
+			if (not _on_other_plane_edge(polys, cands, flats, a.lerp(b, mid), out2)) == open[s - 1]:
 				lo = mid
 			else:
 				hi = mid
@@ -1330,12 +1477,15 @@ func build_buildings() -> void:
 	mat.set_shader_parameter("frame_color", Color(0.95, 0.94, 0.9))
 	wet_materials.append(mat)
 	night_materials.append(mat)
-	var cached := _cached_meshes("buildings")
-	if not cached.is_empty():
-		for mesh in cached:
-			_add_mesh(group, mesh, mat)
-		return
-	var batches := {}
+	var meshes := _cached_meshes("buildings")
+	if meshes.is_empty():
+		meshes = _building_meshes()
+		_store_meshes("buildings", meshes)
+	for mesh in meshes:
+		_add_mesh(group, mesh, mat)
+
+## The buildings' meshes, one per CHUNK square (cached as the "buildings" step).
+func _building_meshes() -> Array:
 	var shafts := shaft_towers()
 	var not_drawn := {} # landmark models and shaft houses: their walls hide nothing behind them
 	for bi in map.buildings.size():
@@ -1344,6 +1494,8 @@ func build_buildings() -> void:
 		if (extra.has("lm") and has_model(String(extra.lm))) or shafts.hidden.has(bi):
 			not_drawn[bi] = true
 	var pushes := _wall_pushes(not_drawn)
+	# the buildings of each 256 m chunk go into one mesh
+	var batches := {}
 	for bi in map.buildings.size():
 		var b: Array = map.buildings[bi]
 		var ring := map.bld_rings[bi]
@@ -1357,16 +1509,11 @@ func build_buildings() -> void:
 		var c := _chunk_of(centre)
 		if not batches.has(c):
 			batches[c] = MeshBatch.new(true, true)
-		_push = float(pushes.get(bi, 0.0))
-		_cur_bi = bi
-		_add_building(batches[c], ring, String(b[0]), float(b[1]), String(b[3]), centre, extra)
-	_push = 0.0
-	_cur_bi = -1
+		_add_building(batches[c], ring, String(b[0]), float(b[1]), String(b[3]), centre, extra, bi, float(pushes.get(bi, 0.0)))
 	var built: Array = []
 	for c in batches:
-		built.append(_add_mesh(group, (batches[c] as MeshBatch).commit(), mat).mesh)
-	if mesh_cache_dir != "":
-		_store_meshes("buildings", built)
+		built.append((batches[c] as MeshBatch).commit())
+	return built
 
 ## The baked detail textures (tools/build_building_textures.py) building.gdshader multiplies onto its facades and roofs.
 static func apply_building_textures(mat: ShaderMaterial) -> void:
@@ -1441,7 +1588,7 @@ static func ring_area(ring: PackedVector2Array) -> float:
 		a += p.x * q.y - q.x * p.y
 	return a * 0.5
 
-func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height: float, roof_shape: String, centre: Vector2, extra: Dictionary = {}) -> void:
+func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height: float, roof_shape: String, centre: Vector2, extra: Dictionary = {}, bi := -1, push := 0.0) -> void:
 	var r := ring.duplicate()
 	# counter-clockwise seen from above (x east, z south) means negative shoelace area here
 	if ring_area(r) > 0.0:
@@ -1488,7 +1635,7 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 		# (a tall wall with no gable over it): build the OSM walls and a roof of our own instead
 		var mark := mb.mark()
 		if _lod2_cover(roof_surfaces, r) >= LOD2_MIN_COVER \
-				and _add_lod2_roof(mb, roof_surfaces, hi, base, roof, wall, uv2_roof, uv2_wall):
+				and _add_lod2_roof(mb, roof_surfaces, hi, base, roof, wall, uv2_roof, uv2_wall, bi, push):
 			return
 		mb.rollback(mark) # a roof given up half way leaves nothing behind
 		roof_surfaces = [] # unusable planes: the OSM walls and a roof of our own
@@ -1506,7 +1653,7 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 		# r runs clockwise on the map (negative shoelace area), so the outside is always on this side of a-b; the
 		# centre of a concave (L, U, T) footprint can lie outside it and would turn walls inward, culled from outside
 		var out := Vector3(-(b.y - a.y), 0.0, b.x - a.x).normalized()
-		_wall(mb, a, b, base, eave, eave, out, wall, hi, seed, float(code))
+		_wall(mb, a, b, base, eave, eave, out, wall, hi, seed, float(code), bi, push)
 	if pitched and roof_surfaces.is_empty():
 		var cen: Vector2 = rect[0]
 		var ax: Vector2 = rect[1]
@@ -1586,15 +1733,15 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 				var t := (b - a).normalized()
 				var inn := Vector2(t.y, -t.x) # inward, from the ring's winding (see the walls above)
 				var ai := a + inn * 0.3
-				var bi := b + inn * 0.3
-				mb.flat_quad(Vector3(ai.x, eave, ai.y), Vector3(bi.x, eave, bi.y), Vector3(bi.x, eave + parapet, bi.y),
+				var bj := b + inn * 0.3
+				mb.flat_quad(Vector3(ai.x, eave, ai.y), Vector3(bj.x, eave, bj.y), Vector3(bj.x, eave + parapet, bj.y),
 					Vector3(ai.x, eave + parapet, ai.y), Vector3(inn.x, 0.0, inn.y), wall.darkened(0.1),
 					[Vector2.ZERO, Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)], Vector2(seed, 3.0))
-				mb.flat_quad(Vector3(a.x, eave + parapet, a.y), Vector3(b.x, eave + parapet, b.y), Vector3(bi.x, eave + parapet, bi.y),
+				mb.flat_quad(Vector3(a.x, eave + parapet, a.y), Vector3(b.x, eave + parapet, b.y), Vector3(bj.x, eave + parapet, bj.y),
 					Vector3(ai.x, eave + parapet, ai.y), Vector3.UP, wall.darkened(0.2),
 					[Vector2.ZERO, Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)], Vector2(seed, 3.0))
 				var out := -inn
-				if _parapet_covered(a, b, eave, eave + parapet):
+				if _parapet_covered(a, b, eave, eave + parapet, bi):
 					continue # a taller neighbour's wall stands in this plane right over it
 				mb.flat_quad(Vector3(a.x, eave, a.y), Vector3(b.x, eave, b.y), Vector3(b.x, eave + parapet, b.y),
 					Vector3(a.x, eave + parapet, a.y), Vector3(out.x, 0.0, out.y), wall,
@@ -1640,7 +1787,7 @@ static func _lod2_cover(faces: Array, ring: PackedVector2Array) -> float:
 ## A measured (GUGiK LoD2) roof: each plane triangulated in its own plane, and walls from the ground up to
 ## every roof edge that no other plane shares, so the walls meet the eaves and gables of the roof exactly.
 ## False if the planes are unusable (the caller builds the OSM walls and roof instead).
-func _add_lod2_roof(mb: MeshBatch, faces: Array, hi: float, base: float, roof: Color, wall: Color, uv2_roof: Vector2, uv2_wall: Vector2) -> bool:
+func _add_lod2_roof(mb: MeshBatch, faces: Array, hi: float, base: float, roof: Color, wall: Color, uv2_roof: Vector2, uv2_wall: Vector2, bi := -1, push := 0.0) -> bool:
 	var polys: Array[PackedVector3Array] = []
 	for face in faces:
 		if not face is Array or face.size() < 9:
@@ -1701,6 +1848,7 @@ func _add_lod2_roof(mb: MeshBatch, faces: Array, hi: float, base: float, roof: C
 	if drawn == 0:
 		return false
 	# outline edges: the stretches of a plane's edge that no other plane's edge runs along (not ridges, hips or valleys)
+	var boxes := _plane_boxes(polys)
 	for pi in polys.size():
 		var poly := polys[pi]
 		# the plane's winding on the map says which side of each edge is outside (its centre can lie outside a concave plane)
@@ -1718,10 +1866,10 @@ func _add_lod2_roof(mb: MeshBatch, faces: Array, hi: float, base: float, roof: C
 				continue # a vertical edge: the walls either side carry it
 			var t := (b2 - a2) / ln
 			var out := Vector3(t.y, 0.0, -t.x) * wind
-			for run in _open_runs(polys, pi, a, b, Vector2(out.x, out.z)):
+			for run in _open_runs(polys, pi, a, b, Vector2(out.x, out.z), boxes):
 				var p0 := a.lerp(b, float(run[0]))
 				var p1 := a.lerp(b, float(run[1]))
-				_wall(mb, Vector2(p0.x, p0.z), Vector2(p1.x, p1.z), base, p0.y, p1.y, out, wall, hi, uv2_wall.x, uv2_wall.y)
+				_wall(mb, Vector2(p0.x, p0.z), Vector2(p1.x, p1.z), base, p0.y, p1.y, out, wall, hi, uv2_wall.x, uv2_wall.y, bi, push)
 	return true
 
 # ============================================================================================ trees
@@ -1749,44 +1897,94 @@ func build_trees() -> void:
 	var quad := QuadMesh.new()
 	quad.size = Vector2(1.0, 1.0)
 	quad.center_offset = Vector3(0.0, 0.5, 0.0)
-	var cached := _cached_meshes("trees")
-	if not cached.is_empty():
-		for rec in cached: # [species ("" for the far cards), instance buffer, count]
-			_add_trees(group, rec[0], rec[1], rec[2], meshes, foliage, quad, impostor_mat)
-		return
+	var recs := _cached_meshes("trees")
+	if recs.is_empty():
+		recs = _tree_records(meshes)
+		_store_meshes("trees", recs)
+	for rec in recs: # [species ("" for the far cards), instance buffer, count]
+		_add_trees(group, rec[0], rec[1], rec[2], meshes, foliage, quad, impostor_mat)
+
+## The trees as instance buffers: one record [species, buffer, count] per TREE_CHUNK cell and species (the full meshes),
+## then one with species "" per IMPOSTOR_CHUNK cell (the far cards). Cached as "trees". `meshes` says which species
+## exist; the rest are planted as Broadleaf. hash2 and _pick are inlined: this runs 750,000 times.
+func _tree_records(meshes: Dictionary) -> Array:
 	var trees: Array = map.raw.get("trees", [])
+	# per kind: the species and the cumulative share at which _pick(KIND_SPECIES[kind], r) takes each
+	var kind_names := {}
+	var kind_cum := {}
+	for kind in KIND_SPECIES:
+		var weights: Dictionary = KIND_SPECIES[kind]
+		var total := 0.0
+		for k in weights:
+			total += weights[k]
+		var names := []
+		var cum := []
+		var acc := 0.0
+		for k in weights:
+			acc += weights[k] / total
+			names.append(k if meshes.has(k) else "Broadleaf")
+			cum.append(acc)
+		kind_names[kind] = names
+		kind_cum[kind] = cum
+	var dims := {}
+	var leaf := {}
+	for species in ["Pine", "Spruce", "Broadleaf", "Birch", "Poplar"]:
+		dims[species] = _tree_dims(species)
+		leaf[species] = _species_colour(species)
 	# chunk -> species -> [transforms, tints]; and chunk -> impostor [transforms, tints]
 	var near := {}
 	var far := {}
+	var s3 := 3.0 * 37.719 # hash2's salt terms
+	var s5 := 5.0 * 37.719
+	var s6 := 6.0 * 37.719
+	var s7 := 7.0 * 37.719
+	var s8 := 8.0 * 37.719
+	var s9 := 9.0 * 37.719
+	var s10 := 10.0 * 37.719
 	for k in range(0, trees.size(), 3):
 		var x: float = trees[k]
 		var y: float = trees[k + 1]
 		var kind := int(trees[k + 2])
-		var r := hash2(x, y, 3.0)
-		var species := _pick(KIND_SPECIES.get(kind, KIND_SPECIES[0]), r)
-		if not meshes.has(species):
-			species = "Broadleaf"
-		var size := (0.72 + hash2(x, y, 5.0) * 0.5) * float(KIND_SCALE.get(kind, 1.0))
-		var tall := size * (0.9 + hash2(x, y, 7.0) * 0.25)
+		var base := x * 12.9898 + y * 78.233
+		var v := sin(base + s3) * 43758.5453
+		var r := v - floorf(v)
+		var sel := kind if kind_cum.has(kind) else 0 # (an unknown kind plants as kind 0 but keeps its own scale)
+		var cum: Array = kind_cum[sel]
+		var names: Array = kind_names[sel]
+		var species: String = names[0]
+		for q in cum.size():
+			if r <= cum[q]:
+				species = names[q]
+				break
+		v = sin(base + s5) * 43758.5453
+		var size := (0.72 + (v - floorf(v)) * 0.5) * float(KIND_SCALE.get(kind, 1.0))
+		v = sin(base + s7) * 43758.5453
+		var tall := size * (0.9 + (v - floorf(v)) * 0.25)
 		var g := map.ground(x, y) - 0.25
-		var c := _chunk_of(Vector2(x, y), TREE_CHUNK)
-		var cf := _chunk_of(Vector2(x, y), IMPOSTOR_CHUNK)
+		var at := Vector2(x, y) # (single precision, as _chunk_of(Vector2(x, y)) cuts it)
+		var c := Vector2i(floori(at.x / TREE_CHUNK), floori(at.y / TREE_CHUNK))
+		var cf := Vector2i(floori(at.x / IMPOSTOR_CHUNK), floori(at.y / IMPOSTOR_CHUNK))
 		if not near.has(c):
 			near[c] = {}
 		if not far.has(cf):
 			far[cf] = [[], []]
 		if not near[c].has(species):
 			near[c][species] = [[], []]
-		var basis := Basis(Vector3.UP, hash2(x, y, 6.0) * TAU).scaled(Vector3(size, tall, size))
-		var tint := 0.82 + hash2(x, y, 8.0) * 0.3
-		var col := Color(tint * (0.94 + hash2(x, y, 9.0) * 0.12), tint, tint * (0.88 + hash2(x, y, 10.0) * 0.16))
-		near[c][species][0].append(Transform3D(basis, Vector3(x, g, y)))
+		v = sin(base + s6) * 43758.5453
+		var basis := Basis(Vector3.UP, (v - floorf(v)) * TAU).scaled(Vector3(size, tall, size))
+		v = sin(base + s8) * 43758.5453
+		var tint := 0.82 + (v - floorf(v)) * 0.3
+		v = sin(base + s9) * 43758.5453
+		var cr := tint * (0.94 + (v - floorf(v)) * 0.12)
+		v = sin(base + s10) * 43758.5453
+		var col := Color(cr, tint, tint * (0.88 + (v - floorf(v)) * 0.16))
+		var origin := Vector3(x, g, y)
+		near[c][species][0].append(Transform3D(basis, origin))
 		near[c][species][1].append(col)
-		var dims := _tree_dims(species)
-		var imp_basis := Basis.from_scale(Vector3(dims.x * 2.0 * size, dims.y * tall, 1.0))
-		far[cf][0].append(Transform3D(imp_basis, Vector3(x, g, y)))
-		var leaf := _species_colour(species)
-		far[cf][1].append(Color(leaf.r * tint, leaf.g * tint, leaf.b * tint, 1.0))
+		var d: Vector2 = dims[species]
+		far[cf][0].append(Transform3D(Basis.from_scale(Vector3(d.x * 2.0 * size, d.y * tall, 1.0)), origin))
+		var lc: Color = leaf[species]
+		far[cf][1].append(Color(lc.r * tint, lc.g * tint, lc.b * tint, 1.0))
 	var recs: Array = []
 	for c in near:
 		for species in near[c]:
@@ -1794,10 +1992,7 @@ func build_trees() -> void:
 			recs.append([species, instance_buffer(lists[0], lists[1]), lists[0].size()])
 	for cf in far:
 		recs.append(["", instance_buffer(far[cf][0], far[cf][1]), far[cf][0].size()])
-	for rec in recs:
-		_add_trees(group, rec[0], rec[1], rec[2], meshes, foliage, quad, impostor_mat)
-	if mesh_cache_dir != "":
-		_store_meshes("trees", recs)
+	return recs
 
 ## One chunk's trees of one species (full meshes near the camera), or with species "" one big chunk's far cards
 ## (few draw calls; the shader drops the cards near the camera, where the real trees stand).
@@ -1868,6 +2063,29 @@ func _doubled_fences(walls: Array) -> Dictionary:
 func build_fences() -> void:
 	var group := _group("Garden Fences")
 	var fence := _model("Fence", _fallback_fence)
+	var recs := _cached_meshes("fences")
+	if recs.is_empty():
+		recs = _fence_records(fence)
+		_store_meshes("fences", recs)
+	var cells: Array = recs[0] # the panels
+	var panels := _multimesh_cells(group, fence[0], cells, false, null, 280.0)
+	for k in panels.size():
+		panels[k].name = "PlotFencePanels" if k == 0 else "PlotFencePanels%d" % k
+	# Low shrubs on selected boundaries soften the hard edges and make garden rows read from the street.
+	if recs[1] != null:
+		_multimesh_cells(group, recs[1], recs[2], false, null, 320.0)
+	# Simple dark soil rectangles inside home gardens and the mapped allotments.
+	var bed_mesh := BoxMesh.new()
+	bed_mesh.size = Vector3.ONE
+	var soil := StandardMaterial3D.new()
+	soil.albedo_color = Color(0.22, 0.14, 0.075)
+	soil.roughness = 1.0
+	_multimesh_cells(group, bed_mesh, recs[3], false, soil, 240.0)
+
+## The fences step's instance data, cached as "fences": [panel cells, the shrub mesh (null: none), shrub cells, bed
+## cells], each a list of [instance buffer, count] per SMALL_CHUNK cell (_chunk_cells). `fence` is the panel model
+## ([mesh, its transform in town.glb]).
+func _fence_records(fence: Array) -> Array:
 	var xfs := []
 	var walls: Array = map.raw.get("fences", [])
 	var doubled := _doubled_fences(walls)
@@ -1893,11 +2111,15 @@ func build_fences() -> void:
 			var scale_y := 0.68 if style == 2 else (0.9 if style == 3 else 1.0)
 			var basis := Basis(Vector3.UP, atan2(-d.y, d.x)).scaled_local(Vector3(span / 2.5, scale_y, 1.0)) # the panel runs along +X
 			xfs.append(Transform3D(basis, Vector3(p.x, map.ground(p.x, p.y), p.y)))
-	_place_many(group, "PlotFencePanels", fence, xfs, [], null, 280.0)
-	# Low shrubs on selected boundaries soften the hard edges and make garden rows read from the street.
-	var roadside: Node = WORLD_ASSETS._load_model("res://models/roadside.glb")
+	var local: Transform3D = fence[1]
+	var placed := []
+	for xf in xfs:
+		placed.append(xf * local)
+	var panel_cells := _chunk_cells(placed, [])
+	var roadside: Node = WORLD_ASSETS._load_model(ROADSIDE_MODELS)
+	var bush: Mesh = null
+	var bush_cells: Array = []
 	if roadside:
-		var bush: Mesh = null
 		for mi in roadside.find_children("BushCluster", "MeshInstance3D", true, false):
 			bush = (mi as MeshInstance3D).mesh
 			break
@@ -1915,20 +2137,14 @@ func build_fences() -> void:
 					var p := a + d * ((float(j) + 0.5) / maxf(1.0, float(steps))) + Vector2(-d.y, d.x).normalized() * 0.9
 					var s := 0.7 + hash2(p.x, p.y, 17.0) * 0.45
 					bushes.append(Transform3D(Basis(Vector3.UP, hash2(p.x, p.y, 19.0) * TAU).scaled(Vector3.ONE * s), Vector3(p.x, map.ground(p.x, p.y), p.y)))
-			_multimesh_chunked(group, bush, bushes, [], null, 320.0)
+			bush_cells = _chunk_cells(bushes, [])
 		roadside.free()
-	# Simple dark soil rectangles inside home gardens and the mapped allotments.
-	var bed_mesh := BoxMesh.new()
-	bed_mesh.size = Vector3.ONE
-	var soil := StandardMaterial3D.new()
-	soil.albedo_color = Color(0.22, 0.14, 0.075)
-	soil.roughness = 1.0
 	var beds := []
 	for bed in map.raw.get("garden_beds", []):
 		var p := Vector2(float(bed[0]), float(bed[1]))
 		var basis := Basis(Vector3.UP, float(bed[2])).scaled_local(Vector3(float(bed[3]), 0.12, float(bed[4])))
 		beds.append(Transform3D(basis, Vector3(p.x, map.ground(p.x, p.y) + 0.05, p.y)))
-	_multimesh_chunked(group, bed_mesh, beds, [], soil, 240.0)
+	return [panel_cells, bush, bush_cells, _chunk_cells(beds, [])]
 
 func _fallback_fence() -> Mesh:
 	var mesh := BoxMesh.new()
@@ -2066,6 +2282,10 @@ func _place_many(parent: Node3D, name: String, mesh_xf: Array, xfs: Array, tints
 ## centre: a single town-wide MultiMesh of small things (fence panels, parked cars) is drawn whole whenever any
 ## of it is in view. Things show at least range_end - 91 m away (half a cell's diagonal).
 func _multimesh_chunked(parent: Node3D, mesh: Mesh, xfs: Array, tints: Array, mat: Material, range_end: float) -> Array[MultiMeshInstance3D]:
+	return _multimesh_cells(parent, mesh, _chunk_cells(xfs, tints), not tints.is_empty(), mat, range_end)
+
+## The instances split into SMALL_CHUNK cells, each as [instance buffer (instance_buffer), count].
+func _chunk_cells(xfs: Array, tints: Array) -> Array:
 	var cells := {}
 	for i in xfs.size():
 		var o: Vector3 = (xfs[i] as Transform3D).origin
@@ -2075,9 +2295,16 @@ func _multimesh_chunked(parent: Node3D, mesh: Mesh, xfs: Array, tints: Array, ma
 		cells[c][0].append(xfs[i])
 		if not tints.is_empty():
 			cells[c][1].append(tints[i])
-	var out: Array[MultiMeshInstance3D] = []
+	var out := []
 	for c in cells:
-		var mmi := _multimesh(parent, mesh, cells[c][0], cells[c][1], mat)
+		out.append([instance_buffer(cells[c][0], cells[c][1]), cells[c][0].size()])
+	return out
+
+## One MultiMeshInstance3D per cell of _chunk_cells(), drawn within range_end.
+func _multimesh_cells(parent: Node3D, mesh: Mesh, cells: Array, colors: bool, mat: Material, range_end: float) -> Array[MultiMeshInstance3D]:
+	var out: Array[MultiMeshInstance3D] = []
+	for cell in cells:
+		var mmi := _multimesh_buffer(parent, mesh, cell[0], cell[1], colors, mat)
 		mmi.visibility_range_end = range_end
 		mmi.visibility_range_end_margin = 20.0
 		_ranged.append([mmi, range_end])
@@ -2185,7 +2412,12 @@ func _build_lamps(group: Node3D) -> void:
 		# the arm reaches over the road: the model's front (-Z) points at it
 		var basis := Basis(Vector3.UP, atan2(-face.x, -face.y))
 		xfs.append(Transform3D(basis, Vector3(p.x, g, p.y)))
-		lamp_spots.append(Vector3(p.x + face.x * 1.6, g + 8.6, p.y + face.y * 1.6))
+		var spot := Vector3(p.x + face.x * 1.6, g + 8.6, p.y + face.y * 1.6)
+		var cell := Vector2i(floori(spot.x / LAMP_CELL), floori(spot.z / LAMP_CELL))
+		var in_cell: PackedInt32Array = _lamp_cells.get(cell, PackedInt32Array())
+		in_cell.append(lamp_spots.size())
+		_lamp_cells[cell] = in_cell
+		lamp_spots.append(spot)
 		lamp_dirs.append(Vector3(face.x, 0.0, face.y))
 	lamp_material = StandardMaterial3D.new()
 	lamp_material.albedo_color = Color(0.95, 0.92, 0.82)
@@ -2194,7 +2426,40 @@ func _build_lamps(group: Node3D) -> void:
 	lamp_material.emission_energy_multiplier = 0.0
 	var mesh_xf := _model("Streetlamp", _fallback_lamp)
 	var lamp_mesh := _with_surface_material(mesh_xf[0], "Lamp", lamp_material)
-	_place_many(group, "Streetlamps", [lamp_mesh, mesh_xf[1]], xfs, [], null, 900.0)
+	_place_many(group, "Streetlamps", [lamp_mesh, mesh_xf[1]], xfs, [], null, LAMP_RANGE)
+
+## The up to count lamp heads nearest to (x, z) within radius metres, nearest first, from the lamp grid: a few dozen
+## candidates however many lamps the town has (the open world's real lights follow the car through this).
+func lamps_near(x: float, z: float, count: int, radius: float) -> PackedVector3Array:
+	var best_d := PackedFloat32Array()
+	var best_i := PackedInt32Array()
+	var r2 := radius * radius
+	var c0 := Vector2i(floori((x - radius) / LAMP_CELL), floori((z - radius) / LAMP_CELL))
+	var c1 := Vector2i(floori((x + radius) / LAMP_CELL), floori((z + radius) / LAMP_CELL))
+	for cx in range(c0.x, c1.x + 1):
+		for cz in range(c0.y, c1.y + 1):
+			var ids = _lamp_cells.get(Vector2i(cx, cz))
+			if ids == null:
+				continue
+			for k in ids:
+				var q := lamp_spots[k]
+				var d := (q.x - x) * (q.x - x) + (q.z - z) * (q.z - z)
+				if d >= r2:
+					continue
+				if best_d.size() >= count and d >= best_d[best_d.size() - 1]:
+					continue
+				var at := best_d.size()
+				while at > 0 and best_d[at - 1] > d:
+					at -= 1
+				best_d.insert(at, d)
+				best_i.insert(at, k)
+				if best_d.size() > count:
+					best_d.resize(count)
+					best_i.resize(count)
+	var out := PackedVector3Array()
+	for k in best_i:
+		out.append(lamp_spots[k])
+	return out
 
 ## A copy of mesh whose surfaces with the material named material_name use mat instead (a MultiMesh can't
 ## override one surface's material per instance node, so the mesh itself carries it).

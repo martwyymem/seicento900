@@ -110,19 +110,27 @@ func respawn() -> void:
 	var lane := 0.0 if map.road_oneway[near.road] else map.road_w[near.road] * 0.22
 	place(near.pos + side * lane, h)
 	# on the road it was put back on (the deck of a bridge, not the street under it)
-	z = map.ground(car.x, car.y) + map.deck_at(int(near.road), int(near.i), float(near.t))
+	z = map.ground(car.x, car.y) + map.deck_at(int(near.road), int(near.i), float(near.t)) + map.road_lift(int(near.road))
 	road = map.road_at(car.x, car.y, z)
 
 func speed_kmh() -> float:
 	return absf(car.speed) * 3.6
 
-## Height the car would ride at on (x, y), keeping to the deck nearest its current height.
-func support(x: float, y: float) -> float:
+## Height the car would ride at on (x, y), keeping to the deck nearest its current height. Streets and pavements are
+## drawn road_lift / PAVEMENT_TOP over the ground and the tyres stand on that. lifted = false gives the surface without
+## that lift (the ground, a deck, a kerb KERB_H high): the slope under the car and so gravity, unchanged by the lift's
+## ramp at a street's edge.
+func support(x: float, y: float, lifted := true) -> float:
 	var g := map.ground(x, y)
 	# the drawn terrain: ponds and river beds slope down their banks (a dyke track through the fishponds stays up)
 	var lowest := map.road_at(x, y)
 	if lowest.is_empty():
-		g = map.terrain(x, y) + map.kerb_at(x, y)
+		g = map.terrain(x, y) + (map.pave_top_at(x, y) if lifted else map.kerb_at(x, y))
+	var g_bare := g # what a raised road's deck stands on
+	if lifted and not lowest.is_empty() and float(lowest.deck) <= 0.05:
+		# a street on the ground is drawn road_lift over it (the tyres rest on it, not in it); a raised road's deck
+		# below carries its own lift
+		g += map.road_lift(int(lowest.road)) * map.lift_share(float(lowest.half) - absf(float(lowest.dist)))
 	# a railway embankment is solid earth: the car rides up its 1:1.5 slopes like a road embankment's, and a cut's
 	# vertical face (or a steep step onto one) stops it (_vertical). Not in an underpass's cut, where the street runs.
 	g = maxf(g, map.rail_bank(x, y))
@@ -150,7 +158,7 @@ func support(x: float, y: float) -> float:
 		else:
 			# beyond a raised road's edge the earth embankment falls away, it is no plane at deck height
 			deck = maxf(0.0, deck - over / TownMap.EMBANKMENT)
-		var h: float = g + deck
+		var h: float = g_bare + deck + (map.road_lift(int(d[0])) * (1.0 - smoothstep(0.0, TownMap.LIFT_RAMP, float(d[2]))) if lifted else 0.0)
 		if h - z > UNDER_DECK:
 			continue # a bridge overhead
 		var dd := absf(h - z)
@@ -215,9 +223,9 @@ func step(dt: float, thr: float, brk: float, steer_in: float, shift_up := false,
 			car.shift_t = 0.18
 
 	# slope of what the car stands on
-	var zc := support(car.x, car.y)
-	var dz_dx := _slope(support(car.x - 1.5, car.y), zc, support(car.x + 1.5, car.y))
-	var dz_dy := _slope(support(car.x, car.y - 1.5), zc, support(car.x, car.y + 1.5))
+	var zc := support(car.x, car.y, false)
+	var dz_dx := _slope(support(car.x - 1.5, car.y, false), zc, support(car.x + 1.5, car.y, false))
+	var dz_dy := _slope(support(car.x, car.y - 1.5, false), zc, support(car.x, car.y + 1.5, false))
 	if airborne:
 		dz_dx = 0.0
 		dz_dy = 0.0

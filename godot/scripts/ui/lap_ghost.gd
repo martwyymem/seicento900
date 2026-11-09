@@ -72,7 +72,7 @@ func _process(delta: float) -> void:
 	var heading: float = pose[2]
 	var s: float = pose[3]
 	var d: float = pose[4]
-	var p: Vector3 = world._world_pos(pose[0], pose[1], s, d)
+	var p: Vector3 = world._car_pos(pose[0], pose[1], s, d)
 	_visual.position = p
 	var grade := atan(tr.sample(tr.GRADE, s) * WORLD.ALTITUDE_SCALE * cos(heading - tr.heading(s)))
 	_visual.grade_pitch += (grade - _visual.grade_pitch) * minf(1.0, delta * 8.0)

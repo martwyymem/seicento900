@@ -41,8 +41,8 @@ func _edge_tilt(map: TownMap, errors: Array[String]) -> void:
 			for s: float in [-1.0, 1.0]:
 				var p := m + Vector2(-d.y, d.x) * s * (half - FreeCar.HALF_W - 0.05)
 				fc.z = fc.support(p.x, p.y)
-				var dx := fc._slope(fc.support(p.x - 1.5, p.y), fc.z, fc.support(p.x + 1.5, p.y))
-				var dy := fc._slope(fc.support(p.x, p.y - 1.5), fc.z, fc.support(p.x, p.y + 1.5))
+				var dx := fc._slope(fc.support(p.x - 1.5, p.y, false), fc.support(p.x, p.y, false), fc.support(p.x + 1.5, p.y, false)) # the slopes the physics reads
+				var dy := fc._slope(fc.support(p.x, p.y - 1.5, false), fc.support(p.x, p.y, false), fc.support(p.x, p.y + 1.5, false))
 				var tilt := rad_to_deg(atan(Vector2(dx, dy).length()))
 				spots += 1
 				worst = maxf(worst, tilt)
