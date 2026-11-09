@@ -133,7 +133,9 @@ func support(x: float, y: float, lifted := true) -> float:
 		g += map.road_lift(int(lowest.road)) * map.lift_share(float(lowest.half) - absf(float(lowest.dist)))
 	# a railway embankment is solid earth: the car rides up its 1:1.5 slopes like a road embankment's, and a cut's
 	# vertical face (or a steep step onto one) stops it (_vertical). Not in an underpass's cut, where the street runs.
-	g = maxf(g, map.rail_bank(x, y))
+	var bank := map.rail_bank(x, y)
+	g = maxf(g, bank)
+	g_bare = maxf(g_bare, bank) # a street beside the embankment is no surface under its slope
 	var best := g
 	var best_d := absf(g - z)
 	# a raised road that is no bridge stands on a solid embankment: where it is the lowest road on the spot the bare
