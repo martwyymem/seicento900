@@ -41,5 +41,5 @@ static func by_hour(env: Environment, day: float, golden: float, night: float, s
 	env.glow_hdr_threshold = lerpf(1.2, 0.55, night)
 	env.glow_intensity = lerpf(0.4, 1.05, night) + 0.15 * golden
 	env.glow_bloom = 0.012 * night
-	env.adjustment_contrast = lerpf(1.08, 1.12, maxf(golden, night))
+	env.adjustment_contrast = 1.12
 	env.adjustment_saturation = lerpf(saturation, saturation + 0.1, golden) * lerpf(1.0, 0.95, night * (1.0 - day))

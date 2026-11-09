@@ -342,13 +342,13 @@ func _layer_y(c: Dictionary, at: Array, p: Vector2) -> float:
 	if c.has("i0"):
 		var z := map.road_z[ri]
 		if z.is_empty():
-			return g - TownBuilder.ROAD_LIFT * 0.5 + 0.1
+			return g + map.road_lift(ri)
 		var ia: int = clampi(int(c.i0) + int(at[2]) * int(c.istep), 0, z.size() - 1)
 		var ib: int = clampi(ia + int(c.istep), 0, z.size() - 1)
-		return g + lerpf(z[ia], z[ib], float(at[3])) - TownBuilder.ROAD_LIFT * 0.5 + 0.1
+		return g + lerpf(z[ia], z[ib], float(at[3])) + map.road_lift(ri)
 	var y_ref: float = float(c.get("y", 0.0))
 	var hit := map.road_at(p.x, p.y, y_ref if y_ref != 0.0 else -INF, 1.0)
-	return float(hit.height) - TownBuilder.ROAD_LIFT * 0.5 + 0.1 if not hit.is_empty() else g + map.kerb_at(p.x, p.y)
+	return float(hit.height) if not hit.is_empty() else g + map.pave_top_at(p.x, p.y)
 
 ## [lane position, direction] `d` metres on from the car's place: along its edge, then on into the edge it has picked
 ## for the junction. The lane drifts a few centimetres side to side as a driver's hands do.

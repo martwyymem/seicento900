@@ -22,6 +22,9 @@ const FURNITURE := preload("res://scripts/ui/trackside_furniture.gd")
 const ROADSIDE_PROPS := preload("res://scripts/ui/roadside_props.gd")
 const LIGHTING := preload("res://scripts/ui/lighting_presets.gd")
 const ALTITUDE_SCALE := 1.0 ## heights at their real scale (the physics ignores elevation)
+const ASPHALT_LIFT := 0.04 ## m: the asphalt ribbon stands this far over the track's ground height
+const RUNOFF_LIFT := 0.01 ## m: the run-off ribbon under it
+const ROAD_REF := 0.09 ## m: _road_y / _world_pos stand this far over the track's ground height (what the trackside is placed against)
 const BEAM_COUNT := 4 ## headlight spotlights handed to the cars nearest the camera after dark
 const BEAM_REACH := 180.0 ## m: cars further from the camera than this get no headlight beam
 const SKID_CAPACITY := 1600 ## skid-mark quads kept; the oldest is reused once they run out
@@ -484,7 +487,7 @@ func _process(delta: float) -> void:
 			y = car.py * b + car.y * a
 			heading -= SimUtil.wrap_angle(car.heading - car.ph) * b
 			s = track.wrap_s(s - track.rel(s - car.ps) * b)
-		var p := _world_pos(x, y, s, car.d)
+		var p := _car_pos(x, y, s, car.d)
 		visual.position = p
 		# pitch with the (height-scaled) road gradient along the car's heading
 		var grade := atan(track.sample(track.GRADE, s) * ALTITUDE_SCALE * cos(heading - track.heading(s)))
@@ -785,7 +788,7 @@ func _update_start_lights() -> void:
 
 ## Road height (world units) at distance s along the centreline.
 func _road_y(s: float) -> float:
-	return (track.sample(track.H, s) - elevation_base) * ALTITUDE_SCALE + 0.09
+	return (track.sample(track.H, s) - elevation_base) * ALTITUDE_SCALE + ROAD_REF
 
 static func _ease(rate: float, delta: float, snap: bool) -> float:
 	return 1.0 if snap else 1.0 - exp(-delta * rate)
@@ -1520,8 +1523,8 @@ func _build_track() -> void:
 	while loose.size() < 16:
 		loose.append(Vector4.ZERO)
 	asphalt_material.set_shader_parameter("loose_zones", loose)
-	_add_ribbon(ro_width, 0.01, runoff_material, "Runoff")
-	_add_ribbon(track.width, 0.04, asphalt_material, "Asphalt")
+	_add_ribbon(ro_width, RUNOFF_LIFT, runoff_material, "Runoff")
+	_add_ribbon(track.width, ASPHALT_LIFT, asphalt_material, "Asphalt")
 	_add_edge_lines()
 	_build_road_supports()
 	_build_viaduct()
@@ -4474,7 +4477,15 @@ func position_overview() -> void:
 
 func _world_pos(x: float, y: float, s: float, d := 0.0) -> Vector3:
 	var h := track.sample(track.H, s)
-	return Vector3(x - world_center.x, (h - elevation_base) * ALTITUDE_SCALE + track.bank_rise(s, d) + 0.09, y - world_center.y)
+	return Vector3(x - world_center.x, (h - elevation_base) * ALTITUDE_SCALE + track.bank_rise(s, d) + ROAD_REF, y - world_center.y)
+
+## Where a car's visual stands at (x, y): _world_pos with the height dropped onto the drawn surface under the tyres (the
+## asphalt ribbon, or the run-off ribbon beyond its edge; they differ by a few centimetres), so the tyres touch it.
+func _car_pos(x: float, y: float, s: float, d := 0.0) -> Vector3:
+	var p := _world_pos(x, y, s, d)
+	var lift := lerpf(ASPHALT_LIFT, RUNOFF_LIFT, smoothstep(track.half - 0.3, track.half + 0.3, absf(d)))
+	p.y += lift - ROAD_REF
+	return p
 
 ## Rotation that leans a car over with the banked road surface at (s, d).
 func _surface_tilt(s: float, d: float) -> Basis:

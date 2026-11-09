@@ -31,7 +31,10 @@ const AREA_KINDS := ["place_town", "place_village", "place_neighbourhood", "plac
 const DAY_RATE := 1.0 / 80.0 ## game hours per real second: a day in 32 minutes
 const BEACON_RADIUS := 9.0
 const CHAIN_IDLE := 2.6 ## s without a skill before the chain is banked
-const LAMP_LIGHTS := 10
+const LAMP_LIGHTS := 14
+const NOON_CAP := deg_to_rad(40.0) ## soft cap on the sun's elevation (see _apply_time)
+const TOWN_ROAD_SHADER := preload("res://shaders/town_road.gdshader")
+const PAVEMENT_SHADER := preload("res://shaders/pavement.gdshader")
 
 var map: TownMap
 var builder: TownBuilder
@@ -87,6 +90,11 @@ var look := CameraLook.new()
 var _chase_cam: ChaseCam
 var hour := 18.5
 var night := 0.0
+## 0..1 how wet the streets are (town_road.gdshader puddles, sheen, rain rings). Nothing rains in the open world yet:
+## set it from a weather system; after dark the streets get a little dew of their own (NIGHT_DAMP)
+var wet := 0.0
+const NIGHT_DAMP := 0.3
+const LAMP_POOL_GLOW := 0.35 ## emission at the middle of a lamp's pool on the ground (reads on the dark tarmac)
 
 var events: Array = [] ## [{stage, spot, pos: Vector2, heading, title, ...}]
 var active_event := -1
@@ -308,11 +316,11 @@ var _build_map_tex: Texture2D
 ## Reads the map and runs every TownBuilder step into `world` (not yet in the tree, so this may run on a worker
 ## thread). Nothing here may touch the scene tree; the steps never hand frames back here (frame_budget_usec 0).
 func _build_town_threaded() -> void:
-	map = TownMap.load_map(MAP_KEY)
+	map = TownMap.load_map(MAP_KEY, TownBuilder.MESH_CACHE_DIR) # warm starts read a snapshot of the indexed map
 	if map == null:
 		return
 	builder = TownBuilder.new(map, world)
-	builder.mesh_cache_dir = TownBuilder.MESH_CACHE_DIR # warm starts load terrain, buildings and trees from disk
+	builder.mesh_cache_dir = TownBuilder.MESH_CACHE_DIR # warm starts load the slow steps' meshes from disk
 	var steps: Array = builder.steps()
 	for i in steps.size():
 		_build_status = ["Building %s" % String(steps[i][0]).to_lower(), 0.05 + 0.85 * float(i) / steps.size()]
@@ -411,6 +419,9 @@ func _build_environment() -> void:
 func _apply_time() -> void:
 	var day_frac := clampf((hour - 4.75) / 16.0, 0.0, 1.0)
 	var elev := deg_to_rad(63.0) * sin(PI * day_frac) if hour > 4.75 and hour < 20.75 else 0.0
+	# the midday sun is held down to about 37 degrees (a September sun): a near-overhead sun lit every wall and road
+	# alike and cast no shadows worth seeing. A soft cap, so a sun below about 20 degrees (the golden hour) is as before
+	elev = NOON_CAP * tanh(elev / NOON_CAP)
 	var below := 0.0
 	if hour <= 4.75 or hour >= 20.75:
 		var h := hour if hour >= 20.75 else hour + 24.0
@@ -431,7 +442,10 @@ func _apply_time() -> void:
 	sun.light_color = moon_col.lerp(day_col.lerp(gold_col, golden), day)
 	# a strong sun against a cooler, dimmer fill (about 3:1): crisp shadows by day, warm faces and long lavender
 	# shadows at the golden hour; after dark a faint blue moon, so the lamps and headlights make the light
-	sun.light_energy = lerpf(0.2, 2.0, day) * lerpf(1.0, 1.05, golden)
+	# midday: the sun up a little and the fill down, so faces turned from the sun drop to about a quarter of the lit
+	# ones; the fill's sky share cools those shadows
+	var midday := smoothstep(22.0, 32.0, elev_deg) # 0 through the golden hour and the night, which keep their look
+	sun.light_energy = lerpf(0.2, 2.0, day) * lerpf(1.0, 1.05, golden) * (1.0 + 0.12 * midday)
 	sun.shadow_opacity = lerpf(0.6, 1.0, day)
 	sky_mat.set_shader_parameter("sun_dir", dir)
 	sky_mat.set_shader_parameter("moon_dir", Vector3(-dir.x, 0.6, -dir.z).normalized())
@@ -453,12 +467,18 @@ func _apply_time() -> void:
 	# sunlit haze: thicker and gold towards the sun, so the distance glows behind the trees
 	env.fog_light_color = Color(0.03, 0.05, 0.11).lerp(Color(0.66, 0.75, 0.87).lerp(Color(0.97, 0.64, 0.4), golden), day)
 	env.fog_sun_scatter = 0.6 * golden
-	env.fog_density = 0.00028 * lerpf(1.0, 2.4, golden) * lerpf(1.0, 1.6, night)
+	# plus a daytime haze, so the far blocks and trees fall back into a paler blue and the near ones stand out
+	env.fog_density = 0.00028 * lerpf(1.0, 2.4, golden) * lerpf(1.0, 1.6, night) + 0.00045 * midday
+	env.fog_aerial_perspective = lerpf(0.6, 0.85, midday)
 	# the fill: a cool sky blue by day (the shadow colour), lavender at the golden hour, a dim moonlit blue at night
-	env.ambient_light_energy = lerpf(0.75, 0.62, day) * lerpf(1.0, 0.75, golden)
-	env.ambient_light_color = Color(0.34, 0.42, 0.72).lerp(Color(0.78, 0.8, 0.86).lerp(Color(0.66, 0.66, 0.88), golden * 0.7), day)
+	env.ambient_light_energy = lerpf(0.95, 0.48, day) * lerpf(1.0, 0.75, golden) * (1.0 - 0.25 * midday)
+	env.ambient_light_color = Color(0.34, 0.42, 0.72).lerp(Color(0.78, 0.8, 0.86).lerp(Color(0.66, 0.66, 0.88), golden * 0.7), day) \
+		.lerp(Color(0.66, 0.76, 0.95), 0.5 * midday)
 	env.ambient_light_sky_contribution = lerpf(0.25, 0.6, day) * lerpf(1.0, 0.6, golden) # the pink sky would wash the shadows out
 	SceneMood.by_hour(env, day, golden, night, 1.06) # ACES already deepens the colour
+	# contact shadows also darken sunlit ground a little by day: under the car, at wall feet, kerbs and fences
+	env.ssao_light_affect = lerpf(0.12, 0.3, midday)
+	env.ssao_intensity = lerpf(2.2, 2.8, midday)
 	# Ultra: sun shafts through the trees and between the houses (volumetric fog lit by the low sun)
 	var shafts := _volumetric and golden > 0.05 and day > 0.2
 	if env.volumetric_fog_enabled != shafts:
@@ -474,12 +494,16 @@ func _apply_time() -> void:
 	if builder:
 		if builder.lamp_material:
 			builder.lamp_material.emission_energy_multiplier = 14.0 * lamps_on # bright enough to bloom
+		var damp := maxf(wet, NIGHT_DAMP * lamps_on)
 		for m in builder.night_materials:
 			m.set_shader_parameter("night", lamps_on)
+			if m.shader == TOWN_ROAD_SHADER or m.shader == PAVEMENT_SHADER: # the streets, not the walls
+				m.set_shader_parameter("wet", damp)
 	for h in headlights:
 		h.light_energy = 11.0 * clampf(night * 1.6 - 0.2, 0.0, 1.0)
 	for l in lamp_lights:
 		l.light_energy = 7.0 * lamps_on
+		(l.get_child(0) as Decal).emission_energy = LAMP_POOL_GLOW * lamps_on * (1.0 + 0.4 * wet)
 		l.visible = lamps_on > 0.02
 
 func _build_headlights() -> void:
@@ -503,24 +527,46 @@ func _build_lamp_lights() -> void:
 		l.light_color = Color(1.0, 0.72, 0.4) # sodium
 		l.shadow_enabled = false
 		l.visible = false
+		# a pool of warm light on the ground under it, so the road shows light and dark between the lamps
+		var pool := Decal.new()
+		pool.name = "Pool"
+		pool.size = Vector3(18.0, 6.0, 18.0)
+		pool.position = Vector3(0.0, -8.0, 0.0)
+		pool.texture_emission = _lamp_pool_texture()
+		pool.albedo_mix = 0.0
+		pool.modulate = Color(1.0, 0.68, 0.36)
+		pool.emission_energy = 0.0
+		pool.upper_fade = 0.5
+		pool.lower_fade = 0.5
+		pool.normal_fade = 0.5 # the ground, not the cars and walls
+		l.add_child(pool)
 		world.add_child(l)
 		lamp_lights.append(l)
+
+static func _lamp_pool_texture() -> GradientTexture2D:
+	var g := Gradient.new()
+	g.offsets = PackedFloat32Array([0.0, 0.45, 1.0])
+	g.colors = PackedColorArray([Color(1, 1, 1), Color(0.42, 0.42, 0.42), Color(0, 0, 0)])
+	var t := GradientTexture2D.new()
+	t.gradient = g
+	t.fill = GradientTexture2D.FILL_RADIAL
+	t.fill_from = Vector2(0.5, 0.5)
+	t.fill_to = Vector2(1.0, 0.5)
+	t.width = 128
+	t.height = 128
+	return t
 
 ## The nearest street lamps get real lights (a pool follows the car).
 func _place_lamp_lights() -> void:
 	if builder == null or builder.lamp_spots.is_empty() or night < 0.3:
 		return
 	var p := Vector3(drive.car.x, drive.z, drive.car.y)
-	var best := []
-	for k in builder.lamp_spots.size():
-		var q := builder.lamp_spots[k]
-		var d := Vector2(q.x - p.x, q.z - p.z).length_squared()
-		if d < 160000.0:
-			best.append([d, q])
-	best.sort_custom(func(a, b): return a[0] < b[0])
+	# from the builder's lamp grid: a few dozen candidates however many lamps the town has
+	var best := builder.lamps_near(p.x, p.z, lamp_lights.size(), 200.0)
 	for i in lamp_lights.size():
 		if i < best.size():
-			lamp_lights[i].position = best[i][1] + Vector3.DOWN * 0.6
+			lamp_lights[i].position = best[i] + Vector3.DOWN * 0.6
+			lamp_lights[i].visible = true
 		else:
 			lamp_lights[i].visible = false
 

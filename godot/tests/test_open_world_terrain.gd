@@ -75,8 +75,9 @@ func _bridges(map: TownMap, errors: Array[String]) -> void:
 		tested += 1
 		var g := map.ground(p.x, p.y)
 		var on := _settle(map, p, g + deck)
-		if absf(on.support(p.x, p.y) - (g + deck)) > 0.05:
-			errors.append("bridge %d '%s': car on the deck is held at %.2f, deck is %.2f" % [ri, map.road_name[ri], on.support(p.x, p.y), g + deck])
+		var surface := g + deck + map.road_lift(ri) # the deck is drawn road_lift over its height: the tyres stand on that
+		if absf(on.support(p.x, p.y) - surface) > 0.05:
+			errors.append("bridge %d '%s': car on the deck is held at %.2f, its surface is %.2f" % [ri, map.road_name[ri], on.support(p.x, p.y), surface])
 		var under := _settle(map, p, g)
 		if absf(under.support(p.x, p.y) - g) > 0.05 and deck > FreeCar.UNDER_DECK - 1.0:
 			errors.append("bridge %d '%s': car under the deck is lifted to %.2f (ground %.2f)" % [ri, map.road_name[ri], under.support(p.x, p.y), g])

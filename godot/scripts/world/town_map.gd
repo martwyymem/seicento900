@@ -25,6 +25,10 @@ const RAIL_HALF := 2.4 ## m: half the width of the ballast bed a railway runs on
 const TUNNEL_HEADROOM := 4.4 ## m: free height under a railway deck over a street (the bore)
 const KERB_H := 0.13 ## m: height of a kerb; the pavement behind it is flat at this height (TownBuilder draws the same)
 const PAVEMENT_W := 1.5 ## m: width of the pavement beyond a road's edge
+const ROAD_LIFT := 0.09 ## m: a street's drawn surface stands this far over the ground (plus ROAD_RANK_LIFT per rank), clear of the terrain mesh
+const ROAD_RANK_LIFT := 0.006 ## m per road rank: the bigger road's surface wins at a junction
+const PAVEMENT_TOP := ROAD_LIFT + 0.03 + KERB_H ## m over the ground: the drawn pavement's flat top (TownBuilder)
+const LIFT_RAMP := 0.6 ## m: the car's ride rises from the ground to a street's drawn surface over this far inside its edge
 const PAVE_GAP := 2.5 ## m: pavements stop this far short of a junction's edge
 const PARAPET := 0.4 ## m: a bridge deck holds a car up this far beyond its edge (the parapet), then it drops off
 
@@ -108,13 +112,78 @@ var in_town_cache := {}
 
 static var _cache := {}
 
-static func load_map(map_key: String) -> TownMap:
+## cache_dir: a folder to keep a snapshot of the loaded map in (the open world passes TownBuilder.MESH_CACHE_DIR). Reading
+## it takes a fraction of the time the 15 MB bake needs to parse and index (see _snapshot_path for what invalidates it).
+static func load_map(map_key: String, cache_dir := "") -> TownMap:
 	if not _cache.has(map_key):
 		var m := TownMap.new()
-		if not m._load(map_key):
-			return null
+		if cache_dir == "" or not m._load_snapshot(map_key, cache_dir):
+			if not m._load(map_key):
+				return null
+			if cache_dir != "":
+				m._save_snapshot(cache_dir)
 		_cache[map_key] = m
 	return _cache[map_key]
+
+const CODE_HASH := preload("res://scripts/world/code_hash.gd")
+const SNAPSHOT_VERSION := "1"
+
+## Where the snapshot of map `map_key` lives: its name carries what it was made from, the bake's MD5, the code that
+## derives the map's state from it (_from_raw and what that names) and the engine version. "" if the bake is missing.
+func _snapshot_path(map_key: String, dir: String) -> String:
+	var json := "res://data/world/%s.json" % map_key
+	if not FileAccess.file_exists(json):
+		return ""
+	var parts := PackedStringArray([SNAPSHOT_VERSION, map_key, FileAccess.get_md5(json), str(Engine.get_version_info()),
+		CODE_HASH.closure("res://scripts/world/town_map.gd", ["_from_raw"], "res://scripts/world/town_map.gd")])
+	if not OS.has_feature("editor"): # an exported game has no script sources to fingerprint: its build stands in
+		parts.append(str(ProjectSettings.get_setting("application/config/version", "")))
+		parts.append(str(FileAccess.get_modified_time(OS.get_executable_path())))
+	return "%s/map_%s_%s.bin" % [dir, map_key, "|".join(parts).md5_text().substr(0, 16)]
+
+func _snapshot_vars() -> Array[String]:
+	var names: Array[String] = []
+	for p in get_property_list():
+		if int(p.usage) & PROPERTY_USAGE_SCRIPT_VARIABLE:
+			names.append(p.name)
+	return names
+
+## Fills every member from the snapshot of this bake; false if there is none (or it does not read back).
+func _load_snapshot(map_key: String, dir: String) -> bool:
+	var path := _snapshot_path(map_key, dir)
+	if path == "" or not FileAccess.file_exists(path):
+		return false
+	var state = bytes_to_var(FileAccess.get_file_as_bytes(path))
+	if not state is Dictionary or not (state as Dictionary).has("raw") or (state as Dictionary).get("key", "") != map_key:
+		return false
+	for n in _snapshot_vars():
+		if (state as Dictionary).has(n):
+			set(n, (state as Dictionary)[n])
+	return true
+
+## Keeps the loaded map's members (all of them are plain data) for the next run, and drops older snapshots of this map.
+func _save_snapshot(dir: String) -> void:
+	var path := _snapshot_path(key, dir)
+	if path == "":
+		return
+	for sec in raw:
+		section_hash(sec) # the mesh cache's stamps read these; computing them once here keeps warm starts from hashing 17 MB
+	var state := {}
+	for n in _snapshot_vars():
+		state[n] = get(n)
+	DirAccess.make_dir_recursive_absolute(dir)
+	var tmp := "%s.tmp%d" % [path, OS.get_process_id()]
+	var f := FileAccess.open(tmp, FileAccess.WRITE)
+	if f == null:
+		return
+	f.store_buffer(var_to_bytes(state))
+	f.close()
+	if DirAccess.rename_absolute(tmp, path) != OK:
+		DirAccess.remove_absolute(tmp)
+		return
+	for fname in DirAccess.get_files_at(dir):
+		if fname.begins_with("map_%s_" % key) and ".tmp" not in fname and dir.path_join(fname) != path:
+			DirAccess.remove_absolute(dir.path_join(fname))
 
 func _load(map_key: String) -> bool:
 	key = map_key
@@ -125,7 +194,11 @@ func _load(map_key: String) -> bool:
 	raw = JSON.parse_string(FileAccess.get_file_as_string(path))
 	if raw == null or raw.is_empty():
 		return false
-	name = raw.get("name", map_key)
+	return _from_raw()
+
+## Everything derived from `raw` (the parsed bake): the spatial hashes, roads, pavements, obstacles and so on.
+func _from_raw() -> bool:
+	name = raw.get("name", key)
 	var b: Array = raw.bounds
 	bounds = Rect2(b[0], b[1], b[2] - b[0], b[3] - b[1])
 	var e: Array = raw.extent
@@ -155,6 +228,18 @@ func _load(map_key: String) -> bool:
 	places = raw.get("places", [])
 	spots = raw.get("spots", {})
 	return true
+
+var _section_hashes := {}
+
+## MD5 of one section of the baked map as parsed ("terrain", "roads", ...), for the open world's mesh cache stamps: a
+## cached step is valid while the sections it reads are unchanged.
+func section_hash(section: String) -> String:
+	if not _section_hashes.has(section):
+		var ctx := HashingContext.new()
+		ctx.start(HashingContext.HASH_MD5)
+		ctx.update(var_to_bytes(raw.get(section)))
+		_section_hashes[section] = ctx.finish().hex_encode()
+	return _section_hashes[section]
 
 static func _flat(arr: Array) -> PackedVector2Array:
 	var out := PackedVector2Array()
@@ -423,6 +508,20 @@ func _has_pavement(ri: int, mid: Vector2) -> bool:
 		return false
 	return not buildings_near(mid, 45.0).is_empty()
 
+## Height of street ri's drawn surface over the ground (and its deck): what the tyres stand on, and what TownBuilder draws.
+func road_lift(ri: int) -> float:
+	return ROAD_LIFT + road_rank[ri] * ROAD_RANK_LIFT
+
+## How much of a street's lift the car's ride takes `inside` metres in from the street's edge (half its width minus
+## the distance from its centreline): none at the very edge, all of it LIFT_RAMP in, so the car meets no step where
+## it drives on or off the tarmac.
+func lift_share(inside: float) -> float:
+	return smoothstep(0.0, LIFT_RAMP, inside)
+
+## Height over the ground of a pavement's top when (x, y) is on one, else 0 (the kerb is KERB_H above the street).
+func pave_top_at(x: float, y: float) -> float:
+	return PAVEMENT_TOP if kerb_at(x, y) > 0.0 else 0.0
+
 ## Kerb height (KERB_H) when (x, y) is on a pavement, else 0.
 func kerb_at(x: float, y: float) -> float:
 	var ck := _cell_key(int(floor(x / CELL)), int(floor(y / CELL)))
@@ -477,7 +576,7 @@ func road_at(x: float, y: float, z_ref := -INF, reach := 0.0) -> Dictionary:
 			best = {"road": ri, "i": i, "t": t, "dist": d * side, "half": half, "deck": deck,
 				"surface": road_surface[ri], "gravel": road_gravel[ri]}
 	if not best.is_empty():
-		best["height"] = ground(x, y) + float(best.deck)
+		best["height"] = ground(x, y) + float(best.deck) + road_lift(int(best.road))
 	return best
 
 ## Every road deck under a map point (for the car's vertical contact: it may be on a bridge or under it):

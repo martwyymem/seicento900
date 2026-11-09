@@ -50,6 +50,7 @@ func _init() -> void:
 	add_child(_photo)
 	add_child(_shade(true))
 	add_child(_shade(false))
+	add_child(_side_shade())
 
 	# top left: where we are
 	var top := VBoxContainer.new()
@@ -284,6 +285,26 @@ func _shade(bottom: bool) -> TextureRect:
 		r.anchor_bottom = 1.0
 	else:
 		r.anchor_bottom = 0.3
+	return r
+
+## A dark fade across the left third, under the place name and the car's figures, so the type reads on a bright still.
+func _side_shade() -> TextureRect:
+	var g := Gradient.new()
+	g.set_color(0, Color(0, 0, 0, 0.5))
+	g.set_color(1, Color(0, 0, 0, 0.0))
+	var tex := GradientTexture2D.new()
+	tex.gradient = g
+	tex.width = 128
+	tex.height = 4
+	tex.fill_from = Vector2(0, 0)
+	tex.fill_to = Vector2(1, 0)
+	var r := TextureRect.new()
+	r.texture = tex
+	r.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	r.stretch_mode = TextureRect.STRETCH_SCALE
+	r.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	r.anchor_bottom = 1.0
+	r.anchor_right = 0.55
 	return r
 
 static func _label(text: String, size: int, color: Color, weight := 700) -> Label:

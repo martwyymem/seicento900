@@ -362,6 +362,11 @@ func _exit_tree() -> void:
 	for v in [_kerb, _gravel, _grass, _scrape, _wind, _spray, _rain]:
 		if v:
 			v.player.stop()
+	# the buses are global: don't leave a race's mute behind for whatever runs next
+	if _car_bus >= 0:
+		AudioServer.set_bus_mute(_car_bus, false)
+	if _world_bus >= 0:
+		AudioServer.set_bus_mute(_world_bus, AudioSettings.effects_silent())
 
 ## Out of the race (paused, on a menu, the race over): the loops die away quickly; a pause also stops the
 ## one-shots.
