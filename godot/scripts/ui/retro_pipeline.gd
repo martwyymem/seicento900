@@ -43,7 +43,7 @@ func apply_to_texture_rect(view: TextureRect) -> void:
 	if is_instance_valid(view):
 		view.material = material
 
-## Update elapsed time for animated effects like summer heat haze distortion.
+## Update the shader's clock (kept for scripts that drive it; no style animates, so nothing shimmers).
 func update_time(dt: float) -> void:
 	_time += dt
 	if material:

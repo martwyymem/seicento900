@@ -4,6 +4,8 @@
 ## godot --path godot --audio-driver Dummy -s tests/_retro_shots.gd
 extends SceneTree
 
+const Guard := preload("res://tests/_qa_save_guard.gd")
+
 var game
 
 func _wait(frames: int) -> void:
@@ -51,6 +53,7 @@ func _shoot(out: String, tag: String) -> void:
 
 func _initialize() -> void:
 	Brain.use_disk = false
+	Guard.backup()
 	var out := OS.get_environment("OUT") if OS.get_environment("OUT") != "" else "/tmp/retro_shots"
 	DirAccess.make_dir_recursive_absolute(out)
 	game = load("res://ui/game.tscn").instantiate()
@@ -64,4 +67,5 @@ func _initialize() -> void:
 		await _shoot(out, "night")
 	game.queue_free()
 	await process_frame
+	Guard.restore()
 	quit()
