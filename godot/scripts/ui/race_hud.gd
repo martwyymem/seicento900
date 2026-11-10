@@ -85,6 +85,7 @@ var flagbar: Control
 var splitbox: Control ## the split time that comes up beside the clock at each third of the lap
 var co_driver: CoDriver ## calls the pace notes (the pace-note boxes show what it called)
 var modepanel: Control ## rally / time trial: the stage splits and standings, or the sectors and lap list (in the tower's place)
+var missionbar: Control ## a campaign mission (RaceSettings.mission): knockout drop zone, drag distance, drift score, progress
 var deltabar: Control ## rally / time trial: the split against the stage leader, or the live delta to the best lap
 var _mode_split := {} ## rally: the split last passed, shown in the delta bar for MODE_SPLIT_SHOW s
 var _mode_seen := 0 ## rally: splits already shown; time trial: laps already shown
@@ -189,6 +190,7 @@ func _ready() -> void:
 	modepanel.size = Vector2(MODE_W, 520)
 	deltabar = _canvas(_draw_delta_bar)
 	_place(deltabar, 0.5, 0.0, 0.5, 0.0, -DELTA_W * 0.5, 156, DELTA_W * 0.5, 156 + 92)
+	missionbar = _canvas(_draw_mission)
 	splitbox = _canvas(_draw_splits)
 	_place(splitbox, 1.0, 0.0, 1.0, 0.0, -14 - CLOCK_W - 20 - 250, 32, -14 - CLOCK_W - 20 - 12, 90)
 	_place(pacenote, 0.5, 0.0, 0.5, 0.0, -150, 14, 150, 146)
@@ -358,6 +360,8 @@ func update(dt: float) -> void:
 	if race.s.mode != "race":
 		_update_mode()
 		deltabar.queue_redraw()
+	missionbar.visible = _mission_showing()
+	missionbar.queue_redraw()
 	var note_key = _pacenote_key()
 	if note_key is Array and note_key != _note_key:
 		_note_key = note_key
@@ -496,6 +500,8 @@ func _layout() -> void:
 		stack.append([_overtake_control, minf(340.0, band * 2.0), 42.0])
 	if _delta_showing():
 		stack.append([deltabar, minf(DELTA_W, band * 2.0), _delta_height()])
+	if _mission_showing():
+		stack.append([missionbar, minf(MISSION_W, band * 2.0), MISSION_H])
 	for b: Label in [banner, banner_small]:
 		if b.text != "":
 			stack.append([b, band * 2.0, _label_height(b, band * 2.0)])
@@ -2123,3 +2129,100 @@ func _draw_delta_bar() -> void:
 	_mt(c, Vector2(0, 76), _signed(d), 44, col if tt.valid else Color(TEXT, 0.5), _digits, HORIZONTAL_ALIGNMENT_CENTER, W)
 	if not tt.valid:
 		_mt(c, Vector2(0, 74), "INVALID", 18, BEHIND, _bold, HORIZONTAL_ALIGNMENT_RIGHT, W - 12)
+
+# ---------------- campaign missions (RaceSettings.mission) ----------------
+const MISSION_W := 420.0
+const MISSION_H := 58.0
+const KO_FLASH := 4.0 ## s the name of a car just knocked out stays up
+
+func _mission_showing() -> bool:
+	return race != null and race.s.mission != "" and race.s.mode == "race" and warp == 1 and race.phase != "finished"
+
+## The mission's essentials on one plate in the centre column: what is at stake now, and the figure that decides it.
+func _draw_mission() -> void:
+	if not _mission_showing():
+		return
+	var c := missionbar
+	var W := c.size.x
+	var p := race.player
+	var col := Color(Missions.COLOR)
+	var head := ""
+	var right := ""
+	var line := ""
+	var line_col := MUTED
+	var line_right := ""
+	var fill := -1.0
+	match race.s.mission:
+		"knockout":
+			var left := race.cars.filter(func(x: RaceCar) -> bool: return not x.dnf).size()
+			head = "KNOCKOUT · %d LEFT" % left
+			right = "FINAL LAP" if left <= 2 else "LAP %d / %d" % [mini(race.order[0].lap + 1, race.R), race.R]
+			var last: Dictionary = race.knocked_out[-1] if not race.knocked_out.is_empty() else {}
+			var zone := race.knockout_zone()
+			if not last.is_empty() and race.race_time - float(last.t) < KO_FLASH:
+				line = "OUT: %s" % _mission_name(last.car)
+				line_col = RED
+			elif left <= 2:
+				line = "LAST TWO: WIN THE LAP"
+				line_col = YELLOW
+			elif zone == p:
+				line = "YOU ARE IN THE DROP ZONE"
+				line_col = RED
+				col = RED
+			elif zone:
+				line = "DROP ZONE: %s" % _mission_name(zone)
+				var gap := race.track.rel(p.s - zone.s) if p.lap == zone.lap else float(p.lap - zone.lap) * race.track.L
+				line_right = "+%.0f m" % maxf(0.0, gap)
+		"drag":
+			var dist := race.s.finish_distance
+			var run := clampf(race.run_distance(p), 0.0, dist)
+			head = "DRAG · %d M" % int(dist)
+			var t = p.finish_time if p.finished else (race.race_time if race.phase == "racing" else 0.0)
+			right = "%.2f s" % float(t) if t != null else "—"
+			line = "FINISHED P%d" % p.pos if p.finished else ("%d m TO GO" % int(ceilf(dist - run)) if race.phase == "racing" else "WAIT FOR THE GREEN")
+			line_right = "%d km/h" % int(absf(p.speed) * 3.6)
+			fill = run / dist
+		"drift":
+			var ds := race.drift
+			if ds == null:
+				return
+			var total := ds.total()
+			head = "DRIFT  %s" % OpenWorldHud._thousands(total)
+			var tier := DriftScore.tier(total, ds.tiers)
+			right = DriftScore.TIER_NAMES[tier] if tier > 0 else ""
+			if ds.event_t > race.clock - 1.6 and ds.last_event != "":
+				line = ("BANKED +%s" if ds.last_event == "BANKED" else "COMBO LOST  −%s") % OpenWorldHud._thousands(ds.event_points)
+				line_col = GOOD if ds.last_event == "BANKED" else RED
+			elif ds.pending() > 0:
+				line = "COMBO %s  ×%.1f" % [OpenWorldHud._thousands(int(ds.combo)), ds.mult]
+				line_col = YELLOW
+			else:
+				line = "SLIDE IT: HANDBRAKE AND THROTTLE"
+			if tier < ds.tiers.size():
+				line_right = "%s %s" % [DriftScore.TIER_NAMES[tier + 1], OpenWorldHud._thousands(int(ds.tiers[tier]))]
+			if race.s.finish_distance > 0.0:
+				fill = clampf(race.run_distance(p) / race.s.finish_distance, 0.0, 1.0)
+		_:
+			# a sprint or an off-road race: how far through the run, and the place
+			var L := race.track.L * race.R
+			var run := clampf(p.lap * race.track.L + p.s, 0.0, L)
+			head = "%s · P%d" % [String(Missions.KIND_NAMES.get(race.s.mission, "MISSION")), p.pos]
+			right = "%.1f / %.1f km" % [run / 1000.0, L / 1000.0]
+			var kind := race.track.loose_at(race.track.wrap_s(p.s)) if race.s.loose_spans else 0
+			line = ["TARMAC", "DIRT", "GRAVEL"][kind] if race.s.loose_spans else "%d TO BEAT" % maxi(0, p.pos - 1)
+			fill = run / L
+	c.draw_rect(Rect2(0, 0, W, MISSION_H), MODE_PLATE)
+	c.draw_rect(Rect2(0, 0, W, 4), col)
+	if fill >= 0.0:
+		c.draw_rect(Rect2(0, MISSION_H - 4, W * clampf(fill, 0.0, 1.0), 4), Color(col, 0.85))
+	var rw := _bold.get_string_size(right, HORIZONTAL_ALIGNMENT_LEFT, -1, 18).x if right != "" else 0.0
+	_mt(c, Vector2(14, 26), head, 18, TEXT, _bold, HORIZONTAL_ALIGNMENT_LEFT, W - 42 - rw)
+	if right != "":
+		_mt(c, Vector2(W - 14 - rw, 26), right, 18, YELLOW, _bold, HORIZONTAL_ALIGNMENT_LEFT, rw + 1.0)
+	var lw := _bold.get_string_size(line_right, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x if line_right != "" else 0.0
+	_mt(c, Vector2(14, 47), line, 14, line_col, _bold, HORIZONTAL_ALIGNMENT_LEFT, W - 42 - lw)
+	if line_right != "":
+		_mt(c, Vector2(W - 14 - lw, 47), line_right, 14, MUTED, _bold, HORIZONTAL_ALIGNMENT_LEFT, lw + 1.0)
+
+func _mission_name(car: RaceCar) -> String:
+	return "YOU" if car.is_player else str(car.name).split(" ")[-1].to_upper()

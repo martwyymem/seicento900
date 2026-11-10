@@ -406,6 +406,7 @@ func set_race(value: Race) -> void:
 
 	for car in value.cars:
 		var visual := CAR_SCENE.instantiate()
+		visual.car_key = value.s.car_class if CarCatalog.is_key(value.s.car_class) else "stock" # the whole field drives the chosen car
 		visuals[car.id] = visual
 		cars_root.add_child(visual)
 		visual.set_paint(car.color)
@@ -823,7 +824,7 @@ func _update_camera(delta: float) -> void:
 	match camera_mode:
 		0, 1: # chase / far chase
 			var far := camera_mode == 1
-			var dist := 11.5 if far else 6.2
+			var dist: float = (11.5 if far else 6.2) + float(CarCatalog.visual(race.s.car_class if race else "stock").get("chase_back", 0.0)) # the same gap behind a longer tail
 			var height := 4.6 if far else 2.2
 			var want := p - fwd * dist + Vector3.UP * height
 			# never dip under the road over a crest
@@ -858,8 +859,10 @@ func _update_camera(delta: float) -> void:
 			fov += 6.0
 		6, 7: # bumper cam just ahead of the front bumper, bonnet cam low on the bonnet in front of the screen
 			var bumper := camera_mode == 6
-			var along := 1.78 if bumper else 0.62
-			var up := 0.42 if bumper else 1.08
+			var fit := CarCatalog.visual(race.s.car_class if race else "stock") # each car's own nose and scuttle
+			var cam: Vector2 = fit.get("bumper_cam" if bumper else "bonnet_cam", Vector2(1.78, 0.42) if bumper else Vector2(0.62, 1.08))
+			var along := cam.x
+			var up := cam.y
 			var ahead := p + fwd * 40.0
 			ahead.y = _road_y(_focus_s + 40.0) + up * 0.75
 			if look.active():
@@ -867,7 +870,7 @@ func _update_camera(delta: float) -> void:
 				# one rises over the roof as it turns so it never looks out from inside the cabin
 				var view := look.turn(fwd)
 				if not bumper:
-					up = lerpf(up, 1.32, smoothstep(0.0, PI * 0.5, absf(look.yaw)))
+					up = lerpf(up, 1.32 + cam.y - 1.08, smoothstep(0.0, PI * 0.5, absf(look.yaw)))
 				camera.global_position = p + view * along + Vector3.UP * up
 				ahead = camera.global_position + view * 40.0 + Vector3.UP * ((ahead.y - camera.global_position.y) * cos(look.yaw) - sin(look.pitch) * 40.0)
 			else:
@@ -1481,7 +1484,7 @@ func _build_track() -> void:
 	ground.mesh = plane
 	ground.position = Vector3(0, -1.8, 0)
 	var far_ground := _surface_material(GROUND_SHADER, "grass" if track.cfg.theme != "city" else "")
-	far_ground.set_shader_parameter("base_color", Color("#364a38") if track.cfg.theme != "city" else Color("#aaa18d"))
+	far_ground.set_shader_parameter("base_color", Color("#364a38") if track.cfg.theme != "city" else CITY_GROUND)
 	ground.material_override = far_ground
 	track_root.add_child(ground)
 	surroundings = SURROUNDINGS.new()
@@ -1672,9 +1675,16 @@ func _build_terrain(ground: MeshInstance3D) -> void:
 	terrain_material.set_shader_parameter("use_vertex_color", true)
 	terrain_material.set_shader_parameter("tex_color_mix", 0.1)
 	terrain_material.set_shader_parameter("slope_rock", 0.4 if track.cfg.theme == "city" else 1.0)
-	terrain_material.set_shader_parameter("lush", 1.0)
+	# a city's ground between the mapped streets and plots is paving and yards, not meadow (Tokyo read as tan
+	# grass, 2026-11-10 QA): no lush grass and little of the grass's patchy tint
+	var lush := 0.0 if track.cfg.theme == "city" else 1.0
+	terrain_material.set_shader_parameter("lush", lush)
+	if track.cfg.theme == "city":
+		terrain_material.set_shader_parameter("tuft", 0.25)
 	if ground.material_override is ShaderMaterial:
-		(ground.material_override as ShaderMaterial).set_shader_parameter("lush", 1.0)
+		(ground.material_override as ShaderMaterial).set_shader_parameter("lush", lush)
+		if track.cfg.theme == "city":
+			(ground.material_override as ShaderMaterial).set_shader_parameter("tuft", 0.25)
 	if surroundings:
 		surroundings.apply_land_map(terrain_material)
 	_terrain_material = terrain_material
@@ -1814,10 +1824,12 @@ func _sample_dem(grid: Dictionary, x: float, z: float) -> float:
 	var h11 := float(heights[(iz + 1) * nx + ix + 1])
 	return h00 * (1.0 - u) * (1.0 - v) + h10 * u * (1.0 - v) + h01 * (1.0 - u) * v + h11 * u * v
 
+const CITY_GROUND := Color("#74726b") ## a city circuit's unmapped ground: worn grey paving (the land map's streets are paler)
+
 func _terrain_base_color() -> Color:
 	match track.cfg.theme:
 		"city":
-			return Color("#777466")
+			return CITY_GROUND
 		"oval":
 			return Color("#607a43")
 	return Color("#52684a")
@@ -3680,6 +3692,8 @@ func _build_lighting() -> void:
 	_lamp_pick.resize(LAMP_POOL.max() + 1)
 	_lamp_pick_d2.resize(LAMP_POOL.max() + 1)
 
+const CITY_MAST_POWER := 0.35 ## a city circuit's floodlight masts' share of the full 70 (its pool keeps sqrt of it; see _lamp_post)
+
 ## One lamp post with its foot at track point p (ground height in world units), turned towards track point
 ## look. A street post is a pole with a short arm and a lantern; a mast is a tall pole carrying a bank of
 ## floodlights tilted down at the circuit. fx is [poles, arms, heads].
@@ -3699,7 +3713,11 @@ func _lamp_post(fx: Array, p: Vector2, ground: float, look: Vector2, mast: bool,
 		# lights the circuit, not the woods around it: aimed at the track in front of the mast
 		var target := Vector3(look.x - world_center.x, ground if is_nan(look_y) else look_y, look.y - world_center.y)
 		var from := at + dir * 2.0
-		_register_lamp(from, Color("#eaf1ff"), 70.0, from.distance_to(target) * 1.9, false, target - from, 42.0, target, 17.0, 0.16, 3.0)
+		# a street circuit's stand masts hang over a narrow street walled by pale pavements and barriers: at full
+		# power they turned 7-12% of Monaco's wet night road white against ~1-3% at the GP (2026-11-10 QA)
+		var power := CITY_MAST_POWER if track.cfg.theme == "city" else 1.0
+		_register_lamp(from, Color("#eaf1ff"), 70.0 * power, from.distance_to(target) * 1.9, false, target - from, 42.0, target, 17.0,
+			0.16 * sqrt(power), 3.0)
 	else:
 		var arm := 1.7
 		var basis := Basis.looking_at(to)

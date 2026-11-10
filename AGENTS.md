@@ -52,6 +52,39 @@ bridge, Monza podium, Nürburg castle, Casino de Monte-Carlo, Silverstone Wing, 
 `godot/data/tracks/<key>_env.json`; add a landmark by naming its OSM element in `LANDMARKS` in
 `build_surroundings.py` and its nominal footprint in `LANDMARK_SIZE` in `surroundings.gd`.
 
+### Adding the next car (recipe, from the VW Golf IV pilot)
+
+The cars after the Seicento are catalogue entries (`godot/scripts/data/car_catalog.gd`, `CarCatalog`). Copy the Golf:
+
+1. **Model**: copy [`tools/blender/build_golf4.py`](tools/blender/build_golf4.py) to `build_<car>.py` and change the real-car numbers
+   (`LENGTH`, `WHEELBASE`, `FRONT_AXLE_S`, `TRACK_*`, `TYRE_R/W`, `ARCH_R`), the profile curves (`W ZM WSH ZSH ZT ZB WR DR`, nose to
+   tail in metres), the glass stations (`S_COWL S_WS_TOP S_SAIL S_B0 S_B1 S_QR S_Q1 S_RG0 S_RG1`, door cuts `S_DOOR`), the lamp outlines
+   and the wheel. The generic helpers (loft curves, `MB`, `Projector`, dent shape keys, previews) are in
+   [`tools/blender/carkit.py`](tools/blender/carkit.py) (`build_seicento.py` keeps its own copy: its GLB is rebuilt byte-identical).
+   Run it with `--renders DIR` and LOOK at every view; lamps are best projected straight (`front_proj`/`rear_proj`, metres across and up),
+   a projection that misses the body raises "projection missed"; Blender exits 0 even on a Python error, so read the log.
+   Keep the names `race_car_visual.gd` finds: objects `Body Details Stripes Wheel Cabin Martini Abarth Marlboro` (blend shapes `dent_front/
+   rear/left/right` on `Body Details Stripes` and the liveries) and materials `Paint Glass Taillight TailBulb TailGlass Headlight LampGlass
+   Plate Bumper Trim Gasket Grille` (Paint is the only surface tinted per car and only the Body mesh may carry it, so body-coloured mirrors
+   and bumpers go in the Body loft, not in Details). Origin: on the ground midway between the axles, front towards -Z after export.
+2. **Physics**: a spec script like [`golf4.gd`](godot/scripts/data/golf4.gd) (a duplicate of `seicento.tres` with `resource_name` set to
+   the key: a non-empty name is what makes `Track.profile_for`, `Race` (brake_k) and the strategist treat it as another car) and
+   measure it: `godot --headless --path godot -s tests/_car_probe.gd` prints 0-100, 400 m, top speed, braking from 100 km/h and
+   skidpad g for the Seicento and the Golf (add the new car to its `cars` dictionary). Tune the spec (final drive, efficiency, `grip_k`,
+   mass), never the physics, until the numbers are within a few percent of the real car's. `grip_k` 1.4 is the Seicento's calibration
+   (0.96 g); 195/65 R15 road tyres sit near 1.19 (0.86 g).
+3. **Catalogue**: add the key to `CarCatalog.KEYS` (append: the order is the saved picker/open-world index), `RaceSettings.car_class`'s
+   `@export_enum`, and the `match` arms of `display_name`, `spec` and `visual` (a `*_VISUAL` dictionary: GLB path, wheel radius, wheelbase,
+   half tracks, roof-number, brake-light, tailpipe and `fx_axle` points, contact-shadow size, and the `decal_aims` rays that place the door,
+   sunstrip, bonnet and sill decals on the Body by raycast: nothing is measured by hand). A car is unlocked when the campaign save's
+   `cars` list holds its key (`CarCatalog.unlocked`; the campaign sets it, no shop or fan gate), or with the dev menu's unlock everything.
+   The pickers (race set-up CAR, open-world CAR button), `RaceCarVisual.car_key`/`set_car()`, `FreeCar.fit_model` and
+   `Game._models_for` need no change. The whole field drives the chosen car.
+4. **Tests**: `tests/test_model_contract.gd` (add the GLB to `CONTRACT` and its body/wheel size to `SIZES`), `tests/test_car_catalog.gd`
+   (performance band against the real car, the model's size against the spec, wheels at the axles, decals on the body, a headless race
+   on two circuits, calibration and profile of its own), then `tests/run_tests.gd` and the parity race `tests/_run_race_test.gd`.
+   Look at it in a window afterwards: decals, plate, lamps at night, wheels in the arches, chase-camera distance for a longer car.
+
 ## Sounds
 
 The player's engine is synthesised live (`godot/scripts/ui/race_audio.gd`). Every other sound (other cars,
@@ -99,3 +132,25 @@ Points of interest: [`godot/scripts/world/poi.gd`](godot/scripts/world/poi.gd) (
 discoverable landmarks (places within 80 m merged) with their state in `WorldProgress` (unknown / known / discovered), the marker
 dictionaries (`kind: "poi"`) the HUD draws on the satnav (nearest 8 inside the disc, no labels) and the big map, and the info lines.
 A new kind (drift zones, mission beacons) is an entry in `Poi.KINDS` plus a finder; `tests/test_poi.gd` covers it.
+
+Live events (Forza Horizon style, raced in free roam with no track load): [`godot/scripts/world/live_events.gd`](godot/scripts/world/live_events.gd)
+(`LiveEvents`) keeps a board of up to 4 events generated round the car on the map's road graph (`TownMap.route`): street
+sprints through checkpoints, speed zones (average speed on a straight main road), drift zones (`DriftScore` on a twisty
+stretch) and trailblazers (any way to a far point). Each lasts 5-9 game hours, is replaced when it expires, is cleared or
+is left 2.6 km behind, and keeps clear of the stage and mission beacons. Medal targets come from `LiveEvents.pace_time` (a
+reference run with the driven car's `PACE` numbers), so faster cars face harder clocks. `OpenWorld` puts them at the end
+of `events` with `"live"` set (beacon, card, map marker kind `"live"`, GPS) and runs them in `_update_live` (countdown hold,
+checkpoint beacon `live_cp`, HUD `set_live`, ABANDON EVENT on the pause menu); medals go to `WorldProgress.live`.
+`tests/test_live_events.gd` covers it; `tests/_live_events_probe.gd` times the generation (about 3 ms each).
+The campaign missions (`Missions`) are raced on the map the same way: [`godot/scripts/world/map_missions.gd`](godot/scripts/world/map_missions.gd)
+(`MapMissions.event`) takes each mission's route from its baked track file (the routes are in the open world's metres) and
+LiveEvents runs it with a field from [`street_rivals.gd`](godot/scripts/world/street_rivals.gd) (`StreetRivals`: cars on the
+route polyline with a grip/accel/brake envelope, drag grid four abreast, knockout eliminations). A rally mission is its special
+stages in turn with the player driving the liaisons; the crews' times come from `pace_time`. During a mission the traffic is
+kept off the roads (`OpenWorld._roads_closed`), the clock jumps to the mission's hour, and the result goes through
+`Missions.record` as a raced one did (`OpenWorld._mission_finished`). **Missions happen only on the open-world map**
+(user, 2026-11-10): the campaign stage list no longer lists them, `Game._on_world_stage` ignores a mission index, and a
+mission whose route is not on the map gets no beacon. The old Bór circuit is not on the map's roads, so the knockout runs one
+lap of Mały Bór cut into sectors (`MapMissions.OFF_MAP`, `ev.sectors`) and the rally leaves the Bór stage out. The game's
+mission race code (`Missions.apply_settings`, `judge`, the mission rally flow) is no longer reached. The campaign stages
+(circuits, most in other towns) still load their own tracks.

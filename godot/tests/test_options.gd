@@ -161,6 +161,7 @@ func _game_options(errors: Array[String]) -> void:
 	game.graphics_aspect = 0
 	AudioSettings.levels = {"master": 100, "engine": 100, "effects": 100, "voice": 100}
 	game._load_graphics_settings()
+	_restore_cfg(cfg_path, backup) # at once: other suites and agents share the sandbox and would load 21:9 from it
 	if game.graphics_resolution != Vector2i(1280, 720) or game.graphics_aspect != 3:
 		errors.append("resolution and aspect should load back: %s, %d" % [game.graphics_resolution, game.graphics_aspect])
 	if AudioSettings.levels != {"master": 70, "engine": 30, "effects": 0, "voice": 90}:
@@ -183,6 +184,7 @@ func _game_options(errors: Array[String]) -> void:
 	if game.graphics_preset != 3 or game.graphics_reflections != 1:
 		errors.append("Ultra should survive a save and load: preset %d" % game.graphics_preset)
 	game._on_preset_selected(2)
+	_restore_cfg(cfg_path, backup)
 
 	# fullscreen: the resolution is the 3D view's render target, fitted inside it; windowed leaves it alone
 	game.graphics_display_mode = 1
@@ -227,9 +229,14 @@ func _game_options(errors: Array[String]) -> void:
 	game.graphics_aspect = 0
 	game._apply_aspect()
 	game.free()
+	_restore_cfg(cfg_path, backup)
 
+## Puts graphics.cfg back as it was before the suite (removes it if there was none). Called right after each check
+## that saves, never only at the end: the dev sandbox is shared, and a killed run must not leave 21:9 behind.
+func _restore_cfg(cfg_path: String, backup: PackedByteArray) -> void:
 	if backup.is_empty():
-		DirAccess.remove_absolute(ProjectSettings.globalize_path(cfg_path))
+		if FileAccess.file_exists(cfg_path):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(cfg_path))
 	else:
 		var f := FileAccess.open(cfg_path, FileAccess.WRITE)
 		f.store_buffer(backup)

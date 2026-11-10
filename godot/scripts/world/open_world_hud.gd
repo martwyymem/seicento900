@@ -58,6 +58,8 @@ var street_plate: Panel ## the dark plate under the street name, so it reads on 
 var area_label: Label
 var chain_box: VBoxContainer
 var chain_title: Label
+var live_title: Label ## a live event's clock or score, over the skill chain (OpenWorld._update_live)
+var live_line: Label
 var chain_points: Label
 var banners: VBoxContainer
 var card: PanelContainer
@@ -170,6 +172,16 @@ func _build() -> void:
 	chain_title = _label("", 18, Color.WHITE, 800)
 	chain_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	chain_box.add_child(chain_title)
+	live_title = _label("", 30, Color.WHITE, 900)
+	live_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	live_title.visible = false
+	chain_box.add_child(live_title)
+	chain_box.move_child(live_title, 0)
+	live_line = _label("", 16, Color(1, 1, 1, 0.85), 800)
+	live_line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	live_line.visible = false
+	chain_box.add_child(live_line)
+	chain_box.move_child(live_line, 1)
 	# discovery and result banners, left, between the stats and the satnav (_trim_banners keeps them there)
 	banners = VBoxContainer.new()
 	banners.position = Vector2(EDGE, 190)
@@ -497,6 +509,19 @@ func set_chain(points: int, label: String) -> void:
 	if label != was:
 		_layout()
 
+## A live event's two lines at the top centre (clock or score, then checkpoints and the gold target); "" hides them.
+func set_live(title: String, line: String, color: Color) -> void:
+	if live_title.text == title and live_line.text == line:
+		return
+	var shown := live_title.visible
+	live_title.text = title
+	live_line.text = line
+	live_title.add_theme_color_override("font_color", color.lightened(0.25))
+	live_title.visible = title != ""
+	live_line.visible = line != ""
+	if shown != live_title.visible:
+		_layout()
+
 func notify(title: String, sub: String, color := ORANGE) -> void:
 	# the same banner again while it is still up (a key pressed twice, an event reported twice) is not stacked:
 	# the one on screen is kept and its time starts over
@@ -577,7 +602,8 @@ func _skin_changed() -> void:
 
 func show_event(sub: String, title: String, body: String, hint: String, color: Color) -> void:
 	card_sub.text = sub
-	card_body.max_lines_visible = 6
+	# _fit_card trims this to what fits above the speedometer; 6 cut a mission's Target and fans lines off at 720p (2026-11-10 QA)
+	card_body.max_lines_visible = 10
 	card_title.text = title
 	card_body.text = body
 	card_hint.text = hint
@@ -623,10 +649,10 @@ func toggle_map(on: bool) -> void:
 		big_overlay.queue_redraw()
 
 ## The pause menu's CAR button shows which car is fitted.
-func set_car_label(hyper: bool, unlocked: bool) -> void:
+func set_car_label(hyper: bool, unlocked: bool, car_name := "") -> void: # car_name: a catalogue car other than the two Seicentos
 	for b in pause_buttons:
 		if b.text.begins_with("CAR:"):
-			b.text = "CAR: HYPERCAR SEICENTO" if hyper else ("CAR: SEICENTO" if unlocked else "CAR: SEICENTO  (HYPERCAR AT LEVEL 10)")
+			b.text = ("CAR: " + car_name.to_upper()) if car_name != "" else "CAR: HYPERCAR SEICENTO" if hyper else ("CAR: SEICENTO" if unlocked else "CAR: SEICENTO  (HYPERCAR AT LEVEL 10)")
 
 func show_pause(on: bool) -> void:
 	if on and not pause_panel.visible:

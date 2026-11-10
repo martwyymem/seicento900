@@ -2,9 +2,12 @@
 ## Env: TRACK (gp), WEATHER (dry|wet|snow|hail|fog|variable), HOUR (14), OPP (8), RUN (8 s of race time before
 ## the first shot), SHOTS (1: shots RUN_GAP s apart), MODES ("0" or e.g. "0,1,2,3,4,5,6": retro styles shot per
 ## frame, the race frozen meanwhile), CAM (camera cycles before shooting), ASPECT (aspect picker index),
+## CLEAN (1: hide HUD and racing line for pixel measurements), PRESET (0 Low .. 3 Ultra), TELE (lap distance, m), PERF (frames to time),
 ## WARP (time-warp steps while getting to RUN), TAG, OUT (/tmp/qa/shots), MODS (comma list of CarMods ids put on the player's car without touching the save, e.g. monster,nitro).
 ## TRACK=gp WEATHER=wet HOUR=22 godot --path godot --audio-driver Dummy -s tests/_qa_race_shots.gd
 extends SceneTree
+
+const Guard := preload("res://tests/_qa_save_guard.gd")
 
 var game
 
@@ -41,15 +44,19 @@ func _save(path: String) -> void:
 
 func _initialize() -> void:
 	Brain.use_disk = false
+	Guard.backup() # the shared dev sandbox: put the saves back at the end
 	var out := _env("OUT", "/tmp/qa/shots")
 	var tag := _env("TAG", "shot")
 	DirAccess.make_dir_recursive_absolute(out)
 	game = load("res://ui/game.tscn").instantiate()
 	root.add_child(game)
 	await _wait(30)
-	if _env("ASPECT", "") != "":
-		game._on_aspect_selected(int(_env("ASPECT", "0")))
-		await _wait(5)
+	game._on_aspect_selected(int(_env("ASPECT", "1"))) # 16:9 unless asked (the sandbox may hold 21:9)
+	if _env("PRESET", "") != "":
+		game._on_preset_selected(int(_env("PRESET", "2"))) # 0 Low .. 3 Ultra
+	if _env("SHARP", "") != "": # FSR sharpening picker index (0 off .. 3 high)
+		game._on_sharpening_selected(int(_env("SHARP", "2")))
+	await _wait(5)
 	game._home_select(1, false)
 	game._activate_home_item()
 	await _wait(5)
@@ -75,6 +82,15 @@ func _initialize() -> void:
 		quit(1)
 		return
 	game.race.set_autopilot(true)
+	if _env("TELE", "") != "": # move the whole field to this lap distance (m), e.g. to look at a landmark
+		var dist: float = float(_env("TELE", "0")) - float(game.race.player.s)
+		for c in game.race.cars:
+			c.s += dist
+		print("QA teleported the field to s=%.0f" % game.race.player.s)
+	if _env("CLEAN", "") != "": # no HUD, no racing line: frames for pixel measurements
+		game.hud.visible = false
+		if game.world_view.show_racing_line:
+			game.world_view.toggle_racing_line()
 	if _env("MODS", "") != "":
 		var on := {}
 		for id in _env("MODS", "").split(","):
@@ -118,6 +134,71 @@ func _initialize() -> void:
 			l.visible = false
 		await _save("%s/%s_diag_nothing.png" % [out, tag])
 		Engine.time_scale = 1.0
+	if _env("PERF", "") != "": # frame time over PERF frames, vsync off
+		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+		Engine.max_fps = 0
+		await _wait(30)
+		var ts: Array[float] = []
+		var t_prev := Time.get_ticks_usec()
+		for k in int(_env("PERF", "120")):
+			await _wait(1)
+			var t_now := Time.get_ticks_usec()
+			ts.append((t_now - t_prev) / 1000.0)
+			t_prev = t_now
+		ts.sort()
+		print("QA perf preset %s: median %.2f ms p95 %.2f ms, draws %d, objects %d, prims %.2fM" % [_env("PRESET", "-"), ts[ts.size() / 2], ts[int(ts.size() * 0.95)],
+			Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME), Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME),
+			Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME) / 1.0e6])
+	if _env("SWEEP", "") != "": # the same frozen frame at each preset in SWEEP (e.g. "1,2"), FSR sharpening index in SHARPS
+		Engine.time_scale = 0.0
+		for pr in _env("SWEEP", "").split(","):
+			game._on_preset_selected(int(pr))
+			for sh in _env("SHARPS", "-").split(","):
+				if sh != "-":
+					game._on_sharpening_selected(int(sh))
+				await _wait(4)
+				await _save("%s/%s_preset%s_sharp%s.png" % [out, tag, pr, sh])
+		Engine.time_scale = 1.0
+		game.queue_free()
+		await process_frame
+		Guard.restore()
+		quit()
+		return
+	if _env("LAYERS", "") != "": # night lighting layers one by one, the race frozen: what lights a glare
+		var w = game.world_view
+		Engine.time_scale = 0.0
+		await _save("%s/%s_layers_base.png" % [out, tag])
+		var e0: PackedFloat32Array = w._lamp_energy.duplicate()
+		for f in [0.5, 0.25]:
+			for i in e0.size():
+				if w._lamp_cone[i] < 50.0:
+					w._lamp_energy[i] = e0[i] * f
+			await _save("%s/%s_layers_masts%d.png" % [out, tag, roundi(f * 100)])
+		w._lamp_energy = e0.duplicate()
+		var streaks: Array = w.find_children("LampStreaks", "", true, false)
+		for n in streaks:
+			n.visible = false
+		await _save("%s/%s_layers_nostreaks.png" % [out, tag])
+		for d in w._lamp_decals:
+			if float(d.get_meta("streak", 0.0)) > 2.0:
+				d.visible = false # the masts' pools first
+		await _save("%s/%s_layers_nomastpools.png" % [out, tag])
+		for d in w._lamp_decals:
+			d.visible = false
+		await _save("%s/%s_layers_nopools.png" % [out, tag])
+		for i in w._lamp_energy.size():
+			if w._lamp_cone[i] < 50.0:
+				w._lamp_energy[i] = 0.0 # the floodlight masts first (the pool's energies are set from these every frame)
+		await _save("%s/%s_layers_nomasts.png" % [out, tag])
+		for i in w._lamp_energy.size():
+			w._lamp_energy[i] = 0.0
+		await _save("%s/%s_layers_nolamps.png" % [out, tag])
+		Engine.time_scale = 1.0
+		game.queue_free()
+		await process_frame
+		Guard.restore()
+		quit()
+		return
 	var modes := _env("MODES", "0").split(",")
 	var shots := int(_env("SHOTS", "1"))
 	for n in shots:
@@ -136,4 +217,5 @@ func _initialize() -> void:
 	print("QA race player pos P%d, lap %d" % [game.race.order.find(game.race.player) + 1, game.race.player.lap])
 	game.queue_free()
 	await process_frame
+	Guard.restore()
 	quit()

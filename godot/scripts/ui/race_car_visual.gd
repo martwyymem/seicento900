@@ -18,7 +18,13 @@ const FX_AXLE := Vector3(0.0, 0.03, 1.12) ## effects come off the rear contact p
 const WHEEL_SPOTS := [Vector3(-HALF_TRACK, WHEEL_RADIUS, -1.1), Vector3(HALF_TRACK, WHEEL_RADIUS, -1.1),
 	Vector3(-HALF_TRACK, WHEEL_RADIUS, 1.1), Vector3(HALF_TRACK, WHEEL_RADIUS, 1.1)] ## FL, FR, RL, RR like the physics
 
-static var _shared := {}
+static var _shared := {} ## the stock Seicento's shared resources (and the model-independent ones every car reuses)
+static var _shared_cars := {} ## CarCatalog key -> that car's shared resources, for every car but the stock one
+var car_key := "stock" ## CarCatalog key: set before the visual enters the tree, or change it later with set_car()
+var _fit: Dictionary = CarCatalog.STOCK_VISUAL ## CarCatalog.visual(car_key)
+var _wheel_radius := WHEEL_RADIUS
+var _wheelbase := WHEELBASE
+var _wheel_spots: Array = WHEEL_SPOTS
 static var _env_materials: Array[ShaderMaterial] = [] ## every car_coat.gdshader material, see _env_material()
 
 var paint_material: StandardMaterial3D
@@ -81,7 +87,44 @@ var _fx := {} ## effect kind -> GPUParticles3D, made the first time the car need
 var fx_quality := 2 ## graphics level for a car outside a race (the open world), which drives its effects with set_fx()
 
 func _ready() -> void:
-	var sh := _shared_resources()
+	_build()
+
+## Swaps the visual to another catalogue car: the body, lamps, wheels and decals are rebuilt, the paint, livery, stripes and
+## number are kept.
+func set_car(key: String) -> void:
+	if key == car_key:
+		return
+	car_key = key
+	if body_pivot == null:
+		return # not built yet: _ready builds it for this key
+	var stripes_on := stripes_node.visible if is_instance_valid(stripes_node) else true
+	for c in get_children():
+		remove_child(c)
+		c.queue_free()
+	steer_pivots.clear()
+	wheels.clear()
+	livery_nodes.clear()
+	_light_bar.clear()
+	_fx.clear()
+	_brake_light = null
+	_beacon = null
+	_tail_energy = -1.0
+	_damage_shown = 0.0
+	_dents_shown = {"front": 0.0, "rear": 0.0, "left": 0.0, "right": 0.0}
+	_build()
+	set_paint(_paint)
+	set_livery(livery)
+	set_stripes(stripes_on)
+	car_number = car_number
+
+func _build() -> void:
+	_fit = CarCatalog.visual(car_key)
+	_wheel_radius = _fit.wheel_radius
+	_wheelbase = _fit.wheelbase
+	var half := _wheelbase * 0.5
+	_wheel_spots = [Vector3(-_fit.half_track_front, _wheel_radius, -half), Vector3(_fit.half_track_front, _wheel_radius, -half),
+		Vector3(-_fit.half_track_rear, _wheel_radius, half), Vector3(_fit.half_track_rear, _wheel_radius, half)]
+	var sh := _shared_resources(car_key)
 	paint_material = StandardMaterial3D.new()
 	paint_material.vertex_color_use_as_albedo = true
 	paint_material.vertex_color_is_srgb = true
@@ -168,7 +211,7 @@ func _ready() -> void:
 		livery_nodes[k] = node
 	martini_node = livery_nodes[2]
 
-	for spot in WHEEL_SPOTS:
+	for spot in _wheel_spots:
 		var pivot := Node3D.new()
 		pivot.position = spot
 		add_child(pivot)
@@ -196,7 +239,7 @@ func _ready() -> void:
 	number_label.font_size = 34
 	number_label.outline_size = 8
 	number_label.modulate = Color("#202124")
-	number_label.position = Vector3(0, 1.428, 0.6)
+	number_label.position = _fit.roof_number
 	number_label.rotation.x = -PI / 2.0
 	number_label.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	body_pivot.add_child(number_label)
@@ -205,6 +248,17 @@ func _ready() -> void:
 	# surface, at points and normals measured on models/seicento.glb's Body mesh (doors: centred on the model's
 	# white door panel). Re-measure if the car is rebuilt.
 	var decal_mat := _decal_material()
+	if _fit.has("decal_aims"):
+		# every car after the Seicento: the decals are aimed at the model by rays (CarCatalog), so nothing is measured by hand
+		var aims: Dictionary = _fit.decal_aims
+		_door_decal_l = _aim_decal("DoorDecalL", decal_mat, sh, aims.DoorDecalL)
+		_door_decal_r = _aim_decal("DoorDecalR", decal_mat, sh, aims.DoorDecalR)
+		_sunstrip_decal = _aim_decal("Sunstrip", decal_mat, sh, aims.Sunstrip)
+		_hood_decal = _aim_decal("HoodDecal", decal_mat, sh, aims.HoodDecal)
+		_sill_decal_l = _aim_decal("SillDecalL", decal_mat, sh, aims.SillDecalL)
+		_sill_decal_r = _aim_decal("SillDecalR", decal_mat, sh, aims.SillDecalR)
+		_update_decals()
+		return
 	_door_decal_l = _add_decal("DoorDecalL", decal_mat, Vector3(-0.7408, 0.65, -0.02), Vector3(-0.9984, 0.0568, -0.0008), Vector3.UP)
 	_door_decal_r = _add_decal("DoorDecalR", decal_mat, Vector3(0.7408, 0.65, -0.02), Vector3(0.9984, 0.0568, -0.0008), Vector3.UP)
 	# along the top of the windscreen, reading from the front; "up" runs up the glass towards the roof
@@ -214,6 +268,20 @@ func _ready() -> void:
 	_sill_decal_l = _add_decal("SillDecalL", decal_mat, Vector3(-0.7415, 0.385, 0.25), Vector3(-0.998, -0.065, 0.003), Vector3.UP)
 	_sill_decal_r = _add_decal("SillDecalR", decal_mat, Vector3(0.7415, 0.385, 0.25), Vector3(0.998, -0.065, 0.003), Vector3.UP)
 	_update_decals()
+
+## A decal on the car's body where a ray from aim.from along aim.dir meets it (the Body mesh's triangles), reading along aim.up.
+func _aim_decal(label: String, mat: StandardMaterial3D, sh: Dictionary, aim: Dictionary) -> MeshInstance3D:
+	if not sh.has("tri"):
+		sh["tri"] = (sh.shell as Mesh).generate_triangle_mesh()
+	var dir: Vector3 = (aim.dir as Vector3).normalized()
+	var hit: Dictionary = (sh.tri as TriangleMesh).intersect_ray(aim.from, dir) if sh.tri != null else {}
+	if hit.is_empty():
+		push_warning("%s: the ray from %s along %s misses the %s body" % [label, aim.from, dir, car_key])
+		return _add_decal(label, mat, aim.from, -dir, aim.up)
+	var n: Vector3 = hit.normal
+	if n.dot(dir) > 0.0:
+		n = -n
+	return _add_decal(label, mat, hit.position, n, aim.up)
 
 func _add_decal(label: String, mat: StandardMaterial3D, surface: Vector3, normal: Vector3, up: Vector3) -> MeshInstance3D:
 	var z := normal.normalized()
@@ -231,10 +299,10 @@ func _add_decal(label: String, mat: StandardMaterial3D, surface: Vector3, normal
 ## so the bigger tyres still stand on the ground. 1.0 puts the stock wheels back.
 func set_wheel_scale(k: float) -> void:
 	for i in steer_pivots.size():
-		var spot: Vector3 = WHEEL_SPOTS[i]
+		var spot: Vector3 = _wheel_spots[i]
 		steer_pivots[i].scale = Vector3.ONE * k
 		steer_pivots[i].position = Vector3(spot.x * (1.0 + (k - 1.0) * 0.4), spot.y * k, spot.z)
-	body_pivot.position.y = WHEEL_RADIUS * (k - 1.0)
+	body_pivot.position.y = _wheel_radius * (k - 1.0)
 
 func set_paint(color: Color) -> void:
 	if not paint_material:
@@ -368,8 +436,9 @@ func set_stripes(enabled: bool) -> void:
 
 ## Headlight glow is the same for every car, so it lives on the shared material.
 static func set_night(night: float) -> void:
-	var sh := _shared_resources()
-	sh.head.set_shader_parameter("lit", 0.08 + 3.6 * night)
+	_shared_resources() # the stock car's resources (and the shared ones) exist
+	for sh in [_shared] + _shared_cars.values():
+		sh.head.set_shader_parameter("lit", 0.08 + 3.6 * night)
 	for m in _env_materials:
 		m.set_shader_parameter("strength", float(m.get_meta("day_strength")) * (1.0 - 0.9 * night))
 	var amb := Color(0.12, 0.14, 0.20).lerp(Color(0.52, 0.56, 0.62), 1.0 - night)
@@ -435,9 +504,9 @@ func sync(car: RaceCar, dt: float, curvature: float, night: float, ghost: bool) 
 		if physical:
 			_spins[i] = fmod(_spins[i] - car.phys.w[i] * dt, TAU)
 		else:
-			_spins[i] = fmod(_spins[i] - car.speed * dt / WHEEL_RADIUS, TAU)
+			_spins[i] = fmod(_spins[i] - car.speed * dt / _wheel_radius, TAU)
 		wheels[i].rotation.x = _spins[i]
-	var steer_angle: float = car.steer if car.control == "free" else atan(WHEELBASE * curvature) * 1.4
+	var steer_angle: float = car.steer if car.control == "free" else atan(_wheelbase * curvature) * 1.4
 	steer_pivots[0].rotation.y = -steer_angle
 	steer_pivots[1].rotation.y = -steer_angle
 
@@ -459,7 +528,7 @@ func sync(car: RaceCar, dt: float, curvature: float, night: float, ghost: bool) 
 			_brake_light.spot_angle = 55.0
 			_brake_light.shadow_enabled = false
 			_brake_light.light_specular = 0.12 # a red wash on the road; on wet tarmac after dark full specular was a blinding blob
-			_brake_light.transform = Transform3D(Basis.looking_at(Vector3(0.0, -0.3, 1.0).normalized()), Vector3(0.0, 0.5, 2.1))
+			_brake_light.transform = Transform3D(Basis.looking_at(Vector3(0.0, -0.3, 1.0).normalized()), _fit.brake_light)
 			body_pivot.add_child(_brake_light)
 		_brake_light.light_energy = BRAKE_LIGHT_ENERGY if car.brake_on else 0.0 # one power: the sun drowns it by day, the dark shows it
 
@@ -491,7 +560,7 @@ func sync(car: RaceCar, dt: float, curvature: float, night: float, ghost: bool) 
 	_update_fx(car)
 	if _previous_throttle > 0.6 and car.throttle < 0.08 and car.rpm > 3200.0 and _fx_near:
 		# a pop from the tailpipe tip (build_seicento.py: 0.30 m right, 0.18 m up, behind the bumper) on a sharp lift
-		FxParticles.burst(self, "backfire", to_global(Vector3(0.30, 0.19, 1.56)), 8, _world.quality)
+		FxParticles.burst(self, "backfire", to_global(_fit.tailpipe), 8, _world.quality)
 	_previous_throttle = car.throttle
 
 # ---------------- tyre smoke, spray and kick-up ----------------
@@ -592,7 +661,7 @@ func _make_emitter(kind: String) -> GPUParticles3D:
 		var q: int = _world.quality if is_instance_valid(_world) and "quality" in _world else fx_quality
 		var p := FxParticles.attach(self, preset, q, 1.0 if is_player else 0.7)
 		if p:
-			p.position = FX_AXLE
+			p.position = _fit.fx_axle
 			return p
 	var sh := _shared_resources()
 	var spec: Dictionary = FX_KINDS[kind]
@@ -606,7 +675,7 @@ func _make_emitter(kind: String) -> GPUParticles3D:
 	p.draw_pass_1 = sh.puff
 	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	p.visibility_aabb = AABB(Vector3(-30, -3, -30), Vector3(60, 14, 90))
-	p.position = FX_AXLE
+	p.position = _fit.fx_axle
 	p.emitting = false
 	add_child(p)
 	return p
@@ -627,12 +696,16 @@ const FX_KINDS := {
 }
 
 # ---------------- shared geometry ----------------
-static func _shared_resources() -> Dictionary:
-	if not _shared.is_empty():
+static func _shared_resources(key := "stock") -> Dictionary:
+	if key == "stock" and not _shared.is_empty():
 		return _shared
+	if key != "stock" and _shared_cars.has(key):
+		return _shared_cars[key]
+	var fit: Dictionary = CarCatalog.visual(key)
+	var common: Dictionary = {} if key == "stock" else _shared_resources("stock") # the model-independent resources are made once
 	# Local frame: -Z forward, +X right, +Y up; the model's origin is on the ground midway between the axles.
 	var meshes := {}
-	var root := _load_model()
+	var root := _load_model(fit.model)
 	if root:
 		for mi in root.find_children("*", "MeshInstance3D", true, false):
 			meshes[mi.name] = (mi as MeshInstance3D).mesh
@@ -722,7 +795,7 @@ static func _shared_resources() -> Dictionary:
 	# Soft dark ellipse under the car keeps it sitting on the road: a dense core under the floor (ambient
 	# occlusion) and a wide soft falloff past the sills and bumpers.
 	var contact := PlaneMesh.new()
-	contact.size = Vector2(2.0, 3.9)
+	contact.size = fit.contact
 	var fade := Gradient.new()
 	fade.offsets = PackedFloat32Array([0.0, 0.5, 0.78, 1.0])
 	fade.colors = PackedColorArray([Color(0, 0, 0, 0.82), Color(0, 0, 0, 0.72), Color(0, 0, 0, 0.3), Color(0, 0, 0, 0)])
@@ -740,11 +813,17 @@ static func _shared_resources() -> Dictionary:
 	contact_mat.albedo_color = Color.WHITE
 	contact.material = contact_mat
 
-	_shared = {"shell": shell, "details": details, "cabin": cabin, "flakes": _flake_texture(), "peel": _peel_texture(), "coat": _coat_material(),
-		"puff": _puff_mesh(), "fx": _fx_materials(), "stripes": meshes.get("Stripes", BoxMesh.new()), "liveries": liveries,
+	var made := {"shell": shell, "details": details, "cabin": cabin,
+		"flakes": common.get("flakes") if not common.is_empty() else _flake_texture(), "peel": common.get("peel") if not common.is_empty() else _peel_texture(),
+		"coat": common.get("coat") if not common.is_empty() else _coat_material(), "puff": common.get("puff") if not common.is_empty() else _puff_mesh(),
+		"fx": common.get("fx") if not common.is_empty() else _fx_materials(), "stripes": meshes.get("Stripes", BoxMesh.new()), "liveries": liveries,
 		"wheel": meshes.get("Wheel", BoxMesh.new()), "contact": contact, "head": head,
 		"paint_surface": maxi(0, _surface(shell, "Paint")), "tail_surface": maxi(0, _surface(details, "Taillight")), "bulb_surface": _surface(details, "TailBulb")}
-	return _shared
+	if key == "stock":
+		_shared = made
+	else:
+		_shared_cars[key] = made
+	return made
 
 ## The mirror pass (shaders/car_coat.gdshader) over the paint, glass and lamp lenses: a crisp horizon and sun glint on top of
 ## the sky's soft radiance. Every one made here is kept in "env" so the world's sky, the sun and the night reach all of them.
@@ -857,15 +936,15 @@ static func _fx_materials() -> Dictionary:
 	return out
 
 ## The imported model when the editor has imported it, otherwise the GLB read directly (fresh checkouts).
-static func _load_model() -> Node:
-	if ResourceLoader.exists(MODEL_PATH):
-		var packed := load(MODEL_PATH) as PackedScene
+static func _load_model(path := MODEL_PATH) -> Node:
+	if ResourceLoader.exists(path):
+		var packed := load(path) as PackedScene
 		if packed:
 			return packed.instantiate()
 	var doc := GLTFDocument.new()
 	var state := GLTFState.new()
-	if doc.append_from_file(ProjectSettings.globalize_path(MODEL_PATH), state) != OK:
-		push_error("Car model %s could not be read" % MODEL_PATH)
+	if doc.append_from_file(ProjectSettings.globalize_path(path), state) != OK:
+		push_error("Car model %s could not be read" % path)
 		return null
 	return doc.generate_scene(state)
 

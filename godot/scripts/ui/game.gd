@@ -146,11 +146,13 @@ const UPSCALE_PRESETS := [
 	{"name": "Performance (50%)", "scale": 0.5},
 	{"name": "Ultra performance (33%)", "scale": 0.33},
 ]
-## FSR sharpening strength; Viewport.fsr_sharpness runs from 0 (sharpest) to 2 (softest).
+## FSR sharpening strength; Viewport.fsr_sharpness runs from 0 (sharpest) to 2 (softest). Medium (the default) was
+## 0.4: on the Medium preset's 67% render it turned the wet night road's specular grain into white glitter, noisier
+## than High at native (2026-11-10 QA, rms grain 17.8e-3 vs 16.2e-3); 0.8 is 14.5e-3.
 const SHARPENING := [
 	{"name": "Off", "value": 2.0},
-	{"name": "Low", "value": 0.8},
-	{"name": "Medium", "value": 0.4},
+	{"name": "Low", "value": 1.2},
+	{"name": "Medium", "value": 0.8},
 	{"name": "High", "value": 0.1},
 ]
 
@@ -309,6 +311,7 @@ var campaign_start_button: Button
 var campaign_cleared := false ## the last campaign race met its target: back at the menu, the briefing moves on
 var open_world: OpenWorld = null ## the campaign's free roam round Brzeszcze (scripts/world/open_world.gd), kept once built
 var world_return := -1 ## the campaign stage started from the open world: its results lead back to its beacon
+var mission_rally := -1 ## a rally mission (Missions) being run through the rally flow: its campaign index, else -1
 var campaign_world_button: Button
 var champ_data: Dictionary = {}
 var track_picker: MenuSelector
@@ -344,8 +347,7 @@ var player_color_picker: ColorPickerButton
 var player_stripes_toggle: CheckButton
 var player_finish_picker: MenuSelector
 var car_class_picker: MenuSelector
-var _hyper_model: CarModel
-var _hyper_strategy: Strategy
+var _car_models := {} ## CarCatalog key -> {car_model, tyres, strategy} for every car but the stock one (_models_for)
 var setup_format_row: Control
 var setup_conditions_row: Control
 var setup_driving_row: HBoxContainer
@@ -1038,8 +1040,8 @@ func _build_setup() -> void:
 	var livery_row := HBoxContainer.new()
 	livery_row.add_theme_constant_override("separation", 14)
 	driver.add_child(livery_row)
-	car_class_picker = _option_field(livery_row, "CAR", ["Seicento 900", "Hypercar Seicento"])
-	car_class_picker.tooltip_text = "The Hypercar Seicento (a Seicento with a Ferrari 499P's power, AWD, in AF Corse's no. 83 yellow) opens at the top fan level"
+	car_class_picker = _option_field(livery_row, "CAR", Array(CarCatalog.KEYS).map(func(k: String) -> String: return CarCatalog.display_name(k)))
+	car_class_picker.tooltip_text = "The Hypercar Seicento (a Seicento with a Ferrari 499P's power, AWD, in AF Corse's no. 83 yellow) opens at the top fan level; the other cars are won by beating campaign missions. The whole field drives the car you pick"
 	car_class_picker.item_selected.connect(_on_car_class_selected)
 	player_finish_picker = _option_field(livery_row, "FINISH", ["Gloss", "Metallic", "Martini Racing", "Abarth", "Marlboro"])
 	var stripes_col := VBoxContainer.new()
@@ -1704,8 +1706,9 @@ func _refresh_strategy() -> void:
 	# a run of ◂ ▸ circuit presses plans once (4-14 ms), for the circuit the selection rests on
 	while Time.get_ticks_msec() < _strategy_rest_msec:
 		await get_tree().process_frame
-	var hyper :=is_instance_valid(car_class_picker) and car_class_picker.selected == 1 and _hypercar_open()
-	var models: Dictionary = _models_for("hypercar" if hyper else "stock")
+	var ckey := _picked_car()
+	var hyper := ckey != "stock" # another car keeps its own calibration (Track.cal_alt)
+	var models: Dictionary = _models_for(ckey)
 	var strat: Strategy = models.strategy
 	var cm: CarModel = models.car_model
 	var key: String = TRACK_KEYS[track_picker.selected]
@@ -2046,7 +2049,9 @@ func _dev_entries() -> Array:
 	add.call("FANS & UNLOCKS", "Unlock everything (hypercar, final race, modifiers): %s" % ("ON" if FanLevels.dev_unlock else "off"),
 		func() -> void: FanLevels.dev_unlock = not FanLevels.dev_unlock)
 	add.call("FANS & UNLOCKS", "Fans now: %s (level %d)" % [OpenWorldHud._thousands(_fan_total()), FanLevels.level(_fan_total())], func() -> void: pass)
+	_dev_campaign_entries(add)
 	if open_world != null and open_world.active:
+		_dev_world_entries(add)
 		for spot in open_world.map.spots.keys():
 			add.call("OPEN WORLD · TELEPORT", String(spot), func() -> void: open_world.dev_teleport(String(spot)), true)
 		for h in [6.0, 12.0, 18.5, 22.0]:
@@ -2061,10 +2066,89 @@ func _dev_entries() -> Array:
 				race.weather.wet = float(w[2]))
 		add.call("RACE · CAR", "Repair the car", func() -> void: Service.fit(race.player, {}, 0.0))
 		add.call("RACE · CAR", "Fill the tank", func() -> void: race.player.fuel = race.spec.tank)
+		_dev_mission_race_entries(add)
 		add.call("RACE · RACE", "Finish the race now (projected from the field's pace)", func() -> void:
 			race.approximate_finish()
 			_show_results(), true)
 	return out
+
+## Dev entries for the campaign: open every stage and mission, give the cars missions award, clear or forget missions.
+func _dev_campaign_entries(add: Callable) -> void:
+	add.call("CAMPAIGN", "Open every stage and mission (all ten stages cleared up to the last)", func() -> void:
+		var prog := Campaign.load_progress()
+		prog["unlocked"] = maxi(int(prog.get("unlocked", 0)), Campaign.STAGES.size() - 1)
+		Campaign.save_progress(prog)
+		_dev_refresh_world())
+	for key in CarCatalog.KEYS:
+		if key == "stock" or key == "hypercar":
+			continue
+		var owned: bool = key in Campaign.load_progress().get("cars", [])
+		add.call("CAMPAIGN · CARS", "%s %s (as its mission awards it)" % ["Take back" if owned else "Give", CarCatalog.display_name(key)], func() -> void:
+			var prog := Campaign.load_progress()
+			var cars: Array = prog.get("cars", []) if prog.get("cars", []) is Array else []
+			if key in cars:
+				cars.erase(key)
+			else:
+				cars.append(key)
+			prog["cars"] = cars
+			Campaign.save_progress(prog))
+	for k in Missions.MISSIONS.size():
+		var idx := Missions.BASE + k
+		var m: Dictionary = Missions.MISSIONS[k]
+		var state := "cleared" if Missions.is_cleared(idx) else ("open" if Missions.is_unlocked(idx) else "locked")
+		add.call("CAMPAIGN · MISSIONS", "Clear %s (%s, %s)" % [String(m.title), Missions.KIND_NAMES.get(String(m.kind), String(m.kind)), state], func() -> void:
+			var res := Missions.record(idx, {"success": true, "pos": 1, "score": 999999, "tier": 3, "time": 60.0, "line": "dev"})
+			_award_stage_fans(int(res.fans))
+			_dev_refresh_world())
+	add.call("CAMPAIGN · MISSIONS", "Forget every mission result (stages and cars stay)", func() -> void:
+		var prog := Campaign.load_progress()
+		prog.erase("missions")
+		Campaign.save_progress(prog)
+		_dev_refresh_world())
+
+## Dev entries for the open world beyond the original teleports: mission beacons and the points of interest.
+func _dev_world_entries(add: Callable) -> void:
+	for ev in open_world.events:
+		if int(ev.get("stage", -1)) >= Missions.BASE:
+			var pos: Vector2 = ev.pos
+			var hd := float(ev.get("heading", 0.0))
+			add.call("OPEN WORLD · MISSION BEACONS", "Drive to %s" % String(ev.get("title", "mission")), func() -> void:
+				open_world.drive.place(pos - Vector2(cos(hd), sin(hd)) * 25.0, hd)
+				open_world.drive.respawn()
+				open_world.snap_camera(), true)
+	var found := 0
+	for p in open_world.pois:
+		if p.is_discovered(open_world.progress):
+			found += 1
+	add.call("OPEN WORLD · POINTS OF INTEREST", "Discover every landmark and trap (%d/%d found)" % [found, open_world.pois.size()], func() -> void:
+		for p in open_world.pois:
+			if p.kind == Poi.LANDMARK:
+				open_world.progress.landmarks[p.id] = true
+			elif p.kind == Poi.TRAP and not open_world.progress.traps.has(p.id):
+				open_world.progress.traps[p.id] = Poi.TRAP_STARS[-1]
+		open_world.progress.save()
+		open_world._update_markers())
+	add.call("OPEN WORLD · POINTS OF INTEREST", "Forget every discovery, trap speed and first-time tip", func() -> void:
+		open_world.progress.landmarks.clear()
+		open_world.progress.traps.clear()
+		open_world.progress.tips.clear()
+		open_world.progress.save()
+		open_world._update_markers())
+
+## Dev entries inside a mission race: knock the drop-zone car out now, bank drift points.
+func _dev_mission_race_entries(add: Callable) -> void:
+	if race.s.knockout:
+		var zone := race.knockout_zone()
+		add.call("RACE · MISSION", "Knock out the drop-zone car now (%s)" % (zone.name if zone else "none"), func() -> void:
+			race._knock_out(race.order[0].lap if not race.order.is_empty() else 0))
+	if race.drift != null:
+		add.call("RACE · MISSION", "+1 000 drift points (score now %d)" % race.drift.total(), func() -> void:
+			race.drift.score += 1000)
+
+## After a campaign change from the dev menu: the open world's beacons follow the save.
+func _dev_refresh_world() -> void:
+	if open_world != null and open_world.active:
+		open_world._refresh_events()
 
 ## The car on screen as text for the dev menu: open-world metres from the baked origin, race metres from the track's origin.
 func dev_coordinates_text() -> String:
@@ -2147,22 +2231,36 @@ func _on_mod_toggled(on: bool, id: String) -> void:
 func _hypercar_open() -> bool:
 	return FanLevels.hypercar_unlocked(_fan_total())
 
+## The catalogue car the CAR picker rests on (the stock Seicento while the chosen one is still locked).
+func _picked_car() -> String:
+	if not is_instance_valid(car_class_picker):
+		return "stock"
+	var k := CarCatalog.key_at(car_class_picker.selected)
+	return k if CarCatalog.unlocked(k, _fan_total()) else "stock"
+
 func _on_car_class_selected(index: int) -> void:
-	if index == 1 and not _hypercar_open():
+	var picked := CarCatalog.key_at(index)
+	if not CarCatalog.unlocked(picked, _fan_total()):
 		car_class_picker.select(0)
-		status_label.text = "The Hypercar Seicento opens at fan level %d (%s): earn fans in the open world and the campaign." % [FanLevels.THRESHOLDS.size(), FanLevels.title(FanLevels.THRESHOLDS.size())]
+		status_label.text = "The %s %s." % [CarCatalog.display_name(picked), CarCatalog.unlock_hint(picked)]
 		status_label.modulate = DANGER
+	_apply_menu_car()
 	_update_menu_car_summary()
 	_queue_strategy_refresh()
 
-## The car model and strategist a race runs on: the Hypercar Seicento for a hypercar race, else the stock Seicento.
+## The car model and strategist a race runs on: the catalogue car's (CarCatalog key, made once), else the stock Seicento.
 func _models_for(car_class: String) -> Dictionary:
-	if car_class != "hypercar":
+	if car_class == "stock" or not CarCatalog.is_key(car_class):
 		return {"car_model": car_model, "tyres": tyre_model, "strategy": strategy}
-	if _hyper_model == null:
-		_hyper_model = Hypercar.model()
-		_hyper_strategy = Strategy.new(_hyper_model, tyre_model)
-	return {"car_model": _hyper_model, "tyres": tyre_model, "strategy": _hyper_strategy}
+	if not _car_models.has(car_class):
+		var cm := CarCatalog.model(car_class)
+		_car_models[car_class] = {"car_model": cm, "tyres": tyre_model, "strategy": Strategy.new(cm, tyre_model)}
+	return _car_models[car_class]
+
+## Puts the picked car on the menu's showcase turntable.
+func _apply_menu_car() -> void:
+	if is_instance_valid(menu_preview_car):
+		menu_preview_car.call("set_car", _picked_car())
 
 func _load_race_settings() -> void:
 	var cfg := ConfigFile.new()
@@ -2199,6 +2297,7 @@ func _load_race_settings() -> void:
 			if not CarSetup.is_stock(st):
 				car_setups[t] = st
 	_refresh_car_setup()
+	_apply_menu_car()
 	_loading_settings = false
 
 ## CMR's car set-up: a five-notch slider per setting, the stock car in the middle. Changes are kept for the
@@ -2450,6 +2549,8 @@ func _update_menu_car_summary() -> void:
 	elif is_campaign_mode:
 		var st := CampaignData.get_stage(campaign_stage_index)
 		race_label = "STAGE %02d / %02d  ·  %d LAPS" % [campaign_stage_index + 1, CampaignData.STAGES.size(), st.laps]
+		if Missions.is_mission(campaign_stage_index):
+			race_label = "%s MISSION  ·  %s" % [Missions.KIND_NAMES[st.kind], Missions.length_text(campaign_stage_index).to_upper()]
 	elif is_rally_mode:
 		var ev := _rally()
 		var i := mini(ev.stage_index, ev.stage_count() - 1)
@@ -4006,6 +4107,9 @@ func _build_results() -> void:
 func _start_race(restart := false) -> void:
 	if _starting:
 		return
+	if is_campaign_mode and Missions.kind_of(campaign_stage_index) == "rally":
+		_start_mission_rally(campaign_stage_index)
+		return
 	if not restart and (is_championship_mode or is_campaign_mode or is_rally_mode) and _service_due():
 		# CMR 2.0: between events the car goes through the service area first
 		if race:
@@ -4091,13 +4195,14 @@ func _set_up_race() -> void:
 	settings.stripes = player_stripes_toggle.button_pressed
 	settings.finish = player_finish_picker.selected
 	var stage_class := str(CampaignData.get_stage(campaign_stage_index).get("car_class", "")) if is_campaign_mode else ""
-	settings.car_class = "hypercar" if (stage_class == "hypercar" or car_class_picker.selected == 1) and _hypercar_open() else "stock"
-	if settings.car_class == "hypercar":
+	settings.car_class = "hypercar" if stage_class == "hypercar" and _hypercar_open() else _picked_car()
+	var car_livery := CarCatalog.livery(settings.car_class)
+	if not car_livery.is_empty():
 		# AF Corse's Le Mans winner: yellow, black stripes, no. 83
-		settings.player_color = Hypercar.PAINT
-		settings.player_number = Hypercar.NUMBER
-		settings.stripes = true
-		settings.finish = 0
+		settings.player_color = car_livery.color
+		settings.player_number = car_livery.number
+		settings.stripes = car_livery.stripes
+		settings.finish = car_livery.finish
 	settings.ai_learning = "off" if ai_learning_picker.selected == 1 else "on"
 	settings.bot_physics = ["on", "off", "near"][bot_physics_picker.selected]
 	settings.grid = str(CampaignData.get_stage(campaign_stage_index).get("grid", "middle")) if is_campaign_mode else ["pole", "middle", "back", "random"][grid_picker.selected] # a stage sets its own grid
@@ -4115,6 +4220,8 @@ func _set_up_race() -> void:
 	settings.parallel = parallel_toggle.button_pressed
 	settings.crew = ["pro", "club", "amateur"][crew_picker.selected]
 	settings.car_setup = CarSetup.clean(car_setups.get(settings.track, {}))
+	if is_campaign_mode:
+		Missions.apply_settings(settings, campaign_stage_index) # a mission's own rules (a stage is left as it is)
 	if quali_run:
 		Qualifying.configure(settings)
 	elif is_championship_mode and not _round_quali().is_empty():
@@ -4128,7 +4235,7 @@ func _set_up_race() -> void:
 	await _open_loading_screen(settings, quali_run)
 	if quali_run or is_time_trial_mode or is_rally_mode:
 		plan = {} # the session builds its own one-run plan
-	elif is_championship_mode or is_campaign_mode or settings.car_class == "hypercar":
+	elif is_championship_mode or is_campaign_mode or settings.car_class != "stock":
 		# every round is planned by the strategist for that circuit's race length, tyre wear and fuel use
 		var opts := _plan_opts(Race.get_track(settings.track), settings.laps, settings.wear_mult, settings.weather if is_campaign_mode or is_championship_mode else "")
 		opts.fuel_mult = settings.fuel_mult
@@ -4137,7 +4244,8 @@ func _set_up_race() -> void:
 
 	if plan == null:
 		if is_campaign_mode:
-			plan = {"stints": [{"c": "soft" if settings.weather == "dry" else ("wet" if settings.weather in ["wet", "snow", "hail"] else "soft"), "laps": settings.laps}]}
+			# (Tyres.KEYS: "soft"/"wet" were no compound at all, so every tyre lookup failed; a drag mission lands here)
+			plan = {"stints": [{"c": "W" if settings.weather in ["wet", "snow", "hail"] else "S", "laps": settings.laps}]}
 		else:
 			status_label.text = "No valid pit strategy for these settings — pick a plan or fix the custom one."
 			status_label.modulate = DANGER
@@ -4280,7 +4388,7 @@ func _show_results() -> void:
 		if r.car.is_player:
 			me = r
 	var fast = race.fastest
-	var title := "DNF — %s" % me.car.dnf_reason if me.car.dnf else "P%d OF %d" % [me.pos, rows.size()]
+	var title := "DNF — %s" % me.car.dnf_reason if me.car.dnf and not me.car.dnf_reason.begins_with("Knocked out") else "P%d OF %d" % [me.pos, rows.size()]
 	var laps: int = race.winner.finish_lap if race.winner else race.R
 	var sub := "%s · %s%d lap%s · %s" % [race.track.name, ("%s · " % _fmt_hours(race.duration / 3600.0)) if race.timed else "", laps,
 		"" if laps == 1 else "s",
@@ -4290,7 +4398,9 @@ func _show_results() -> void:
 	if fast:
 		sub += " · Fastest lap %s %s" % [fast.car.name, Race.fmt_time(fast.t)]
 	col.add_child(_label("CHEQUERED FLAG · %s" % title, 26, INK))
-	if is_campaign_mode and me.car.dnf:
+	if is_campaign_mode and Missions.is_mission(campaign_stage_index):
+		_add_mission_outcome(col, Missions.judge(race, campaign_stage_index))
+	elif is_campaign_mode and me.car.dnf:
 		var dnf_res := CampaignData.record_result(campaign_stage_index, 999) # a retirement counts as a failed try
 		col.add_child(_label("OBJECTIVE FAILED — you did not finish. Retry to advance!", 14, DANGER))
 		col.add_child(_label(_award_stage_fans(int(dnf_res.fans)), 13, CmrStyle.AMBER))
@@ -4369,7 +4479,7 @@ func _show_results() -> void:
 		var tyres := ""
 		for c in car.history:
 			tyres += ("→" if tyres != "" else "") + str(c)
-		var cells := ["DNF" if car.dnf else str(r.pos), str(car.number), car.name, str(r.laps), time_txt,
+		var cells := ["DNF" if car.dnf and not car.dnf_reason.begins_with("Knocked out") else str(r.pos), str(car.number), car.name, str(r.laps), time_txt,
 			Race.fmt_time(car.best_lap), str(car.stops), tyres]
 		if is_champ:
 			cells.append("+%d" % _round_points(r))
@@ -4397,7 +4507,10 @@ func _show_results() -> void:
 			primary = _button(next_label, ACCENT)
 			primary.pressed.connect(_start_race)
 	elif is_campaign_mode:
-		if campaign_cleared and campaign_stage_index < CampaignData.STAGES.size() - 1:
+		if Missions.is_mission(campaign_stage_index):
+			primary = _button("RUN IT AGAIN ▸" if campaign_cleared else "RETRY MISSION ▸", ACCENT)
+			primary.pressed.connect(_start_race)
+		elif campaign_cleared and campaign_stage_index < CampaignData.STAGES.size() - 1:
 			primary = _button("NEXT STAGE ▸", ACCENT)
 			primary.pressed.connect(func() -> void:
 				campaign_stage_index += 1
@@ -4632,6 +4745,8 @@ func _return_to_setup(to_service := false) -> void:
 	status_label.text = ""
 	status_label.modulate = MUTED
 	result_panel.hide()
+	if mission_rally >= 0 and not to_service:
+		_end_mission_rally()
 	var raced := campaign_stage_index
 	if is_campaign_mode and campaign_cleared and CampaignData.is_unlocked(campaign_stage_index + 1) and campaign_stage_index < CampaignData.STAGES.size() - 1:
 		campaign_stage_index += 1 # stage won: the menu briefs the next one
@@ -4741,6 +4856,8 @@ func _award_stage_fans(fans: int) -> String:
 
 ## A beacon in the open world starts its campaign stage; the results bring the car back to it.
 func _on_world_stage(index: int) -> void:
+	if Missions.is_mission(index): # missions are raced on the open-world map only (OpenWorld._begin_mission)
+		return
 	is_campaign_mode = true
 	is_championship_mode = false
 	is_rally_mode = false
@@ -4750,6 +4867,50 @@ func _on_world_stage(index: int) -> void:
 	open_world.suspend()
 	_update_mode_view()
 	_start_race()
+
+## A rally mission runs through the rally flow (stage results, service) on a rally of its own, never saved over
+## the menu's; when the event is over its results record the mission and lead back to the beacon.
+func _start_mission_rally(index: int) -> void:
+	mission_rally = index
+	campaign_stage_index = index
+	is_campaign_mode = false
+	is_rally_mode = true
+	rally_event = Missions.new_rally(index)
+	rally_car = {}
+	_rally_recorded = null
+	_start_race()
+
+## Leaves a rally mission: the menu's own rally is read back from its save, the campaign is the mode again.
+func _end_mission_rally() -> void:
+	campaign_stage_index = mission_rally
+	mission_rally = -1
+	rally_event = null
+	rally_car = {}
+	_rally_recorded = null
+	is_rally_mode = false
+	is_campaign_mode = true
+
+## The results' mission block: cleared or missed (and by how much), the trophy, the fans.
+func _add_mission_outcome(col: VBoxContainer, outcome: Dictionary) -> void:
+	var res := Missions.record(campaign_stage_index, outcome)
+	campaign_cleared = res.success
+	_add_mission_result_lines(col, res)
+
+func _add_mission_result_lines(col: VBoxContainer, res: Dictionary) -> void:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 3)
+	col.add_child(box)
+	if res.success:
+		box.add_child(_label("★ MISSION CLEARED ★  %s" % res.line, 18, CmrStyle.GREEN))
+		if res.first_clear:
+			box.add_child(_label("🏆 Trophy Awarded: %s" % res.trophy, 14, CmrStyle.AMBER))
+		if String(res.get("reward_car", "")) != "":
+			box.add_child(_label("New car won: %s (pick it under CAR)" % CarCatalog.display_name(String(res.reward_car)), 14, CmrStyle.AMBER))
+	else:
+		box.add_child(_label("MISSION MISSED — %s. Retry it from its beacon." % res.line, 14, DANGER))
+	for l in box.get_children():
+		(l as Label).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(_label(_award_stage_fans(int(res.fans)), 13, CmrStyle.AMBER))
 
 func _on_world_leave(to: String) -> void:
 	if to == "stages":
@@ -4774,19 +4935,30 @@ func _populate_campaign_stages() -> void:
 		var prefix := "★ " if completed else ("▶ " if (i == unlocked or fan_lock) and is_un else "🔒 ")
 		campaign_stage_picker.add_item("%s%s" % [prefix, st.title])
 		campaign_stage_picker.set_item_disabled(i, not is_un)
-	campaign_stage_picker.selected = campaign_stage_index
+	# the missions are not in the list: they are raced on the open-world map only, from their beacons
+	if Missions.is_mission(campaign_stage_index):
+		campaign_stage_index = clampi(unlocked, 0, CampaignData.STAGES.size() - 1)
+	campaign_stage_picker.selected = _campaign_pick(campaign_stage_index)
 
-func _select_campaign_stage(index: int) -> void:
+## The campaign picker's row for a stage or mission index, and back (missions are listed after the stages).
+func _campaign_pick(index: int) -> int:
+	return CampaignData.STAGES.size() + index - Missions.BASE if Missions.is_mission(index) else index
+
+func _campaign_unpick(row: int) -> int:
+	return Missions.BASE + row - CampaignData.STAGES.size() if row >= CampaignData.STAGES.size() else row
+
+func _select_campaign_stage(row: int) -> void:
+	var index := _campaign_unpick(row)
 	if CampaignData.is_unlocked(index, _fan_total()):
 		_apply_campaign_stage(index)
 	else:
-		campaign_stage_picker.select(campaign_stage_index) # ◂ ▸ can land on a locked stage: stay put
+		campaign_stage_picker.select(_campaign_pick(campaign_stage_index)) # ◂ ▸ can land on a locked stage: stay put
 
 func _apply_campaign_stage(stage_idx: int) -> void:
 	campaign_stage_index = stage_idx
 	var st: Dictionary = CampaignData.get_stage(stage_idx)
-	if is_instance_valid(campaign_stage_picker) and campaign_stage_picker.selected != stage_idx:
-		campaign_stage_picker.select(stage_idx)
+	if is_instance_valid(campaign_stage_picker) and campaign_stage_picker.selected != _campaign_pick(stage_idx):
+		campaign_stage_picker.select(_campaign_pick(stage_idx))
 	_update_campaign_view()
 	_update_information_page()
 	_update_menu_car_summary()
@@ -4817,6 +4989,8 @@ func _update_campaign_view() -> void:
 		campaign_target_label.text = "★ TARGET OBJECTIVE: Win the race (P1)"
 	else:
 		campaign_target_label.text = "★ TARGET OBJECTIVE: Finish P%d or higher" % target_pos
+	if st.has("mission"):
+		campaign_target_label.text = "★ TARGET OBJECTIVE: %s" % Missions.target_text(campaign_stage_index)
 	campaign_trophy_label.text = "🏆 Trophy: %s" % str(st.get("trophy", ""))
 	campaign_desc_label.text = str(st.get("desc", ""))
 	campaign_tip_label.text = "💡 Mechanic: \"%s\"" % str(st.get("tip", ""))
@@ -4846,6 +5020,8 @@ func _update_setup_title() -> void:
 	if is_campaign_mode:
 		var st := CampaignData.get_stage(campaign_stage_index)
 		setup_title_label.text = "CAMPAIGN · STAGE %d/%d" % [campaign_stage_index + 1, CampaignData.STAGES.size()]
+		if Missions.is_mission(campaign_stage_index):
+			setup_title_label.text = "CAMPAIGN · %s MISSION" % Missions.KIND_NAMES[st.kind]
 		setup_subtitle_label.text = str(st.get("act_name", "THE SEICENTO ODYSSEY")).to_upper()
 	elif is_championship_mode:
 		setup_title_label.text = "CHAMPIONSHIP · ROUND %d/%d" % [_champ_round() + 1, _calendar().size()]
@@ -5684,7 +5860,7 @@ func _load_rally() -> void:
 	_new_rally(Rally.EVENTS[0].key)
 
 func _save_rally() -> void:
-	if rally_event == null:
+	if rally_event == null or mission_rally >= 0: # a rally mission is never saved over the menu's rally
 		return
 	var d := rally_event.to_dict()
 	d["car"] = rally_car
@@ -5834,7 +6010,13 @@ func _show_rally_results() -> void:
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 12)
 	var primary: Button
-	if ev.is_over():
+	if ev.is_over() and mission_rally >= 0:
+		var res := Missions.record(mission_rally, Missions.judge_rally(ev, mission_rally))
+		campaign_cleared = res.success
+		_add_mission_result_lines(col, res)
+		primary = _button("BACK TO BRZESZCZE  ▸" if world_return >= 0 else "BACK TO THE CAMPAIGN  ▸", ACCENT)
+		primary.pressed.connect(_return_to_setup)
+	elif ev.is_over():
 		primary = _button("RALLY COMPLETE · BACK TO THE RALLY PAGE", ACCENT)
 		primary.pressed.connect(_return_to_setup)
 	elif _service_due():

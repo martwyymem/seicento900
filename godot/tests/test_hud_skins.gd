@@ -10,7 +10,7 @@ var completed := false
 
 const SKINS := ["cmr", "ps1", "mw", "sa", "carbon", "fh1"]
 const CANVAS_SET: Array[Vector2] = [Vector2(1600, 900), Vector2(1231, 692), Vector2(1600, 1200)]
-const STATES := ["grid", "lap 1", "final lap", "damaged", "in the pits", "long name"]
+const STATES := ["grid", "lap 1", "final lap", "damaged", "in the pits", "long name", "knockout", "drag", "drift", "sprint"]
 
 func run() -> Array:
 	var errors: Array[String] = []
@@ -88,6 +88,27 @@ static func _set_state(race: Race, state: String) -> void:
 		"in the pits":
 			p.mode = "pit"
 			p.pit = {"phase": "service", "entered_at": 30.0, "hold": 0.0, "wait": 0.0, "total": 6.4, "left": 2.1}
+		"knockout": # a campaign mission's plate (RaceSettings.mission): a car just knocked out
+			race.s.knockout = true
+			race.s.mission = "knockout"
+			race.green_at = 0.0 # (race_time is the clock since the green: 40 s in)
+			race.update_order()
+			race._knock_out(1)
+		"drag":
+			race.s.mission = "drag"
+			race.s.finish_distance = 1000.0
+			race.green_at = 0.0
+			p.speed = 33.3
+		"drift":
+			race.s.mission = "drift"
+			race.drift = DriftScore.new()
+			race.drift.tiers = [600, 2500, 6000]
+			race.drift.score = 23456
+			race.drift.combo = 1812.5
+			race.drift.mult = 3.7
+		"sprint":
+			race.s.mission = "sprint"
+			p.pos = 14
 		"long name":
 			p.name = "Maximilian Brzęczyszczykiewicz-Wąchała"
 			for c in race.cars:
@@ -122,7 +143,7 @@ func _check(errors: Array[String], tree: SceneTree, race: Race, state: String, s
 		rects["pit wall"] = _rect(hud.pitwall, canvas)
 	if hud.help.visible:
 		rects["key help"] = hud.help_rect()
-	for pair in [["start lights", hud.lights], ["banner", hud.banner], ["banner line", hud.banner_small]]:
+	for pair in [["start lights", hud.lights], ["banner", hud.banner], ["banner line", hud.banner_small], ["mission plate", hud.missionbar]]:
 		var c: Control = pair[1]
 		if c.visible and c.self_modulate.a > 0.0 and (not c is Label or (c as Label).text != ""):
 			var r := _rect(c, canvas)
@@ -133,7 +154,8 @@ func _check(errors: Array[String], tree: SceneTree, race: Race, state: String, s
 	_overlaps(errors, tag, rects, canvas)
 	# the state really showed what it is meant to (otherwise the checks below prove nothing)
 	var drawn: Array = hud.text_audit.map(func(t: Array) -> String: return t[3])
-	var wants := {"damaged": "DMG", "in the pits": "Crew working", "final lap": "P12", "grid": "P0"}
+	var wants := {"damaged": "DMG", "in the pits": "Crew working", "final lap": "P12", "grid": "P0", "knockout": "OUT:",
+		"drag": "DRAG", "drift": "COMBO", "sprint": "SPRINT"}
 	if wants.has(state) and not drawn.any(func(x: String) -> bool: return x.begins_with(wants[state])):
 		errors.append("%s: the HUD never drew '%s'" % [tag, wants[state]])
 	# strings
@@ -191,7 +213,7 @@ func _check(errors: Array[String], tree: SceneTree, race: Race, state: String, s
 static func _name_of(hud: RaceHud, c: Control) -> String:
 	for pair in [["tower", hud.tower], ["clock", hud.clock], ["pit wall", hud.pitwall], ["feed", hud.feed], ["dash", hud.dash],
 			["flag board", hud.flagbar], ["status chip", hud.statusbar], ["pace notes", hud.pacenote], ["split", hud.splitbox],
-			["mode panel", hud.modepanel], ["delta bar", hud.deltabar], ["overtake", hud._overtake_control]]:
+			["mode panel", hud.modepanel], ["delta bar", hud.deltabar], ["overtake", hud._overtake_control], ["mission plate", hud.missionbar]]:
 		if pair[1] == c:
 			return pair[0]
 	return str(c.name)

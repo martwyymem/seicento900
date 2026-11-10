@@ -36,6 +36,13 @@ extends Resource
 @export var stage_to := 0.0 ## rally: where it finishes, metres after the start line (0: back at the start line, a full lap)
 @export_enum("tarmac", "gravel", "dirt") var surface := "tarmac" ## the road itself (rally stages); tarmac changes nothing
 @export var rolling_start := false ## time trial: start at speed, on an out-lap run-up to the line
+## Campaign missions (Missions): Godot-only race rules, all off by default (the parity tests never set them).
+@export var knockout := false ## each time the leader completes a lap, the last running car is out (field N: N-1 laps)
+@export var finish_distance := 0.0 ## m: > 0 ends each car's race once it has covered this far from its grid spot (a drag race)
+@export var loose_spans := false ## the track's baked dirt and gravel spans grip as they look (as TrackDef.loose_grip), for an off-road race
+@export var drift_score := false ## the player's slides score drift points (Race.drift, DriftScore)
+@export var drift_tiers := PackedInt32Array() ## the drift mission's bronze, silver and gold scores (the HUD shows the next one)
+@export var mission := "" ## the campaign mission's kind (Missions.KINDS), for the HUD; "" in every other race
 
 @export_group("Conditions")
 @export_enum("dry", "wet", "snow", "hail", "fog", "variable") var weather := "dry"
@@ -57,7 +64,7 @@ extends Resource
 @export var player_number := 9
 @export var player_color := Color("#b3121d")
 @export var stripes := true
-@export_enum("stock", "hypercar") var car_class := "stock" ## "hypercar": the whole field drives the Hypercar Seicento (Hypercar), once the top fan level has unlocked it
+@export_enum("stock", "hypercar", "golf4") var car_class := "stock" ## a CarCatalog key: the whole field drives that car ("hypercar" once the top fan level has opened it, "golf4" once the campaign has awarded it)
 @export var finish := 0 ## 0 gloss, 1 metallic, 2 Martini Racing, 3 Abarth, 4 Marlboro
 @export_enum("auto", "manual") var gearbox := "auto"
 @export_enum("full", "abs", "off") var assists := "full"
