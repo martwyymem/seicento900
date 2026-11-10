@@ -66,7 +66,11 @@ var is_player := false
 var grade_pitch := 0.0
 var _roll := 0.0
 var _spins := PackedFloat64Array([0.0, 0.0, 0.0, 0.0])
-var _tail_energy := -1.0
+var _lamp_sig := Vector4(-1.0, -1.0, -1.0, -1.0) ## the lamp state last applied (set_lamps)
+const BULB_OFF := Color(0.36, 0.09, 0.04)
+const BULB_ON := Color(0.9, 0.2, 0.06)
+const BULB_RED := Color(1.0, 0.12, 0.03)
+const BULB_WHITE := Color(1.0, 0.86, 0.72) ## the reversing lamp
 var _sun: DirectionalLight3D ## the world's sun, for the paint's glint (found from the player's car)
 var _sun_tried := -1000
 var _sun_sig := Vector4.ZERO
@@ -108,7 +112,7 @@ func set_car(key: String) -> void:
 	_fx.clear()
 	_brake_light = null
 	_beacon = null
-	_tail_energy = -1.0
+	_lamp_sig = Vector4(-1.0, -1.0, -1.0, -1.0)
 	_damage_shown = 0.0
 	_dents_shown = {"front": 0.0, "rear": 0.0, "left": 0.0, "right": 0.0}
 	_build()
@@ -155,14 +159,14 @@ func _build() -> void:
 	tail_material.metallic_specular = 0.25
 	tail_material.emission_enabled = true
 	tail_material.emission = Color(1.0, 0.0, 0.0)
-	tail_material.emission_energy_multiplier = 0.35
+	tail_material.emission_energy_multiplier = 0.0 # off until set_lamps lights it
 
 	bulb_material = StandardMaterial3D.new()
-	bulb_material.albedo_color = Color(0.9, 0.2, 0.06)
+	bulb_material.albedo_color = BULB_OFF # a dull bulb behind the red lens by day (it read as lit in the sun)
 	bulb_material.roughness = 0.15
 	bulb_material.emission_enabled = true
-	bulb_material.emission = Color(1.0, 0.12, 0.03)
-	bulb_material.emission_energy_multiplier = 0.3
+	bulb_material.emission = BULB_RED
+	bulb_material.emission_energy_multiplier = 0.0
 
 	body_pivot = Node3D.new()
 	body_pivot.name = "SuspendedBody"
@@ -186,6 +190,8 @@ func _build() -> void:
 	body_pivot.add_child(details)
 	_details_node = details
 	details.set_instance_shader_parameter("plate_id", float(posmod(car_number * 5 + 3, PLATE_ROWS)))
+	details.set_instance_shader_parameter("lit", 0.0)
+	details.set_instance_shader_parameter("glow", 0.0)
 
 	var cabin := MeshInstance3D.new()
 	cabin.name = "Cabin"
@@ -434,11 +440,14 @@ func set_stripes(enabled: bool) -> void:
 	if is_instance_valid(stripes_node):
 		stripes_node.visible = enabled and livery not in WHITE_LIVERIES
 
-## Headlight glow is the same for every car, so it lives on the shared material.
+## How far the headlamps are on (0 off .. 1 full) at this much night: the beams (OpenWorld.headlights, the race's pooled
+## beams) and the lamp lenses (set_lamps) all follow it, so a lit lens always means a beam and a dark one none.
+static func headlamp_level(night: float) -> float:
+	return clampf(night * 1.6 - 0.2, 0.0, 1.0)
+
+## The night's ambient on the shared mirror passes and particles (the lamps are per car: set_lamps, from sync).
 static func set_night(night: float) -> void:
 	_shared_resources() # the stock car's resources (and the shared ones) exist
-	for sh in [_shared] + _shared_cars.values():
-		sh.head.set_shader_parameter("lit", 0.08 + 3.6 * night)
 	for m in _env_materials:
 		m.set_shader_parameter("strength", float(m.get_meta("day_strength")) * (1.0 - 0.9 * night))
 	var amb := Color(0.12, 0.14, 0.20).lerp(Color(0.52, 0.56, 0.62), 1.0 - night)
@@ -486,6 +495,29 @@ func _update_sun() -> void:
 			m.set_shader_parameter("sun_color", _sun.light_color)
 			m.set_shader_parameter("sun_power", power)
 
+## The lamps' glowing surfaces, matching the lights the car has on. By day everything is off (dark red tail lenses, a
+## dull chrome headlamp) unless braking (bright red, blooming) or reversing (a white bulb behind the lens). After dark
+## the headlamps glow with the beams (headlamp_level) and the tail lamps burn dimly as position lights, brighter when
+## braking. Cheap to call every frame: the materials change only when the state does.
+func set_lamps(night: float, braking := false, reversing := false) -> void:
+	if not is_instance_valid(_details_node):
+		return
+	var head := headlamp_level(night)
+	var tail := (0.6 + 0.2 * night) if braking else 0.12 * head
+	var sig := Vector4(head, tail, 1.0 if braking else 0.0, 1.0 if reversing else 0.0)
+	if sig.is_equal_approx(_lamp_sig):
+		return
+	_lamp_sig = sig
+	tail_material.emission_energy_multiplier = tail
+	var bulb := (4.0 + 1.5 * night) if braking else (2.4 if reversing else 0.7 * head)
+	bulb_material.emission_energy_multiplier = bulb
+	bulb_material.emission = BULB_WHITE if reversing and not braking else BULB_RED
+	bulb_material.albedo_color = BULB_ON if bulb > 0.0 else BULB_OFF
+	# the lens (car_taillamp.gdshader): lit, with a prism glow, when braking; a dim position light after dark
+	_details_node.set_instance_shader_parameter("glow", 1.0 if braking else (0.35 if reversing else 0.22 * head))
+	# the headlamp reflector's bulb (car_headlamp.gdshader)
+	_details_node.set_instance_shader_parameter("lit", 3.6 * head)
+
 ## Per-frame presentation. curvature is the road curvature under the car (for rail-driven cars).
 func sync(car: RaceCar, dt: float, curvature: float, night: float, ghost: bool) -> void:
 	var physical: bool = car.control == "free" and car.phys != null
@@ -510,14 +542,8 @@ func sync(car: RaceCar, dt: float, curvature: float, night: float, ghost: bool) 
 	steer_pivots[0].rotation.y = -steer_angle
 	steer_pivots[1].rotation.y = -steer_angle
 
-	# brake lights well over the glow threshold so they bloom; the running lights stay a lit-lens red
-	var tail := (0.6 + 0.2 * night) if car.brake_on else (0.05 + 0.15 * night)
-	if absf(tail - _tail_energy) > 0.01:
-		_tail_energy = tail
-		tail_material.emission_energy_multiplier = tail
-		bulb_material.emission_energy_multiplier = (4.0 + 1.5 * night) if car.brake_on else (0.35 + 0.8 * night)
-		# the lens (car_taillamp.gdshader): lit, with a prism glow, when braking; a dim running light otherwise
-		_details_node.set_instance_shader_parameter("glow", 1.0 if car.brake_on else 0.1 + 0.2 * night)
+	var reversing: bool = car.control == "free" and car.rev
+	set_lamps(night, car.brake_on, reversing)
 	if is_player and not _ghost:
 		_update_sun()
 		if _brake_light == null:
@@ -530,7 +556,9 @@ func sync(car: RaceCar, dt: float, curvature: float, night: float, ghost: bool) 
 			_brake_light.light_specular = 0.12 # a red wash on the road; on wet tarmac after dark full specular was a blinding blob
 			_brake_light.transform = Transform3D(Basis.looking_at(Vector3(0.0, -0.3, 1.0).normalized()), _fit.brake_light)
 			body_pivot.add_child(_brake_light)
-		_brake_light.light_energy = BRAKE_LIGHT_ENERGY if car.brake_on else 0.0 # one power: the sun drowns it by day, the dark shows it
+		# one power: the sun drowns it by day, the dark shows it; white and softer for the reversing lamp
+		_brake_light.light_color = Color(1.0, 0.04, 0.02) if car.brake_on or not reversing else Color(1.0, 0.92, 0.82)
+		_brake_light.light_energy = BRAKE_LIGHT_ENERGY if car.brake_on else (BRAKE_LIGHT_ENERGY * 0.6 if reversing else 0.0)
 
 	if ghost != _ghost:
 		_ghost = ghost
@@ -727,6 +755,7 @@ static func _shared_resources(key := "stock") -> Dictionary:
 	glass.next_pass = _env_material(1.0, 0.10, 0.0, false)
 	var head := ShaderMaterial.new() # the reflector bowl (car_headlamp.gdshader): dark chrome facets, a bulb that lights at night
 	head.shader = load("res://shaders/car_headlamp.gdshader")
+	head.resource_name = "Headlight" # still found by name (_surface) once it replaces the glTF's material on the mesh
 	var glass_surface := _surface(shell, "Glass")
 	if glass_surface >= 0:
 		shell.surface_set_material(glass_surface, glass)
@@ -767,6 +796,8 @@ static func _shared_resources(key := "stock") -> Dictionary:
 	var head_surface := _surface(details, "Headlight")
 	if head_surface >= 0:
 		details.surface_set_material(head_surface, head)
+		if fit.model != CarCatalog.STOCK_VISUAL.model: # (the Seicento keeps the shader's hand-placed bulb)
+			head.set_shader_parameter("centre", _lamp_centre(details, head_surface))
 	# Unpainted plastic (bumpers, sills, trim, gaskets): the world's warm sun, ACES and the car's reflection probe lifted the
 	# glTF's dark grey to tan, so these get an explicit near-black, satin, low-specular material.
 	for pair in [[details, "Bumper", 0.21, 0.55], [details, "Trim", 0.10, 0.5], [details, "Gasket", 0.07, 0.8],
@@ -947,6 +978,18 @@ static func _load_model(path := MODEL_PATH) -> Node:
 		push_error("Car model %s could not be read" % path)
 		return null
 	return doc.generate_scene(state)
+
+## The middle of the right-hand lamp of a surface (x > 0, in the model's frame) as (x, y): where car_headlamp.gdshader puts
+## its bulb, so each car's reflector lights round its own lamp.
+static func _lamp_centre(mesh: Mesh, surface: int) -> Vector2:
+	var verts: PackedVector3Array = mesh.surface_get_arrays(surface)[Mesh.ARRAY_VERTEX]
+	var lo := Vector2(INF, INF)
+	var hi := Vector2(-INF, -INF)
+	for v in verts:
+		if v.x > 0.0:
+			lo = lo.min(Vector2(v.x, v.y))
+			hi = hi.max(Vector2(v.x, v.y))
+	return (lo + hi) * 0.5 if lo.x < INF else Vector2(0.40, 0.64)
 
 ## Index of the surface whose material has this name (from Blender), or -1.
 static func _surface(mesh: Mesh, material_name: String) -> int:

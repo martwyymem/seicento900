@@ -23,6 +23,11 @@ const PIER_R := 0.8 ## m: collision radius of a bridge pier (the drawn pier is 1
 const PIER_SPACING := 22.0 ## m along a bridge between piers
 const RAIL_HALF := 2.4 ## m: half the width of the ballast bed a railway runs on, with its kerb
 const TUNNEL_HEADROOM := 4.4 ## m: free height under a railway deck over a street (the bore)
+const TUNNEL_VERGE := 1.6 ## m: an underpass's bore is this much wider than the carriageway on each side ...
+const TUNNEL_MIN_HALF := 4.0 ## m: ... and at least this wide either side of the street's centre (8 m: two cars and room)
+const TUNNEL_AXIS := 12.0 ## m either side of the crossing that the bore's line follows the street over
+const TUNNEL_MAX_HALF := 9.0 ## m: the most a cut widens for a street wandering through it
+const WING_SOLID := 0.5 ## m: a wing wall at least this high over the ground stops the car (TownMap walls)
 const KERB_H := 0.13 ## m: height of a kerb; the pavement behind it is flat at this height (TownBuilder draws the same)
 const PAVEMENT_W := 1.5 ## m: width of the pavement beyond a road's edge
 const ROAD_LIFT := 0.09 ## m: a street's drawn surface stands this far over the ground (plus ROAD_RANK_LIFT per rank), clear of the terrain mesh
@@ -223,6 +228,7 @@ func _from_raw() -> bool:
 	_load_rails()
 	_load_tunnels()
 	_load_rail_banks()
+	_add_tunnel_walls()
 	_build_bridge_solids()
 	areas = raw.get("areas", [])
 	places = raw.get("places", [])
@@ -805,8 +811,17 @@ func _load_obstacles() -> void:
 	var trees: Array = raw.get("trees", [])
 	for k in range(0, trees.size(), 3):
 		add_post(Vector2(trees[k], trees[k + 1]), TREE_RADIUS)
-	for wall in raw.get("fences", []):
+	# only what TownBuilder draws is solid: a doubled segment (a second panel row 0.8 m off a longer one) or a sliver
+	# is not drawn
+	var walls: Array = raw.get("fences", [])
+	var doubled := doubled_fences(walls)
+	for wi in walls.size():
+		if doubled.has(wi):
+			continue
+		var wall: Array = walls[wi]
 		var style := int(wall[4]) if wall.size() > 4 else 0
+		if style != 4 and Vector2(wall[0], wall[1]).distance_to(Vector2(wall[2], wall[3])) < 0.35:
+			continue # too short to draw a panel or a bush for
 		add_wall(Vector2(wall[0], wall[1]), Vector2(wall[2], wall[3]), 0.48 if style == 2 else 0.12)
 	var lamps := _flat(raw.get("lamps", []))
 	for p in lamps:
@@ -1016,6 +1031,55 @@ func signal_ahead(p: Vector2, dir: Vector2, look: float) -> Array:
 		best = [h, d]
 	return best
 
+## Fence segments (raw "fences" records) that a longer, parallel one within 0.8 m already covers (a mapped barrier next
+## to a generated plot boundary): TownBuilder draws only the longer one, and only it is solid. Returns {index: true}.
+static func doubled_fences(walls: Array) -> Dictionary:
+	var order: Array = []
+	var cells := {}
+	for wi in walls.size():
+		var w: Array = walls[wi]
+		var style := int(w[4]) if w.size() > 4 else 0
+		if style == 2 or style == 4:
+			continue
+		var len := Vector2(float(w[2]) - float(w[0]), float(w[3]) - float(w[1])).length()
+		if len >= 0.35:
+			order.append([len, wi])
+	order.sort_custom(func(x: Array, y: Array) -> bool: return x[0] > y[0])
+	var skip := {}
+	for entry: Array in order:
+		var wi: int = entry[1]
+		var w: Array = walls[wi]
+		var a := Vector2(float(w[0]), float(w[1]))
+		var d := Vector2(float(w[2]), float(w[3])) - a
+		var ln: float = entry[0]
+		var t := d / ln
+		var n := Vector2(-t.y, t.x)
+		var mid := a + d * 0.5
+		var cell := Vector2i(floori(mid.x / 6.0), floori(mid.y / 6.0))
+		var covered := false
+		for dx in range(-1, 2):
+			for dy in range(-1, 2):
+				for oi: int in cells.get(cell + Vector2i(dx, dy), []):
+					var o: Array = walls[oi]
+					var oa := Vector2(float(o[0]), float(o[1]))
+					var ob := Vector2(float(o[2]), float(o[3]))
+					var ot := (ob - oa) / maxf(oa.distance_to(ob), 1e-3)
+					if absf(t.cross(ot)) > 0.1:
+						continue
+					if absf((oa - a).dot(n)) > 0.8 or absf((ob - a).dot(n)) > 0.8:
+						continue
+					var s0 := clampf((oa - a).dot(t), 0.0, ln)
+					var s1 := clampf((ob - a).dot(t), 0.0, ln)
+					if absf(s1 - s0) > ln * 0.8:
+						covered = true
+		if covered:
+			skip[wi] = true
+		else:
+			if not cells.has(cell):
+				cells[cell] = []
+			cells[cell].append(wi)
+	return skip
+
 func add_post(p: Vector2, radius: float) -> void:
 	var ck := _cell_key(int(floor(p.x / BCELL)), int(floor(p.y / BCELL)))
 	if not _post_cells.has(ck):
@@ -1136,7 +1200,9 @@ func rail_distance(p: Vector2, r: float) -> float:
 ## (TownBuilder.build_rail draws exactly these quads, and rail_bank() holds the car up on them): "ballast" the bed's
 ## top and its two shoulders, "bank" (only on raised track) the two grassy 1:1.5 slopes from the shoulders down to
 ## 0.3 m under the ground. Each quad is [p0, p1, p2, p3] as MeshBatch.flat_quad takes them.
-func rail_section(a: Vector2, b: Vector2, za: float, zb: float, bw: float) -> Dictionary:
+## prev (when given) is the line's point before a: "joint" then holds the wedge that closes the gap the two segments'
+## sections leave on the outside of the bend at a (bed, shoulder and, on raised track, slope), the same way.
+func rail_section(a: Vector2, b: Vector2, za: float, zb: float, bw: float, prev := Vector2.INF) -> Dictionary:
 	var t := (b - a).normalized()
 	var side := Vector3(-t.y, 0.0, t.x)
 	var up := Vector3.UP
@@ -1158,7 +1224,25 @@ func rail_section(a: Vector2, b: Vector2, za: float, zb: float, bw: float) -> Di
 			b0.y = ground(b0.x, b0.z) - 0.3
 			b1.y = ground(b1.x, b1.z) - 0.3
 			bank.append([e0, e1, b1, b0])
-	return {"ballast": ballast, "bank": bank}
+	var joint := []
+	if prev != Vector2.INF and prev.distance_to(a) > 0.01:
+		var t0 := (a - prev).normalized()
+		var turn := t0.cross(t)
+		if absf(turn) > 0.002:
+			var g := -signf(turn) # the outside of the bend
+			var s0 := Vector3(-t0.y, 0.0, t0.x) * g
+			var s1 := side * g
+			joint.append([A, A + s0 * h, A + s1 * h, A])
+			joint.append([A + s0 * h, A + s1 * h, A + s1 * (h + 0.6) - up * 0.35, A + s0 * (h + 0.6) - up * 0.35])
+			if za > 0.3:
+				var e0 := A + s0 * (h + 0.6) - up * 0.35
+				var e1 := A + s1 * (h + 0.6) - up * 0.35
+				var b0 := e0 + s0 * maxf(0.5, za * EMBANKMENT)
+				var b1 := e1 + s1 * maxf(0.5, za * EMBANKMENT)
+				b0.y = ground(b0.x, b0.z) - 0.3
+				b1.y = ground(b1.x, b1.z) - 0.3
+				joint.append([e0, e1, b1, b0])
+	return {"ballast": ballast, "bank": bank, "joint": joint}
 
 ## Every raised railway's drawn bed and embankment as triangles in a spatial hash, for rail_bank().
 var _bank_tris := PackedFloat32Array() ## x0, y0, h0, x1, y1, h1, x2, y2, h2 per triangle (map x, y and height)
@@ -1174,8 +1258,8 @@ func _load_rail_banks() -> void:
 		for i in pts.size() - 1:
 			if zs[i] <= 0.3 and zs[i + 1] <= 0.3:
 				continue
-			var sec := rail_section(pts[i], pts[i + 1], zs[i], zs[i + 1], bw)
-			for q in sec.ballast + sec.bank:
+			var sec := rail_section(pts[i], pts[i + 1], zs[i], zs[i + 1], bw, pts[i - 1] if i > 0 else Vector2.INF)
+			for q in sec.ballast + sec.bank + sec.joint:
 				for tri in [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]:
 					var k := _bank_tris.size() / 9
 					var lo := Vector2(INF, INF)
@@ -1235,10 +1319,18 @@ func in_tunnel_cut(p: Vector2) -> bool:
 ## track that crosses the street there, and top is the highest one's rail level (the header beam's top).
 ## cut_half / cut_len: the strip of the embankment the street's cut takes out (rail_bank(), TownBuilder._bank_quad).
 func _load_tunnels() -> void:
+	var road_of := {}
+	for ri in raw.get("roads", []).size():
+		road_of[int(raw.roads[ri].id)] = ri
 	for t in raw.get("tunnels", []):
 		var u := Vector2(t.u[0], t.u[1])
 		var v := Vector2(t.v[0], t.v[1])
 		var c := Vector2(t.c[0], t.c[1])
+		var ri: int = road_of.get(int(t.road), -1)
+		# the bore runs along the street as it is drawn either side of the crossing (the baked direction is one short
+		# segment's, so a street that bends near the railway ran into the bore's wall)
+		if ri >= 0:
+			v = _road_axis(ri, c, TUNNEL_AXIS, v)
 		var sin_t := maxf(absf(u.cross(v)), 0.35)
 		var z := float(t.z)
 		# the raised tracks crossing the street within 14 m of the baked centre: their offsets along it and heights
@@ -1270,19 +1362,106 @@ func _load_tunnels() -> void:
 		var mid := (s_lo + s_hi) * 0.5
 		var span := (s_hi - s_lo) * 0.5
 		c += v * mid
-		# a skewed crossing's bed reaches further along the street at the bore's sides than on its centre line
-		var skew := absf(u.dot(v)) / sin_t * (float(t.w) * 0.5 + 0.5)
-		var hf := span + skew + minf((RAIL_HALF + 0.6 + EMBANKMENT * z_max) / sin_t, 42.0)
-		var rec := {"c": c, "u": u, "v": v, "w": float(t.w), "z": top - ground(c.x, c.y), "road": int(t.road),
+		var w := float(t.w)
+		# the bore's half width: the carriageway and a generous verge each side (two cars pass with room to spare even
+		# in a lane-wide underpass), wider where the street wanders off the bore's line inside the cut
+		var half := maxf(w * 0.5 + TUNNEL_VERGE, TUNNEL_MIN_HALF)
+		var hf := 0.0
+		var skew := absf(u.dot(v)) / sin_t * (half + 0.3)
+		hf = span + skew + minf((RAIL_HALF + 0.6 + EMBANKMENT * z_max) / sin_t, 42.0)
+		var rec := {"c": c, "u": u, "v": v, "w": w, "z": top - ground(c.x, c.y), "road": int(t.road), "ri": ri,
 			"tn": int(t.get("tn", 0)), "half_bore": span + skew + (RAIL_HALF + 0.3) / sin_t, "half_foot": hf, "top": top,
-			"cut_half": float(t.w) * 0.5 + 0.2, "cut_len": hf + 2.0, "ground": ground(c.x, c.y)}
+			"cut_half": half, "cut_len": hf + 2.0, "ground": ground(c.x, c.y)}
 		tunnels.append(rec)
+
+## The side walls that keep the car in each underpass's bore and cut (two-sided TownMap walls): through the bore, and
+## on along the wing walls as far as they stand WING_SOLID over the ground (TownBuilder draws the wing wall's top a
+## hand over the embankment, which falls to nothing at its foot: a wall a few centimetres high is no wall to hit).
+## Needs the rail banks.
+func _add_tunnel_walls() -> void:
+	for t in tunnels:
+		var c: Vector2 = t.c
+		var v: Vector2 = t.v
 		var n := Vector2(-v.y, v.x)
-		var off := float(t.w) * 0.5 + 0.45
+		# where the street wanders off the bore's line inside the cut (it bends, or comes in from the side) the cut
+		# widens to take it with a verge, wherever the embankment it runs into stands WING_SOLID high or more
+		if int(t.ri) >= 0:
+			var need := _road_wander(int(t.ri), c, v, float(t.half_foot), float(t.cut_half) - float(t.w) * 0.5 - TUNNEL_VERGE * 0.6)
+			if need + float(t.w) * 0.5 + TUNNEL_VERGE * 0.6 > float(t.cut_half):
+				var sin_t := maxf(absf((t.u as Vector2).cross(v)), 0.35)
+				var half := minf(need + float(t.w) * 0.5 + TUNNEL_VERGE * 0.6, TUNNEL_MAX_HALF)
+				var grow := absf((t.u as Vector2).dot(v)) / sin_t * (half - float(t.cut_half))
+				t.cut_half = half
+				t.half_bore = float(t.half_bore) + grow
+				t.half_foot = float(t.half_foot) + grow
+				t.cut_len = float(t.half_foot) + 2.0
+		var off := float(t.cut_half) + 0.25
+		var hb := float(t.half_bore)
+		var hf := float(t.half_foot)
 		for side in [-1.0, 1.0]:
-			var a: Vector2 = c - v * float(rec.half_foot) + n * off * side
-			var b: Vector2 = c + v * float(rec.half_foot) + n * off * side
-			add_wall(a, b, 0.25)
+			var ends := []
+			for e in [-1.0, 1.0]:
+				var s := hb
+				while s + 0.5 <= hf:
+					var q: Vector2 = c + v * (s + 0.5) * e + n * float(t.cut_half) * side
+					if rail_bank(q.x, q.y, true) + 0.08 - ground(q.x, q.y) < WING_SOLID:
+						break
+					s += 0.5
+				ends.append(s)
+			add_wall(c - v * float(ends[0]) + n * off * side, c + v * float(ends[1]) + n * off * side, 0.25)
+
+## Unit direction of road ri through point p, measured between the points `reach` m either side of it along the road
+## (`hint` gives the sense, and is what comes back for a road too short to say).
+func _road_axis(ri: int, p: Vector2, reach: float, hint: Vector2) -> Vector2:
+	var pts := road_pts[ri]
+	var best := INF
+	var s_at := 0.0
+	var acc := 0.0
+	var cum := PackedFloat32Array([0.0])
+	for k in pts.size() - 1:
+		var q := Geometry2D.get_closest_point_to_segment(p, pts[k], pts[k + 1])
+		if q.distance_to(p) < best:
+			best = q.distance_to(p)
+			s_at = acc + pts[k].distance_to(q)
+		acc += pts[k].distance_to(pts[k + 1])
+		cum.append(acc)
+	var a := _road_point(pts, cum, s_at - reach)
+	var b := _road_point(pts, cum, s_at + reach)
+	if a.distance_to(b) < 1.0:
+		return hint
+	var d := (b - a).normalized()
+	return d if d.dot(hint) >= 0.0 else -d
+
+static func _road_point(pts: PackedVector2Array, cum: PackedFloat32Array, s: float) -> Vector2:
+	s = clampf(s, 0.0, cum[cum.size() - 1])
+	for k in pts.size() - 1:
+		if s <= cum[k + 1] or k == pts.size() - 2:
+			var f := (s - cum[k]) / maxf(cum[k + 1] - cum[k], 1e-6)
+			return pts[k].lerp(pts[k + 1], clampf(f, 0.0, 1.0))
+	return pts[pts.size() - 1]
+
+## How far (m) road ri's centre line strays to either side of the line through c along v, within `reach` of c along
+## it, at the places where the railway embankment (rail_bank) stands at least WING_SOLID over the ground (a street
+## that leaves the cut over the embankment's low toe needs no room there). At least `floor`.
+func _road_wander(ri: int, c: Vector2, v: Vector2, reach: float, floor_m: float) -> float:
+	var n := Vector2(-v.y, v.x)
+	var pts := road_pts[ri]
+	var worst := floor_m
+	for k in pts.size() - 1:
+		var a := pts[k]
+		var b := pts[k + 1]
+		var ln := a.distance_to(b)
+		if Geometry2D.get_closest_point_to_segment(c, a, b).distance_to(c) > reach + 30.0:
+			continue
+		var steps := maxi(1, int(ceil(ln / 0.5)))
+		for j in steps + 1:
+			var p := a.lerp(b, float(j) / float(steps))
+			var rel := p - c
+			if absf(rel.dot(v)) > reach or absf(rel.dot(n)) <= worst:
+				continue
+			if rail_bank(p.x, p.y, true) - ground(p.x, p.y) >= WING_SOLID:
+				worst = absf(rel.dot(n))
+	return worst
 
 ## The two portals of a tunnel: [position, heading out of the bore] each.
 func tunnel_portals(t: Dictionary) -> Array:

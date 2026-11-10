@@ -1198,7 +1198,8 @@ func _hide_beams() -> void:
 
 ## After dark the pooled beams go to the cars nearest the camera.
 func _update_beams() -> void:
-	if night < 0.05 or beams.is_empty():
+	var level := CAR_VISUAL.headlamp_level(night) # the lamp lenses (RaceCarVisual.set_lamps) light with the same level
+	if level <= 0.0 or beams.is_empty():
 		_hide_beams()
 		return
 	var cam := camera.global_position
@@ -1232,7 +1233,7 @@ func _update_beams() -> void:
 		var fwd := -visual.basis.z
 		var from := visual.position + fwd * 1.9 + Vector3.UP * 0.66
 		beam.look_at_from_position(from, visual.position + fwd * 26.0 - Vector3.UP * 0.4, Vector3.UP)
-		beam.light_energy = 24.0 * night * Service.lamp(_rank_cars[i], race.clock) # damaged electrics dim and flicker
+		beam.light_energy = 24.0 * level * Service.lamp(_rank_cars[i], race.clock) # damaged electrics dim and flicker
 		beam.visible = true
 
 func toggle_racing_line() -> bool:

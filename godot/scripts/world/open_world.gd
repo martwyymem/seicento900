@@ -16,6 +16,7 @@ const MAP_KEY := "brzeszcze"
 const TICK := 1.0 / 120.0
 const SKY_SHADER := preload("res://shaders/sky.gdshader")
 const CAR_SCENE := preload("res://scripts/ui/race_car_visual.tscn")
+const CAR_VISUAL := preload("res://scripts/ui/race_car_visual.gd")
 const WORLD := preload("res://scripts/ui/race_world.gd")
 ## Campaign track -> the map spot its beacon stands at (tools/build_open_world.py names the spots)
 const STAGE_SPOTS := {"wilamowice": "exit_wilamowice", "brzeszcze": "industrial_sprint", "bor": "bor_stage",
@@ -30,6 +31,8 @@ const DISCOVER_KINDS := ["mineshaft", "church", "stadium", "station", "museum", 
 const AREA_KINDS := ["place_town", "place_village", "place_neighbourhood", "place_hamlet", "place_suburb"]
 const DAY_RATE := 1.0 / 80.0 ## game hours per real second: a day in 32 minutes
 const BEACON_RADIUS := 9.0
+const HEADLIGHT_ENERGY := 26.0 ## each dipped beam at full night (see _build_headlights)
+const SPAWN_ROLL := 14.0 ## m a car put back at a stage beacon stands on along its road, clear of the beacon
 const CHAIN_IDLE := 2.6 ## s without a skill before the chain is banked
 const LAMP_LIGHTS := 14
 const NOON_CAP := deg_to_rad(40.0) ## soft cap on the sun's elevation (see _apply_time)
@@ -512,23 +515,32 @@ func _apply_time() -> void:
 			m.set_shader_parameter("night", lamps_on)
 			if m.shader == TOWN_ROAD_SHADER or m.shader == PAVEMENT_SHADER: # the streets, not the walls
 				m.set_shader_parameter("wet", damp)
+	# the beams with the lamp lenses (race_car_visual.gd set_lamps follows the same level)
+	var beams: float = CAR_VISUAL.headlamp_level(night)
 	for h in headlights:
-		h.light_energy = 11.0 * clampf(night * 1.6 - 0.2, 0.0, 1.0)
+		h.light_energy = HEADLIGHT_ENERGY * beams
+		h.visible = beams > 0.0
 	for l in lamp_lights:
 		l.light_energy = 7.0 * lamps_on
 		(l.get_child(0) as Decal).emission_energy = LAMP_POOL_GLOW * lamps_on * (1.0 + 0.4 * wet)
 		l.visible = lamps_on > 0.02
 
+## Dipped beams: aimed down onto the road, brightest in the middle of the cone and fading with distance, so the road
+## ahead is lit and a wall 20 m off gets a soft pool up to the first floor, not a white sheet over the whole facade
+## (70 m reach, a 0.8 distance falloff and a 28 degree cone tilted 4 degrees down lit a 5-storey block at full power).
 func _build_headlights() -> void:
 	for x: float in [-0.5, 0.5]:
 		var s := SpotLight3D.new()
 		s.position = Vector3(x, 0.66, -1.75)
-		s.spot_range = 70.0
-		s.spot_angle = 28.0
-		s.spot_attenuation = 0.8
+		s.spot_range = 50.0
+		s.spot_angle = 24.0
+		s.spot_angle_attenuation = 0.75 # most of the light in the middle of the beam, a soft edge
+		s.spot_attenuation = 1.3 # nearer the inverse square than the old 0.8: 20 m gets a third of 8 m's light
+		s.light_specular = 0.15 # no glare off wet tarmac and glazing
 		s.light_color = Color(1.0, 0.95, 0.82)
 		s.shadow_enabled = false
-		s.rotation = Vector3(deg_to_rad(-4.0), 0.0, 0.0)
+		s.visible = false
+		s.rotation = Vector3(deg_to_rad(-6.0), 0.0, 0.0)
 		car_visual.add_child(s)
 		headlights.append(s)
 
@@ -987,12 +999,13 @@ func _update_rivals(delta: float) -> void:
 		node.visible = true
 		node.position = Vector3(p.x, y, p.y)
 		node.basis = Basis(Vector3.UP, -dir.angle() - PI / 2.0)
+		node.call("set_lamps", night) # headlamps and position lights after dark, like the player's
 		# contact: two cars' worth of circles, the player shoved out and the rival knocked across
 		var d := me.distance_to(p)
 		if d < 2.1 and d > 0.01:
 			var n_out := (me - p) / d
 			var rel := Vector2(drive.car.vx, drive.car.vy) - dir * float(r.v)
-			drive.bump(n_out, 2.1 - d, Vector2.ZERO, RIVAL_MASS)
+			drive.bump(n_out, 2.1 - d, Vector2.ZERO, RIVAL_MASS, dir * float(r.v))
 			var side := signf(Vector2(-dir.y, dir.x).dot(p - me))
 			rv.knock(k, 0.5 * (side if side != 0.0 else 1.0), clampf(rel.length() * 0.3, 0.0, 6.0))
 
@@ -1064,13 +1077,15 @@ func _next_open_event() -> int:
 func _spawn(spawn) -> void:
 	var p := Vector2.ZERO
 	var h := 0.0
+	var roll := 0.0
 	var found := false
 	if spawn is int:
 		for e in events:
 			if e.stage == spawn:
-				# back at the beacon, rolled a little on, facing the way the stage left
+				# back at the beacon, rolled a little on (clear of its trigger), facing on towards the next target
 				h = e.heading + PI
-				p = (e.pos as Vector2) + Vector2(cos(h), sin(h)) * 14.0
+				p = e.pos
+				roll = SPAWN_ROLL
 				found = true
 	elif spawn is String and spawn != "" and map.spots.has(spawn):
 		var s: Array = map.spots[spawn]
@@ -1085,13 +1100,79 @@ func _spawn(spawn) -> void:
 		var s: Array = map.spots.get("festival", [0.0, 0.0, 0.0])
 		p = Vector2(s[0], s[1])
 		h = float(s[2])
-	drive.place(p, h)
-	drive.respawn() if map.road_at(p.x, p.y, -INF, 2.0).is_empty() else null
-	snap_camera()
-	_apply_time()
+	# the GPS target first: the car is put on its road facing the way the route there sets off
 	if not gps_waypoint and (gps_target < 0 or gps_target >= events.size() or events[gps_target].done):
 		gps_target = _next_open_event()
+	var to: Variant = null
+	if _has_target():
+		to = _target_pos()
+	spawn_car(drive, map, p, h, to, roll)
+	snap_camera()
+	_apply_time()
 	_recompute_route()
+
+## Puts the car at rest in first gear on the road nearest p (its right-hand lane), facing along that road: the way the
+## GPS route to `to` sets off when there is one, else the way h points (a stage spot's road, the saved heading), and
+## `roll` metres on along that way. Every spawn goes through here (tests/test_open_world_spawn.gd).
+static func spawn_car(drive: FreeCar, map: TownMap, p: Vector2, h: float, to: Variant = null, roll := 0.0) -> void:
+	drive.place(p, h)
+	drive.respawn()
+	var d := Vector2.ZERO
+	if to is Vector2:
+		d = route_dir(map, Vector2(drive.car.x, drive.car.y), to)
+		if d != Vector2.ZERO:
+			drive.respawn(d)
+	if roll > 0.0:
+		var at := Vector2(drive.car.x, drive.car.y)
+		var f := Vector2.from_angle(drive.car.heading)
+		var q := at + f * roll
+		if d != Vector2.ZERO:
+			# rolled on down the route itself, so a turn just past the beacon is taken, not driven past
+			var r := map.route(at, to)
+			var q2 := point_along(r, roll + 4.0)
+			q = point_along(r, roll)
+			if q2.distance_to(q) > 1.0:
+				f = (q2 - q).normalized()
+		drive.place(q, f.angle())
+		drive.respawn(f)
+
+## The point dist metres along the polyline r (its end when it is shorter).
+static func point_along(r: PackedVector2Array, dist: float) -> Vector2:
+	if r.is_empty():
+		return Vector2.ZERO
+	var run := 0.0
+	for k in range(1, r.size()):
+		var l := r[k].distance_to(r[k - 1])
+		if run + l >= dist:
+			return r[k - 1].lerp(r[k], (dist - run) / maxf(l, 1e-6))
+		run += l
+	return r[r.size() - 1]
+
+## The way along its road the GPS route from p to `to` sets off (a unit vector); zero when there is no route or p is
+## already there. TownMap.route starts at p's projection on the nearest road and goes straight to the junction the
+## route leaves by, so the first route point off the start, found on that road, says which way along it to go.
+static func route_dir(map: TownMap, p: Vector2, to: Vector2) -> Vector2:
+	var r := map.route(p, to)
+	if r.size() < 2:
+		return Vector2.ZERO
+	var a := map.nearest_road(p, 120.0) # the projection the route starts from
+	if a.is_empty():
+		return Vector2.ZERO
+	var length := 0.0
+	for k in range(1, r.size()):
+		length += r[k].distance_to(r[k - 1])
+	if length < 4.0:
+		return Vector2.ZERO # the target is right here
+	var pts: PackedVector2Array = map.road_pts[int(a.road)]
+	var at := float(a.i) + float(a.t)
+	for k in range(1, r.size()):
+		if r[k].distance_to(r[0]) < 1.0:
+			continue
+		for j in pts.size():
+			if pts[j].distance_squared_to(r[k]) < 0.01 and absf(float(j) - at) > 0.001:
+				return (a.dir as Vector2) * signf(float(j) - at)
+		return (r[k] - r[0]).normalized() # not on the start road (a junction right at the start): the chord
+	return Vector2.ZERO
 
 ## Cuts the chase camera to its place behind the car after the car was put somewhere new (spawn, reset, teleport),
 ## so it neither sweeps across the map nor swings round from the old heading.

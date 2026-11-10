@@ -1388,6 +1388,7 @@ def build(check_png=None):
         return True
 
     generated = 0
+    gen_from = len(fences)  # fences[gen_from:gen_to] are the generated plot fences
     STEP, SETBACK, GATE, DEPTH = 2.5, 2.2, 1.8, 32.0
     for r in out_roads:
         if r['kn'] not in ('residential', 'living_street', 'unclassified', 'tertiary') or r['b']:
@@ -1447,6 +1448,14 @@ def build(check_png=None):
                             p0 = q
                             d += STEP
                     prev = None if gate else (e, owner)  # the gate leaves a gap in the frontage
+    gen_to = len(fences)
+    # A plot whose hash picks style 2 or 4 is an open plot: TownBuilder draws plot fences as panels (styles 0, 1, 3),
+    # hedges only along mapped barrier=hedge ways and style 4 only at the road closures, so these generated segments
+    # had no mesh and stood in the gardens as invisible walls (60 km of them). They are dropped from the output only:
+    # everything placed round the fences below (beds, lamps, trees) stays where it was.
+    open_plot = [i for i in range(gen_from, gen_to) if fences[i][4] in (2, 4)]
+    print(len(open_plot), 'generated fence segments of open plots (style 2 or 4) left out')
+    open_plot = set(open_plot)
     # a vegetable bed behind some houses
     garden_beds = []
     for hx, hy, ring in house_centres:
@@ -1904,7 +1913,7 @@ def build(check_png=None):
         'areas': [[kind, flat_pts(ring), [flat_pts(h) for h in holes], extra] for _, _, kind, ring, holes, extra, _ in areas],
         'waterways': [[wd, flat_pts(pts)] for wd, pts in waterways],
         'trees': [v for x, y, c in trees for v in (r1(x), r1(y), c)],
-        'fences': [[r1(x), r1(y), r1(xx), r1(yy), style] for x, y, xx, yy, style in fences],
+        'fences': [[r1(x), r1(y), r1(xx), r1(yy), style] for i, (x, y, xx, yy, style) in enumerate(fences) if i not in open_plot],
         'garden_beds': [[r1(x), r1(y), round(a, 3), l, w] for x, y, a, l, w in garden_beds],
         'lamps': flat_pts(lamps),
         'signals': flat_pts(signals),

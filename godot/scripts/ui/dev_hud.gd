@@ -85,7 +85,9 @@ func _build_lines() -> PackedStringArray:
 	lines.append("%d FPS   %.2f ms" % [Engine.get_frames_per_second(), _frames[posmod(_head - 1, HISTORY)]])
 	lines.append("avg %.2f ms (%.0f fps)   worst %.2f ms" % [avg, 1000.0 / maxf(avg, 0.001), worst])
 	lines.append("1%% low %.0f fps" % low_fps)
-	lines.append("CPU process %.2f ms  physics %.2f ms" % [Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0, Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0])
+	# Godot's process monitor also counts the wait for the renderer, so it reads as high as the frame itself when
+	# the 3D view is the cost: it is not script time
+	lines.append("main loop %.2f ms  physics %.2f ms" % [Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0, Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0])
 	lines.append("draw calls %d   objects %d" % [Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME), Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)])
 	lines.append("primitives %s" % _thousands(int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME))))
 	lines.append("video mem %.0f MB   ram %.0f MB" % [Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED) / 1048576.0, Performance.get_monitor(Performance.MEMORY_STATIC) / 1048576.0])

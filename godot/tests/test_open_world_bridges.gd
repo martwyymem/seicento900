@@ -133,21 +133,26 @@ func _tunnels(map: TownMap, errors: Array[String]) -> void:
 		# the slab over the street leaves headroom
 		if float(t.z) - 0.9 < TownMap.TUNNEL_HEADROOM - 0.1:
 			errors.append("%s: only %.1f m under the deck" % [label, float(t.z) - 0.9])
-		# (3) the car drives through at the ground's height without a jump and is not stopped
+		# (3) the car drives through along the street (from 8 m before the cut, the way the street comes) at the ground's
+		# height without a jump and is not stopped
 		var v: Vector2 = t.v
-		var start := c - v * (float(t.half_foot) + 8.0)
+		var ri := int(t.ri)
+		var s_c := _road_arc(map, ri, c)
+		var sgn := 1.0 if (_road_at_arc(map, ri, s_c + 1.0) - _road_at_arc(map, ri, s_c - 1.0)).dot(v) >= 0.0 else -1.0
+		var start := _road_at_arc(map, ri, s_c - sgn * (float(t.half_foot) + 8.0))
 		var fc := FreeCar.new(map)
-		fc.place(start, v.angle())
+		var dir0 := (_road_at_arc(map, ri, s_c - sgn * (float(t.half_foot) + 5.0)) - start).normalized()
+		fc.place(start, dir0.angle())
 		fc.z = fc.support(start.x, start.y)
-		fc.car.vx = v.x * 8.0
-		fc.car.vy = v.y * 8.0
+		fc.car.vx = dir0.x * 8.0
+		fc.car.vy = dir0.y * 8.0
 		fc.car.gear = 1
 		var last := fc.z
 		var worst := 0.0
 		var worst_at := Vector2.ZERO
 		var through := false
 		for i in int(7.0 / DT):
-			fc.step(DT, 0.5, 0.0, _steer_to(fc, c + v * 60.0))
+			fc.step(DT, 0.5, 0.0, _steer_to(fc, _road_at_arc(map, ri, _road_arc(map, ri, Vector2(fc.car.x, fc.car.y)) + sgn * 6.0)))
 			if absf(fc.z - last) > worst and Vector2(fc.car.x, fc.car.y).distance_to(c) < float(t.half_foot) + 3.0:
 				worst = absf(fc.z - last)
 				worst_at = Vector2(fc.car.x, fc.car.y)
@@ -267,6 +272,8 @@ func _bank_collision(map: TownMap, errors: Array[String]) -> void:
 				var start := c - v * e * (float(t.half_foot) + 6.0) + n * sd * (float(t.cut_half) + 3.0)
 				if not map.buildings_near(start, 6.0).is_empty() or not map.walls_near(start, 4.0).is_empty():
 					continue
+				if not map.road_at(start.x, start.y, -INF, 3.0).is_empty():
+					continue # on (or at the edge of) a street: this is about the grass slope beside the cut
 				var fc := FreeCar.new(map)
 				fc.place(start, (v * e).angle())
 				fc.z = fc.support(start.x, start.y)
@@ -286,7 +293,8 @@ func _bank_collision(map: TownMap, errors: Array[String]) -> void:
 						worst = bank - fc.z
 						worst_at = p
 					top = maxf(top, fc.z - map.ground(p.x, p.y))
-					jump = maxf(jump, absf(fc.z - last))
+					if map.road_at(p.x, p.y, -INF, 1.0).is_empty():
+						jump = maxf(jump, absf(fc.z - last)) # (a street's edge on the way, beside a pond bank, is its own step)
 					last = fc.z
 				if worst > 0.4:
 					errors.append("%s: a car driven at the embankment beside the cut went %.2f m into it at %s" % [label, worst, worst_at])
@@ -313,6 +321,34 @@ func _bank_collision(map: TownMap, errors: Array[String]) -> void:
 				errors.append("%s: a car steered at the wing wall got %.2f m off the centre line (the wall stands at %.2f)" % [label, widest, float(t.cut_half)])
 	if climbed < 6:
 		errors.append("only %d cars rode up an embankment beside an underpass" % climbed)
+
+## Arc length along road ri of its point nearest p.
+func _road_arc(map: TownMap, ri: int, p: Vector2) -> float:
+	var pts := map.road_pts[ri]
+	var best := INF
+	var at := 0.0
+	var acc := 0.0
+	for k in pts.size() - 1:
+		var q := Geometry2D.get_closest_point_to_segment(p, pts[k], pts[k + 1])
+		if q.distance_to(p) < best:
+			best = q.distance_to(p)
+			at = acc + pts[k].distance_to(q)
+		acc += pts[k].distance_to(pts[k + 1])
+	return at
+
+## The point of road ri at arc length s (clamped to the road), straight on past its ends.
+func _road_at_arc(map: TownMap, ri: int, s: float) -> Vector2:
+	var pts := map.road_pts[ri]
+	var acc := 0.0
+	if s < 0.0:
+		return pts[0] + (pts[0] - pts[1]).normalized() * -s
+	for k in pts.size() - 1:
+		var d := pts[k].distance_to(pts[k + 1])
+		if s <= acc + d:
+			return pts[k].lerp(pts[k + 1], (s - acc) / maxf(d, 1e-6))
+		acc += d
+	var n := pts.size()
+	return pts[n - 1] + (pts[n - 1] - pts[n - 2]).normalized() * (s - acc)
 
 func _steer_to(fc: FreeCar, target: Vector2) -> float:
 	var want := (target - Vector2(fc.car.x, fc.car.y)).angle()

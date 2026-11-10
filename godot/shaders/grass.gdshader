@@ -1,4 +1,5 @@
-// Meadow grass and wheat patches (GrassPatch, WheatPatch in models/roadside.glb, planted by vegetation.gd).
+// Meadow grass and wheat patches and the far layer's tufts (GrassPatch, WheatPatch, GrassTuft in models/roadside.glb,
+// planted by vegetation.gd).
 // The mesh's vertex colour is data: R the blade's dryness, G the height along the blade (0 root, 1 tip), B 1 on a
 // wheat ear, A a per-blade random. INSTANCE_CUSTOM: rgb a tint, a how dry the patch is.
 // The blades sway in rolling gusts, get a dark root and a sunlit tip, let the sun through from behind, and shrink
@@ -7,10 +8,11 @@
 shader_type spatial;
 render_mode cull_disabled, specular_schlick_ggx;
 
-uniform vec3 root_color : source_color = vec3(0.09, 0.16, 0.05);
-uniform vec3 mid_color : source_color = vec3(0.30, 0.50, 0.11);
-uniform vec3 tip_color : source_color = vec3(0.56, 0.68, 0.20);
-uniform vec3 dry_color : source_color = vec3(0.80, 0.68, 0.36);
+// a summer meadow's olive greens, the tips straw-tinged (brighter tips read as neon yellow-green in low sun)
+uniform vec3 root_color : source_color = vec3(0.08, 0.13, 0.05);
+uniform vec3 mid_color : source_color = vec3(0.26, 0.39, 0.12);
+uniform vec3 tip_color : source_color = vec3(0.46, 0.53, 0.22);
+uniform vec3 dry_color : source_color = vec3(0.72, 0.64, 0.37);
 uniform vec3 ear_color : source_color = vec3(0.86, 0.70, 0.36);
 // what the blades turn towards the far edge: the bare meadow's colour beyond the planted ring (vegetation.gd MEADOW_FAR)
 uniform vec3 far_color : source_color = vec3(0.30, 0.50, 0.11);
@@ -24,7 +26,10 @@ uniform float fade_end = 88.0; // m: gone
 // sparse ones come in, so no cell's grass changes all at once
 uniform vec2 lod_out = vec2(0.0);
 uniform vec2 lod_in = vec2(0.0);
-uniform float translucency = 0.55;
+// m: the blades take far_color over this band (y = 0: from 20 m before fade_start to fade_end). vegetation.gd gives
+// the near patches and the far tufts the same band, so where both stand they have one colour.
+uniform vec2 tone_range = vec2(0.0);
+uniform float translucency = 0.4;
 
 varying float v_h;
 varying float v_dry;
@@ -56,7 +61,7 @@ void vertex() {
 	// takes the plain mid colour, nearer the ground's, so the edge of the planted ring doesn't read as a wall
 	float keep = blade_leaves(vec2(fade_start, fade_end), d, v_rnd);
 	keep *= 1.0 - smoothstep(fade_start, fade_end, d) * 0.5;
-	v_far = smoothstep(fade_start - 20.0, fade_end, d);
+	v_far = tone_range.y > 0.0 ? smoothstep(tone_range.x, tone_range.y, d) : smoothstep(fade_start - 20.0, fade_end, d);
 	if (lod_out.y > 0.0) {
 		keep *= blade_leaves(lod_out, d, v_rnd);
 	}

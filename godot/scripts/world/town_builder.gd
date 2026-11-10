@@ -820,7 +820,7 @@ func _rail_meshes() -> Array:
 			var za := (zs[i] if not zs.is_empty() else 0.0)
 			var zb := (zs[i + 1] if not zs.is_empty() else 0.0)
 			# the bed and the embankment as TownMap.rail_section gives them (the car rides the same surfaces)
-			var sec := map.rail_section(a, b, za, zb, bw)
+			var sec := map.rail_section(a, b, za, zb, bw, pts[i - 1] if i > 0 else Vector2.INF)
 			var A: Vector3 = (sec.ballast[0][0] + sec.ballast[0][3]) * 0.5
 			var B: Vector3 = (sec.ballast[0][1] + sec.ballast[0][2]) * 0.5
 			var side := Vector3(nrm.x, 0.0, nrm.y)
@@ -851,6 +851,17 @@ func _rail_meshes() -> Array:
 				if nn.y < 0.0:
 					nn = -nn
 				_bank_quad(bank, e0, e1, q[2], b0, nn, (a + b) * 0.5)
+			# the wedge on the outside of the bend at a: bed and shoulder in ballast, the slope as embankment
+			for k in sec.joint.size():
+				var q: Array = sec.joint[k]
+				if k < 2:
+					ballast.flat_quad(q[0], q[1], q[2], q[3], Vector3.UP, ballast_col if k == 0 else ballast_col.darkened(0.1))
+				else:
+					var j0: Vector3 = q[0]
+					var nn := (q[1] as Vector3 - j0).cross(q[3] as Vector3 - j0).normalized()
+					if nn.y < 0.0:
+						nn = -nn
+					_bank_quad(bank, j0, q[1], q[2], q[3], nn, a)
 	var recs: Array = []
 	for ck in chunks:
 		var parts: Array = chunks[ck]
@@ -971,7 +982,7 @@ func build_tunnels() -> void:
 		var n := Vector2(-v.y, v.x)
 		var hb: float = t.half_bore
 		var hf: float = t.half_foot
-		var hw: float = float(t.w) * 0.5 + 0.2
+		var hw: float = t.cut_half # the bore's and the cut's half width (TownMap: the street and a verge each side)
 		var deck_top: float = t.top # the highest track's rail level: the header beam's top
 		var roof: float = deck_top - 0.9
 		var at := func(s: float, l: float, y: float) -> Vector3:
@@ -2014,51 +2025,9 @@ func _add_trees(group: Node3D, species: String, buf: PackedFloat32Array, count: 
 ## Fence segments that a longer, parallel one within 0.8 m already covers (a mapped barrier next to a generated
 ## plot boundary): both would draw, and their panels cross like a double fence. Returns {index: true}.
 func _doubled_fences(walls: Array) -> Dictionary:
-	var order: Array = []
-	var cells := {}
-	for wi in walls.size():
-		var w: Array = walls[wi]
-		var style := int(w[4]) if w.size() > 4 else 0
-		if style == 2 or style == 4:
-			continue
-		var len := Vector2(float(w[2]) - float(w[0]), float(w[3]) - float(w[1])).length()
-		if len >= 0.35:
-			order.append([len, wi])
-	order.sort_custom(func(x: Array, y: Array) -> bool: return x[0] > y[0])
-	var skip := {}
-	for entry: Array in order:
-		var wi: int = entry[1]
-		var w: Array = walls[wi]
-		var a := Vector2(float(w[0]), float(w[1]))
-		var d := Vector2(float(w[2]), float(w[3])) - a
-		var ln: float = entry[0]
-		var t := d / ln
-		var n := Vector2(-t.y, t.x)
-		var mid := a + d * 0.5
-		var cell := Vector2i(floori(mid.x / 6.0), floori(mid.y / 6.0))
-		var covered := false
-		for dx in range(-1, 2):
-			for dy in range(-1, 2):
-				for oi: int in cells.get(cell + Vector2i(dx, dy), []):
-					var o: Array = walls[oi]
-					var oa := Vector2(float(o[0]), float(o[1]))
-					var ob := Vector2(float(o[2]), float(o[3]))
-					var ot := (ob - oa) / maxf(oa.distance_to(ob), 1e-3)
-					if absf(t.cross(ot)) > 0.1:
-						continue
-					if absf((oa - a).dot(n)) > 0.8 or absf((ob - a).dot(n)) > 0.8:
-						continue
-					var s0 := clampf((oa - a).dot(t), 0.0, ln)
-					var s1 := clampf((ob - a).dot(t), 0.0, ln)
-					if absf(s1 - s0) > ln * 0.8:
-						covered = true
-		if covered:
-			skip[wi] = true
-		else:
-			if not cells.has(cell):
-				cells[cell] = []
-			cells[cell].append(wi)
-	return skip
+	return TownMap.doubled_fences(walls)
+
+const HEDGE_STEP := 1.7 ## m between the bush clusters of a hedge row
 
 func build_fences() -> void:
 	var group := _group("Garden Fences")
@@ -2125,18 +2094,24 @@ func _fence_records(fence: Array) -> Array:
 			break
 		if bush:
 			var bushes := []
-			for wi in range(0, walls.size(), 2):
+			# a hedge (style 2) is a row of bush clusters standing on its line, end to end (the cluster is ~2.1 m long
+			# along its X), so the hedge the car hits (TownMap: a 0.48 m half-thick wall on that line) is the one drawn
+			for wi in walls.size():
 				var w: Array = walls[wi]
 				if int(w[4]) != 2:
 					continue
 				var a := Vector2(float(w[0]), float(w[1]))
 				var b := Vector2(float(w[2]), float(w[3]))
 				var d := b - a
-				var steps := int(d.length() / 8.0)
+				if d.length() < 0.35:
+					continue
+				var steps := maxi(1, int(ceil(d.length() / HEDGE_STEP)))
+				var yaw := atan2(-d.y, d.x)
 				for j in steps:
-					var p := a + d * ((float(j) + 0.5) / maxf(1.0, float(steps))) + Vector2(-d.y, d.x).normalized() * 0.9
-					var s := 0.7 + hash2(p.x, p.y, 17.0) * 0.45
-					bushes.append(Transform3D(Basis(Vector3.UP, hash2(p.x, p.y, 19.0) * TAU).scaled(Vector3.ONE * s), Vector3(p.x, map.ground(p.x, p.y), p.y)))
+					var p := a + d * ((float(j) + 0.5) / float(steps))
+					var s := 0.8 + hash2(p.x, p.y, 17.0) * 0.3
+					var turn := yaw + (hash2(p.x, p.y, 19.0) - 0.5) * 0.5 + (PI if hash2(p.x, p.y, 23.0) > 0.5 else 0.0)
+					bushes.append(Transform3D(Basis(Vector3.UP, turn).scaled(Vector3.ONE * s), Vector3(p.x, map.ground(p.x, p.y), p.y)))
 			bush_cells = _chunk_cells(bushes, [])
 		roadside.free()
 	var beds := []
@@ -3171,20 +3146,37 @@ func add_beacon(name: String, p: Vector2, color: Color, label_text: String) -> N
 	col_inst.position = Vector3(0, 80.0, 0)
 	col_inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	node.add_child(col_inst)
-	var ring := TorusMesh.new()
-	ring.inner_radius = 5.4
-	ring.outer_radius = 6.0
-	ring.rings = 48
-	var ring_mat := glow.duplicate() as StandardMaterial3D
-	ring_mat.albedo_texture = null
-	ring_mat.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_DISABLED
-	ring_mat.albedo_color = Color(color.r, color.g, color.b, 0.9)
+	# the start ring: a flat band painted on the ground (each vertex at the road or ground height under it), not a
+	# floating torus; plain alpha blend, so it never runs past its colour into the night glow as a neon hoop
+	var ring_mat := StandardMaterial3D.new()
+	ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ring_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	ring_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	ring_mat.albedo_color = Color(color.r * 0.8, color.g * 0.8, color.b * 0.8, 0.7)
+	ring_mat.render_priority = 1
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var segs := 64
+	var ring_pts := []
+	for i in segs + 1:
+		var a := TAU * float(i) / segs
+		var pair := []
+		for r: float in [5.4, 6.0]:
+			var q := p + Vector2(cos(a), sin(a)) * r
+			var rg := map.road_at(q.x, q.y, -INF, 2.0)
+			var h: float = float(rg.height) if not rg.is_empty() else map.ground(q.x, q.y)
+			pair.append(Vector3(q.x - p.x, h - y + 0.07, q.y - p.y))
+		ring_pts.append(pair)
+	for i in segs:
+		var a0: Array = ring_pts[i]
+		var a1: Array = ring_pts[i + 1]
+		for v in [a0[0], a0[1], a1[1], a0[0], a1[1], a1[0]]:
+			st.add_vertex(v)
 	var ring_inst := MeshInstance3D.new()
-	ring_inst.mesh = ring
+	ring_inst.mesh = st.commit()
 	ring_inst.material_override = ring_mat
-	ring_inst.position = Vector3(0, 0.25, 0)
-	ring_inst.scale = Vector3(1, 0.25, 1)
 	ring_inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ring_inst.visibility_range_end = 300.0
 	node.add_child(ring_inst)
 	var label := Label3D.new()
 	label.text = label_text

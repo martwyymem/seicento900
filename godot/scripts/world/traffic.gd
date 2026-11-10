@@ -1033,7 +1033,7 @@ func _contact(player: FreeCar) -> void:
 				touched = true
 				var n_local := (cl - local).normalized() if d > 1e-4 else Vector2(-1, 0)
 				var n_out := n_local.rotated(car.heading) # from the traffic car towards the player
-				var v := player.bump(n_out, (RADIUS - d) * (0.15 if player.monster else 0.6), cl.rotated(car.heading), CAR_MASS)
+				var v := player.bump(n_out, (RADIUS - d) * (0.15 if player.monster else 0.6), cl.rotated(car.heading), CAR_MASS, cv)
 				c.push = (c.push as Vector2) - n_out * (RADIUS - d) * (1.2 if player.monster else 0.4)
 				if v > 2.0:
 					c.knock = 2.5
