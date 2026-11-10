@@ -107,6 +107,8 @@ var _reset_armed := false ## RESET CAMPAIGN was pressed once and waits for its c
 var route := PackedVector2Array()
 var _route_t := 0.0
 var traps: Array = [] ## [{id, pos, dir, name}]
+var pois: Array[Poi] = [] ## the speed traps and landmarks the map and the satnav show (scripts/world/poi.gd)
+var wp_poi := "" ## the Poi id the waypoint route runs to ("" for the player's own waypoint)
 var _trap_near := {}
 var chain_points := 0.0
 var chain_mult := 1.0
@@ -662,9 +664,11 @@ func _update_markers() -> void:
 		var st: Dictionary = Campaign.get_stage(e.stage)
 		var info := "%s · %s · %s" % [e.title, SPOT_NOTE.get(e.spot, ""), "Done" if e.done else ("Open" if e.open else "Locked")]
 		list.append({"pos": e.pos, "color": e.color, "label": "%d. %s" % [e.stage + 1, String(st.track).capitalize()], "info": info})
-	if wp_on:
+	if wp_on and wp_poi == "":
 		list.append({"pos": wp_pos, "color": OpenWorldHud.PURPLE, "label": "WAYPOINT", "kind": "waypoint", "info": "Your waypoint"})
+	list.append_array(Poi.markers(pois, progress, wp_poi if wp_on else ""))
 	hud.set_markers(list)
+	hud.set_summary(Poi.summary(pois, progress, progress.roads.size(), map.road_pts.size()))
 	_place_waypoint_beacon()
 
 ## The waypoint stands in the world too: a purple light column like the stages', so it can be found by eye.
@@ -674,16 +678,20 @@ func _place_waypoint_beacon() -> void:
 	var old: Variant = builder.beacon_nodes.get("waypoint")
 	if old != null and is_instance_valid(old):
 		var at: Vector3 = (old as Node3D).position
-		if wp_on and Vector2(at.x, at.z).distance_to(wp_pos) < 0.5:
+		if wp_on and wp_poi == "" and Vector2(at.x, at.z).distance_to(wp_pos) < 0.5:
 			return
 		(old as Node3D).queue_free()
 	builder.beacon_nodes.erase("waypoint")
-	if wp_on:
+	if wp_on and wp_poi == "": # a route to a point of interest leaves the beacon off: the point has its own marker
 		builder.add_beacon("waypoint", wp_pos, OpenWorldHud.PURPLE, "WAYPOINT")
 
 ## Driving up to the waypoint clears it, as reaching a stage beacon does: the route and the column go.
 func _check_waypoint_reached() -> void:
 	if not wp_on or drive == null:
+		return
+	if wp_poi != "":
+		if Vector2(drive.car.x, drive.car.y).distance_to(wp_pos) <= WAYPOINT_REACH:
+			_clear_poi_route()
 		return
 	if Vector2(drive.car.x, drive.car.y).distance_to(wp_pos) > WAYPOINT_REACH:
 		return
@@ -779,37 +787,10 @@ func _start_active_event() -> void:
 # ================================================================================================ speed traps, discovery
 
 func _build_traps() -> void:
-	# the long straights of the main roads, at least 600 m apart
-	var cands := []
-	for ri in map.road_pts.size():
-		if not map.road_kind[ri] in ["secondary", "tertiary", "primary", "unclassified"]:
-			continue
-		var pts := map.road_pts[ri]
-		var i := 0
-		while i < pts.size() - 1:
-			var j := i
-			var run := 0.0
-			var d0 := (pts[i + 1] - pts[i]).normalized()
-			while j < pts.size() - 1 and (pts[j + 1] - pts[j]).normalized().dot(d0) > 0.995:
-				run += pts[j].distance_to(pts[j + 1])
-				j += 1
-			if run > 220.0:
-				var mid := pts[i].lerp(pts[j], 0.5)
-				cands.append([run, mid, d0, ri])
-			i = maxi(j, i + 1)
-	cands.sort_custom(func(a, b): return a[0] > b[0])
-	for c in cands:
-		var ok := true
-		for t in traps:
-			if (t.pos as Vector2).distance_to(c[1]) < 600.0:
-				ok = false
-		if ok:
-			var name := map.road_name[c[3]]
-			traps.append({"id": "trap_%d_%d" % [int(c[1].x), int(c[1].y)], "pos": c[1], "dir": c[2],
-				"name": street_label(name) if name != "" else "Speed trap"})
-			_add_trap_sign(c[1], c[2], c[3])
-		if traps.size() >= 9:
-			break
+	traps = Poi.find_traps(map)
+	for t in traps:
+		_add_trap_sign(t.pos, t.dir, t.road)
+	pois = Poi.build(map, traps)
 
 func _add_trap_sign(p: Vector2, dir: Vector2, ri: int) -> void:
 	var side := Vector2(-dir.y, dir.x)
@@ -849,16 +830,30 @@ func _check_traps() -> void:
 		var across := absf(d.dot(Vector2(-t.dir.y, t.dir.x)))
 		var near := absf(along) < 4.0 and across < 12.0
 		if near and not _trap_near.get(t.id, false):
-			var kmh := drive.speed_kmh()
-			var best := float(progress.traps.get(t.id, 0.0))
-			var stars := 3 if kmh >= 120.0 else (2 if kmh >= 100.0 else (1 if kmh >= 80.0 else 0))
-			var star_txt := "★".repeat(stars) + "☆".repeat(3 - stars)
-			var sub := "%s · %s%s" % [t.name, star_txt, "  NEW BEST" if kmh > best + 0.5 else "  best %d km/h" % int(best)]
-			hud.notify("SPEED TRAP  %d KM/H" % int(round(kmh)), sub, Color("#4aa3ff"))
-			if kmh > best:
-				progress.traps[t.id] = snappedf(kmh, 0.1)
-				_add_fans(int(kmh * 4.0), "")
+			_trap_driven(t, drive.speed_kmh())
 		_trap_near[t.id] = near
+
+## One run through a trap: the banner (the first-ever run explains traps in the same banner), the best speed kept,
+## fans for a new best, and the trap shown as driven on the map.
+func _trap_driven(t: Dictionary, kmh: float) -> void:
+	var p := Poi.find(pois, String(t.id))
+	var best := float(progress.traps.get(t.id, 0.0))
+	var first: bool = not progress.traps.has(t.id)
+	var star_txt := Poi.star_text(Poi.stars(kmh))
+	var sub := "%s · %s%s" % [t.name, star_txt, "  NEW BEST" if kmh > best + 0.5 else "  best %d km/h" % int(best)]
+	if p != null:
+		p.record_run(progress, kmh)
+		if first:
+			sub += "\n%s %d / %d driven. %s" % [Poi.KINDS[Poi.TRAP].plural, Poi.counts(pois, progress)[Poi.TRAP][0], Poi.TRAP_COUNT, Poi.take_intro(progress, Poi.TRAP)]
+	elif kmh > best:
+		progress.traps[t.id] = snappedf(kmh, 0.1)
+	hud.notify("SPEED TRAP  %d KM/H" % int(round(kmh)), sub, Color("#4aa3ff"))
+	if kmh > best:
+		_add_fans(int(kmh * 4.0), "")
+	if first or kmh > best:
+		_update_markers()
+	if wp_poi == t.id:
+		_clear_poi_route()
 
 func _check_discovery() -> void:
 	var cp := Vector2(drive.car.x, drive.car.y)
@@ -866,19 +861,24 @@ func _check_discovery() -> void:
 		var ri: int = drive.road.road
 		if not progress.roads.has(ri):
 			progress.roads[ri] = true
+			hud.set_summary(Poi.summary(pois, progress, progress.roads.size(), map.road_pts.size()))
 			if progress.roads.size() % 50 == 0:
 				hud.notify("ROADS DRIVEN  %d / %d" % [progress.roads.size(), map.road_pts.size()], "Every street of Brzeszcze, one at a time")
 		hud.set_street(street_label(map.road_name[ri]))
-	for pl in map.places:
-		if not String(pl.k) in DISCOVER_KINDS or String(pl.name) == "":
-			continue
-		var name := String(pl.name)
-		if progress.landmarks.has(name):
-			continue
-		if Vector2(pl.x, pl.y).distance_to(cp) < 70.0:
-			progress.landmarks[name] = true
-			hud.notify("DISCOVERED", name, OpenWorldHud.GOLD)
-			_add_fans(1000, "")
+	var found := Poi.discover_near(pois, progress, cp)
+	for p in found:
+		var c: Array = Poi.counts(pois, progress)[Poi.LANDMARK]
+		var sub := "%s\n%s · %d / %d landmarks · +%s fans" % [p.name, p.sub, c[0], c[1], OpenWorldHud._thousands(Poi.LANDMARK_FANS)]
+		if found.find(p) == 0:
+			var tip := Poi.take_intro(progress, Poi.LANDMARK)
+			if tip != "":
+				sub += "\n" + tip
+		hud.notify("DISCOVERED", sub, Poi.KINDS[Poi.LANDMARK].color)
+		_add_fans(Poi.LANDMARK_FANS, "")
+		if wp_poi == p.id:
+			_clear_poi_route()
+	if not found.is_empty():
+		_update_markers()
 
 ## How a street is signed: "ul. Dworcowa", "Rondo NSZZ Solidarność", the S1, the DW933.
 static func street_label(name: String) -> String:
@@ -1104,8 +1104,33 @@ func award_fans(n: int) -> void:
 	_add_fans(n, "")
 	_save()
 
+## The GPS route runs to a point of interest (Enter on it in the big map): the waypoint machinery carries the
+## route, the point keeps its own marker.
+func _route_to_poi(p: Poi) -> void:
+	if p == null:
+		return
+	wp_poi = p.id
+	wp_pos = p.pos
+	wp_on = true
+	gps_waypoint = true
+	_update_markers()
+	_recompute_route()
+	hud.toggle_map(false)
+	hud.notify("ROUTE SET", p.name if p.state(progress) != Poi.State.UNKNOWN else "Undiscovered landmark", OpenWorldHud.PURPLE)
+
+## Arrived at (or found) the point the route ran to: the route and the highlight go; the point's own banner has
+## said everything there is to say.
+func _clear_poi_route() -> void:
+	wp_poi = ""
+	wp_on = false
+	if gps_waypoint:
+		gps_waypoint = false
+		_recompute_route()
+	_update_markers()
+
 ## Drops the player's own waypoint (map click or cursor) and routes there.
 func _set_waypoint(pos: Vector2) -> void:
+	wp_poi = ""
 	wp_pos = MapMarker.keep_inside(pos, map.play) # a click on the dimmed ground beyond the edge has no route
 	wp_on = true
 	gps_waypoint = true
@@ -1348,6 +1373,8 @@ func _input(event: InputEvent) -> void:
 			"accept":
 				if hud.cursor_on:
 					_set_waypoint(hud.cursor)
+				elif hud.map_sel >= 0 and hud.map_sel < hud.markers.size() and hud.markers[hud.map_sel].get("kind", "") == "poi":
+					_route_to_poi(Poi.find(pois, String(hud.markers[hud.map_sel].id)))
 				elif hud.map_sel >= events.size():
 					gps_waypoint = true
 					_recompute_route()
@@ -1369,6 +1396,10 @@ func _input(event: InputEvent) -> void:
 			hud.map_sel = maxi(gps_target, 0)
 			hud.toggle_map(true)
 		"gps":
+			if wp_poi != "":
+				wp_poi = ""
+				wp_on = false
+				_update_markers()
 			gps_waypoint = false
 			gps_target = _next_open_event()
 			_recompute_route()

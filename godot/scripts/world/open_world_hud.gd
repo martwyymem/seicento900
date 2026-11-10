@@ -39,7 +39,8 @@ var map_sel := 0
 var cursor_on := false ## the free map cursor (F / pad X) for placing a waypoint anywhere
 var cursor := Vector2.ZERO
 var route := PackedVector2Array()
-var markers: Array = [] ## [{pos: Vector2, color: Color, label: String, kind: String}]
+var markers: Array = [] ## [{pos: Vector2, color: Color, label: String, kind: String}]; kind "poi" is a Poi.marker()
+var summary := "" ## the big map's progress line ("Speed traps 3/9 · Landmarks 5/14 · Roads 212/1830")
 var car_pos := Vector2.ZERO
 var car_heading := 0.0
 var speed := 0.0
@@ -53,6 +54,7 @@ var level_label: Label
 var roads_label: Label
 var clock_label: Label
 var street_label: Label
+var street_plate: Panel ## the dark plate under the street name, so it reads on bright ground
 var area_label: Label
 var chain_box: VBoxContainer
 var chain_title: Label
@@ -177,6 +179,15 @@ func _build() -> void:
 	banners.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(banners)
 	# street name, bottom centre; district, under the chain
+	street_plate = Panel.new()
+	street_plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	street_plate.add_theme_stylebox_override("panel", _street_plate_box())
+	street_plate.anchor_left = 0.5
+	street_plate.anchor_right = 0.5
+	street_plate.anchor_top = 1.0
+	street_plate.anchor_bottom = 1.0
+	street_plate.modulate.a = 0.0
+	add_child(street_plate)
 	street_label = _label("", 24, Color.WHITE, 800)
 	street_label.anchor_left = 0.5
 	street_label.anchor_right = 0.5
@@ -241,6 +252,12 @@ func _build() -> void:
 	_build_big_map()
 	_build_pause()
 	_build_loading()
+
+func _street_plate_box() -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(CmrStyle.PLATE, 0.62)
+	sb.set_corner_radius_all(6)
+	return sb
 
 func _card_box() -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
@@ -364,7 +381,9 @@ func update_drive(kmh: float, g: int, r: float, r_max: float, pos: Vector2, head
 	if map_open:
 		big_overlay.queue_redraw()
 	_street_t = maxf(0.0, _street_t - dt)
-	street_label.modulate.a = clampf(_street_t, 0.0, 1.0) * 0.9 + 0.1 if _street != "" else 0.0
+	# bright for the first seconds on a new street, then a calm 70% (it used to fade to 10%: unreadable)
+	street_label.modulate.a = 0.7 + clampf(_street_t, 0.0, 1.0) * 0.3 if _street != "" else 0.0
+	street_plate.modulate.a = street_label.modulate.a
 	if _area_t > 0.0:
 		_area_t -= dt
 		area_label.modulate.a = clampf(minf(_area_t, 3.2 - _area_t) * 2.0, 0.0, 1.0)
@@ -418,6 +437,14 @@ func _layout() -> void:
 	help_label.offset_top = -10.0 - help_h
 	street_label.offset_bottom = help_label.offset_top - 4.0
 	street_label.offset_top = street_label.offset_bottom - _line_h(street_label)
+	# the plate hugs the text (at the size _fit_label picked), a little wider and taller
+	var sf := street_label.get_theme_font("font")
+	var sw := minf(low * 2.0, sf.get_string_size(street_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, street_label.get_theme_font_size("font_size")).x + street_label.get_theme_constant("outline_size"))
+	street_plate.offset_left = -sw * 0.5 - 14.0
+	street_plate.offset_right = sw * 0.5 + 14.0
+	street_plate.offset_top = street_label.offset_top - 3.0
+	street_plate.offset_bottom = street_label.offset_bottom + 3.0
+	street_plate.visible = _street != ""
 	var right := W - EDGE - CARD_W - 12.0 if card.visible else W - EDGE
 	var top := minf(cx - (EDGE + BANNERS_W + 12.0), right - cx)
 	_fit_label(area_label, top, 46, 24)
@@ -471,7 +498,15 @@ func set_chain(points: int, label: String) -> void:
 		_layout()
 
 func notify(title: String, sub: String, color := ORANGE) -> void:
+	# the same banner again while it is still up (a key pressed twice, an event reported twice) is not stacked:
+	# the one on screen is kept and its time starts over
+	var key := title + "\n" + sub
+	for b in banners.get_children():
+		if b.get_meta("key", "") == key and not b.is_queued_for_deletion():
+			_hold_banner(b as Control)
+			return
 	var panel := PanelContainer.new()
+	panel.set_meta("key", key)
 	var sb := _card_box()
 	sb.border_color = color
 	panel.add_theme_stylebox_override("panel", sb)
@@ -496,8 +531,21 @@ func notify(title: String, sub: String, color := ORANGE) -> void:
 	if is_inside_tree() and not get_tree().process_frame.is_connected(_trim_banners):
 		get_tree().process_frame.connect(_trim_banners, CONNECT_ONE_SHOT)
 	panel.modulate.a = 0.0
+	_hold_banner(panel, 0.25)
+
+## A banner's life: fades in over `fade_in` s (it starts from its current opacity), stays 4 s, fades out and goes.
+## Called again for the same banner it restarts the 4 s.
+func _hold_banner(panel: Control, fade_in := 0.0) -> void:
+	if panel.has_meta("tween"):
+		var old: Variant = panel.get_meta("tween")
+		if old is Tween and (old as Tween).is_valid():
+			(old as Tween).kill()
 	var tw := panel.create_tween()
-	tw.tween_property(panel, "modulate:a", 1.0, 0.25)
+	panel.set_meta("tween", tw)
+	if fade_in > 0.0:
+		tw.tween_property(panel, "modulate:a", 1.0, fade_in)
+	else:
+		panel.modulate.a = 1.0
 	tw.tween_interval(4.0)
 	tw.tween_property(panel, "modulate:a", 0.0, 0.6)
 	tw.tween_callback(panel.queue_free)
@@ -517,6 +565,7 @@ func _skin_changed() -> void:
 		var sb := p.get_theme_stylebox("panel") as StyleBoxFlat
 		if sb:
 			sb.bg_color = Color(CmrStyle.PLATE, 0.88)
+	(street_plate.get_theme_stylebox("panel") as StyleBoxFlat).bg_color = Color(CmrStyle.PLATE, 0.62)
 	for b in banners.get_children():
 		var sb := (b as Control).get_theme_stylebox("panel") as StyleBoxFlat
 		if sb:
@@ -548,7 +597,17 @@ func set_route(points: PackedVector2Array) -> void:
 
 func set_markers(list: Array) -> void:
 	markers = list
+	map_sel = clampi(map_sel, 0, maxi(markers.size() - 1, 0))
 	overlay.queue_redraw()
+	if map_open:
+		big_overlay.queue_redraw()
+
+## The progress line under the big map's title.
+func set_summary(text: String) -> void:
+	if text != summary:
+		summary = text
+		if map_open:
+			big_overlay.queue_redraw()
 
 func toggle_map(on: bool) -> void:
 	map_open = on
@@ -613,6 +672,8 @@ func _draw_minimap_overlay() -> void:
 			overlay.draw_polyline(pts, Color(CmrStyle.PLATE, 0.7), 7.0, true)
 			overlay.draw_polyline(pts, PURPLE.lightened(0.25), 4.0, true)
 	for m in markers:
+		if m.get("kind", "") == "poi":
+			continue # drawn below, small, and only when inside the disc
 		var rim := MapMarker.rim_clamp(_mini_xy(m.pos, radius, sz), sz)
 		var q: Vector2 = rim.pos
 		var edge: bool = rim.edge
@@ -629,6 +690,9 @@ func _draw_minimap_overlay() -> void:
 			var tip: Vector2 = q + dir * 15.0
 			var side := Vector2(-dir.y, dir.x) * 5.0
 			overlay.draw_colored_polygon(PackedVector2Array([tip, q + dir * 8.0 + side, q + dir * 8.0 - side]), Color.WHITE if pin else m.color)
+	# points of interest: the few nearest inside the disc, small, no labels, under the stage and waypoint pins' weight
+	for m in Poi.minimap_pois(markers, car_pos, radius):
+		_draw_poi(overlay, _mini_xy(m.pos, radius, sz), m, 5.0, false)
 	# the car: an arrow at the centre pointing up
 	var c := sz * 0.5
 	var arrow := PackedVector2Array([c + Vector2(0, -11), c + Vector2(8, 9), c + Vector2(0, 4), c + Vector2(-8, 9)])
@@ -697,6 +761,13 @@ func _draw_big_overlay() -> void:
 		var m: Dictionary = markers[i]
 		var q := _big_xy(m.pos)
 		var sel := i == map_sel
+		if m.get("kind", "") == "poi":
+			_draw_poi(big_overlay, q, m, 9.0 if sel else 6.5, sel)
+			var text := String(m.label)
+			if sel or text != "":
+				big_overlay.draw_string(font, q + Vector2(14, 5), text if text != "" else "?", HORIZONTAL_ALIGNMENT_LEFT, -1, 16 if sel else 11,
+					Color.WHITE if sel else Color(1, 1, 1, 0.6))
+			continue
 		big_overlay.draw_circle(q, 13.0 if sel else 10.0, Color(0, 0, 0, 0.7))
 		big_overlay.draw_circle(q, 10.0 if sel else 7.0, m.color)
 		if sel:
@@ -717,13 +788,72 @@ func _draw_big_overlay() -> void:
 		big_overlay.draw_arc(q, 9.0, 0.0, TAU, 24, PURPLE.lightened(0.3), 2.5, true)
 	var title := "BRZESZCZE · MAP"
 	big_overlay.draw_string(CmrStyle.font(900), Vector2(40, 60), title, HORIZONTAL_ALIGNMENT_LEFT, -1, 34, Color.WHITE)
-	var hint := "← → pick an event · Enter set route · click / F place your own waypoint · M / Esc close"
+	var hint := "← → pick a place · Enter set route · click / F place your own waypoint · M / Esc close"
 	if cursor_on:
 		hint = "arrows move the cursor · Enter set waypoint here · F back to events"
 	big_overlay.draw_string(CmrStyle.font(600), Vector2(40, 92), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 1, 1, 0.75))
+	if summary != "":
+		big_overlay.draw_string(CmrStyle.font(800), Vector2(40, 118), summary, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
+		_draw_map_legend(Vector2(40 + CmrStyle.font(800).get_string_size(summary, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x + 36.0, 113.0))
 	if map_sel >= 0 and map_sel < markers.size():
-		big_overlay.draw_string(CmrStyle.font(800), Vector2(40, big_overlay.size.y - 40), String(markers[map_sel].get("info", "")),
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 18, GOLD)
+		# what the selected place is and what to do there; a long line wraps upwards from the foot of the map
+		var info := String(markers[map_sel].get("info", ""))
+		var ifont := CmrStyle.font(800)
+		var wrap := maxf(big_overlay.size.x - 80.0, 200.0)
+		var h := ifont.get_multiline_string_size(info, HORIZONTAL_ALIGNMENT_LEFT, wrap, 18).y
+		big_overlay.draw_multiline_string(ifont, Vector2(40, big_overlay.size.y - 40 - h + ifont.get_ascent(18)), info,
+			HORIZONTAL_ALIGNMENT_LEFT, wrap, 18, -1, GOLD)
+
+## One point of interest marker on `canvas` (the satnav or the big map) at `q`, `r` px across: a dark backing, the
+## kind's shape in its colour, or a dim disc with a ? when the point is still unknown; a white ring when the GPS
+## route runs to it and a wider one when selected.
+func _draw_poi(canvas: Control, q: Vector2, m: Dictionary, r: float, sel: bool) -> void:
+	var unknown: bool = m.get("unknown", false)
+	var col: Color = m.color
+	if unknown:
+		var rr := r * 1.25
+		canvas.draw_circle(q, rr + 2.0, Color(0, 0, 0, 0.6))
+		canvas.draw_circle(q, rr, Color(CmrStyle.PLATE, 0.85))
+		canvas.draw_arc(q, rr, 0.0, TAU, 20, col, 1.5, true)
+		var fs := int(rr * 1.7)
+		canvas.draw_string(CmrStyle.font(900), q + Vector2(-rr, fs * 0.36), "?", HORIZONTAL_ALIGNMENT_CENTER, rr * 2.0, fs, col.lightened(0.2))
+	else:
+		var shape := String(m.get("shape", "square"))
+		canvas.draw_colored_polygon(MapMarker.shape_points(shape, q, r + 2.0), Color(0, 0, 0, 0.65))
+		canvas.draw_colored_polygon(MapMarker.shape_points(shape, q, r), col)
+	if m.get("routed", false):
+		canvas.draw_arc(q, r * 2.0, 0.0, TAU, 24, PURPLE.lightened(0.25), 2.5, true)
+	if sel:
+		canvas.draw_arc(q, r * 2.0 + 5.0, 0.0, TAU, 32, Color.WHITE, 2.5, true)
+
+## The big map's key to the point shapes: [shape, colour, text].
+const LEGEND_SIZE := 14
+
+static func legend_entries() -> Array:
+	return [["diamond", Poi.KINDS[Poi.TRAP].color, "speed trap"], ["square", Poi.KINDS[Poi.LANDMARK].color, "landmark"],
+		["?", Poi.UNKNOWN_COLOR, "undiscovered"]]
+
+## How wide the key is (px), so the map's header can check it fits beside the progress line.
+static func legend_width() -> float:
+	var font := CmrStyle.font(600)
+	var w := 0.0
+	for e in legend_entries():
+		w += 28.0 + font.get_string_size(String(e[2]), HORIZONTAL_ALIGNMENT_LEFT, -1, LEGEND_SIZE).x + 14.0
+	return w
+
+func _draw_map_legend(at: Vector2) -> void:
+	var font := CmrStyle.font(600)
+	var x := at.x
+	for entry in legend_entries():
+		var c := Vector2(x + 7.0, at.y + 1.0)
+		if entry[0] == "?":
+			big_overlay.draw_circle(c, 8.0, Color(CmrStyle.PLATE, 0.85))
+			big_overlay.draw_arc(c, 8.0, 0.0, TAU, 16, entry[1], 1.5, true)
+			big_overlay.draw_string(CmrStyle.font(900), c + Vector2(-8, 5), "?", HORIZONTAL_ALIGNMENT_CENTER, 16.0, 13, entry[1])
+		else:
+			big_overlay.draw_colored_polygon(MapMarker.shape_points(entry[0], c, 5.5), entry[1])
+		big_overlay.draw_string(font, Vector2(x + 20.0, at.y + 6.0), entry[2], HORIZONTAL_ALIGNMENT_LEFT, -1, LEGEND_SIZE, Color(1, 1, 1, 0.8))
+		x += 28.0 + font.get_string_size(String(entry[2]), HORIZONTAL_ALIGNMENT_LEFT, -1, LEGEND_SIZE).x + 14.0
 
 func _draw_speedo() -> void:
 	var sz := speedo.size

@@ -62,3 +62,11 @@ static func keep_inside(p: Vector2, poly: PackedVector2Array, inset := 2.0) -> V
 	var inward := (centre - best).normalized()
 	var inside := best + inward * inset
 	return inside if Geometry2D.is_point_in_polygon(inside, poly) else best
+
+## The outline of a point-of-interest marker centred on `c`, `r` pixels from the centre to a corner: "diamond"
+## (speed traps) or a square (landmarks and any kind added later). Unknown points are drawn as discs by the HUD.
+static func shape_points(shape: String, c: Vector2, r: float) -> PackedVector2Array:
+	if shape == "diamond":
+		return PackedVector2Array([c + Vector2(0, -r * 1.25), c + Vector2(r * 1.25, 0), c + Vector2(0, r * 1.25), c + Vector2(-r * 1.25, 0)])
+	var h := r * 0.9
+	return PackedVector2Array([c + Vector2(-h, -h), c + Vector2(h, -h), c + Vector2(h, h), c + Vector2(-h, h)])

@@ -12,6 +12,15 @@ the work below is merged.
   - `godot/tests/_qa_race_buttons.gd` (new: every RACE button starts a race, keyboard and synthetic pad)
   - `godot/tests/_qa_save_guard.gd` (new: backs up and restores the shared dev-sandbox saves around a probe)
 
+## Update 2026-11-10 (resumed)
+- POI work (worktree `t3-d6370480-...`) is merged into the main checkout, uncommitted: `scripts/world/poi.gd`,
+  `tests/test_poi.gd`, edits to `open_world.gd`, `open_world_hud.gd`, `world_progress.gd`, `map_marker.gd`,
+  `run_tests.gd`, `AGENTS.md`. Verified on the main checkout: import exit 0, full suite 52 ok / 0 failures,
+  headless boot clean.
+- Campaign events, Golf IV and QA agents were restarted in their own worktrees and threads.
+- `godot/textures/loading/ow_cover_{1,2,3}.jpg` show as modified in the main checkout (09:48 today); not from this
+  run, left alone.
+
 ## Work still sitting in agent worktrees (uncommitted, each based on `e39a67b`)
 All under `/Users/martwyymem/.t3/worktrees/Seicento/`. The agents may have stopped early at the usage limit, so read
 each one's last message and run the checks before trusting its diff.

@@ -18,13 +18,17 @@ var best_chain := 0
 var odometer := 0.0
 var car_class := 0 ## 0 the stock Seicento, 1 the Hypercar Seicento (once unlocked)
 var mods := {} ## CarMods switched on (id -> true)
+var tips := {} ## first-time explanations already shown (Poi kind -> true)
 
 static func load_progress() -> WorldProgress:
-	var w := WorldProgress.new()
 	var path := SaveData.read_path(SAVE_FILE)
 	if not FileAccess.file_exists(path):
-		return w
-	var data = JSON.parse_string(FileAccess.get_file_as_string(path))
+		return WorldProgress.new()
+	return from_dict(JSON.parse_string(FileAccess.get_file_as_string(path)))
+
+## A save's JSON as a WorldProgress; a key an older save lacks keeps its default.
+static func from_dict(data: Variant) -> WorldProgress:
+	var w := WorldProgress.new()
 	if not data is Dictionary:
 		return w
 	var p: Array = data.get("pos", [])
@@ -46,13 +50,12 @@ static func load_progress() -> WorldProgress:
 	w.car_class = int(data.get("car_class", 0))
 	for id in data.get("mods", []):
 		w.mods[str(id)] = true
+	for k in data.get("tips", []):
+		w.tips[str(k)] = true
 	return w
 
-func save() -> void:
-	var f := FileAccess.open(SaveData.path(SAVE_FILE), FileAccess.WRITE)
-	if not f:
-		return
-	f.store_string(JSON.stringify({
+func to_dict() -> Dictionary:
+	return {
 		"pos": [snappedf(pos.x, 0.1), snappedf(pos.y, 0.1), snappedf(heading, 0.001)],
 		"hour": snappedf(hour, 0.01),
 		"roads": roads.keys(),
@@ -63,4 +66,11 @@ func save() -> void:
 		"odometer": snappedf(odometer, 1.0),
 		"car_class": car_class,
 		"mods": mods.keys(),
-	}))
+		"tips": tips.keys(),
+	}
+
+func save() -> void:
+	var f := FileAccess.open(SaveData.path(SAVE_FILE), FileAccess.WRITE)
+	if not f:
+		return
+	f.store_string(JSON.stringify(to_dict()))
