@@ -4,6 +4,7 @@ class_name Campaign
 extends RefCounted
 
 const SAVE_FILE := "campaign.json"
+static var save_file := SAVE_FILE ## tests point this at a file of their own (the dev sandbox is shared)
 
 const STAGES := [
 	{
@@ -211,7 +212,7 @@ const STAGES := [
 ]
 
 static func load_progress() -> Dictionary:
-	var path := SaveData.read_path(SAVE_FILE)
+	var path := SaveData.read_path(save_file)
 	if not FileAccess.file_exists(path):
 		return {"unlocked": 0, "best_pos": {}, "trophies": []}
 	var f := FileAccess.open(path, FileAccess.READ)
@@ -223,7 +224,7 @@ static func load_progress() -> Dictionary:
 	return {"unlocked": 0, "best_pos": {}, "trophies": []}
 
 static func save_progress(data: Dictionary) -> void:
-	var path := SaveData.path(SAVE_FILE)
+	var path := SaveData.path(save_file)
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f:
 		f.store_string(JSON.stringify(data, "  "))
@@ -239,6 +240,8 @@ const FAILS_PER_EASE := 1 ## failed tries on a stage before its field drops one 
 ## (down to Easy), so a stage that keeps beating the player gets kinder instead of blocking the campaign.
 ## base_difficulty is the stage's own level, eased says how many steps it came down.
 static func get_stage(index: int) -> Dictionary:
+	if Missions.is_mission(index):
+		return Missions.as_stage(index) # a mission (Missions.BASE + k) reads like a stage
 	var st: Dictionary = (STAGES[index] if index >= 0 and index < STAGES.size() else STAGES[0]).duplicate()
 	var base: String = st.get("difficulty", "medium")
 	var fails := int(load_progress().get("fails", {}).get(str(index), 0))
@@ -259,12 +262,17 @@ static func get_stage(index: int) -> Dictionary:
 ## fans: the player's fan total (read from the open-world save when not given). A "fan_lock" stage (the Goliath)
 ## opens at the top fan level instead of after the stage before it.
 static func is_unlocked(stage_idx: int, fans := -1) -> bool:
+	if Missions.is_mission(stage_idx):
+		return Missions.is_unlocked(stage_idx)
 	if stage_idx >= 0 and stage_idx < STAGES.size() and STAGES[stage_idx].get("fan_lock", false):
 		return FanLevels.hypercar_unlocked(fans if fans >= 0 else WorldProgress.load_progress().fans)
 	var prog := load_progress()
 	return stage_idx <= int(prog.get("unlocked", 0))
 
 static func record_result(stage_idx: int, pos: int) -> Dictionary:
+	if Missions.is_mission(stage_idx): # a place-only result (the game judges missions with Missions.judge)
+		var st := get_stage(stage_idx)
+		return Missions.record(stage_idx, {"pos": pos, "success": pos <= int(st.target_pos), "tier": 0, "score": 0})
 	var stage := get_stage(stage_idx)
 	var prog := load_progress()
 	var unlocked: int = int(prog.get("unlocked", 0))

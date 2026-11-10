@@ -77,3 +77,55 @@ timeout 120 godot --headless --path godot --quit-after 60                      #
 - All worktrees share one `user://dev_sandbox/`; concurrent suites can disturb each other's saves. Re-run a
   save-related failure on its own. Old rally and championship saves there once made a probe open on SS3.
 - QA screenshots came out 1280x548: a 21:9 setting was probably left in the shared sandbox `graphics.cfg`.
+
+## Update 2026-11-10, later
+- POI work was committed on main as d7f0244 (not by this run).
+- QA round 2 done (Sonnet). Its probe `godot/tests/_qa_ow_look.gd` and `_qa_race_shots.gd` changes are in the
+  main checkout, uncommitted. Findings: Monaco night-rain lamp-streak glare, Medium-preset wet-road glitter,
+  Tokyo ground reads as grass, `test_options.gd` leaves 21:9 in the shared graphics.cfg; High/Ultra night rain
+  24/31 ms on the GP (indicative). QA item 4 (open-world traffic, LoD2, flats, Wola/Rajsko) not looked at.
+- A windowed Opus agent is fixing those four findings in its own worktree (from d7f0244), then item 4 if time.
+- Golf IV (worktree t3-a1edc4d4) merged into the main checkout, uncommitted: model `golf4.glb` + `build_golf4.py`
+  + `carkit.py`, spec `golf4.gd` (13.9 s 0-100, 171 km/h), `CarCatalog`, per-car `race_car_visual.gd`, pickers,
+  `test_car_catalog.gd`. Verified on main: import 0, suite 53 ok / 0 failures, parity `completed=true errors=0`,
+  boot clean. Not seen on screen. Still to do: a campaign mission's `reward_car = "golf4"` (after the campaign
+  missions merge); lap ghosts still show the Seicento.
+- Campaign missions (worktree t3-d7bfa3b9) merged into the main checkout, uncommitted: `missions.gd`, `drift_score.gd`,
+  race rules, mission HUD plate, beacons, `test_missions.gd`. The Bór Knockout (`knockout_bor`) now awards the
+  Golf IV (`reward_car`, appended to the campaign save's `cars`; results line "New car won"; CAR picker hint names
+  the mission). Verified on main: suite 53 ok (after updating test_missions' stale "reward_car must be empty"
+  check), parity `completed=true errors=0`, boot clean. TASKS.md updated from all four reports.
+- Next: after the windowed fix agent finishes, a windowed pass on the Golf IV look and the mission flows
+  (beacon -> race -> results -> beacon, rally mission service halts) - nothing of either has been seen on screen.
+- Rendering fixes (worktree t3-76756a24) merged, uncommitted: city-theme floodlight masts at 0.35 power (Monaco
+  glare 10.5-12.5% -> 5-6% near-white road), FSR sharpening softened (Medium 0.4->0.8, Low 0.8->1.2; Medium wet
+  glitter gone), city-theme grey paving ground, test_options.gd restores graphics.cfg after each check. Verified on
+  main: suite 54 ok / 0 failures, parity `completed=true errors=0`, boot clean.
+- Windowed Opus agent now checking the Golf IV and the mission flows (worktree from d7f0244 + main_wip.patch).
+- Dev menu (§ + 1) extended, uncommitted (`game.gd` `_dev_campaign_entries` / `_dev_world_entries` /
+  `_dev_mission_race_entries`, `dev_menu.gd` header, `tests/test_dev_menu.gd`): open every stage and mission, give/take
+  back mission cars, clear each mission, forget mission results; open world: drive to each mission beacon, discover
+  or forget all POIs; mission race: knock out the drop-zone car, +1000 drift points. test_dev_menu passes; the
+  open-world and in-race entries compile but were never pressed (windowed check needed).
+- Windowed agent "Golf IV and campaign mission flows" (Opus) was finishing its verification when the usage limit ran
+  low; read its report (thread task 2cb6965b) and merge its fixes, then run suite + parity + boot.
+
+## Live events (2026-11-10, open-world FH-style events): state for the next session
+- Built, headless only: `godot/scripts/world/live_events.gd` (sprint, speed zone, drift zone, trailblazer generated round the car), the OpenWorld integration (`_live_*` functions in `open_world.gd`), the HUD's `set_live`, `WorldProgress.live`, `tests/test_live_events.gd` (in run_tests), probe `tests/_live_events_probe.gd`. Docs in AGENTS.md and TASKS.md. Not committed; not seen on screen.
+- Parity race passes. Full suite result: see the scratchpad suite.log of that session, or re-run `tests/run_tests.gd`.
+- Half-done: `godot/scripts/world/street_rivals.gd` (`StreetRivals`, rival sim for a "street_race" kind) exists but nothing uses it and it has no tests. Next: the street_race kind in LiveEvents (KINDS/NAMES/COLORS/BLURB, generate like the sprint, rivals in begin/tick, place → medal), rival drawing via `traffic._car_node` + contact in `open_world.gd`, cleanup on abandon/finish/suspend, tests.
+- Review findings FIXED and verified (2026-11-10):
+  * Checkpoints on bridge decks passing from below: fixed by recording road surface `cp_z` in `LiveEvents._make()` and enforcing vertical tolerance check (`absf(z - cp_z[cp]) <= 4.0`) in `tick()`, fed from `drive.z`.
+  * `_live_sync` blinking active card: fixed by tracking `active_live_id` and preserving `active_event` across board refills if still within trigger radius.
+  * `_live_finished` clobbering GPS: fixed by only reassigning when GPS target specifically pointed at the finished live event (or was out-of-bounds) and player has not set a manual waypoint; excluded live events from `_next_open_event`.
+  * Mid-run car/mod switch & respawn exploits: switching cars, toggling car mods, manual car reset, or water respawn now cleanly abandons any active live event with an explanatory notification banner.
+  * Reset campaign dropping active checkpoint beacon: fixed by calling `_live_cp_beacon()` in `_refresh_events()` when an event is running.
+  * `resample` division by zero: added guard against zero-length segments.
+  * Knockout race finish projection (`race.gd`, `game.gd`): fixed `approximate_finish()` to properly simulate lap-by-lap knockout eliminations, populating `knocked_out` and `out_order` with DNF reasons, and enabled skip projection for knockout races.
+- Test verification:
+  * Full test suite `godot --headless --path godot -s tests/run_tests.gd`: all 54 suites OK, 0 failures.
+  * Bit parity `godot --headless --path godot -s tests/_run_race_test.gd`: 191,135 values checked, `completed=true errors=0`.
+  * Clean boot `godot --headless --path godot --quit-after 60`: exit 0, 0 script errors.
+- Windowed Golf/missions QA fixes merged, uncommitted, verified clean on main (suite 54 ok, parity ok, boot ok).
+- Still open: drift/rally/sprint/off-road missions and the "New car won" screen not seen on screen (`PART=mission MISSION=<id>` in the probe); overlapping S1 mission labels on the big map; "0 laps" on drag results; mission results button says BACK TO MENU; rally mission could double-record if its results screen rebuilds.
+

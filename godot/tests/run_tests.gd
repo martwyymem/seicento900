@@ -47,6 +47,7 @@ const SUITES := [
 	"res://tests/test_handbrake.gd",
 	"res://tests/test_fan_levels.gd",
 	"res://tests/test_hypercar.gd",
+	"res://tests/test_car_catalog.gd",
 	"res://tests/test_dev_menu.gd",
 	"res://tests/test_car_mods.gd",
 	"res://tests/test_goliath.gd",
@@ -55,7 +56,10 @@ const SUITES := [
 	"res://tests/test_chase_cam.gd",
 	"res://tests/test_camera_look.gd",
 	"res://tests/test_damage_policy.gd",
-	"res://tests/test_routes.gd"
+	"res://tests/test_routes.gd",
+	"res://tests/test_missions.gd",
+	"res://tests/test_live_events.gd",
+	"res://tests/test_street_rivals.gd"
 ]
 
 const SURROUNDINGS := preload("res://scripts/ui/surroundings.gd")

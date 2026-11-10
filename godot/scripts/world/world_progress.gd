@@ -16,9 +16,10 @@ var traps := {} ## trap id -> best km/h
 var fans := 0
 var best_chain := 0
 var odometer := 0.0
-var car_class := 0 ## 0 the stock Seicento, 1 the Hypercar Seicento (once unlocked)
+var car_class := 0 ## index into CarCatalog.KEYS: 0 the stock Seicento, 1 the Hypercar Seicento, 2 the Golf IV... (each once unlocked)
 var mods := {} ## CarMods switched on (id -> true)
 var tips := {} ## first-time explanations already shown (Poi kind -> true)
+var live := {} ## LiveEvents medals: {tries, done, bronze, silver, gold, kinds: {kind: done}}
 
 static func load_progress() -> WorldProgress:
 	var path := SaveData.read_path(SAVE_FILE)
@@ -52,6 +53,9 @@ static func from_dict(data: Variant) -> WorldProgress:
 		w.mods[str(id)] = true
 	for k in data.get("tips", []):
 		w.tips[str(k)] = true
+	var lv = data.get("live", {})
+	if lv is Dictionary:
+		w.live = lv
 	return w
 
 func to_dict() -> Dictionary:
@@ -67,6 +71,7 @@ func to_dict() -> Dictionary:
 		"car_class": car_class,
 		"mods": mods.keys(),
 		"tips": tips.keys(),
+		"live": live,
 	}
 
 func save() -> void:
@@ -74,3 +79,15 @@ func save() -> void:
 	if not f:
 		return
 	f.store_string(JSON.stringify(to_dict()))
+
+## A finished live event (LiveEvents): tier 0 is a try that won no medal.
+func record_live(kind: String, tier: int) -> void:
+	live["tries"] = int(live.get("tries", 0)) + 1
+	if tier <= 0:
+		return
+	live["done"] = int(live.get("done", 0)) + 1
+	var medal: String = ["", "bronze", "silver", "gold"][clampi(tier, 1, 3)]
+	live[medal] = int(live.get(medal, 0)) + 1
+	var kinds: Dictionary = live.get("kinds", {}) if live.get("kinds", {}) is Dictionary else {}
+	kinds[kind] = int(kinds.get(kind, 0)) + 1
+	live["kinds"] = kinds

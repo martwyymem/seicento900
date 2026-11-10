@@ -200,6 +200,11 @@ var mechanical_damage := false ## crashes cost power, grip and parts for every c
 var rc: RaceControl = null ## flags, safety car, stewards and damage (null: contact is just physics, as before)
 var stage: Rally.Stage = null ## s.mode == "rally": the special stage's clock, splits and penalties
 var tt: TimeTrial = null ## s.mode == "time_trial": sectors, the live delta and the lap list
+var drift: DriftScore = null ## s.drift_score: the player's drift points (a campaign drift mission)
+var knocked_out: Array = [] ## s.knockout: [{car, lap}] in the order the cars were eliminated
+var out_order := {} ## s.knockout: car -> the order it left the race in (1 first), knock-outs and retirements alike
+var _start_run := {} ## s.finish_distance: car -> its s on the grid, so each car runs the same distance from its own spot
+var _loose := false ## the baked loose spans grip as gravel or dirt (TrackDef.loose_grip or RaceSettings.loose_spans)
 var last_contact := 0.0
 ## Hits for the game's sound (WorldAudio), oldest first, IMPACT_STRIDE floats each: x, y, closing speed (m/s),
 ## kind (0 a barrier, 1 another car) and the two cars' ids (the second -1 for a barrier). Only kept while
@@ -252,9 +257,10 @@ func _init(settings: RaceSettings, player_plan = null, seed_ := -1, models := {}
 		_steer_k = Physics.SURF_STEER[road_surf]
 	track = get_track(settings.track)
 	track.PROF = track.profile_for(car_model)
-	if track.cfg.loose_grip:
+	_loose = track.cfg.loose_grip or settings.loose_spans
+	if _loose:
 		track.PROF = track.loose_profile(track.PROF) # the AI slows for the gravel it now meets (surface_at)
-	if spec.resource_name == "hypercar":
+	if spec.resource_name != "": # a derived car (CarCatalog: the hypercar, the Golf...): its own grip and downforce
 		brake_k = spec.grip_k / 1.4
 		brake_aero = brake_k * 0.5 * 1.225 * maxf(0.0, -spec.lift_a) / car_model.mass_with_fuel(spec.tank * 0.5)
 	cal = strategy.calibrate(track)
@@ -288,6 +294,9 @@ func _init(settings: RaceSettings, player_plan = null, seed_ := -1, models := {}
 		stage = Rally.Stage.new(self)
 	elif settings.mode == "time_trial":
 		tt = TimeTrial.new(self)
+	if settings.drift_score:
+		drift = DriftScore.new()
+		drift.tiers = Array(settings.drift_tiers)
 	order = cars.duplicate()
 	for i in cars.size():
 		_order_idx[cars[i]] = i
@@ -536,6 +545,8 @@ func build_field(player_plan) -> void:
 		car.reaction = 0.18 + rng.next() * 0.35 + (1.0 - car.skill) * 2.0
 		car.pace = 1.0
 		cars.append(car)
+	if s.finish_distance > 0.0:
+		_drag_grid()
 	if s.qualifying:
 		var times := Qualifying.lap_times(self, bots.map(func(b: RaceCar) -> float: return b.quali))
 		for i in bots.size():
@@ -615,6 +626,8 @@ func step(dt: float, input: PlayerInput) -> void:
 	if s.collisions:
 		collide()
 	update_order()
+	if phase == "racing" and (s.knockout or s.finish_distance > 0.0 or drift):
+		_mission_rules(dt)
 	if rc:
 		rc.step(dt)
 	if stage:
@@ -755,6 +768,30 @@ func approximate_finish() -> void:
 	for c in runs:
 		var r: Dictionary = runs[c]
 		r.lt = field + (r.lt - field) * r.n / (r.n + 3.0)
+	if s.knockout:
+		var cur_leader_lap := 0
+		for c in runs:
+			cur_leader_lap = maxi(cur_leader_lap, c.lap)
+		for target_lap in range(cur_leader_lap + 1, R):
+			if runs.size() <= 2:
+				break
+			var slowest_c: RaceCar = null
+			var slowest_t := -INF
+			for c in runs:
+				var t := _projected_time(runs[c], target_lap)
+				if t > slowest_t:
+					slowest_t = t
+					slowest_c = c
+			if slowest_c != null and runs.size() > 2:
+				slowest_c.dnf = true
+				slowest_c.dnf_reason = "Knocked out on lap %d" % target_lap
+				slowest_c.recovered = true
+				slowest_c.vx = 0.0
+				slowest_c.vy = 0.0
+				slowest_c.v = 0.0
+				knocked_out.append({"car": slowest_c, "lap": target_lap, "t": slowest_t})
+				_mark_out(slowest_c)
+				runs.erase(slowest_c)
 	if not runs.is_empty() and not winner:
 		# the winner: first to complete R laps, or in a timed race the leader's first crossing after time
 		var best_t := INF
@@ -898,6 +935,10 @@ func on_line(car: RaceCar) -> void:
 		if left <= 0.0:
 			log_event("🏁 Time is up — the leader takes the chequered flag", "good")
 	var done := (car == order[0] and rt >= duration) if timed else car.lap >= R
+	if s.finish_distance > 0.0:
+		done = false # a drag race ends at its distance (_mission_rules), not at the line
+	elif s.knockout and not done and not winner and car == order[0]:
+		_knock_out(car.lap)
 	if rc and rc.flag == "red":
 		done = false # nobody takes the flag in the pit lane: the race resumes first
 	if not winner and done:
@@ -1766,7 +1807,7 @@ func surface_at(car: RaceCar, x: float, y: float) -> int:
 		if not c.cobbles.is_empty() and ad <= tr.half and not (car.is_player and _monster_player) and in_cobbles(tr.wrap_s(car.s)):
 			return Physics.SURF_COBBLE
 		# a gravel or dirt stretch of a street stage (TrackDef.loose_grip: Pszczyna's park) grips as it looks
-		if c.loose_grip and ad <= tr.half:
+		if _loose and ad <= tr.half:
 			var kind := tr.loose_at(tr.wrap_s(car.s))
 			if kind > 0:
 				return Physics.SURF_GRAVEL_ROAD if kind == 2 else Physics.SURF_DIRT
@@ -2418,6 +2459,8 @@ func _order_key(c: RaceCar) -> float:
 		return -1e12 + c.lap * L + c.s
 	if c.finished:
 		return c.finish_lap * L + L - 1.0 - c.finish_order * 1e-3
+	if not _start_run.is_empty():
+		return c.lap * L + c.s - float(_start_run.get(c, 0.0)) # a drag race: the distance run from the car's own spot
 	return c.lap * L + c.s
 
 ## Runs every physics tick (120/s), so this sorts `order` in place instead of the
@@ -2444,6 +2487,85 @@ func update_order() -> void:
 	for i in order.size():
 		order[i].pos = i + 1
 
+# ---------------- campaign missions (RaceSettings.knockout, finish_distance, drift_score) ----------------
+## A drag race: the field lines up two abreast in rows, every car's run measured from its own spot.
+func _drag_grid() -> void:
+	var tr := track
+	for k in cars.size():
+		var car: RaceCar = cars[k]
+		car.s = -(9.0 + (k / 2) * 8.0)
+		car.d = (-1.0 if k % 2 == 0 else 1.0) * minf(2.0, tr.half * 0.5)
+		var p := tr.pos(car.s, car.d)
+		car.x = p[0]
+		car.y = p[1]
+		car.heading = tr.heading(car.s)
+		_start_run[car] = car.s
+
+## How far a car has run from its grid spot (a drag race), m.
+func run_distance(car: RaceCar) -> float:
+	return car.lap * track.L + car.s - float(_start_run.get(car, 0.0))
+
+## The car a knockout drops next: the last one still running (null when there is none).
+func knockout_zone() -> RaceCar:
+	for i in range(order.size() - 1, -1, -1):
+		var c: RaceCar = order[i]
+		if not c.dnf and not c.finished:
+			return c
+	return null
+
+func _running_count() -> int:
+	var n := 0
+	for c in cars:
+		if not c.dnf and not c.finished:
+			n += 1
+	return n
+
+## The leader has completed lap `lap`: the last running car is out (cleared off the track at once).
+func _knock_out(lap: int) -> void:
+	if _running_count() <= 2:
+		return # the final: the two left race to the flag
+	var victim := knockout_zone()
+	if victim == null or victim == order[0]:
+		return
+	victim.dnf = true
+	victim.dnf_reason = "Knocked out on lap %d" % lap
+	victim.recovered = true # off the track at once: no wreck to dodge, no yellow flag
+	victim.pit_request = false
+	victim.vx = 0.0
+	victim.vy = 0.0
+	victim.v = 0.0
+	knocked_out.append({"car": victim, "lap": lap, "t": race_time})
+	_mark_out(victim)
+	log_event("You are knocked out!" if victim.is_player else "%s is knocked out" % victim.name, "bad" if victim.is_player else "warn")
+
+func _mark_out(car: RaceCar) -> void:
+	if not out_order.has(car):
+		out_order[car] = out_order.size() + 1
+
+func _mission_rules(dt: float) -> void:
+	if s.knockout:
+		for c in cars:
+			if c.dnf and not out_order.has(c):
+				_mark_out(c) # crashed or out of fuel: out at that moment, like a knock-out
+		if not winner and cars.size() > 1 and _running_count() == 1:
+			var last := knockout_zone() # everyone else is out: the last car standing wins
+			winner = last
+			finish(last)
+	if s.finish_distance > 0.0:
+		for c in cars:
+			if c.finished or c.dnf:
+				continue
+			var over := run_distance(c) - s.finish_distance
+			if over < 0.0:
+				continue
+			if not winner:
+				winner = c
+			finish(c)
+			# the line was crossed part-way through the tick
+			c.finish_time = race_time - minf(dt, over / maxf(1.0, absf(c.speed) if c.control == "free" else c.v))
+	if drift:
+		drift.tick(self, player, dt)
+
 ## Final classification: [{pos, car, laps, total, gap, status}].
 func results() -> Array:
 	var rows := []
@@ -2453,6 +2575,9 @@ func results() -> Array:
 	var before := func(a: Dictionary, b: Dictionary) -> bool:
 		if a.car.dnf != b.car.dnf:
 			return not a.car.dnf
+		if a.car.dnf and not out_order.is_empty():
+			# a knockout ranks the cars that left in reverse: the last one out is the best of them
+			return int(out_order.get(a.car, 0)) > int(out_order.get(b.car, 0))
 		if b.laps != a.laps:
 			return a.laps > b.laps
 		if a.total != null and b.total != null:

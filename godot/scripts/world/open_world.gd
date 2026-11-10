@@ -96,7 +96,12 @@ var wet := 0.0
 const NIGHT_DAMP := 0.3
 const LAMP_POOL_GLOW := 0.35 ## emission at the middle of a lamp's pool on the ground (reads on the dark tarmac)
 
-var events: Array = [] ## [{stage, spot, pos: Vector2, heading, title, ...}]
+var events: Array = [] ## [{stage, spot, pos: Vector2, heading, title, ...}]; a live event has "live": its id
+var live: LiveEvents ## the generated events round the car (scripts/world/live_events.gd)
+var _crashed_frame := false
+var _rival_nodes: Array[Node3D] = [] ## the field of a mission raced on the map (StreetRivals), drawn
+const RIVAL_PAINTS := ["#1565c0", "#f9a825", "#2e7d32", "#6a1b9a", "#ef6c00", "#00838f", "#ad1457", "#4e342e", "#eceff1"]
+const RIVAL_MASS := 900.0 ## the car hit something hard this frame (a live drift zone loses its combo)
 var active_event := -1
 var gps_target := -1
 var gps_waypoint := false ## the route runs to the player's own waypoint instead of a stage
@@ -189,7 +194,8 @@ func open(spawn = "", opts := {}) -> void:
 		surface_fx.reset_car_bus()
 	_refresh_events()
 	_spawn(spawn)
-	if progress.car_class == 1 and not FanLevels.hypercar_unlocked(progress.fans):
+	_live_open()
+	if not CarCatalog.unlocked(CarCatalog.key_at(progress.car_class), progress.fans):
 		progress.car_class = 0
 	if _fitted_class != progress.car_class:
 		_fit_car()
@@ -206,6 +212,9 @@ func suspend() -> void:
 		return
 	_save()
 	active = false
+	if live and live.is_running():
+		live.abandon()
+		_live_cp_beacon()
 	viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	if audio:
 		audio.update_car(null, false)
@@ -230,8 +239,8 @@ func _build_world() -> void:
 	building = true
 	var by_frame := DisplayServer.get_name() != "headless"
 	progress = WorldProgress.load_progress()
-	var hyper := progress.car_class == 1 and FanLevels.hypercar_unlocked(progress.fans)
-	hud.open_loading(Hypercar.spec() if hyper else load("res://data/seicento.tres"), "Hypercar Seicento" if hyper else "Fiat Seicento")
+	var ckey := CarCatalog.key_at(progress.car_class) if CarCatalog.unlocked(CarCatalog.key_at(progress.car_class), progress.fans) else "stock"
+	hud.open_loading(CarCatalog.spec(ckey), CarCatalog.display_name(ckey) if ckey != "stock" else "Fiat Seicento")
 	hud.show_loading("Reading the map of Brzeszcze", 0.02)
 	hour = progress.hour
 	world = Node3D.new()
@@ -283,6 +292,8 @@ func _build_world() -> void:
 	t = Time.get_ticks_msec()
 	drive = FreeCar.new(map)
 	car_visual = CAR_SCENE.instantiate()
+	if CarCatalog.unlocked(CarCatalog.key_at(progress.car_class), progress.fans):
+		car_visual.car_key = CarCatalog.key_at(progress.car_class)
 	world.add_child(car_visual)
 	car_visual.is_player = true
 	car_visual.fx_quality = quality
@@ -656,11 +667,20 @@ func _refresh_events() -> void:
 		if open_:
 			var label := "%s%s" % ["★ " if done else "", String(st.title).to_upper()]
 			builder.add_beacon("stage_%d" % i, pos, colour, label)
+	_add_mission_events(prog)
+	_add_live_events()
+	_live_cp_beacon()
 	_update_markers()
 
 func _update_markers() -> void:
 	var list := []
 	for e in events:
+		if e.has("mission"):
+			list.append(_mission_marker(e))
+			continue
+		if e.has("live"):
+			list.append(_live_marker(e))
+			continue
 		var st: Dictionary = Campaign.get_stage(e.stage)
 		var info := "%s · %s · %s" % [e.title, SPOT_NOTE.get(e.spot, ""), "Done" if e.done else ("Open" if e.open else "Locked")]
 		list.append({"pos": e.pos, "color": e.color, "label": "%d. %s" % [e.stage + 1, String(st.track).capitalize()], "info": info})
@@ -670,6 +690,337 @@ func _update_markers() -> void:
 	hud.set_markers(list)
 	hud.set_summary(Poi.summary(pois, progress, progress.roads.size(), map.road_pts.size()))
 	_place_waypoint_beacon()
+
+## The campaign missions (Missions) as beacons of their own colour at the places they start, once open; their
+## events carry stage = Missions.BASE + k, so the route, spawn and start code takes them like stages.
+func _add_mission_events(prog: Dictionary) -> void:
+	for k in Missions.MISSIONS.size():
+		var idx := Missions.BASE + k
+		# where the mission starts on the map (MapMissions: the knockout and the rally start off the old Bór circuit)
+		var mev := MapMissions.event(idx)
+		if mev.is_empty(): # raced on the map or not at all
+			continue
+		var pose := [mev.pos.x, mev.pos.y, float(mev.heading)]
+		if pose.is_empty() or not map.in_play(Vector2(pose[0], pose[1])):
+			continue
+		var open_ := Missions.is_unlocked(idx, prog)
+		var done := Missions.is_cleared(idx, prog)
+		var m: Dictionary = Missions.MISSIONS[k]
+		var pos := Vector2(pose[0], pose[1])
+		for e in events:
+			if (e.pos as Vector2).distance_to(pos) < 14.0:
+				pos += Vector2(cos(float(pose[2])), sin(float(pose[2]))) * 18.0 # along the road, not into the verge
+		var colour := Missions.DONE_COLOR if done else (Missions.COLOR if open_ else Color(0.5, 0.5, 0.55))
+		var title := "%s: %s" % [String(Missions.KIND_NAMES[m.kind]).capitalize(), m.title]
+		# heading points back along the road, as a stage spot's does: the car comes back facing on down the route
+		events.append({"stage": idx, "mission": k, "spot": "", "pos": pos, "heading": float(pose[2]) + PI, "done": done,
+			"open": open_, "color": colour, "title": title, "act": Missions.ACT_NAMES[clampi(int(m.act) - 1, 0, 2)]})
+		if open_:
+			builder.add_beacon("mission_%d" % k, pos, colour, "%s%s" % ["★ " if done else "", title.to_upper()])
+
+func _mission_marker(e: Dictionary) -> Dictionary:
+	var m: Dictionary = Missions.MISSIONS[int(e.mission)]
+	var info := "%s · %s · %s" % [e.title, Missions.target_text(int(e.stage)), "Done" if e.done else ("Open" if e.open else "Locked")]
+	return {"pos": e.pos, "color": e.color, "label": "%s · %s" % [Missions.KIND_NAMES[m.kind], m.title], "info": info, "kind": "mission"}
+
+# ------------------------------------------------------------------------------------------ live events
+
+## Live events (LiveEvents): generated round the car on the map's own roads and raced right here. They sit at the
+## end of `events` with "live" set (so the GPS, the map, the beacons and the cards take them like the stages) and
+## come and go as the board changes (_live_sync).
+func _live_open() -> void:
+	if live == null:
+		live = LiveEvents.new(map)
+	if live.is_running():
+		live.abandon()
+	_live_cp_beacon()
+	var cp := Vector2(drive.car.x, drive.car.y)
+	live.update(0.0, 0.0, cp, _beacon_points(), live.board.size() < LiveEvents.MAX_LIVE)
+	_live_sync()
+
+## Where the stage and mission beacons stand, which live events keep clear of.
+func _beacon_points() -> PackedVector2Array:
+	var out := PackedVector2Array()
+	for e in events:
+		if not e.has("live"):
+			out.append(e.pos)
+	return out
+
+func _add_live_events() -> void:
+	if live == null:
+		return
+	for lev in live.board:
+		var title := "%s: %s" % [String(LiveEvents.KIND_NAMES[lev.kind]).capitalize(), lev.title]
+		events.append({"live": lev.id, "stage": -1, "spot": "", "pos": lev.pos, "heading": lev.heading, "done": false,
+			"open": true, "color": lev.color, "title": title, "act": "Live event"})
+		builder.add_beacon("live_%s" % lev.id, lev.pos, lev.color, String(LiveEvents.KIND_NAMES[lev.kind]))
+
+## Rebuilds the live entries of `events` (and their beacons) from the board, keeping the GPS on the same event.
+func _live_sync() -> void:
+	var keep := ""
+	if gps_target >= 0 and gps_target < events.size() and events[gps_target].has("live"):
+		keep = String(events[gps_target].live)
+	var active_live_id := ""
+	if active_event >= 0 and active_event < events.size() and events[active_event].has("live"):
+		active_live_id = String(events[active_event].live)
+	for k in range(events.size() - 1, -1, -1):
+		if events[k].has("live"):
+			var key := "live_%s" % events[k].live
+			var n: Variant = builder.beacon_nodes.get(key)
+			if n is Node3D:
+				(n as Node3D).queue_free()
+			builder.beacon_nodes.erase(key)
+			events.remove_at(k)
+	_add_live_events()
+	if keep != "":
+		gps_target = -1
+		for k in events.size():
+			if String(events[k].get("live", "")) == keep:
+				gps_target = k
+				break
+		if gps_target < 0 and not gps_waypoint:
+			gps_target = _next_open_event()
+			_recompute_route()
+	if active_live_id != "":
+		active_event = -1
+		for k in events.size():
+			if String(events[k].get("live", "")) == active_live_id:
+				active_event = k
+				break
+		if active_event < 0:
+			hud.hide_event()
+	elif active_event >= events.size():
+		active_event = -1
+		hud.hide_event()
+	_update_markers()
+
+func _live_marker(e: Dictionary) -> Dictionary:
+	var lev := live.find(String(e.live)) if live else {}
+	var info := String(e.title)
+	if not lev.is_empty():
+		info += " · %s" % live.target_text(lev, CarCatalog.key_at(progress.car_class))
+	return {"pos": e.pos, "color": e.color, "label": String(LiveEvents.KIND_NAMES.get(lev.get("kind", ""), "LIVE EVENT")),
+		"info": info, "kind": "live"}
+
+## Puts the car on the event's line, facing down the route, and starts the countdown.
+func _begin_live(id: String) -> void:
+	var lev := live.find(id)
+	if lev.is_empty():
+		return
+	drive.place(lev.pos, float(lev.heading))
+	snap_camera()
+	live.begin(lev, CarCatalog.key_at(progress.car_class))
+	active_event = -1
+	hud.hide_event()
+	gps_waypoint = false
+	_live_cp_beacon()
+	_recompute_route()
+	hud.notify(String(LiveEvents.KIND_NAMES[lev.kind]), String(lev.title), lev.color)
+
+## The beacon at the next checkpoint (or the finish) while an event runs; none otherwise.
+func _live_cp_beacon() -> void:
+	if builder == null:
+		return
+	var old: Variant = builder.beacon_nodes.get("live_cp")
+	if old is Node3D:
+		(old as Node3D).queue_free()
+	builder.beacon_nodes.erase("live_cp")
+	if live == null or not live.is_running():
+		_clear_rivals()
+		return
+	var lev: Dictionary = live.run.ev
+	if live.run.state == "liaison":
+		var st: Dictionary = lev.stages[int(live.run.stage)]
+		builder.add_beacon("live_cp", live.next_target(), lev.color, "SS%d START · %s" % [int(live.run.stage) + 1, String(st.name).to_upper()])
+		return
+	var cps: PackedVector2Array = live.run.cps
+	var i := int(live.run.cp)
+	var label := "FINISH" if i >= cps.size() - 1 else "CHECKPOINT %d/%d" % [i + 1, cps.size()]
+	builder.add_beacon("live_cp", cps[i], lev.color, label)
+
+## One frame of the live events: the run (timer, checkpoints, result) or, between runs, the board round the car.
+func _update_live(delta: float) -> void:
+	if live == null:
+		return
+	var cp := Vector2(drive.car.x, drive.car.y)
+	if live.is_running():
+		var car := drive.car
+		var v := Vector2(car.vx, car.vy).length()
+		var slip := absf(wrapf(atan2(car.vy, car.vx) - car.heading, -PI, PI)) if v > 1.0 else 0.0
+		var off := map.road_at(cp.x, cp.y, drive.z, DriftScore.OFF_ROAD).is_empty()
+		var lev: Dictionary = live.run.ev
+		var r := live.tick(delta * _time_rate, cp, v, slip, off and not drive.airborne, _crashed_frame, drive.z)
+		match r:
+			"go":
+				hud.notify("GO!", String(lev.title), lev.color)
+			"cp":
+				_live_cp_beacon()
+				_recompute_route()
+				hud.notify("CHECKPOINT", LiveEvents.clock_text(float(live.run.t)), lev.color)
+			"stage_done":
+				var n := (live.run.stage_times as Array).size()
+				hud.notify("SS%d DONE · %s" % [n, LiveEvents.clock_text(float(live.run.stage_times[n - 1]))],
+					"P%d overall · drive the liaison to SS%d" % [live.rally_place(), n + 1], lev.color)
+				_live_cp_beacon()
+				_recompute_route()
+			"stage":
+				hud.notify("SS%d · %s" % [int(live.run.stage) + 1, String(lev.stages[int(live.run.stage)].name)], "On the line", lev.color)
+				_live_cp_beacon()
+				_recompute_route()
+			"done", "fail":
+				_live_finished()
+		if live.is_running():
+			_update_rivals(delta)
+		var lines := live.hud_lines(cp)
+		hud.set_live(String(lines[0]), String(lines[1]), lev.color)
+		return
+	hud.set_live("", "", Color.WHITE)
+	var before := _live_ids()
+	var added := live.update(delta, delta * DAY_RATE, cp, _beacon_points())
+	for lev in added:
+		var d := (lev.pos as Vector2).distance_to(cp)
+		if d < LiveEvents.ANNOUNCE:
+			hud.notify("NEW LIVE EVENT", "%s · %s · %d m" % [LiveEvents.KIND_NAMES[lev.kind], lev.title, int(d)], lev.color)
+	if _live_ids() != before:
+		_live_sync()
+
+func _live_ids() -> String:
+	var ids := PackedStringArray()
+	for lev in live.board:
+		ids.append(String(lev.id))
+	return ",".join(ids)
+
+func _live_finished() -> void:
+	var res := live.last_result
+	var lev: Dictionary = res.get("ev", {})
+	if lev.has("mission"):
+		_mission_finished(res)
+		return
+	var kind := String(lev.get("kind", ""))
+	var tier := int(res.get("tier", 0))
+	progress.record_live(kind, tier)
+	_live_cp_beacon()
+	hud.set_live("", "", Color.WHITE)
+	if tier > 0:
+		var sub := "%s · %s" % [String(res.line), String(res.get("next", ""))] if String(res.get("next", "")) != "" else String(res.line)
+		hud.notify("%s · %s" % [LiveEvents.TIER_NAMES[tier], LiveEvents.KIND_NAMES[kind]], sub, LiveEvents.TIER_COLORS[tier])
+		_add_fans(int(res.fans), "LIVE EVENT")
+	else:
+		var why := String(res.line) if not res.has("next") else "%s · %s" % [String(res.line), String(res.get("next", ""))]
+		hud.notify("NO MEDAL · %s" % LiveEvents.KIND_NAMES.get(kind, "EVENT"), why + " · the event stays up for another go", LiveEvents.TIER_COLORS[0])
+	_live_sync()
+	if not gps_waypoint and (gps_target < 0 or gps_target >= events.size() or events[gps_target].has("live")):
+		gps_target = _next_open_event()
+	_recompute_route()
+	_save()
+
+# ------------------------------------------------------------------------------------------ missions on the map
+
+## A campaign mission raced where it stands (MapMissions): the car goes on the grid, the clock is set to the
+## mission's hour, the roads close to traffic and the field lines up. False when its route is not on the map (the
+## caller then loads it as a race as before).
+func _begin_mission(index: int) -> bool:
+	if live == null:
+		return false
+	var lev := MapMissions.event(index)
+	if lev.is_empty():
+		return false
+	var def: Dictionary = Missions.get_def(index)
+	hour = float(def.get("start_hour", hour))
+	if sun: # (built worlds only: _process applies it every frame anyway)
+		_apply_time()
+	live.begin(lev, CarCatalog.key_at(progress.car_class))
+	var g: Array = live.grid_pose(lev)
+	drive.place(g[0], float(g[1]))
+	snap_camera()
+	if traffic:
+		traffic.clear()
+	active_event = -1
+	hud.hide_event()
+	gps_waypoint = false
+	_spawn_rivals()
+	_live_cp_beacon()
+	_recompute_route()
+	hud.notify("%s MISSION" % Missions.KIND_NAMES[def.kind], String(def.title), Missions.COLOR)
+	return true
+
+## A mission is on: the town's traffic is kept off its roads.
+func _roads_closed() -> bool:
+	return live != null and live.is_running() and live.run.ev.has("mission")
+
+func _spawn_rivals() -> void:
+	_clear_rivals()
+	var rv := live.rivals()
+	if rv == null:
+		return
+	for k in rv.rivals.size():
+		var node: Node3D = CAR_SCENE.instantiate()
+		node.car_key = CarCatalog.key_at(progress.car_class)
+		world.add_child(node)
+		node.set_paint(Color(RIVAL_PAINTS[k % RIVAL_PAINTS.size()]))
+		_rival_nodes.append(node)
+	_update_rivals(0.0)
+
+func _clear_rivals() -> void:
+	for n in _rival_nodes:
+		if is_instance_valid(n):
+			n.queue_free()
+	_rival_nodes.clear()
+
+## The field drawn where StreetRivals has it, out of the race once knocked out, and pushed by the player's car.
+func _update_rivals(delta: float) -> void:
+	var rv := live.rivals()
+	if rv == null or _rival_nodes.size() != rv.rivals.size():
+		return
+	var me := Vector2(drive.car.x, drive.car.y)
+	for k in rv.rivals.size():
+		var r: Dictionary = rv.rivals[k]
+		var node := _rival_nodes[k]
+		if bool(r.get("out", false)):
+			node.visible = false
+			continue
+		var pose: Array = rv.pose(float(r.s), float(r.lat))
+		var p: Vector2 = pose[0]
+		var dir: Vector2 = pose[1]
+		var hit := map.road_at(p.x, p.y, drive.z, 2.0)
+		var y: float = float(hit.height) if not hit.is_empty() else map.ground(p.x, p.y)
+		node.visible = true
+		node.position = Vector3(p.x, y, p.y)
+		node.basis = Basis(Vector3.UP, -dir.angle() - PI / 2.0)
+		# contact: two cars' worth of circles, the player shoved out and the rival knocked across
+		var d := me.distance_to(p)
+		if d < 2.1 and d > 0.01:
+			var n_out := (me - p) / d
+			var rel := Vector2(drive.car.vx, drive.car.vy) - dir * float(r.v)
+			drive.bump(n_out, 2.1 - d, Vector2.ZERO, RIVAL_MASS)
+			var side := signf(Vector2(-dir.y, dir.x).dot(p - me))
+			rv.knock(k, 0.5 * (side if side != 0.0 else 1.0), clampf(rel.length() * 0.3, 0.0, 6.0))
+
+## A mission run over: recorded in the campaign save like a raced one (Missions.record), its result as banners,
+## the beacons recoloured, the traffic back.
+func _mission_finished(res: Dictionary) -> void:
+	var lev: Dictionary = res.get("ev", {})
+	var index := int(lev.mission)
+	_live_cp_beacon()
+	hud.set_live("", "", Color.WHITE)
+	var out := MapMissions.outcome(res)
+	var rec := Missions.record(index, out)
+	var def: Dictionary = Missions.get_def(index)
+	if bool(rec.success):
+		hud.notify("MISSION CLEARED%s" % (" · " + String(rec.trophy).to_upper() if bool(rec.first_clear) else ""),
+			String(out.line), OpenWorldHud.GOLD)
+	else:
+		hud.notify("MISSION MISSED · %s" % String(def.title), "%s · target: %s" % [String(out.line),
+			Missions.target_text(index).to_lower()], Color("#ff5a4a"))
+	if int(rec.fans) > 0:
+		_add_fans(int(rec.fans), "MISSION")
+	if String(rec.get("reward_car", "")) != "":
+		hud.notify("NEW CAR WON", CarCatalog.display_name(String(rec.reward_car)).to_upper(), OpenWorldHud.GOLD)
+	_refresh_events()
+	if not gps_waypoint:
+		gps_target = _next_open_event()
+	_recompute_route()
+	_save()
 
 ## The waypoint stands in the world too: a purple light column like the stages', so it can be found by eye.
 func _place_waypoint_beacon() -> void:
@@ -706,7 +1057,7 @@ func _check_waypoint_reached() -> void:
 ## finished, so "unlocked" alone would point at stage 9 for ever); -1 when everything is done.
 func _next_open_event() -> int:
 	for k in events.size():
-		if events[k].open and not events[k].done:
+		if not events[k].has("live") and events[k].open and not events[k].done:
 			return k
 	return -1
 
@@ -754,6 +1105,11 @@ func snap_camera() -> void:
 	look.reset()
 
 func _check_events() -> void:
+	if live and live.is_running():
+		if active_event >= 0:
+			active_event = -1
+			hud.hide_event()
+		return
 	var cp := Vector2(drive.car.x, drive.car.y)
 	var found := -1
 	for k in events.size():
@@ -766,6 +1122,16 @@ func _check_events() -> void:
 		hud.hide_event()
 		return
 	var ev: Dictionary = events[found]
+	if ev.has("live"):
+		var lev := live.find(String(ev.live))
+		if not lev.is_empty():
+			var c := live.card(lev, CarCatalog.key_at(progress.car_class))
+			hud.show_event(String(c[0]), String(c[1]), String(c[2]), String(c[3]), ev.color)
+		return
+	if ev.has("mission"):
+		var c := Missions.card(int(ev.stage), FanLevels.level(progress.fans))
+		hud.show_event(String(c[0]), String(c[1]), String(c[2]), String(c[3]), ev.color)
+		return
 	var st: Dictionary = Campaign.get_stage(ev.stage)
 	var target := "Win the race" if int(st.target_pos) == 1 else "Finish P%d or better" % int(st.target_pos)
 	var body := "%s\n\n%s · %d laps · %s · %d rivals (%s)\nTarget: %s · Trophy: %s\nFan level %d recommended (you are level %d) · up to %s fans on a first clear" % [st.desc, SPOT_NOTE.get(ev.spot, ""),
@@ -780,6 +1146,12 @@ func _start_active_event() -> void:
 		return
 	var ev: Dictionary = events[active_event]
 	if not ev.open:
+		return
+	if ev.has("live"):
+		_begin_live(String(ev.live))
+		return
+	if ev.has("mission"): # only ever on the map
+		_begin_mission(int(ev.stage))
 		return
 	_save()
 	stage_requested.emit(int(ev.stage))
@@ -973,6 +1345,7 @@ func _update_skills(dt: float) -> void:
 		if float(h[2]) > 6.0:
 			crashed = true
 	traffic.hits.clear()
+	_crashed_frame = crashed
 	if crashed and chain_points > 0.0:
 		hud.notify("CHAIN LOST", "Crashed with %d fans in the chain" % int(chain_points * chain_mult), Color("#ff4d4d"))
 		chain_points = 0.0
@@ -1010,9 +1383,13 @@ func _add_fans(n: int, banner: String) -> void:
 # ================================================================================================ GPS
 
 func _has_target() -> bool:
+	if live and live.is_running():
+		return true
 	return wp_on if gps_waypoint else (gps_target >= 0 and gps_target < events.size())
 
 func _target_pos() -> Vector2:
+	if live and live.is_running():
+		return live.next_target()
 	return wp_pos if gps_waypoint else (events[gps_target].pos as Vector2)
 
 func _recompute_route() -> void:
@@ -1023,34 +1400,45 @@ func _recompute_route() -> void:
 	hud.set_route(route)
 	_update_route_mesh()
 
-## Swaps between the stock Seicento and, once the top fan level has unlocked it, the Hypercar Seicento (AF Corse's no. 83).
+## Cycles through the open cars (CarCatalog): the stock Seicento, the Hypercar Seicento once the top fan level has unlocked it
+## (AF Corse's no. 83), and every car the campaign has awarded.
 func _toggle_car() -> void:
-	if progress.car_class == 0 and not FanLevels.hypercar_unlocked(progress.fans):
+	var open := CarCatalog.open_keys(progress.fans)
+	if open.size() < 2:
 		hud.notify("HYPERCAR LOCKED", "Reach fan level %d: %s" % [FanLevels.THRESHOLDS.size(), FanLevels.title(FanLevels.THRESHOLDS.size()).to_upper()], Color("#ff5a4a"))
 		return
-	progress.car_class = 1 - progress.car_class
+	var next: String = open[(open.find(CarCatalog.key_at(progress.car_class)) + 1) % open.size()]
+	progress.car_class = CarCatalog.index_of(next)
 	_fit_car()
-	hud.notify("HYPERCAR SEICENTO" if progress.car_class == 1 else "STOCK SEICENTO", "Fitted", OpenWorldHud.GOLD)
+	hud.notify("STOCK SEICENTO" if next == "stock" else CarCatalog.display_name(next).to_upper(), "Fitted", OpenWorldHud.GOLD)
+
+## The catalogue car's name when it is neither Seicento, for the pause menu's CAR button.
+func _car_name() -> String:
+	var key := CarCatalog.key_at(progress.car_class)
+	return "" if key == "stock" or key == "hypercar" else CarCatalog.display_name(key)
 
 ## Puts the chosen car's model and livery on the player's car.
 func _fit_car() -> void:
-	var hyper := progress.car_class == 1
 	_fitted_class = progress.car_class
-	drive.fit_model(Hypercar.model() if hyper else CarModel.new())
+	var key := CarCatalog.key_at(progress.car_class)
+	drive.fit_model(CarCatalog.model(key))
+	if car_visual:
+		car_visual.set_car(key)
 	_apply_look()
 
 ## The fitted car's livery and the modifiers switched on (CarMods), on the visual and the physics.
 func _apply_look() -> void:
 	var hyper := progress.car_class == 1
+	var livery := CarCatalog.livery(CarCatalog.key_at(progress.car_class))
 	mods = CarMods.active(progress.mods, progress.fans)
 	CarMods.apply_to(drive, mods)
 	if traffic:
 		traffic.set_monster(mods.has("monster"))
 	if car_visual:
-		car_visual.set_paint(Hypercar.PAINT if hyper else paint)
-		car_visual.car_number = Hypercar.NUMBER if hyper else car_number
+		car_visual.set_paint(livery.get("color", paint))
+		car_visual.car_number = livery.get("number", car_number)
 		car_visual.set_wheel_scale(CarMods.MONSTER_WHEELS if mods.has("monster") else 1.0)
-	hud.set_car_label(hyper, FanLevels.hypercar_unlocked(progress.fans))
+	hud.set_car_label(hyper, FanLevels.hypercar_unlocked(progress.fans), _car_name())
 
 ## The pause menu's MODIFIERS page: one switch per CarMods entry, locked ones name their fan level.
 func _show_mods_page() -> void:
@@ -1076,6 +1464,12 @@ func _toggle_mod(id: String) -> void:
 	if not CarMods.unlocked(id, progress.fans):
 		hud.notify("%s LOCKED" % m[2], "Reach fan level %d: %s" % [m[1], FanLevels.title(m[1]).to_upper()], Color("#ff5a4a"))
 		return
+	if live and live.is_running():
+		live.abandon()
+		_live_cp_beacon()
+		_recompute_route()
+		hud.set_live("", "", Color.WHITE)
+		hud.notify("EVENT ABANDONED", "Modifier changed", Color("#ff5a4a"))
 	if progress.mods.get(id, false):
 		progress.mods.erase(id)
 	else:
@@ -1165,6 +1559,10 @@ func _process(delta: float) -> void:
 		return
 	nitro_on = false
 	_read_input(delta)
+	if live and live.holding(): # on the line until the lights go (handbrake: the auto box reverses on a held brake)
+		throttle = 0.0
+		brake = 0.0
+		handbrake = 1.0
 	var slow := mods.has("bullet") and (drive.airborne or _drift_t > 0.3)
 	_time_rate = move_toward(_time_rate, CarMods.BULLET_RATE if slow else 1.0, delta * 3.0)
 	accumulator += minf(delta, 0.1) * _time_rate
@@ -1175,13 +1573,20 @@ func _process(delta: float) -> void:
 		drive.step(TICK, throttle, brake, steer, shift_up, shift_down, handbrake)
 		shift_up = false
 		shift_down = false
-		traffic.step(TICK, drive)
+		if not _roads_closed():
+			traffic.step(TICK, drive)
 		train.step(TICK)
 		accumulator -= TICK
 		steps += 1
 	if steps >= 24:
 		accumulator = 0.0
 	if drive.wants_respawn:
+		if live and live.is_running():
+			live.abandon()
+			_live_cp_beacon()
+			_recompute_route()
+			hud.set_live("", "", Color.WHITE)
+			hud.notify("EVENT ABANDONED", "Car respawned", Color("#ff5a4a"))
 		hud.notify("BACK ON THE ROAD", "The Seicento doesn't swim", Color("#4aa3ff"))
 		drive.respawn()
 		snap_camera()
@@ -1195,6 +1600,7 @@ func _process(delta: float) -> void:
 	_update_skills(delta * _time_rate)
 	_update_nitro(delta * _time_rate) # simulation time, so bullet time doesn't farm drift points
 	_check_events()
+	_update_live(delta)
 	_check_traps()
 	_disc_t -= delta
 	if _disc_t <= 0.0:
@@ -1460,8 +1866,10 @@ func _action_of(event: InputEvent) -> String:
 func _set_paused(on: bool) -> void:
 	paused = on
 	hud.show_pause(on)
+	if on and live and live.is_running():
+		hud.set_pause_page("PAUSED", OpenWorldHud.PAUSE_ITEMS.slice(0, 1) + [["abandon_live", "ABANDON EVENT"]] + OpenWorldHud.PAUSE_ITEMS.slice(1))
 	if on:
-		hud.set_car_label(progress.car_class == 1, FanLevels.hypercar_unlocked(progress.fans))
+		hud.set_car_label(progress.car_class == 1, FanLevels.hypercar_unlocked(progress.fans), _car_name())
 	if on and audio:
 		audio.update_car(null, false)
 
@@ -1472,6 +1880,14 @@ func _pause_action(action: String) -> void:
 		_toggle_mod(action.substr(4))
 		return
 	match action:
+		"abandon_live":
+			if live and live.is_running():
+				live.abandon()
+				_live_cp_beacon()
+				_recompute_route()
+				hud.set_live("", "", Color.WHITE)
+				hud.notify("EVENT ABANDONED", "", Color("#ff5a4a"))
+			_set_paused(false)
 		"reset_campaign":
 			if not _reset_armed:
 				_reset_armed = true
@@ -1487,12 +1903,18 @@ func _pause_action(action: String) -> void:
 		"resume":
 			_set_paused(false)
 		"car":
+			if live and live.is_running():
+				live.abandon()
+				_live_cp_beacon()
+				_recompute_route()
+				hud.set_live("", "", Color.WHITE)
+				hud.notify("EVENT ABANDONED", "Car changed", Color("#ff5a4a"))
 			_toggle_car()
 		"mods":
 			_show_mods_page()
 		"mods_back":
-			hud.set_pause_page("PAUSED", OpenWorldHud.PAUSE_ITEMS)
-			hud.set_car_label(progress.car_class == 1, FanLevels.hypercar_unlocked(progress.fans))
+			hud.set_pause_page("PAUSED", OpenWorldHud.PAUSE_ITEMS.slice(0, 1) + ([["abandon_live", "ABANDON EVENT"]] if live and live.is_running() else []) + OpenWorldHud.PAUSE_ITEMS.slice(1))
+			hud.set_car_label(progress.car_class == 1, FanLevels.hypercar_unlocked(progress.fans), _car_name())
 		"map":
 			_set_paused(false)
 			hud.map_sel = maxi(gps_target, 0)
@@ -1503,6 +1925,12 @@ func _pause_action(action: String) -> void:
 			leave_requested.emit("stages")
 		"reset":
 			_set_paused(false)
+			if live and live.is_running():
+				live.abandon()
+				_live_cp_beacon()
+				_recompute_route()
+				hud.set_live("", "", Color.WHITE)
+				hud.notify("EVENT ABANDONED", "Car reset", Color("#ff5a4a"))
 			drive.respawn()
 			snap_camera()
 		"time":

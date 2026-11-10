@@ -258,10 +258,10 @@ func build_profile() -> void:
 	PROF = p
 	_stock_prof = p
 
-## The speed profile for a car: the stock Seicento's own (PROF as built), or for another car (the Hypercar Seicento)
+## The speed profile for a car: the stock Seicento's own (PROF as built), or for another car (CarCatalog's hypercar, Golf...)
 ## one from its grip, downforce and top speed. Race puts its car's profile in PROF for the race.
 func profile_for(cm: CarModel) -> PackedFloat64Array:
-	if cm == null or cm.spec.resource_name != "hypercar":
+	if cm == null or cm.spec.resource_name == "": # the stock Seicento (a named spec is a derived car)
 		return _stock_prof
 	var id := cm.spec.get_instance_id()
 	if _prof_alt.has(id):

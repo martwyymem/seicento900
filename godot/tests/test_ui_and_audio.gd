@@ -255,8 +255,13 @@ func _check_menu_modes(errors: Array[String], game_script: GDScript) -> void:
 			# the campaign opens in the open world of Brzeszcze; its pause menu leads to the stage list
 			if game.active_menu_page != "world" or game.open_world == null or not game.open_world.active:
 				errors.append("Menu 'campaign' should open the open world, got '%s'" % game.active_menu_page)
-			elif game.open_world.events.size() != CampaignData.STAGES.size():
-				errors.append("The open world shows %d stage beacons for %d stages" % [game.open_world.events.size(), CampaignData.STAGES.size()])
+			else:
+				# the stages and, beside them, the campaign missions (Missions), each once
+				var n_missions: int = game.open_world.events.filter(func(e: Dictionary) -> bool: return e.has("mission")).size()
+				var n_live: int = game.open_world.events.filter(func(e: Dictionary) -> bool: return e.has("live")).size() # LiveEvents come and go
+				if game.open_world.events.size() - n_missions - n_live != CampaignData.STAGES.size() or n_missions != Missions.MISSIONS.size():
+					errors.append("The open world shows %d stage and %d mission beacons for %d stages and %d missions" % [
+						game.open_world.events.size() - n_missions, n_missions, CampaignData.STAGES.size(), Missions.MISSIONS.size()])
 			if game.open_world:
 				game.open_world.suspend()
 			game._on_world_leave("stages")
@@ -268,6 +273,18 @@ func _check_menu_modes(errors: Array[String], game_script: GDScript) -> void:
 			errors.append("Menu '%s' set-up title should start '%s', got '%s'" % [id, want[2], game.setup_title_label.text])
 		var items: Array = game._setup_focus_items()
 		if id == "campaign":
+			# the stage list carries the stages only: missions are raced on the open-world map, from their beacons
+			game._populate_campaign_stages()
+			if game.campaign_stage_picker.item_count != CampaignData.STAGES.size():
+				errors.append("The campaign list has %d rows for %d stages (missions belong on the map)" % [game.campaign_stage_picker.item_count,
+					CampaignData.STAGES.size()])
+			elif game._campaign_unpick(3) != 3:
+				errors.append("The campaign list's stage rows do not map to their stages")
+			var back_to: int = game.campaign_stage_index
+			game._apply_campaign_stage(Missions.index_of("drag_quarter"))
+			if not String(game.campaign_target_label.text).contains("Win") or not String(game.campaign_title_label.text).begins_with("Drag"):
+				errors.append("A mission's briefing reads '%s' / '%s'" % [game.campaign_title_label.text, game.campaign_target_label.text])
+			game._apply_campaign_stage(back_to)
 			if not game.campaign_side.visible or game.track_picker.visible or game.setup_conditions_row.visible or game.setup_format_row.visible:
 				errors.append("The campaign briefing should show the stage and hide circuit, format and conditions")
 			if game.setup_race_button.visible or not items.has(game.campaign_start_button):

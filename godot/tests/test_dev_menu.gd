@@ -43,6 +43,48 @@ func run() -> Array:
 	FanLevels.dev_unlock = false
 	game.car_class_picker.select(0)
 
+	# the campaign entries (on a test save of their own: the dev sandbox is shared)
+	var saved_file := Campaign.save_file
+	Campaign.save_file = "test_dev_menu_campaign.json"
+	Campaign.reset_progress()
+	var fans_before := WorldProgress.load_progress().fans # clearing a mission pays fans into the (shared) world save
+	var by_label := func(prefix: String) -> Dictionary:
+		for e in game._dev_entries():
+			if String(e.label).begins_with(prefix):
+				return e
+		return {}
+	var give: Dictionary = by_label.call("Give VW Golf IV")
+	check("the menu can give the Golf IV", not give.is_empty())
+	if not give.is_empty():
+		give.do.call()
+		check("giving the Golf IV puts it in the campaign's cars", "golf4" in Campaign.load_progress().get("cars", []) and CarCatalog.unlocked("golf4"))
+		var back: Dictionary = by_label.call("Take back VW Golf IV")
+		check("the entry turns into take back", not back.is_empty())
+		if not back.is_empty():
+			back.do.call()
+			check("taking it back removes it", not "golf4" in Campaign.load_progress().get("cars", []))
+	var ko := Missions.index_of("knockout_bor")
+	check("the Bór knockout starts locked", not Missions.is_unlocked(ko))
+	var open_all: Dictionary = by_label.call("Open every stage and mission")
+	check("the menu can open every mission", not open_all.is_empty())
+	if not open_all.is_empty():
+		open_all.do.call()
+		check("opening everything opens every mission", range(Missions.MISSIONS.size()).all(func(k): return Missions.is_unlocked(Missions.BASE + k)))
+	var clear_ko: Dictionary = by_label.call("Clear Bór")
+	check("each mission has a clear entry", not clear_ko.is_empty() and game._dev_entries().filter(func(e): return String(e.label).begins_with("Clear ")).size() == Missions.MISSIONS.size())
+	if not clear_ko.is_empty():
+		clear_ko.do.call()
+		check("clearing the knockout from the menu clears it and awards its car", Missions.is_cleared(ko) and "golf4" in Campaign.load_progress().get("cars", []))
+	var forget: Dictionary = by_label.call("Forget every mission result")
+	if not forget.is_empty():
+		forget.do.call()
+	check("forgetting mission results clears them", not forget.is_empty() and not Missions.is_cleared(ko))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(SaveData.path(Campaign.save_file)))
+	Campaign.save_file = saved_file
+	var wp := WorldProgress.load_progress()
+	wp.fans = fans_before
+	wp.save()
+
 	# the open world's car swap
 	var fc := FreeCar.new(null)
 	fc.fit_model(Hypercar.model())

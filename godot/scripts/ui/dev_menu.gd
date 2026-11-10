@@ -1,5 +1,7 @@
 ## The developer menu: § + 1 (the key left of 1, held, then 1; either order). A list of actions for whatever is on screen:
-## fans and unlocks everywhere, teleports, time of day and parked cars in the open world, weather, repairs and finishing in a race.
+## fans and unlocks everywhere; the campaign (open every stage and mission, give or take back mission cars, clear or forget
+## each mission); teleports, mission beacons, points of interest (discover or forget all), time of day and parked cars in the
+## open world; weather, repairs, finishing and, in a mission race, knocking out the drop-zone car or banking drift points.
 ## A live coordinates line at the top shows the car on screen (x, y, heading; z in the open world); "Copy coordinates" puts it on the clipboard.
 ## The game fills it (game.gd `_dev_entries()`); the world freezes (Engine.time_scale 0) while it is open. ↑ ↓ and Enter or a click
 ## choose, Esc or § + 1 again closes. The ~ performance overlay (DevHud) still toggles on the key's own press and release.

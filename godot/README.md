@@ -280,6 +280,14 @@ extract because its source imagery is large and costly to fetch for this build.
   east, Bielsko-Biała south on ul. Bielska, Wilamowice down the S1 and Tychy's Fiat track up it. Kraków is the
   train from Brzeszcze Jawiszowice station and Tokyo the festival. Pull into a beacon, read the briefing card
   and press Enter. The results bring the car back to the beacon, through the service area if it is damaged.
+- **Missions** (`scripts/sim/missions.gd`) sit beside the ten stages: a quarter-mile and a standing-kilometre
+  drag race on the S1, the S1 Sprint, a drift attack in Babudy, an off-road race at Kolonia Stawowa, the Bór
+  knockout and Rajd Borów. Each opens once a stage is cleared and is a cyan beacon at its route's real start line,
+  snapped onto the map's roads at load. A mission is campaign index `Missions.BASE + k`, so `Campaign.get_stage`
+  and the campaign flow take it like a stage; a rally mission runs through the rally flow on a rally of its own,
+  never saved over the menu's. The race rules are per-event `RaceSettings` (`knockout`, `finish_distance`,
+  `loose_spans`, `drift_score` with `DriftScore`, `mission` for the HUD's mission plate). Progress is
+  `campaign.json["missions"]`. `tests/test_missions.gd` covers it; `tests/_missions_probe.gd` measures the races.
 - **Driving** uses the race's own tyre-model physics (`FreeCar`, `scripts/world/free_car.gd`) on the town's
   surfaces (asphalt, setts, gravel tracks, grass). It rides the ground heights and the bridge decks and
   embankments. Buildings, trees, lamp posts and parked cars are solid, the ponds can't be driven through, and
