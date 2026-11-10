@@ -1548,6 +1548,7 @@ func _off_route() -> bool:
 
 # ================================================================================================ frame
 
+static var PROF := {}
 func _process(delta: float) -> void:
 	if not active or not built:
 		return
@@ -1558,7 +1559,9 @@ func _process(delta: float) -> void:
 		hud.update_drive(drive.speed_kmh(), _gear_shown(), drive.car.rpm, drive.model.spec.limiter, Vector2(drive.car.x, drive.car.y), drive.car.heading, delta)
 		return
 	nitro_on = false
+	var __t10 := Time.get_ticks_usec()
 	_read_input(delta)
+	PROF['_read_input'] = PROF.get('_read_input', 0) + Time.get_ticks_usec() - __t10
 	if live and live.holding(): # on the line until the lights go (handbrake: the auto box reverses on a held brake)
 		throttle = 0.0
 		brake = 0.0
@@ -1567,6 +1570,7 @@ func _process(delta: float) -> void:
 	_time_rate = move_toward(_time_rate, CarMods.BULLET_RATE if slow else 1.0, delta * 3.0)
 	accumulator += minf(delta, 0.1) * _time_rate
 	var steps := 0
+	var __ts := Time.get_ticks_usec()
 	while accumulator >= TICK and steps < 24:
 		_prev_pos = Vector3(drive.car.x, drive.z, drive.car.y)
 		_prev_heading = drive.car.heading
@@ -1578,6 +1582,7 @@ func _process(delta: float) -> void:
 		train.step(TICK)
 		accumulator -= TICK
 		steps += 1
+	PROF["sim_steps"] = PROF.get("sim_steps", 0) + Time.get_ticks_usec() - __ts
 	if steps >= 24:
 		accumulator = 0.0
 	if drive.wants_respawn:
@@ -1590,30 +1595,58 @@ func _process(delta: float) -> void:
 		hud.notify("BACK ON THE ROAD", "The Seicento doesn't swim", Color("#4aa3ff"))
 		drive.respawn()
 		snap_camera()
+	var __t42 := Time.get_ticks_usec()
 	builder.update_crossings(delta)
+	PROF['builder.update_crossings'] = PROF.get('builder.update_crossings', 0) + Time.get_ticks_usec() - __t42
+	var __t43 := Time.get_ticks_usec()
 	builder.update_signals()
+	PROF['builder.update_signals'] = PROF.get('builder.update_signals', 0) + Time.get_ticks_usec() - __t43
 	hour = fmod(hour + delta * DAY_RATE, 24.0)
+	var __t45 := Time.get_ticks_usec()
 	_apply_time()
+	PROF['_apply_time'] = PROF.get('_apply_time', 0) + Time.get_ticks_usec() - __t45
+	var __t46 := Time.get_ticks_usec()
 	_sync_car(delta)
+	PROF['_sync_car'] = PROF.get('_sync_car', 0) + Time.get_ticks_usec() - __t46
+	var __t47 := Time.get_ticks_usec()
 	surface_fx.update(drive, car_visual, delta)
+	PROF['surface_fx.update'] = PROF.get('surface_fx.update', 0) + Time.get_ticks_usec() - __t47
+	var __t48 := Time.get_ticks_usec()
 	_update_camera(delta)
+	PROF['_update_camera'] = PROF.get('_update_camera', 0) + Time.get_ticks_usec() - __t48
+	var __t49 := Time.get_ticks_usec()
 	_update_skills(delta * _time_rate)
+	PROF['_update_skills'] = PROF.get('_update_skills', 0) + Time.get_ticks_usec() - __t49
+	var __t50 := Time.get_ticks_usec()
 	_update_nitro(delta * _time_rate) # simulation time, so bullet time doesn't farm drift points
+	PROF['_update_nitro'] = PROF.get('_update_nitro', 0) + Time.get_ticks_usec() - __t50
+	var __t51 := Time.get_ticks_usec()
 	_check_events()
+	PROF['_check_events'] = PROF.get('_check_events', 0) + Time.get_ticks_usec() - __t51
+	var __t52 := Time.get_ticks_usec()
 	_update_live(delta)
+	PROF['_update_live'] = PROF.get('_update_live', 0) + Time.get_ticks_usec() - __t52
+	var __t53 := Time.get_ticks_usec()
 	_check_traps()
+	PROF['_check_traps'] = PROF.get('_check_traps', 0) + Time.get_ticks_usec() - __t53
 	_disc_t -= delta
 	if _disc_t <= 0.0:
 		_disc_t = 0.5
+		var __x := Time.get_ticks_usec()
 		_check_discovery()
+		PROF['_check_discovery()'] = PROF.get('_check_discovery()', 0) + Time.get_ticks_usec() - __x
 	_area_t -= delta
 	if _area_t <= 0.0:
 		_area_t = 1.5
+		var __x := Time.get_ticks_usec()
 		_check_area()
+		PROF['_check_area()'] = PROF.get('_check_area()', 0) + Time.get_ticks_usec() - __x
 	_lamp_t -= delta
 	if _lamp_t <= 0.0:
 		_lamp_t = 0.6
+		var __x := Time.get_ticks_usec()
 		_place_lamp_lights()
+		PROF['_place_lamp_lights()'] = PROF.get('_place_lamp_lights()', 0) + Time.get_ticks_usec() - __x
 	_route_t -= delta
 	if _route_t <= 0.0:
 		_route_t = 0.5
@@ -1625,9 +1658,15 @@ func _process(delta: float) -> void:
 	_save_t -= delta
 	if _save_t <= 0.0:
 		_save_t = 15.0
+		var __x := Time.get_ticks_usec()
 		_save()
+		PROF['_save()'] = PROF.get('_save()', 0) + Time.get_ticks_usec() - __x
+	var __t78 := Time.get_ticks_usec()
 	hud.update_drive(drive.speed_kmh(), _gear_shown(), drive.car.rpm, drive.model.spec.limiter, Vector2(drive.car.x, drive.car.y), drive.car.heading, delta)
+	PROF['hud.update_drive'] = PROF.get('hud.update_drive', 0) + Time.get_ticks_usec() - __t78
+	var __t79 := Time.get_ticks_usec()
 	hud.set_stats(progress.fans, progress.roads.size(), map.road_pts.size(), hour)
+	PROF['hud.set_stats'] = PROF.get('hud.set_stats', 0) + Time.get_ticks_usec() - __t79
 	if audio:
 		audio.update_car(drive.car, true, null)
 
