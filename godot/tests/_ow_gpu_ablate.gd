@@ -34,7 +34,8 @@ func _initialize() -> void:
 	var grass := []
 	for c in ow.world.find_children("*", "MultiMeshInstance3D", true, false):
 		var mmi := c as MultiMeshInstance3D
-		if mmi.material_override and str(mmi.material_override.get("shader").resource_path).contains("grass"):
+		var m := mmi.material_override as ShaderMaterial
+		if m and m.shader and m.shader.resource_path.contains("grass"):
 			grass.append(mmi)
 	print("grass MMIs ", grass.size())
 	var tests := {

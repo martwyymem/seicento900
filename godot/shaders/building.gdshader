@@ -136,7 +136,7 @@ vec3 glass(vec3 w, vec2 uv, float storey, float bay, float ww, float wh, float s
 	// a lit room
 	float on = step(w.y, lit_share) * night;
 	float hue = fract(w.y * 71.3);
-	float strength = 0.55 + 0.9 * fract(w.y * 23.9);
+	float strength = 0.5 + 0.6 * fract(w.y * 23.9); // up to ~1.1: warm and coloured under the night exposure, not clipped white
 	vec3 lamp = lamp_colour(hue) * strength;
 	float room = 0.65 + 0.35 * smoothstep(0.0, 0.7, ly) * (1.0 - 0.5 * abs(lx - 0.5)); // brighter near the ceiling light, dimmer at the jambs
 	lamp *= room * (1.0 - 0.65 * blind) * (1.0 - 0.45 * curtain * smoothstep(0.32, 0.12, side));
@@ -277,7 +277,10 @@ void fragment() {
 				float letters = step(0.35, hash12(vec2(floor(uv.x / 0.22), unit))) * step(abs(uv.y - 2.725), 0.12) * step(abs(fract(uv.x / 6.0 + v_seed) - 0.5) * 6.0, 2.3);
 				col = mix(board * 0.85, vec3(0.95, 0.94, 0.9), letters);
 				col = mix(col, board * 0.5, 1.0 - smoothstep(0.0, 0.05, min(uv.y - 2.45, 3.0 - uv.y)));
-				glow = (board * 0.35 + vec3(1.0, 0.95, 0.85) * letters * 1.3) * night * 1.4;
+				// backlit after dark in its own colour: the board glows, the letters a warm light tinted by it, kept under
+				// the night exposure's white point (letters at 1.8 clipped the whole band to white and bloomed)
+				vec3 lettering = mix(vec3(1.0, 0.9, 0.72), board * 1.4 + 0.15, 0.35);
+				glow = (board * 0.55 * (1.0 - letters) + lettering * letters * 0.5) * night;
 				rough = 0.35;
 			} else if (uv.y > 0.35 && pillar < 0.5) {
 				is_window = true;
@@ -294,7 +297,7 @@ void fragment() {
 				vec3 shop_l = mix(lamp_colour(uh), vec3(1.0, 0.92, 0.78), 0.4);
 				float shelf = 0.75 + 0.25 * step(0.5, fract(uv.y * 2.4 + uh));
 				float up = 0.7 + 0.5 * smoothstep(0.0, 1.0, ly);
-				glow = shop_l * open_ * shelf * up * night * 0.6 * (1.0 - mul);
+				glow = shop_l * open_ * shelf * up * night * 0.42 * (1.0 - mul); // a lit interior, not a light box
 				rough = 0.08;
 			} else {
 				col = base * 0.6;

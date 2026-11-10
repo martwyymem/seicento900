@@ -15,15 +15,17 @@ const CUSTOM := 4 ## index the picker uses for settings that match no preset
 ## ow_shadow_distance / ow_shadow_splits: the open world's sun shadows; ow_draw_scale: how far its trees and small
 ## props draw (TownBuilder.set_draw_scale, High's ranges = 1); volumetric_fog: open-world and race fog and sun
 ## shafts, only where the preset can afford them; car_reflections: a reflection probe follows the player's car
-## (CarReflections), so its paint mirrors the street, not only the sky; ssil: screen-space light bounce
+## (CarReflections), so its paint mirrors the street, not only the sky; ssil: screen-space light bounce.
+## Medium keeps two shadow cascades and no car reflections (2026-11-10): the open world is bound by draw calls, not
+## pixels, so a lower render resolution saves little; the probe's extra cube faces and two more cascades cost more.
 const PRESETS := [
 	{"quality": 0, "upscaler": 1, "upscale_preset": 3, "antialiasing": 1, "ssao": false, "shadows": true, "reflections": 0,
 		"ow_shadow_distance": 120.0, "ow_shadow_splits": 2, "ow_draw_scale": 0.6, "volumetric_fog": false,
 		"car_reflections": false, "ssil": false,
 		"blurb": "Smoothest on older machines: 50% render resolution with FSR 1, FXAA, no ambient occlusion, short shadows."},
 	{"quality": 1, "upscaler": 1, "upscale_preset": 1, "antialiasing": 0, "ssao": true, "shadows": true, "reflections": 0,
-		"ow_shadow_distance": 190.0, "ow_shadow_splits": 4, "ow_draw_scale": 0.8, "volumetric_fog": false,
-		"car_reflections": true, "ssil": false,
+		"ow_shadow_distance": 160.0, "ow_shadow_splits": 2, "ow_draw_scale": 0.8, "volumetric_fog": false,
+		"car_reflections": false, "ssil": false,
 		"blurb": "Balanced: 67% render resolution with FSR 1, SMAA, ambient occlusion."},
 	{"quality": 2, "upscaler": 0, "upscale_preset": 1, "antialiasing": 0, "ssao": true, "shadows": true, "reflections": 0,
 		"ow_shadow_distance": 260.0, "ow_shadow_splits": 4, "ow_draw_scale": 1.0, "volumetric_fog": false,

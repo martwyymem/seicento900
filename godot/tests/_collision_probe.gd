@@ -22,12 +22,12 @@ func _initialize() -> void:
 		var b := Vector2(float(w[2]), float(w[3]))
 		var ln := a.distance_to(b)
 		by_style[style] = int(by_style.get(style, 0)) + 1
-		var drawn := (style == 0 or style == 1 or style == 3) and ln >= 0.35 and not doubled.has(wi)
-		if style == 2:
-			drawn = wi % 2 == 0 and ln >= 8.0 # the old bush rule: every other hedge record, one bush per 8 m
+		# what TownBuilder draws: panels for styles 0, 1, 3 (not doubled), a bush row for a hedge, a closure's barrier
+		var drawn := (style == 0 or style == 1 or style == 3 or style == 2) and ln >= 0.35 and (style == 2 or not doubled.has(wi))
 		if style == 4:
 			drawn = _is_closure(map, a, b)
-		if not drawn:
+		var solid_rec := not doubled.has(wi) and (style == 4 or ln >= 0.35) # TownMap._load_obstacles' rule
+		if solid_rec and not drawn:
 			undrawn[style] = int(undrawn.get(style, 0)) + 1
 			undrawn_m[style] = float(undrawn_m.get(style, 0.0)) + ln
 		if style == 4:
@@ -42,9 +42,13 @@ func _initialize() -> void:
 				if first_road.size() < 6:
 					first_road.append("%s style %d on %s" % [q, style, map.road_name[int(hit.road)]])
 				break
+	var solid := 0
+	for ck in map._wall_cells:
+		solid += (map._wall_cells[ck] as PackedFloat32Array).size() / 5
+	print("solid wall entries in TownMap's hash (cells x segments): ", solid)
 	print("fence segments by style: ", by_style)
-	print("hashed but not drawn (count): ", undrawn)
-	print("hashed but not drawn (m): ", _round(undrawn_m))
+	print("solid (TownMap) but not drawn (count): ", undrawn)
+	print("solid (TownMap) but not drawn (m): ", _round(undrawn_m))
 	print("fence segments on a ground-level carriageway: %d (%.0f m) e.g. %s" % [on_road, on_road_m, first_road])
 	# what a car on a raised deck would hit underneath it: fences, trees and buildings under the deck
 	var under_walls := 0
@@ -75,6 +79,8 @@ func _initialize() -> void:
 			var hit := map.road_at(v.x, v.y, -INF, -0.2)
 			if not hit.is_empty() and float(hit.deck) < 0.5:
 				posts_on_road += 1
+				if posts_on_road <= 14:
+					print("  post r %.2f at (%.1f, %.1f) %.2f m from the centre of %s (half %.1f)" % [v.z, v.x, v.y, absf(float(hit.dist)), map.road_name[int(hit.road)], float(hit.half)])
 	print("posts in a ground-level carriageway: %d" % posts_on_road)
 	# underpasses: clear width between the side walls, and how far the street's edge comes to them
 	for t in map.tunnels:

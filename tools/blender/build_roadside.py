@@ -197,11 +197,11 @@ def curved_blade(m, x, y, h, w, yaw, lean, dry, rnd, segs=(0.0, 0.4, 0.75)):
 	m.face([rows[-1][0], rows[-1][1], tip], "Blade")
 
 
-def grass_patch(blades, width_mul=1.0, salt=1.0):
-	"""About 1.6 m across of meadow grass: `blades` curved blades 0.3-1.0 m high leaning every way."""
+def grass_patch(blades, width_mul=1.0, salt=1.0, reach=0.8):
+	"""About 1.6 m across (2 x reach) of meadow grass: `blades` curved blades 0.3-1.0 m high leaning every way."""
 	m = MB()
 	for k in range(blades):
-		r = 0.8 * math.sqrt(_rand(k, salt))
+		r = reach * math.sqrt(_rand(k, salt))
 		a = k * 2.39996 + _rand(k, salt + 1) * 0.6
 		x, y = math.cos(a) * r, math.sin(a) * r
 		tall = _rand(k, salt + 2)
@@ -307,6 +307,8 @@ def main():
 	objects = []
 	for name, builder in [("BushCluster", bush), ("TallGrass", grass), ("Wheat", wheat), ("Corn", corn),
 		("Flower", flower), ("GrassPatch", lambda: grass_patch(110)), ("GrassPatchLow", lambda: grass_patch(30, 2.2, 3.0)),
+		# the far layer (vegetation.gd): a few broad blades in a tight clump, so a meadow still reads as grass 200 m off
+		("GrassTuft", lambda: grass_patch(14, 3.0, 5.0, 0.55)),
 		("WheatPatch", lambda: wheat_patch(60)), ("WheatPatchLow", lambda: wheat_patch(22, 2.0, 9.0)), ("HayBale", hay_bale),
 		("WaysideCross", roadside_cross), ("KilometrePost", kilometre_post), ("RallyBoard", rally_board)]:
 		objects.append(builder().emit(name))

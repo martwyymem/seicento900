@@ -34,7 +34,9 @@ const float BAYER_4X4[16] = float[](
 );
 
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
-const int BLOOM_TAPS = 20;
+// 10 taps, each half a texel off the pixel grid so the bilinear filter averages four texels per tap: the same
+// smooth glow as the old 20 point taps at half the reads (it runs at full output size, 7.5M pixels at 3448x2164)
+const int BLOOM_TAPS = 10;
 
 float get_bayer_val(ivec2 p) {
 	int idx = (p.x & 3) + (p.y & 3) * 4;
@@ -92,7 +94,7 @@ void fragment() {
 				float f = (float(i) + 0.5) / float(BLOOM_TAPS);
 				float a = float(i) * 2.39996;
 				vec2 off = vec2(cos(a), sin(a)) * sqrt(f) * radius;
-				vec3 tap = texture(TEXTURE, UV + off * texel).rgb;
+				vec3 tap = texture(TEXTURE, UV + (off + vec2(0.5)) * texel).rgb;
 				float w = 1.0 - f * 0.6;
 				bloom += tap * smoothstep(threshold, threshold + 0.3, dot(tap, LUMA)) * w;
 				wsum += w;
