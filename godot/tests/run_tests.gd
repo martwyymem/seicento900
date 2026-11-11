@@ -36,6 +36,7 @@ const SUITES := [
 	"res://tests/test_open_world_lamps.gd",
 	"res://tests/test_open_world_spawn.gd",
 	"res://tests/test_car_lamps.gd",
+	"res://tests/test_free_car_rest.gd",
 	"res://tests/test_vegetation.gd",
 	"res://tests/test_roadside_props.gd",
 	"res://tests/test_building_walls.gd",

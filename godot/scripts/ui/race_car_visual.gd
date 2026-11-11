@@ -503,13 +503,13 @@ func set_lamps(night: float, braking := false, reversing := false) -> void:
 	if not is_instance_valid(_details_node):
 		return
 	var head := headlamp_level(night)
-	var tail := (0.6 + 0.2 * night) if braking else 0.12 * head
+	var tail := (0.6 + 0.2 * night) if braking else 0.08 * head
 	var sig := Vector4(head, tail, 1.0 if braking else 0.0, 1.0 if reversing else 0.0)
 	if sig.is_equal_approx(_lamp_sig):
 		return
 	_lamp_sig = sig
 	tail_material.emission_energy_multiplier = tail
-	var bulb := (4.0 + 1.5 * night) if braking else (2.4 if reversing else 0.7 * head)
+	var bulb := (4.0 + 1.5 * night) if braking else (2.4 if reversing else 0.5 * head)
 	bulb_material.emission_energy_multiplier = bulb
 	bulb_material.emission = BULB_WHITE if reversing and not braking else BULB_RED
 	bulb_material.albedo_color = BULB_ON if bulb > 0.0 else BULB_OFF

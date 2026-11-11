@@ -4,7 +4,7 @@
 // lamp in the model's frame (RaceCarVisual._lamp_centre). The clear cover over it is the LampGlass surface.
 shader_type spatial;
 
-instance uniform float lit = 0.0;
+instance uniform float lit : instance_index(2) = 0.0;
 uniform vec2 centre = vec2(0.40, 0.640);
 uniform vec3 beam : source_color = vec3(1.0, 0.93, 0.78);
 varying vec3 lp;

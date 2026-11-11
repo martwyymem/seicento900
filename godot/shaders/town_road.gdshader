@@ -25,6 +25,8 @@ uniform bool use_textures = false;
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable, hint_default_white;
 uniform sampler2D normal_tex : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform float tex_scale = 0.25;
+// TownMap.pothole_texture(): per 3 m cell a rank, the hole's centre and its radius (the car drops into the same ones)
+uniform sampler2D potholes : filter_nearest, repeat_enable;
 
 varying vec3 world_pos;
 varying flat float v_style;
@@ -43,7 +45,7 @@ void vertex() {
 // a painted band of width w centred on x = c, anti-aliased
 float band(float x, float c, float w) {
 	float d = abs(x - c);
-	float aa = fwidth(x) * 0.8 + 0.004;
+	float aa = fwidth(x) * 1.5 + 0.004; // an edge a pixel and a half wide: stable under a jittered (temporal) projection
 	return 1.0 - smoothstep(w * 0.5 - aa, w * 0.5 + aa, d);
 }
 
@@ -179,6 +181,27 @@ void fragment() {
 		spark *= 1.0 - paint_a;
 	}
 
+	// potholes on the lesser streets: broken through to the base, a crumbled lighter rim
+	float pot = 0.0;
+	if (surf < 0.25 && v_style < 1.5) {
+		vec2 pc = floor(p / 3.0);
+		vec4 pt = texelFetch(potholes, ivec2(mod(pc, 128.0)), 0);
+		if (pt.r < 0.12 * (v_style < 0.5 ? 1.0 : 0.4)) {
+			vec2 c = (pc + 0.25 + pt.gb * 0.5) * 3.0;
+			float r = 0.3 + 0.3 * pt.a;
+			float d = length(p - c) + (g3 - 0.5) * 0.1;
+			float far = 1.0 - smoothstep(0.12, 0.35, px);
+			pot = (1.0 - smoothstep(r * 0.55, r * 0.8, d)) * far;
+			float rim = (1.0 - smoothstep(r * 0.8, r * 1.3, d)) * (1.0 - pot) * far;
+			col = mix(col, col * 0.55, rim * 0.7); // broken, tar-dark edge
+			// the far wall of the hole is in shade, the floor is dirt and loose stone
+			float wall = smoothstep(r * 0.2, r * 0.8, d) * clamp(0.5 + 0.5 * normalize(p - c + 1e-4).y, 0.0, 1.0);
+			col = mix(col, vec3(0.055, 0.045, 0.032) * (0.7 + 0.6 * g1) * (1.0 - 0.75 * wall), pot);
+			rough = mix(rough, 1.0, pot);
+			spark *= 1.0 - pot;
+		}
+	}
+
 	// cracks and seams: dark, matte
 	float sealed = max(seam, 0.0);
 	col = mix(col, col * 0.35, clamp(crack * 0.62 + sealed * 0.8, 0.0, 1.0) * (1.0 - float(surf > 0.25)));
@@ -187,6 +210,7 @@ void fragment() {
 	// rain: darker, glossier, with standing water in the dips of the wheel tracks and along the gutters
 	float dip = clamp(smoothstep(0.62, 0.8, g2) + 0.55 * gutter + 0.35 * wheel_zone * smoothstep(0.4, 0.6, pores), 0.0, 1.0);
 	float puddle = wet * smoothstep(0.35, 0.8, dip) * (1.0 - smoothstep(half_w - 0.3, half_w, abs(x)));
+	puddle = max(puddle, wet * pot); // the holes fill first
 	float w = wet * (surf < 0.75 ? 1.0 : 0.85);
 	col *= mix(1.0, 0.55, w);
 	// a wet film is a sheen, not a mirror, and the pores keep it uneven; after dark the lamps streak across it
@@ -211,13 +235,18 @@ void fragment() {
 	// the aggregate's own relief, flattened under water; sparkle: a few stones catch the light
 	float flat_k = clamp(w * 0.55 + puddle * 0.45, 0.0, 1.0);
 	vec2 bump = (nmap.xy - 0.5) * nmap_depth + micro_n.xy * 1.1 * (1.0 - 0.8 * flat_k);
-	float px_fade = 1.0 - smoothstep(0.004, 0.03, px) * 0.6;
+	// under the lamps after dark every glinting stone and facet of the aggregate twinkles as the car moves (worse
+	// through a temporal upscaler): the sparkle goes and the relief flattens with the night and with distance
+	spark *= 1.0 - night;
+	float px_fade = (1.0 - smoothstep(0.004, 0.02, px) * 0.85) * (1.0 - 0.6 * night);
 	bump = bump * px_fade + ringv;
 	float spec_k = 0.4 + 0.3 * w;
 	rough = mix(rough, 0.3, spark * 0.7 * (1.0 - flat_k));
 	spec_k += spark * 0.4;
 	ALBEDO = col;
-	ROUGHNESS = clamp(rough, 0.02, 1.0);
+	// only real rain makes a mirror: the night's dew under the lamps and headlights keeps a matte floor, or every
+	// facet of the surface throws a sub-pixel glint that a temporal upscaler turns into flicker
+	ROUGHNESS = clamp(rough, mix(0.42, 0.02, smoothstep(0.3, 0.6, wet)), 1.0);
 	SPECULAR = spec_k;
 	NORMAL_MAP = vec3(0.5 + bump.x, 0.5 + bump.y, 1.0);
 	NORMAL_MAP_DEPTH = 1.0;

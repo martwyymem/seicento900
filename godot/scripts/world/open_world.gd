@@ -69,6 +69,7 @@ var _volumetric := false ## the preset affords volumetric fog: sun shafts in the
 var headlights: Array[SpotLight3D] = []
 var reflections: CarReflections ## the street mirrored in the car's paint (presets with car_reflections)
 var lamp_lights: Array[OmniLight3D] = []
+var _lamp_reach := 200.0 ## m: the pooled lamp lights have faded out by here (_place_lamp_lights)
 var route_mesh: MeshInstance3D
 var route_mat: StandardMaterial3D
 var hud: OpenWorldHud
@@ -97,7 +98,7 @@ var night := 0.0
 ## set it from a weather system; after dark the streets get a little dew of their own (NIGHT_DAMP)
 var wet := 0.0
 const NIGHT_DAMP := 0.3
-const LAMP_POOL_GLOW := 0.35 ## emission at the middle of a lamp's pool on the ground (reads on the dark tarmac)
+const LAMP_POOL_GLOW := 0.7 ## emission at the middle of a lamp's pool on the ground (reads on the dark tarmac)
 
 var events: Array = [] ## [{stage, spot, pos: Vector2, heading, title, ...}]; a live event has "live": its id
 var live: LiveEvents ## the generated events round the car (scripts/world/live_events.gd)
@@ -520,9 +521,14 @@ func _apply_time() -> void:
 	for h in headlights:
 		h.light_energy = HEADLIGHT_ENERGY * beams
 		h.visible = beams > 0.0
+	# each pooled lamp fades out towards the farthest one's distance, so a lamp never snaps on or off as the pool
+	# moves from one to the next (_place_lamp_lights); the tarmac is dark, so its pool is mostly the decal's glow
+	var here := Vector2(drive.car.x, drive.car.y) if drive else Vector2.ZERO
 	for l in lamp_lights:
-		l.light_energy = 7.0 * lamps_on
-		(l.get_child(0) as Decal).emission_energy = LAMP_POOL_GLOW * lamps_on * (1.0 + 0.4 * wet)
+		var d := Vector2(l.position.x, l.position.z).distance_to(here)
+		var near := (1.0 - smoothstep(_lamp_reach * 0.7, _lamp_reach, d)) * lamps_on
+		l.light_energy = 4.5 * near
+		(l.get_child(0) as Decal).emission_energy = LAMP_POOL_GLOW * near * (1.0 + 0.4 * wet)
 		l.visible = lamps_on > 0.02
 
 ## Dipped beams: aimed down onto the road, brightest in the middle of the cone and fading with distance, so the road
@@ -588,6 +594,12 @@ func _place_lamp_lights() -> void:
 	var p := Vector3(drive.car.x, drive.z, drive.car.y)
 	# from the builder's lamp grid: a few dozen candidates however many lamps the town has
 	var best := builder.lamps_near(p.x, p.z, lamp_lights.size(), 200.0)
+	# the farthest lamp of a full pool is where the lights have faded to nothing (less the ground covered until the
+	# next placing)
+	_lamp_reach = 200.0
+	if best.size() >= lamp_lights.size():
+		var far := best[best.size() - 1]
+		_lamp_reach = maxf(Vector2(far.x - p.x, far.z - p.z).length() - 12.0, 25.0)
 	for i in lamp_lights.size():
 		if i < best.size():
 			lamp_lights[i].position = best[i] + Vector3.DOWN * 0.6
@@ -1505,6 +1517,10 @@ func _fit_car() -> void:
 	drive.fit_model(CarCatalog.model(key))
 	if car_visual:
 		car_visual.set_car(key)
+		# set_car frees the visual's children, the beams among them: without new ones the next car drove dark
+		if headlights.any(func(h: SpotLight3D) -> bool: return not is_instance_valid(h) or h.get_parent() != car_visual):
+			headlights.clear()
+			_build_headlights()
 	_apply_look()
 
 ## The fitted car's livery and the modifiers switched on (CarMods), on the visual and the physics.
@@ -1693,7 +1709,7 @@ func _process(delta: float) -> void:
 		_check_area()
 	_lamp_t -= delta
 	if _lamp_t <= 0.0:
-		_lamp_t = 0.6
+		_lamp_t = 0.25
 		_place_lamp_lights()
 	_route_t -= delta
 	if _route_t <= 0.0:

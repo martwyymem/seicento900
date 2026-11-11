@@ -141,7 +141,7 @@ void fragment() {
 	}
 	rough = mix(rough, 0.35, spark * 0.6);
 	ALBEDO = col;
-	ROUGHNESS = clamp(rough, 0.04, 1.0);
+	ROUGHNESS = clamp(rough, mix(0.42, 0.04, smoothstep(0.3, 0.6, wet)), 1.0); // as town_road.gdshader
 	SPECULAR = 0.4 + 0.25 * w + spark * 0.3;
 	bump *= 1.0 - smoothstep(0.004, 0.03, px) * 0.6;
 	NORMAL_MAP = vec3(0.5 + bump.x, 0.5 + bump.y, 1.0);

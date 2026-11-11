@@ -38,6 +38,7 @@ var airborne := false
 var air_time := 0.0
 var last_air := 0.0 ## seconds of the last jump, set on landing (for the skill score)
 var landed := 0.0 ## landing speed (m/s) of the last touchdown, cleared by whoever reads it
+var _pot_mask := 0 ## which wheels stand in a pothole (bit per wheel)
 var hits: Array = [] ## [[x, y, closing speed]] since the reader last emptied it
 var in_water := false
 var water_t := 0.0
@@ -134,7 +135,13 @@ func support(x: float, y: float, lifted := true) -> float:
 	if lifted and not lowest.is_empty() and float(lowest.deck) <= 0.05:
 		# a street on the ground is drawn road_lift over it (the tyres rest on it, not in it); a raised road's deck
 		# below carries its own lift
-		g += map.road_lift(int(lowest.road)) * map.lift_share(float(lowest.half) - absf(float(lowest.dist)))
+		g += map.road_lift(int(lowest.road))
+	elif lifted and lowest.is_empty() and map.kerb_at(x, y) == 0.0:
+		# beside a street: its gravel shoulder runs down to the ground
+		var beside := map.road_at(x, y, -INF, TownMap.SHOULDER)
+		if not beside.is_empty() and float(beside.deck) <= 0.05:
+			var over := absf(float(beside.dist)) - float(beside.half)
+			g += map.road_lift(int(beside.road)) * (1.0 - smoothstep(0.0, TownMap.SHOULDER, over))
 	# a railway embankment is solid earth: the car rides up its 1:1.5 slopes like a road embankment's, and a cut's
 	# vertical face (or a steep step onto one) stops it (_vertical). Not in an underpass's cut, where the street runs.
 	var bank := map.rail_bank(x, y)
@@ -262,6 +269,20 @@ func step(dt: float, thr: float, brk: float, steer_in: float, shift_up := false,
 	car.ph = car.heading
 	car.has_prev = true
 	phys.step(car, ctl, env, dt)
+	# at rest it stays at rest: off the pedals (or on the handbrake) and all but stopped, the car holds where it is
+	# instead of creeping down every slight slope with nothing but the reverse-selecting brake to stop it
+	var crawl := Vector2(car.vx, car.vy).length()
+	if not airborne and thr < 0.02 and (crawl < 0.3 or (handbrake > 0.5 and crawl < 1.2)):
+		car.x = px
+		car.y = py
+		car.heading = car.ph
+		car.vx = 0.0
+		car.vy = 0.0
+		car.yaw_rate = 0.0
+		car.speed = 0.0
+		if car.phys != null:
+			for i in car.phys.w.size():
+				car.phys.w[i] = 0.0
 	car.shift_t = maxf(0.0, car.shift_t - dt)
 	car.hold_t = maxf(0.0, car.hold_t - dt)
 	odometer += Vector2(car.x - px, car.y - py).length()
@@ -320,6 +341,7 @@ func _vertical(dt: float, px: float, py: float, mass: float) -> void:
 			airborne = false
 			air_time = 0.0
 		return
+	target -= _potholes()
 	var pred := z + vz * dt
 	if target < pred - 0.3 and absf(car.speed) > 6.0:
 		airborne = true
@@ -335,6 +357,35 @@ func _vertical(dt: float, px: float, py: float, mass: float) -> void:
 			return
 	vz = clampf(rise / maxf(dt, 1e-4), -25.0, 25.0)
 	z = target
+
+## The wheels over the potholes (TownMap.pothole): how far the car sags into them, with a thump, a little speed lost
+## and a tug at the wheel as each one drops in.
+func _potholes() -> float:
+	var f := Vector2(cos(car.heading), sin(car.heading))
+	var s := Vector2(-f.y, f.x)
+	var deep := 0.0
+	var mask := 0
+	var tug := 0.0
+	for k in 4:
+		var side := 1.0 if k % 2 == 0 else -1.0
+		var w := Vector2(car.x, car.y) + f * (1.1 if k < 2 else -1.1) + s * (0.62 * side)
+		var d := map.pothole(w.x, w.y)
+		if d > 0.02:
+			mask |= 1 << k
+			if _pot_mask & (1 << k) == 0:
+				tug += side
+		deep = maxf(deep, d)
+	var fresh := mask & ~_pot_mask
+	_pot_mask = mask
+	var spd := absf(car.speed)
+	if fresh != 0 and spd > 4.0:
+		hits.append([car.x, car.y, clampf(spd * 0.06, 0.6, 2.2)])
+		if not monster:
+			var keep := 1.0 - minf(spd * 0.0006, 0.015)
+			car.vx *= keep
+			car.vy *= keep
+			car.yaw_rate += 0.04 * tug * minf(spd / 20.0, 1.0)
+	return deep * 0.6
 
 ## Wheels hit the edge of a kerb: the car loses speed, thumps (a hit event for the sound) and, if quick, hops.
 func _kerb_strike(rise: float, spd: float) -> void:

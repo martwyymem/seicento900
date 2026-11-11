@@ -30,7 +30,7 @@ const TUNNEL_MAX_HALF := 9.0 ## m: the most a cut widens for a street wandering 
 const WING_SOLID := 0.5 ## m: a wing wall at least this high over the ground stops the car (TownMap walls)
 const KERB_H := 0.13 ## m: height of a kerb; the pavement behind it is flat at this height (TownBuilder draws the same)
 const PAVEMENT_W := 1.5 ## m: width of the pavement beyond a road's edge
-const ROAD_LIFT := 0.09 ## m: a street's drawn surface stands this far over the ground (plus ROAD_RANK_LIFT per rank), clear of the terrain mesh
+const ROAD_LIFT := 0.14 ## m: a street's drawn surface stands this far over the ground (plus ROAD_RANK_LIFT per rank), clear of the terrain mesh
 const ROAD_RANK_LIFT := 0.006 ## m per road rank: the bigger road's surface wins at a junction
 const PAVEMENT_TOP := ROAD_LIFT + 0.03 + KERB_H ## m over the ground: the drawn pavement's flat top (TownBuilder)
 const LIFT_RAMP := 0.6 ## m: the car's ride rises from the ground to a street's drawn surface over this far inside its edge
@@ -523,6 +523,66 @@ func road_lift(ri: int) -> float:
 ## it drives on or off the tarmac.
 func lift_share(inside: float) -> float:
 	return smoothstep(0.0, LIFT_RAMP, inside)
+
+## A street on the ground stands ROAD_LIFT proud of it on a gravel shoulder SHOULDER wide (TownBuilder draws it, FreeCar
+## rides down it), so the tarmac's edge reads as an edge and not as paint on the grass.
+const SHOULDER := 0.9
+const SHOULDER_DROP := 0.04 ## m under the ground at the shoulder's foot, so the grass covers its end
+
+## Potholes: a repeating POT_N x POT_N tile of POT_CELL m cells, each with a rank (a hole where it is under
+## POT_SHARE x road_wear), a centre and a radius. The car (pothole()) and the road shader (town_road.gdshader, the
+## "potholes" texture) read the same bytes, so the hole the wheel drops into is the one drawn.
+const POT_CELL := 3.0
+const POT_N := 128
+const POT_SHARE := 0.12
+const POT_DEPTH := 0.05
+static var _pot_bytes := PackedByteArray()
+static var _pot_texture: ImageTexture
+
+static func pothole_bytes() -> PackedByteArray:
+	if _pot_bytes.is_empty():
+		var rng := RandomNumberGenerator.new()
+		rng.seed = 900
+		_pot_bytes.resize(POT_N * POT_N * 4)
+		for k in _pot_bytes.size():
+			_pot_bytes[k] = rng.randi_range(0, 255)
+	return _pot_bytes
+
+static func pothole_texture() -> ImageTexture:
+	if _pot_texture == null:
+		_pot_texture = ImageTexture.create_from_image(Image.create_from_data(POT_N, POT_N, false, Image.FORMAT_RGBA8, pothole_bytes()))
+	return _pot_texture
+
+## How pot-holed street ri is, 0..1: the back streets, lanes and service roads most, the wider local streets a little,
+## the main roads not at all (the same classes as TownBuilder._style 0 and 1).
+func road_wear(ri: int) -> float:
+	if ri >= road_surface.size() or ri >= road_kind.size() or ri >= road_oneway.size() or road_surface[ri] != 0:
+		return 0.0
+	var kind := road_kind[ri]
+	if kind.begins_with("motorway") or kind == "trunk" or kind in ["primary", "secondary", "tertiary"]:
+		return 0.0
+	if kind in ["unclassified", "residential"] and road_w[ri] >= 5.0 and road_oneway[ri] == 0:
+		return 0.4
+	return 1.0
+
+## Depth (m) of the pothole under a map point, 0 on sound tarmac and off the streets.
+func pothole(x: float, y: float) -> float:
+	var b := pothole_bytes()
+	var cx := floorf(x / POT_CELL)
+	var cy := floorf(y / POT_CELL)
+	var k := (posmod(int(cy), POT_N) * POT_N + posmod(int(cx), POT_N)) * 4
+	var rank := b[k] / 255.0
+	if rank >= POT_SHARE:
+		return 0.0
+	var c := Vector2(cx + 0.25 + b[k + 1] / 255.0 * 0.5, cy + 0.25 + b[k + 2] / 255.0 * 0.5) * POT_CELL
+	var r := 0.3 + 0.3 * b[k + 3] / 255.0
+	var shape := 1.0 - smoothstep(r * 0.55, r, Vector2(x, y).distance_to(c))
+	if shape <= 0.0:
+		return 0.0
+	var hit := road_at(x, y)
+	if hit.is_empty() or float(hit.deck) > 0.05 or rank >= POT_SHARE * road_wear(int(hit.road)):
+		return 0.0
+	return POT_DEPTH * shape
 
 ## Height over the ground of a pavement's top when (x, y) is on one, else 0 (the kerb is KERB_H above the street).
 func pave_top_at(x: float, y: float) -> float:

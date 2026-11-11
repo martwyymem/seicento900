@@ -405,6 +405,7 @@ const BRIDGE_CAP_DEPTH := 0.6 ## m, the cross-head on a pier
 func build_roads() -> void:
 	var group := _group("Streets")
 	var mat := _surface_material(ROAD_SHADER, "asphalt")
+	mat.set_shader_parameter("potholes", TownMap.pothole_texture())
 	SurfaceTextures.apply(mat)
 	night_materials.append(mat)
 	var kerb_mat := StandardMaterial3D.new()
@@ -520,6 +521,70 @@ func _street_meshes() -> Array:
 			# seen from above (north up) with travel to the east, left_i is top left and right_i bottom left:
 			# left_i, right_i, right_i+1, left_i+1 is the counter-clockwise order quad() wants
 			mb.quad(a, a + 1, a + 3, a + 2)
+		# the gravel shoulder: the tarmac stands road_lift proud of the ground and this runs down to it, where no
+		# pavement, junction or other street takes the edge
+		var kb: MeshBatch = kerb_b[c]
+		for side: float in [-1.0, 1.0]:
+			var edge: PackedVector3Array = left if side < 0.0 else right
+			var foot := PackedVector3Array()
+			foot.resize(n)
+			for i in n:
+				var across := right[i] - left[i]
+				var o := Vector2(across.x, across.z).normalized() * side
+				var q := Vector2(edge[i].x, edge[i].z) + o * TownMap.SHOULDER
+				foot[i] = Vector3(q.x, map.ground(q.x, q.y) - TownMap.SHOULDER_DROP, q.y)
+			for i in n - 1:
+				if not zs.is_empty() and (zs[i] > 0.05 or zs[i + 1] > 0.05):
+					continue
+				if jd[i] < 0.6 or jd[i + 1] < 0.6:
+					continue
+				var mid := (foot[i] + foot[i + 1] + edge[i] + edge[i + 1]) * 0.25
+				if map.kerb_at(mid.x, mid.z) > 0.0 or not map.road_at(mid.x, mid.z).is_empty():
+					continue
+				var tone := 0.9 + 0.2 * hash2(floorf(mid.x / 4.0), floorf(mid.z / 4.0), 7.0)
+				var gravel := Color(0.07 * tone, 0.058 * tone, 0.04 * tone)
+				var nrm3 := (edge[i + 1] - edge[i]).cross(foot[i] - edge[i]).normalized()
+				if nrm3.y < 0.0:
+					nrm3 = -nrm3
+				if side > 0.0:
+					kb.flat_quad(edge[i], foot[i], foot[i + 1], edge[i + 1], nrm3, gravel)
+				else:
+					kb.flat_quad(edge[i], edge[i + 1], foot[i + 1], foot[i], nrm3, gravel)
+		# a dead end is rounded off (the car's road_at already ends in this half circle) and its shoulder runs round
+		# it, wider at the tip where cars turn: not a tarmac strip cut square in the grass
+		for e in 2:
+			var ei := 0 if e == 0 else n - 1
+			if not zs.is_empty() and zs[ei] > 0.05:
+				continue
+			var dir_out := (pts[ei] - pts[1 if e == 0 else n - 2]).normalized()
+			var beyond := pts[ei] + dir_out * (half + 0.6)
+			if not map.road_at(beyond.x, beyond.y).is_empty() or map.kerb_at(beyond.x, beyond.y) > 0.0:
+				continue # it runs into another street or a pavement
+			var side_v := Vector2(-dir_out.y, dir_out.x)
+			var along := 1.0 if e == 1 else -1.0 # which way the arc length runs past the end
+			var cap_col := Color(0.0, surf, lanes, oneway)
+			var u2 := Vector2(half, style)
+			var centre := Vector3(pts[ei].x, map.ground(pts[ei].x, pts[ei].y) + lift, pts[ei].y)
+			var rim: Array[Vector3] = []
+			var apron: Array[Vector3] = []
+			var uvs: Array[Vector2] = []
+			var steps := 10
+			for k in steps + 1:
+				var ang := -PI * 0.5 + PI * k / steps
+				var o := dir_out * cos(ang) + side_v * sin(ang)
+				var q := pts[ei] + o * half
+				rim.append(Vector3(q.x, map.ground(q.x, q.y) + lift, q.y))
+				# side_v is left of dir_out on the map; the mesh's UV.x runs to the right of travel
+				uvs.append(Vector2(sin(ang) * half * -along, s[ei] + cos(ang) * half * along))
+				var q2 := pts[ei] + o * (half + TownMap.SHOULDER * (1.0 + 0.8 * cos(ang)))
+				apron.append(Vector3(q2.x, map.ground(q2.x, q2.y) - TownMap.SHOULDER_DROP, q2.y))
+			for k in steps:
+				mb.flat_tri(centre, rim[k], rim[k + 1], Vector3.UP, Vector2(0.0, s[ei]), uvs[k], uvs[k + 1], cap_col, u2)
+				var tone := 0.9 + 0.2 * hash2(floorf(rim[k].x / 4.0), floorf(rim[k].z / 4.0), 7.0)
+				var nrm3 := (rim[k + 1] - rim[k]).cross(apron[k] - rim[k]).normalized()
+				if nrm3.y < 0.0:
+					nrm3 = -nrm3
+				kb.flat_quad(rim[k], rim[k + 1], apron[k + 1], apron[k], nrm3, Color(0.07 * tone, 0.058 * tone, 0.04 * tone))
 		# raised stretches: a bridge deck with parapets, or an earth embankment down to the ground
 		if not zs.is_empty():
 			var db: MeshBatch = deck_b[c]
@@ -736,7 +801,9 @@ func _build_junction_patches(recs: Array, node_width: Dictionary, node_roads: Di
 		if int(node_roads[nid]) < 2 or not map.node_pos.has(nid):
 			continue
 		var p: Vector2 = map.node_pos[nid]
-		var r := float(node_width[nid]) * 0.5 + 0.6
+		# the widest street's own half width: the disc fills the outside of a bend and the mouth of a side street
+		# without standing proud of the carriageway's edge (0.6 m more made a wart on every bend and T-junction)
+		var r := float(node_width[nid]) * 0.5 + 0.05
 		var c := _chunk_of(p)
 		if not batches.has(c):
 			batches[c] = MeshBatch.new(true, true)
