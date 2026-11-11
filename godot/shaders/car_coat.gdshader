@@ -18,7 +18,7 @@ uniform float f0 = 0.07;        ///< reflectance face-on: 0.04 is bare clear coa
 uniform float skyline = 1.0;    ///< 0 hides the trees and houses
 uniform float exposure = 1.7;   ///< the real sky is far brighter than the screen's white, so the mirror is too
 uniform float use_vertex_color = 1.0;
-instance uniform float coat = 1.0;
+instance uniform float coat : instance_index(3) = 1.0;
 
 float hash(float n) {
 	return fract(sin(n * 127.1) * 43758.5453);

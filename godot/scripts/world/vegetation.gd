@@ -278,14 +278,14 @@ func _block(cache: Array, x: float, y: float) -> PackedFloat32Array:
 	var lush := vnoise(cx, cy, 40.0, 11.0)
 	var drift := vnoise(cx, cy, 18.0, 7.0)
 	var dens := 0.4 + 0.5 * smoothstep(0.3, 0.75, drift)
-	var tall := 0.42 + 0.42 * lush + 0.14 * hash2(cx, cy, 12.0)
+	var tall := 0.3 + 0.3 * lush + 0.1 * hash2(cx, cy, 12.0) # of blades up to 1 m: ankle to knee high
 	var verge := _near_road(i) if i >= 0 else 0.0
 	if verge > 0.0: # by a road: mown shorter and thinner towards the edge
 		dens = lerpf(dens, 0.32, verge)
-		tall = lerpf(tall, 0.3, verge)
+		tall = lerpf(tall, 0.2, verge)
 	if edge > 0.0:
 		dens = lerpf(dens, 1.0, edge)
-		tall = lerpf(tall, 0.88 + 0.32 * lush, edge)
+		tall = lerpf(tall, 0.68 + 0.24 * lush, edge)
 	# a lawn: a taller fringe left along a garden fence or round a tree
 	# and whether the whole square is clear of roads, pavements and buildings, so its patches skip those checks
 	# (TownMap hashes each road segment into the cells within its half width plus DRIVE_REACH, which covers the
@@ -297,7 +297,7 @@ func _block(cache: Array, x: float, y: float) -> PackedFloat32Array:
 			if map._seg_cells.has(map._cell_key(gx, gy)):
 				clear = 0.0
 	var open := 1.0 if map.buildings_near(Vector2(cx, cy), half + 0.1).is_empty() else 0.0
-	var b := PackedFloat32Array([dens, tall, lerpf(0.22, 0.75, edge), lerpf(0.22, 0.62, edge) + 0.1 * lush, vnoise(cx, cy, 70.0, 31.0),
+	var b := PackedFloat32Array([dens, tall, lerpf(0.22, 0.75, edge), lerpf(0.12, 0.5, edge) + 0.06 * lush, vnoise(cx, cy, 70.0, 31.0),
 		clear, open])
 	cache[slot] = b
 	return b
@@ -312,7 +312,7 @@ static func _block_cache(x0: float, y0: float, size: float) -> Array:
 ## [share kept, height scale] of grass at land pixel i: _block()'s, or right at a road's edge sparse stubble.
 func _grass_at(i: int, x: float, y: float, mown: bool, blk: PackedFloat32Array) -> Vector2:
 	if maxi(land[i], land[i + 2]) >= 40:
-		return Vector2(0.3, 0.18 + 0.1 * hash2(x, y, 16.0))
+		return Vector2(0.3, 0.12 + 0.08 * hash2(x, y, 16.0))
 	return Vector2(blk[2], blk[3]) if mown else Vector2(blk[0], blk[1])
 
 ## "pitch", "park" or "" at p, from the areas over cell `key`.
@@ -736,7 +736,7 @@ func _plant_flowers(cell: Node3D, x0: float, y0: float) -> void:
 		var pick := int(hash2(pid_x, pid_y, 19.0) * FLOWER_COLOURS.size())
 		if hash2(p[0], p[1], 20.0) < 0.22: # a few of another colour
 			pick = int(hash2(p[0], p[1], 21.0) * FLOWER_COLOURS.size())
-		var s := 1.2 + hash2(p[0], p[1], 22.0) * 0.9 # over the meadow grass
+		var s := 0.7 + hash2(p[0], p[1], 22.0) * 0.5 # knee high at most (the mesh is 0.45 m): just over the meadow grass
 		xfs.append(_place(p[0], p[1], hash2(p[0], p[1], 23.0) * TAU, Vector3(s, s * (0.9 + hash2(p[0], p[1], 24.0) * 0.5), s), -0.02))
 		cols.append(FLOWER_COLOURS[pick % FLOWER_COLOURS.size()])
 	_commit(cell, "Flower", xfs, cols, FLOWER_RANGE)

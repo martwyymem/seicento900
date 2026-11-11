@@ -6,7 +6,7 @@ shader_type spatial;
 
 uniform sampler2D atlas : source_color, filter_linear_mipmap_anisotropic, repeat_disable;
 uniform float rows = 8.0;
-instance uniform float plate_id = 0.0;
+instance uniform float plate_id : instance_index(0) = 0.0;
 
 varying vec3 lp;
 

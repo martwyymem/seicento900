@@ -7,7 +7,7 @@ render_mode blend_mix, depth_draw_opaque, cull_back, specular_schlick_ggx;
 
 uniform vec3 tint : source_color = vec3(0.62, 0.012, 0.02);
 uniform float cell = 190.0; // prisms per metre
-instance uniform float glow = 0.0;
+instance uniform float glow : instance_index(1) = 0.0;
 
 varying vec3 lp;
 
