@@ -251,6 +251,9 @@ func _drive(live: LiveEvents, ev: Dictionary, p0: Vector2, h0: float) -> void:
 							continue
 						if (rv.pose(float(ro.s), float(ro.lat))[0] as Vector2).distance_to(q) < 2.2:
 							overlap += 1
+		var fine := OS.get_environment("TRACE_FROM") != "" and t >= float(OS.get_environment("TRACE_FROM")) and t <= float(OS.get_environment("TRACE_TO"))
+		if fine and int(t * 4.0) != int((t - DT) * 4.0):
+			print("      t %.2f p %s s %.0f v %.1f tgt %.1f thr %.0f brk %.2f dev %.1f off %s" % [t, cp, s, speed, target, thr, brk, follow[i].distance_to(cp), off])
 		if OS.get_environment("TRACE") != "" and int(t * 0.2) != int((t - DT) * 0.2):
 			print("      t %.0f p %s s %.0f/%.0f v %.1f dev %.1f state %s cp %d off %s surf %d" % [t, cp, s, follow.size() * 2.0, speed,
 				follow[i].distance_to(cp), live.run.get("state", "-"), int(live.run.get("cp", -1)), off, car.surface])

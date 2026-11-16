@@ -265,8 +265,8 @@ func _place_start() -> void:
 
 func _load_record() -> void:
 	var cond := "wet" if race.weather.wet >= LapRecords.WET_AT else "dry"
-	var rec := LapRecords.record(race.s.track, cond)
-	var ghost := LapRecords.load_ghost(race.s.track, cond)
+	var rec := LapRecords.record(race.s.track, cond, race.s.car_class)
+	var ghost := LapRecords.load_ghost(race.s.track, cond, race.s.car_class)
 	record_sectors = []
 	record_time = rec.get("t", null)
 	if record_time == null or ghost.is_empty():

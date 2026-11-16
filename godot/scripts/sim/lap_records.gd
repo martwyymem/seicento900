@@ -3,6 +3,9 @@
 ## to the next, with no autopilot, no pit stop and the car on the tarmac throughout, as qualifying requires) at
 ## DT intervals. Such a lap faster than the record replaces it and its ghost. It also gives the live gap to the record at the player's point on the lap.
 ## Kept in user://lap_records.json, with each ghost in user://ghosts/<track>_<dry|wet>.ghost.
+## Records and ghosts are per car (CarCatalog key, the race's `car_class`): the stock Seicento's keep the original
+## slots ("dry", "wet", and no suffix on the ghost file, so saves from before several cars still load), any other
+## car's are "dry@<car>" and <track>_<cond>_<car>.ghost. A record carries its `car` key (missing = "stock").
 class_name LapRecords
 extends RefCounted
 
@@ -23,6 +26,7 @@ static var _memory_ghosts := {} ## track -> {cond: samples} when use_disk is off
 
 var race: Race
 var track_key := ""
+var car_key := "stock" ## the car being driven: whose record and ghost are chased and set
 var conditions := "dry" ## of the ghost being chased (taken from the track at the start of each lap)
 var ghost := PackedFloat32Array() ## samples of the record lap for those conditions (empty = none yet)
 var ghost_time = null ## its lap time, or null
@@ -38,6 +42,7 @@ var _lap_seen := 0
 func _init(race_: Race) -> void:
 	race = race_
 	track_key = race.s.track
+	car_key = car_of(race.s.car_class)
 	var p := race.player
 	_laps_seen = p.lap_times.size()
 	_lap_seen = p.lap
@@ -62,17 +67,32 @@ static func _save_store() -> void:
 	if f:
 		f.store_string(JSON.stringify(_store))
 
-## {t, date, tyre, assists, gearbox} of the record for these conditions, or {} if there is none.
-static func record(track: String, cond: String) -> Dictionary:
-	return load_store().tracks.get(track, {}).get(cond, {})
+## A CarCatalog key, or "stock" for an empty or unknown one.
+static func car_of(car: String) -> String:
+	return car if car != "" and CarCatalog.is_key(car) else "stock"
+
+## The store slot of a condition for a car: the stock car keeps the original "dry"/"wet".
+static func slot(cond: String, car := "stock") -> String:
+	car = car_of(car)
+	return cond if car == "stock" else "%s@%s" % [cond, car]
+
+## {t, date, tyre, assists, gearbox, car} of this car's record for these conditions, or {} if there is none.
+static func record(track: String, cond: String, car := "stock") -> Dictionary:
+	var r: Dictionary = load_store().tracks.get(track, {}).get(slot(cond, car), {})
+	if r.is_empty() or r.has("car"):
+		return r
+	var out := r.duplicate()
+	out["car"] = "stock" # saved before records were per car
+	return out
 
 ## Drops a circuit's records and ghosts.
 static func forget(track: String) -> void:
 	load_store().tracks.erase(track)
 	_save_store()
-	for cond in CONDITIONS:
-		if use_disk and FileAccess.file_exists(_ghost_path(track, cond)):
-			DirAccess.remove_absolute(_ghost_path(track, cond))
+	for car in CarCatalog.KEYS:
+		for cond in CONDITIONS:
+			if use_disk and FileAccess.file_exists(_ghost_path(track, cond, car)):
+				DirAccess.remove_absolute(_ghost_path(track, cond, car))
 	_memory_ghosts.erase(track)
 
 ## Whether the ghost is drawn: one preference for driving alone (qualifying, or no opponents) and one for racing.
@@ -86,27 +106,27 @@ static func set_ghost_shown(solo: bool, on: bool) -> void:
 	st.ghost["solo" if solo else "race"] = on
 	_save_store()
 
-static func _ghost_path(track: String, cond: String) -> String:
-	return SaveData.path("%s/%s_%s.ghost" % [GHOST_DIR, track, cond])
+static func _ghost_path(track: String, cond: String, car := "stock") -> String:
+	return SaveData.path("%s/%s_%s.ghost" % [GHOST_DIR, track, slot(cond, car).replace("@", "_")])
 
-static func load_ghost(track: String, cond: String) -> PackedFloat32Array:
+static func load_ghost(track: String, cond: String, car := "stock") -> PackedFloat32Array:
 	if not use_disk:
-		return _memory_ghosts.get(track, {}).get(cond, PackedFloat32Array())
-	var path := _ghost_path(track, cond)
+		return _memory_ghosts.get(track, {}).get(slot(cond, car), PackedFloat32Array())
+	var path := _ghost_path(track, cond, car)
 	if not FileAccess.file_exists(path):
 		return PackedFloat32Array()
 	var f := FileAccess.open(path, FileAccess.READ)
 	var v = f.get_var() if f else null
 	return v if v is PackedFloat32Array and v.size() % STRIDE == 0 else PackedFloat32Array()
 
-static func _save_ghost(track: String, cond: String, samples: PackedFloat32Array) -> void:
+static func _save_ghost(track: String, cond: String, samples: PackedFloat32Array, car := "stock") -> void:
 	if not use_disk:
 		if not _memory_ghosts.has(track):
 			_memory_ghosts[track] = {}
-		_memory_ghosts[track][cond] = samples
+		_memory_ghosts[track][slot(cond, car)] = samples
 		return
 	DirAccess.make_dir_recursive_absolute(SaveData.path(GHOST_DIR))
-	var f := FileAccess.open(_ghost_path(track, cond), FileAccess.WRITE)
+	var f := FileAccess.open(_ghost_path(track, cond, car), FileAccess.WRITE)
 	if f:
 		f.store_var(samples)
 
@@ -116,8 +136,8 @@ func _track_conditions() -> String:
 
 func _use_ghost(cond: String) -> void:
 	conditions = cond
-	ghost = load_ghost(track_key, cond)
-	var r := record(track_key, cond)
+	ghost = load_ghost(track_key, cond, car_key)
+	var r := record(track_key, cond, car_key)
 	ghost_time = r.t if r.has("t") and not ghost.is_empty() else null
 
 ## Call after every Race.step.
@@ -168,16 +188,16 @@ func _lap_done(p: RaceCar) -> void:
 	if n * DT < lt - 2.0 * DT:
 		return # not recorded right through
 	var cond := "wet" if _rec_wet / n >= WET_AT else "dry"
-	var old := record(track_key, cond)
+	var old := record(track_key, cond, car_key)
 	if old.has("t") and lt >= float(old.t):
 		return
 	var st := load_store()
 	if not st.tracks.has(track_key):
 		st.tracks[track_key] = {}
-	st.tracks[track_key][cond] = {"t": lt, "date": Time.get_date_string_from_system(), "tyre": p.tyre.c,
+	st.tracks[track_key][slot(cond, car_key)] = {"car": car_key, "t": lt, "date": Time.get_date_string_from_system(), "tyre": p.tyre.c,
 		"assists": race.s.assists, "gearbox": race.s.gearbox}
 	_save_store()
-	_save_ghost(track_key, cond, _rec)
+	_save_ghost(track_key, cond, _rec, car_key)
 	new_records.append({"t": lt, "conditions": cond})
 	var was := " (was %s)" % Race.fmt_time(float(old.t)) if old.has("t") else ""
 	race.log_event("New %s lap record at %s: %s%s" % [cond, race.track.name, Race.fmt_time(lt), was], "purple")
