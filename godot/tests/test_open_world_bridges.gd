@@ -55,6 +55,15 @@ func _piers(map: TownMap, errors: Array[String]) -> void:
 				continue
 			if not map.posts_near(p, 12.0).is_empty() or not map.walls_near(p, 12.0).is_empty() or not map.buildings_near(p, 12.0).is_empty():
 				continue
+			var probe := FreeCar.new(map)
+			probe.z = g
+			var banked := false
+			for k in 8:
+				var q := start + dir * k
+				if probe.support(q.x, q.y) - map.ground(q.x, q.y) > 0.5:
+					banked = true # the way to the pier is up an approach ramp's embankment (solid earth), not on the ground
+			if banked:
+				continue
 			var fc := _drive(map, start, ang, g, 2.2, p)
 			tested += 1
 			if closest < TownMap.PIER_R + FreeCar.HALF_W * 0.8:

@@ -22,17 +22,23 @@ const STOCK_VISUAL := {
 }
 const GOLF4_VISUAL := {
 	"model": "res://models/golf4.glb", "wheel_radius": 0.3172, "wheelbase": 2.511, "half_track_front": 0.7565, "half_track_rear": 0.747,
-	"roof_number": Vector3(0.0, 1.444, 0.55), "brake_light": Vector3(0.0, 0.6, 2.25), "tailpipe": Vector3(0.35, 0.24, 2.10),
+	"roof_number": Vector3(0.0, 1.444, 0.55), "brake_light": Vector3(0.0, 0.6, 2.25), "tailpipe": Vector3(0.35, 0.24, 2.08),
 	"fx_axle": Vector3(0.0, 0.03, 1.2555), "contact": Vector2(2.1, 4.5),
-	# the nose is 2.11 m ahead of the origin and the scuttle at 0.89 m (build_golf4.py): the Seicento's 1.78 / 0.62 put the
+	# the plates' bottom edges (front bumper, tailgate recess) and a top limit for car_plate.gdshader; 512 x 105 mm as the Seicento's
+	"plate_y": Vector3(0.398, 0.644, 0.8),
+	# the big tail lamps (car_taillamp.gdshader and the lamp body behind the lens): a deeper, more opaque red lens by day
+	# with less sky in its sheen, so they read red rather than smoky (a stronger glow burnt out to yellow under ACES)
+	"tail_lamp": {"tint": Color(0.70, 0.01, 0.015), "alpha_off": 0.86, "alpha_lit": 0.93, "glow_gain": 0.6, "sheen": 0.3,
+		"reflect": 0.3, "albedo": Color("#5a0404"), "energy": 0.9},
+	# the nose is 2.12 m ahead of the origin and the cowl at 0.90 m (build_golf4.py): the Seicento's 1.78 / 0.62 put the
 	# cameras inside the bumper and the dashboard (2026-11-10 QA)
 	"bumper_cam": Vector2(2.15, 0.45), "bonnet_cam": Vector2(0.89, 1.14),
-	"chase_back": 0.46, ## the chase cameras stand this much further back: the tail is 2.04 m behind the origin, the Seicento's 1.58
+	"chase_back": 0.46, ## the chase cameras stand this much further back: the tail is 2.03 m behind the origin, the Seicento's 1.58
 	# the front door, the top of the windscreen, the bonnet and the sill under the front door
 	"decal_aims": {
 		"DoorDecalL": {"from": Vector3(-1.5, 0.74, -0.39), "dir": Vector3(1, 0, 0), "up": Vector3.UP},
 		"DoorDecalR": {"from": Vector3(1.5, 0.74, -0.39), "dir": Vector3(-1, 0, 0), "up": Vector3.UP},
-		"Sunstrip": {"from": Vector3(0.0, 1.85, -0.62), "dir": Vector3(0.0, -0.88, 0.47), "up": Vector3(0.0, 0.47, 0.88)},
+		"Sunstrip": {"from": Vector3(0.0, 1.85, -0.66), "dir": Vector3(0.0, -0.88, 0.47), "up": Vector3(0.0, 0.47, 0.88)},
 		"HoodDecal": {"from": Vector3(0.0, 1.4, -1.35), "dir": Vector3(0, -1, 0), "up": Vector3.FORWARD},
 		"SillDecalL": {"from": Vector3(-1.5, 0.40, 0.0), "dir": Vector3(1, 0, 0), "up": Vector3.UP},
 		"SillDecalR": {"from": Vector3(1.5, 0.40, 0.0), "dir": Vector3(-1, 0, 0), "up": Vector3.UP},

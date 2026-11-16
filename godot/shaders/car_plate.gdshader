@@ -7,6 +7,11 @@ shader_type spatial;
 uniform sampler2D atlas : source_color, filter_linear_mipmap_anisotropic, repeat_disable;
 uniform float rows = 8.0;
 instance uniform float plate_id : instance_index(0) = 0.0;
+// where each plate's bottom edge sits and the highest plate point (the Seicento's by default; other cars set theirs
+// from their CarCatalog visual's "plate_y": front bottom, rear bottom, top limit)
+uniform float y0_front = 0.3086;
+uniform float y0_rear = 0.3666;
+uniform float y_max = 0.5;
 
 varying vec3 lp;
 
@@ -15,12 +20,12 @@ void vertex() {
 }
 
 void fragment() {
-	bool is_plate = abs(lp.x) < 0.262 && abs(lp.z) > 1.4 && lp.y < 0.5;
+	bool is_plate = abs(lp.x) < 0.262 && abs(lp.z) > 1.4 && lp.y < y_max;
 	vec3 col = vec3(0.92, 0.91, 0.87);
 	float rough = 0.5;
 	if (is_plate) {
 		bool front = lp.z < 0.0;
-		float y0 = front ? 0.3086 : 0.3666;
+		float y0 = front ? y0_front : y0_rear;
 		float u = lp.x / 0.2559 * 0.5;
 		u = front ? 0.5 - u : 0.5 + u; // each end is read from outside
 		float v = 1.0 - (lp.y - y0) / 0.1047;

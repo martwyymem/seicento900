@@ -141,8 +141,9 @@ static func event(index: int) -> Dictionary:
 	ev.heading = (path[mini(3, path.size() - 1)] - path[0]).angle()
 	return ev
 
-## The rally crews' stage times: [[t stage 0, t stage 1, ...] per rival].
-static func rally_times(ev: Dictionary, car_key: String, seed_value: int) -> Array:
+## The rally crews' stage times: [[t stage 0, t stage 1, ...] per rival]. `grips`: each stage's surface grip
+## (LiveEvents.grip_of), so a gravel stage's reference is as slow as the gravel makes the player.
+static func rally_times(ev: Dictionary, car_key: String, seed_value: int, grips := []) -> Array:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value
 	var band: Vector2 = RALLY_PACE.get(String(ev.get("difficulty", "medium")), RALLY_PACE.medium)
@@ -151,8 +152,9 @@ static func rally_times(ev: Dictionary, car_key: String, seed_value: int) -> Arr
 	for k in n:
 		var f := lerpf(band.x, band.y, float(k) / maxf(n - 1, 1))
 		var times := []
-		for st in ev.stages:
-			times.append(LiveEvents.pace_time(st.path, car_key) * f * rng.randf_range(0.985, 1.015))
+		for j in (ev.stages as Array).size():
+			var g := float(grips[j]) if j < grips.size() else 1.0
+			times.append(LiveEvents.pace_time(ev.stages[j].path, car_key, 0.0, g) * f * rng.randf_range(0.985, 1.015))
 		out.append(times)
 	return out
 

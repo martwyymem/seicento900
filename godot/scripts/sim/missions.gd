@@ -42,7 +42,7 @@ const MISSIONS := [
 		"id": "drift_babudy", "kind": "drift", "after": 2, "act": 1,
 		"title": "Drift w Babudach",
 		"track": "babudy_gora", "laps": 1, "opponents": 0, "difficulty": "easy", "finish_distance": 2600.0,
-		"weather": "dry", "start_hour": 17.5, "tiers": [600, 2500, 6000], "at": 0.0,
+		"weather": "dry", "start_hour": 17.5, "tiers": [300, 1200, 3000], "at": 0.0,
 		"trophy": "Babudy Sideways Shield", "reward_car": "",
 		"desc": "The lads from Góra want to see it sideways. 2.6 km of the lanes from Babudy towards Góra, gravel and tarmac, judged on angle and speed. Link the slides and the score multiplies; touch a fence or leave the road and the combo is gone.",
 		"tip": "Flick the handbrake (Space) as you turn in, catch it on the throttle, and let the next bend take the slide over before the combo banks.",

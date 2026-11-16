@@ -1,5 +1,5 @@
 """Generate the racing decal atlas for the Seicento cars (godot/models/car_decals.png, read by race_car_visual.gd).
-Door number plates (1-16), windscreen sunstrips, bonnet rally plates and sponsor stacks.
+Door number plates (1-16; numbers 17-99 are a blank plate plus digit glyphs from car_door_plates.png), windscreen sunstrips, bonnet rally plates and sponsor stacks.
 Every sponsor is made up: no real brands. Run from the repo root: python3 tools/build_car_decals.py
 """
 import os
@@ -194,5 +194,55 @@ def make_atlas(out_path):
     atlas.save(out_path, "PNG")
     print(f"Saved decal atlas to {out_path} ({W}x{H})")
 
+
+def make_door_plates(out_path):
+    """Numbers above 16 have no cell in the atlas: godot/models/car_door_plates.png holds the four blank plates
+    (same frame, header, flag pip and sponsor as the atlas cells k % 4, number left out) at y 0..256 and the digits
+    0-9 (128x130 cells, same font and vertical rule as the atlas numbers) at y 256..512, two rows of five."""
+    sheet = Image.new("RGBA", (1024, 512), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(sheet)
+    f_hdr = ImageFont.truetype("godot/fonts/Oswald.ttf", 24)
+    f_sub = ImageFont.truetype("godot/fonts/Oswald.ttf", 18)
+    f_num = ImageFont.truetype("godot/fonts/Archivo.ttf", 116)
+    headers = [
+        ("SEICENTO 900 CUP", (190, 20, 30), (255, 255, 255)),
+        ("OLIO VELOCE", (25, 25, 30), (255, 210, 0)),
+        ("GOMME TORINO", (18, 55, 130), (255, 255, 255)),
+        ("TROFEO SEICENTO", (20, 100, 50), (255, 255, 255)),
+    ]
+    for k in range(4):
+        x0 = k * 256 + 12
+        y0 = 12
+        x1 = x0 + 232
+        y1 = y0 + 232
+        hdr_text, hdr_bg, hdr_fg = headers[k]
+        draw.rounded_rectangle([x0, y0, x1, y1], radius=16, fill=(248, 248, 246, 255), outline=(20, 22, 25, 255), width=5)
+        draw.rounded_rectangle([x0 + 4, y0 + 4, x1 - 4, y1 - 4], radius=12, outline=(180, 185, 190, 180), width=2)
+        draw.rounded_rectangle([x0 + 4, y0 + 4, x1 - 4, y0 + 52], radius=10, fill=hdr_bg)
+        bbox = draw.textbbox((0, 0), hdr_text, font=f_hdr)
+        draw.text((x0 + (232 - (bbox[2] - bbox[0])) // 2, y0 + 14), hdr_text, font=f_hdr, fill=hdr_fg)
+        draw.line([x0 + 8, y1 - 32, x1 - 8, y1 - 32], fill=(200, 204, 210, 255), width=2)
+        if k % 2 == 0:
+            draw.rectangle([x0 + 16, y1 - 24, x0 + 32, y1 - 10], fill=(0, 146, 70, 255))
+            draw.rectangle([x0 + 32, y1 - 24, x0 + 48, y1 - 10], fill=(255, 255, 255, 255))
+            draw.rectangle([x0 + 48, y1 - 24, x0 + 64, y1 - 10], fill=(206, 43, 55, 255))
+        else:
+            draw.rectangle([x0 + 16, y1 - 24, x0 + 64, y1 - 17], fill=(255, 255, 255, 255))
+            draw.rectangle([x0 + 16, y1 - 17, x0 + 64, y1 - 10], fill=(220, 30, 45, 255))
+        spon = ["LAMPO", "VELOCE", "TORINO", "PISTA"][k]
+        sbox = draw.textbbox((0, 0), spon, font=f_sub)
+        draw.text((x1 - 16 - (sbox[2] - sbox[0]), y1 - 26), spon, font=f_sub, fill=(60, 65, 70, 255))
+    for d in range(10):
+        s = str(d)
+        nbox = draw.textbbox((0, 0), s, font=f_num)
+        nh = nbox[3] - nbox[1]
+        cx = (d % 5) * 128
+        cy = 256 + (d // 5) * 128
+        adv = draw.textlength(s, font=f_num)
+        draw.text((cx + (128 - adv) / 2, cy + (130 - nh) // 2), s, font=f_num, fill=(18, 20, 24, 255))
+    sheet.save(out_path, "PNG")
+    print(f"Saved door plate sheet to {out_path}")
+
 if __name__ == "__main__":
     make_atlas("godot/models/car_decals.png")
+    make_door_plates("godot/models/car_door_plates.png")

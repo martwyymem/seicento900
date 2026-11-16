@@ -9,6 +9,7 @@ const G := 9.81
 const HALF_L := 1.68 ## half the Seicento's length (3.34 m) and width (1.51 m)
 const HALF_W := 0.76
 const WALL_STEP := 0.9 ## m: a deck this much above the car is a wall (the side of an embankment), not a ramp
+const LOW_BRIDGE := 2.35 ## m: a bridge deck lower than this over the drawn ground leaves no room for a car under its slab
 const UNDER_DECK := 3.6 ## m: a deck this far above the car is a bridge it passes under
 const TRAIN_TOP := 3.6 ## m: a car this far over the rails clears the train's roof
 const SLOPE_BREAK := 0.3 ## m: the two sides of the car's slope sample differ this much: one is off a ledge
@@ -131,6 +132,8 @@ func support(x: float, y: float, lifted := true) -> float:
 	var lowest := map.road_at(x, y)
 	if lowest.is_empty():
 		g = map.terrain(x, y) + (map.pave_top_at(x, y) if lifted else map.kerb_at(x, y))
+	if not lowest.is_empty() and float(lowest.deck) <= 0.05:
+		g += float(lowest.get("level", 0.0)) # a track along a hillside is levelled across (TownMap.level_extra)
 	var g_bare := g # what a raised road's deck stands on
 	if lifted and not lowest.is_empty() and float(lowest.deck) <= 0.05:
 		# a street on the ground is drawn road_lift over it (the tyres rest on it, not in it); a raised road's deck
@@ -141,7 +144,7 @@ func support(x: float, y: float, lifted := true) -> float:
 		var beside := map.road_at(x, y, -INF, TownMap.SHOULDER)
 		if not beside.is_empty() and float(beside.deck) <= 0.05:
 			var over := absf(float(beside.dist)) - float(beside.half)
-			g += map.road_lift(int(beside.road)) * (1.0 - smoothstep(0.0, TownMap.SHOULDER, over))
+			g += (map.road_lift(int(beside.road)) + float(beside.get("level", 0.0))) * (1.0 - smoothstep(0.0, TownMap.SHOULDER, over))
 	# a railway embankment is solid earth: the car rides up its 1:1.5 slopes like a road embankment's, and a cut's
 	# vertical face (or a steep step onto one) stops it (_vertical). Not in an underpass's cut, where the street runs.
 	var bank := map.rail_bank(x, y)
@@ -154,6 +157,12 @@ func support(x: float, y: float, lifted := true) -> float:
 	if not lowest.is_empty() and float(lowest.deck) > 0.05 and map.road_bridge[int(lowest.road)] != 1:
 		best_d = INF
 	var decks := map.decks_at(x, y, TownMap.DRIVE_REACH)
+	# under the end span of a low bridge (less than LOW_BRIDGE over the ground: Most Bronisław's 2.2 m) there is no room
+	# for a car: that is the abutment, the ground there is no surface and the deck's side is a wall
+	var low_deck := -INF
+	for d in decks:
+		if d[5] and d[7] and float(d[2]) <= 0.0 and map.ground(x, y) + float(d[1]) - map.terrain(x, y) < LOW_BRIDGE:
+			low_deck = maxf(low_deck, g_bare + float(d[1]) + (map.road_lift(int(d[0])) if lifted else 0.0))
 	# on a raised road's own carriageway another road's side slope is no surface (a junction of two embankments)
 	var on_solid := false
 	for d in decks:
@@ -171,14 +180,26 @@ func support(x: float, y: float, lifted := true) -> float:
 		else:
 			# beyond a raised road's edge the earth embankment falls away, it is no plane at deck height
 			deck = maxf(0.0, deck - over / TownMap.EMBANKMENT)
-		var h: float = g_bare + deck + (map.road_lift(int(d[0])) * (1.0 - smoothstep(0.0, TownMap.LIFT_RAMP, float(d[2]))) if lifted else 0.0)
+		# a bridge's deck stands on the ground's height, not on the pond or river bed sunk under it (out to its parapet)
+		var base := maxf(map.ground(x, y), g_bare) if d[5] else g_bare
+		var h: float = base + deck + (map.road_lift(int(d[0])) * (1.0 - smoothstep(0.0, TownMap.LIFT_RAMP, float(d[2]))) if lifted else 0.0)
 		if h - z > UNDER_DECK:
 			continue # a bridge overhead
 		var dd := absf(h - z)
 		if dd < best_d:
 			best_d = dd
 			best = h
-	return best
+	# beside a raised road (no bridge) its embankment is solid earth sloping 1:EMBANKMENT to the ground, as drawn: the
+	# ground there is the slope, so a car that runs off a ramp's side drives back up it instead of meeting a wall
+	if lowest.is_empty(): # (not on another street's carriageway, which keeps its own level)
+		for d in decks:
+			if not d[5] and not d[6] and float(d[2]) >= 0.0 and float(d[1]) > 0.05: # (sideways: no cone past its end)
+				var slope := maxf(0.0, float(d[1]) - float(d[2]) / TownMap.EMBANKMENT)
+				if slope > 0.0:
+					var hs := g_bare + slope + (map.road_lift(int(d[0])) * (1.0 - smoothstep(0.0, TownMap.LIFT_RAMP, float(d[2]))) if lifted else 0.0)
+					if hs > best and hs - z < UNDER_DECK:
+						best = hs
+	return maxf(best, low_deck)
 
 func _surface_at(x: float, y: float) -> int:
 	if airborne:
@@ -479,21 +500,15 @@ func _collide_at(prev: Vector2, mass: float) -> bool:
 	var free := _free_ends(segs)
 	# buildings: each face near the car, one-sided (its outside), its ends joined to the next face
 	var faces: Array = []
+	# (the walls as drawn: TownMap.building_faces, the measured roof outline's walls or a landmark model's footprint)
 	for bi in map.buildings_near(c, HALF_L + 0.6):
-		var ring := map.bld_rings[bi]
-		var m := ring.size()
-		if m < 3:
-			continue
-		var area := 0.0
-		for k in m:
-			area += ring[k].cross(ring[(k + 1) % m])
-		for k in m:
-			var a := ring[k]
-			var b := ring[(k + 1) % m]
+		var bf := map.building_faces(bi)
+		for k in range(0, bf.size(), 6):
+			var a := Vector2(bf[k], bf[k + 1])
+			var b := Vector2(bf[k + 2], bf[k + 3])
 			if Geometry2D.get_closest_point_to_segment(c, a, b).distance_to(c) > HALF_L + 0.3:
 				continue
-			var t := (b - a).normalized()
-			faces.append([a, b, Vector2(t.y, -t.x) if area > 0.0 else Vector2(-t.y, t.x)])
+			faces.append([a, b, Vector2(bf[k + 4], bf[k + 5])])
 	# two passes settle a box wedged into a corner (each contact moves it, so the next is measured afresh). Contacts
 	# with one face (the panels of a fence, a facade's runs, a wall and the building behind it) merge into one, so a
 	# box across a joint is not knocked twice off centre and spun.

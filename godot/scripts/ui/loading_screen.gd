@@ -171,7 +171,7 @@ func open(segments: Array, caption: String, value: String, info := {}) -> void:
 	_value.text = value
 	var hour := float(info.get("hour", -1.0))
 	var weather := String(info.get("weather", ""))
-	var path := hero_path(String(info.get("track", "")), hour)
+	var path := hero_path(String(info.get("track", "")), hour, String(info.get("car", "stock")))
 	_photo.texture = load(path) as Texture2D if path != "" else null
 	_photo.visible = _photo.texture != null
 	for child in _facts.get_children():
@@ -209,9 +209,19 @@ func _process(delta: float) -> void:
 	_photo.scale = Vector2(k, k)
 
 ## The path of a circuit's still (its night one where it has one and the clock says night), "" when there is none.
-static func hero_path(key: String, hour := -1.0) -> String:
+## The stock stills show the stock Seicento's field, so another car (CarCatalog key) takes its own circuit still
+## (hero_<key>_<car>.jpg) where one was rendered, else one of its open-world cover stills (the same one for a circuit
+## every time), and the stock circuit still only when the car has no stills at all.
+static func hero_path(key: String, hour := -1.0, car := "stock") -> String:
 	if key == "":
 		return ""
+	if car != "stock" and CarCatalog.is_key(car):
+		var own := "%shero_%s_%s.jpg" % [HERO_DIR, key, car]
+		if ResourceLoader.exists(own):
+			return own
+		var set := OpenWorldCover.shots_for(car)
+		if set != OpenWorldCover.SHOTS.stock and (ResourceLoader.exists("%shero_%s.jpg" % [HERO_DIR, key])):
+			return OpenWorldCover.DIR + String(set[absi(hash(key)) % set.size()][0])
 	if hour >= 0.0 and (hour >= NIGHT_FROM or hour < NIGHT_TO):
 		var night := "%shero_%s_night.jpg" % [HERO_DIR, key]
 		if ResourceLoader.exists(night):

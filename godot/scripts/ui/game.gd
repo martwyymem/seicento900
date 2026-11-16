@@ -4355,7 +4355,7 @@ func _open_loading_screen(settings: RaceSettings, qualifying := false) -> void:
 		facts = [["RUN", "Rolling start" if settings.rolling_start else "Standing start"]]
 	loading_screen.open(segments, caption, "%.2f km" % length_km, {
 		"track": settings.track, "hour": settings.start_hour, "weather": settings.weather, "mode": settings.mode,
-		"facts": facts})
+		"facts": facts, "car": String(settings.car_class)})
 	await _loading_progress(0.15)
 
 func _loading_progress(fraction: float) -> void:

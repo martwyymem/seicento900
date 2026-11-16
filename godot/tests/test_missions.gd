@@ -26,6 +26,7 @@ func run() -> Array:
 	_field_race(errors, "sprint", "s1_sprint", 3, {})
 	_drift_driver(errors)
 	_beacons(errors)
+	_map_starts(errors)
 	completed = true
 	return errors
 
@@ -385,3 +386,49 @@ func _beacons(errors: Array[String]) -> void:
 			var q := Missions.place(Missions.BASE + k2, map)
 			if q.size() == 3 and Vector2(q[0], q[1]).distance_to(p) < 14.0 and Missions.MISSIONS[k2].track != Missions.MISSIONS[k].track:
 				errors.append("%s: on top of %s" % [tag, Missions.MISSIONS[k2].id])
+
+## Each mission as raced on the map (MapMissions + LiveEvents): the player's grid spot, every rival's and every
+## checkpoint stand on the map's roads (the roads were rebaked: this catches a start left in the verge); the field
+## takes the mission's difficulty; a gravel rally stage slows the crews' reference as it slows the player.
+func _map_starts(errors: Array[String]) -> void:
+	var map := TownMap.load_map(OpenWorld.MAP_KEY)
+	if map == null:
+		errors.append("map did not load")
+		return
+	var live := LiveEvents.new(map, 7)
+	for k in Missions.MISSIONS.size():
+		var idx := Missions.BASE + k
+		var ev := MapMissions.event(idx)
+		if ev.is_empty():
+			errors.append("mission %s has no map event" % Missions.MISSIONS[k].id)
+			continue
+		live.begin(ev, "stock")
+		var g := live.grid_pose(ev)
+		if map.road_at(g[0].x, g[0].y, -INF, 0.2).is_empty():
+			errors.append("%s: the player's grid spot is off the road" % ev.id)
+		var rv := live.rivals()
+		if rv:
+			if String(ev.difficulty) != String(Missions.as_stage(idx).difficulty):
+				errors.append("%s: the field does not take the mission's difficulty" % ev.id)
+			for j in rv.rivals.size():
+				var ps: Array = rv.pose(float(rv.rivals[j].s), float(rv.rivals[j].lat))
+				if map.road_at(ps[0].x, ps[0].y, -INF, 0.5).is_empty():
+					errors.append("%s: rival %d's grid spot is off the road" % [ev.id, j])
+				if (ps[0] as Vector2).distance_to(g[0]) < 2.0:
+					errors.append("%s: rival %d starts on top of the player" % [ev.id, j])
+		var off := 0
+		var all_cps: Array = [ev.cps]
+		if ev.kind == "rally":
+			all_cps = ev.stages.map(func(st): return st.cps)
+		for cps in all_cps:
+			for c in cps:
+				if map.nearest_road(c, 6.0).is_empty():
+					off += 1
+		if off > 0:
+			errors.append("%s: %d checkpoints more than 6 m off the roads" % [ev.id, off])
+		if ev.kind == "rally":
+			var dry := MapMissions.rally_times(ev, "stock", 3)
+			var wet := MapMissions.rally_times(ev, "stock", 3, (ev.stages as Array).map(func(st): return 0.7))
+			if float(wet[0][0]) <= float(dry[0][0]):
+				errors.append("rally crews are not slowed by a loose stage's grip")
+		live.abandon()

@@ -154,3 +154,28 @@ mission whose route is not on the map gets no beacon. The old Bór circuit is no
 lap of Mały Bór cut into sectors (`MapMissions.OFF_MAP`, `ev.sectors`) and the rally leaves the Bór stage out. The game's
 mission race code (`Missions.apply_settings`, `judge`, the mission rally flow) is no longer reached. The campaign stages
 (circuits, most in other towns) still load their own tracks.
+
+Open-world geometry rules (2026-11-13): streets are drawn by `TownBuilder.ribbon()`; the baker rounds corners between
+junctions (`fillet`) and narrows the halves of divided roads (`narrow_dual_carriageways`); `TownMap.way_joins()` lists the
+nodes where one OSM way just continues as the next, drawn unbroken. Water follows the ground 0.9 m under it
+(`TownMap.water_surface`), the bed sinks along a 1:4 bank (`_build_bed_mask`), and roads keep their banks. Never call
+`Geometry2D.is_point_in_polygon` in open-world code: it miscounts along lines through a polygon's corners, use
+`TownMap.inside()`. What collides must be what is drawn: fences go through `TownMap.fence_pieces()`, parapets through
+`parapet_open()`. Probes: `tests/_road_audit_probe.gd`, `_lake_probe.gd`, `_invisible_wall_probe.gd` (sweeps every lane),
+`_live_audit.gd` (a scripted driver through every mission and live event); suites `test_open_world_roads.gd`,
+`test_open_world_lakes.gd`, `test_invisible_walls.gd`.
+Closure barriers stand 6 m in from the play edge (further where a road leaves at a slant) and the road stops 0.5 m past
+them; spawns keep `OpenWorld.CLOSURE_CLEAR` back. Streets carry per-point half widths (`hw`, from the baker's
+`narrow_past_buildings`, plus tapers at way joins); `TownMap.road_halves()` is what the ribbon, kerbs and `road_at` use.
+Streets without kerbs lean across by at most 4% (`TownMap.level_extra`), drawn and ridden alike. Decks over 4 m count as
+bridges, not embankments. Building collision is the drawn walls (`TownMap.building_faces`). `test_open_world_roads.gd`
+also drives every mission route and both S1 carriageways flat out.
+
+Loading screens follow the car: `OpenWorldCover.SHOTS` per car key and `hero_<track>_<car>.jpg` for races, falling back
+to the car's cover stills, then to the stock set; render a new car's stills with `CAR=<key> tests/_cover_shots.gd`. Door
+numbers above 16 are composed from `models/car_door_plates.png` (blank plates + digits, `build_car_decals.py`).
+
+Events on the map run Forza Horizon style: gates across the road, missed-gate / wrong-way / off-route notices, R resets to the
+last gate, RESTART EVENT and ABANDON EVENT on the pause menu, a results card after each event, and one shared clean-up in
+`OpenWorld` that restores the clock, traffic, HUD and GPS. Speed zones, drift zones and trailblazers start by driving through
+their gate; cleared live events stay on the board with their best medal. Drag fields are tuned to `LiveEvents.DRAG_TIMES`.

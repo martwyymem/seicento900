@@ -23,7 +23,9 @@ func _initialize() -> void:
 	sun.rotation_degrees = Vector3(-50, -30, 0)
 	root.add_child(sun)
 	var car: Node3D = load("res://scripts/ui/race_car_visual.gd").new()
-	car.car_number = 7
+	car.car_number = int(OS.get_environment("NUMBER")) if OS.get_environment("NUMBER") != "" else 7 # NUMBER=83: another door number
+	if CarCatalog.is_key(OS.get_environment("CAR")): # CAR=golf4: that catalogue car instead of the Seicento
+		car.car_key = OS.get_environment("CAR")
 	root.add_child(car)
 	car.set_paint(Color("#4aa0d8"))
 	var cam := Camera3D.new()

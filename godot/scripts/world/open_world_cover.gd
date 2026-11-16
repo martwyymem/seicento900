@@ -5,12 +5,26 @@
 class_name OpenWorldCover
 extends Control
 
-## [file under textures/loading/, place caption]
-const SHOTS := [
-	["ow_cover_1.jpg", "KWK Brzeszcze · the shaft at sundown"],
-	["ow_cover_2.jpg", "ul. Bór · Brzeszcze-Bór"],
-	["ow_cover_3.jpg", "S1 · dusk towards Wilamowice"],
-]
+## Each car's stills, by CarCatalog key: [file under textures/loading/, place caption]. The stock set is the fallback for a car
+## without stills of its own (shots_for), so a new catalogue car never shows an empty cover. Rendered by tests/_cover_shots.gd.
+const SHOTS := {
+	"stock": [
+		["ow_cover_1.jpg", "KWK Brzeszcze · the shaft at sundown"],
+		["ow_cover_2.jpg", "ul. Bór · Brzeszcze-Bór"],
+		["ow_cover_3.jpg", "S1 · dusk towards Wilamowice"],
+	],
+	"hypercar": [
+		["hypercar_1.jpg", "KWK Brzeszcze · the shaft at sundown"],
+		["hypercar_2.jpg", "ul. Bór · Brzeszcze-Bór"],
+		["hypercar_3.jpg", "S1 · dusk towards Wilamowice"],
+	],
+	"golf4": [
+		["golf4_1.jpg", "KWK Brzeszcze · the shaft at sundown"],
+		["golf4_2.jpg", "ul. Bór · Brzeszcze-Bór"],
+		["golf4_3.jpg", "S1 · dusk towards Wilamowice"],
+	],
+}
+const DIR := "res://textures/loading/"
 const ACCENT := Color("#ff4fa3") ## the festival pink of the open-world HUD's highlights
 const DRIFT_TIME := 14.0 ## s for the slow zoom across the still
 ## Forza-style performance classes by index: [top of the band, letter, colour]
@@ -18,6 +32,7 @@ const CLASSES := [[500, "D", Color("#3fa7d6")], [600, "C", Color("#f2c14e")], [7
 	[800, "A", Color("#e4572e")], [900, "S1", Color("#9d4edd")], [998, "S2", Color("#3a86ff")], [999, "X", Color("#2ec4b6")]]
 
 var shot := 0
+var shots: Array = SHOTS.stock ## the set the cover is showing (the driven car's, or the stock one)
 var _photo: TextureRect
 var _fallback: ColorRect
 var _place: Label
@@ -141,12 +156,20 @@ func _init() -> void:
 	add_child(credit)
 	hide()
 
-## Shows the cover with one of the stills (-1: pick one at random) and the figures of the car the player drives.
-func open(spec: CarSpec, car_name: String, index := -1) -> void:
-	shot = randi() % SHOTS.size() if index < 0 else clampi(index, 0, SHOTS.size() - 1)
-	var path := "res://textures/loading/%s" % SHOTS[shot][0]
+## The stills of a car (CarCatalog key): its own set when every file of it exists, else the stock car's.
+static func shots_for(car_key: String) -> Array:
+	var own: Array = SHOTS.get(car_key, [])
+	if own.is_empty() or own.any(func(s: Array) -> bool: return not ResourceLoader.exists(DIR + String(s[0]))):
+		return SHOTS.stock
+	return own
+
+## Shows the cover with one of the driven car's stills (-1: pick one at random) and that car's figures (from its spec).
+func open(spec: CarSpec, car_name: String, index := -1, car_key := "stock") -> void:
+	shots = shots_for(car_key)
+	shot = randi() % shots.size() if index < 0 else clampi(index, 0, shots.size() - 1)
+	var path := DIR + String(shots[shot][0])
 	_photo.texture = load(path) as Texture2D if ResourceLoader.exists(path) else null
-	_place.text = String(SHOTS[shot][1])
+	_place.text = String(shots[shot][1])
 	_car_name.text = car_name.to_upper()
 	var st := car_stats(spec)
 	var cls := perf_class(st)

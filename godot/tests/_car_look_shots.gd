@@ -1,6 +1,7 @@
 ## Windowed probe: the player's Seicento from chase, rear, front, side and wheel views in the open world.
 ##   godot --path godot --audio-driver Dummy --always-on-top -s tests/_car_look_shots.gd -- [out dir]
 ## Env: ONLY (comma list of "<set>" names: day, dusk, night), PAINT (hex colour, default the game's red), BRAKE (1: brake lights on).
+##   CAR (a CarCatalog key, e.g. golf4: fits that car first).
 extends SceneTree
 
 const SETS := {
@@ -31,6 +32,9 @@ func _initialize() -> void:
 	await ow.open("industrial_sprint")
 	if ow.get("hud") != null:
 		ow.hud.visible = false
+	if CarCatalog.is_key(OS.get_environment("CAR")):
+		ow.progress.car_class = CarCatalog.index_of(OS.get_environment("CAR"))
+		ow._fit_car()
 	if OS.get_environment("PROBE") == "0": # diagnostic: the car's reflection probe off
 		for pr in root.find_children("*", "ReflectionProbe", true, false):
 			pr.visible = false
@@ -47,6 +51,7 @@ func _initialize() -> void:
 		ow.active = true
 		for i in 50:
 			ow.hour = SETS[k][1]
+			paused = false # a covered or unfocused window pauses the tree
 			await process_frame
 		ow.active = false
 		if OS.get_environment("PAINT") != "":
@@ -61,6 +66,7 @@ func _initialize() -> void:
 			ow.camera.fov = 55.0 if v != "wheel" else 40.0
 			for i in 12:
 				ow.drive.car.brake_on = brake
+				paused = false
 				ow.car_visual.sync(ow.drive.car, 0.016, 0.0, ow.night, false)
 				await process_frame
 			await RenderingServer.frame_post_draw

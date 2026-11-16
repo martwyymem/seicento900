@@ -91,7 +91,7 @@ func _clear(c: Vector2, dir: Vector2, limit: float, guards: Array, rings: Array)
 	var near_rings := []
 	var ring_d0 := []
 	for ring: PackedVector2Array in rings:
-		if _seg_ring_dist(c, e, ring) < MARGIN or Geometry2D.is_point_in_polygon(e, ring):
+		if _seg_ring_dist(c, e, ring) < MARGIN or TownMap.inside(e, ring):
 			near_rings.append(ring)
 			ring_d0.append(_ring_dist(c, ring))
 	if near_guards.is_empty() and near_rings.is_empty():
@@ -109,7 +109,7 @@ func _clear(c: Vector2, dir: Vector2, limit: float, guards: Array, rings: Array)
 		if not blocked:
 			for k in near_rings.size():
 				var ring: PackedVector2Array = near_rings[k]
-				if Geometry2D.is_point_in_polygon(q, ring) or _ring_dist(q, ring) < minf(MARGIN, maxf(ring_d0[k] - 0.02, 0.0)):
+				if TownMap.inside(q, ring) or _ring_dist(q, ring) < minf(MARGIN, maxf(ring_d0[k] - 0.02, 0.0)):
 					blocked = true
 					break
 		if blocked:
