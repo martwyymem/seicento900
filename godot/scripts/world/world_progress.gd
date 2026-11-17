@@ -84,6 +84,27 @@ func save() -> void:
 		return
 	f.store_string(JSON.stringify(to_dict()))
 
+## A new campaign (RESET CAMPAIGN): fans and level, roads driven, landmarks, speed traps, live-event medals and the
+## odometer go; the car goes back to the stock Seicento (the cars won are locked again). Where the car stands, the
+## clock, modifiers, tips already read and the map's filters stay.
+func wipe_campaign() -> void:
+	roads = {}
+	landmarks = {}
+	traps = {}
+	fans = 0
+	best_chain = 0
+	odometer = 0.0
+	car_class = 0
+	live = {}
+
+## Wipes the whole campaign on disk: the stages, missions, story and cars (Campaign.reset_progress) and the
+## open-world progress (wipe_campaign). An OpenWorld already built keeps its own copy: use OpenWorld.reset_campaign.
+static func reset_campaign() -> void:
+	Campaign.reset_progress()
+	var w := load_progress()
+	w.wipe_campaign()
+	w.save()
+
 ## A finished live event (LiveEvents): tier 0 is a try that missed its target. Misses in a row per kind are kept
 ## in "fails" (the next field of that kind is eased, as a campaign mission's is); a clear forgets them.
 func record_live(kind: String, tier: int) -> void:

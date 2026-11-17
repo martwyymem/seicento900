@@ -57,6 +57,7 @@ func run() -> Array:
 	_ease(map, home, errors)
 	_board(map, home, errors)
 	_save(errors)
+	_standings(errors)
 	await _world(map, home, errors)
 	_missions_on_map(map, errors)
 	_hairpin(map, errors)
@@ -307,6 +308,52 @@ func _save(errors: Array[String]) -> void:
 	old.record_live("sprint", 0)
 	if int(old.live.get("tries", 0)) != 5 or int(old.live.get("done", 0)) != 3:
 		errors.append("an old save's live stats did not carry on: %s" % [old.live])
+
+## The field has names (Drivers.ROSTER, no two alike) and the timing list puts the player where position() says, the
+## rest in running order; a knockout's cars out come last as OUT. RESET CAMPAIGN wipes the open-world progress.
+func _standings(errors: Array[String]) -> void:
+	var path := PackedVector2Array([Vector2.ZERO, Vector2(3000, 0)])
+	var rv := StreetRivals.new(path, "stock", 5, 77)
+	var names := {}
+	for r in rv.rivals:
+		if String(r.get("name", "")) == "" or int(r.get("number", 0)) <= 0:
+			errors.append("a street rival has no name or number: %s" % [r])
+		names[String(r.get("name", ""))] = true
+	if names.size() != rv.rivals.size():
+		errors.append("street rivals share names: %s" % [names.keys()])
+	for i in 300: # 10 s at a middling pace: some of the field ahead, some behind
+		rv.step(1.0 / 30.0, Vector2(minf(float(i) * 0.6, 3000.0), 0.0), 18.0)
+	var rows := rv.standings()
+	if rows.size() != rv.field():
+		errors.append("the timing list has %d rows for a field of %d" % [rows.size(), rv.field()])
+	var mine := rows.find_custom(func(r): return bool(r.player))
+	if mine != rv.position() - 1:
+		errors.append("the timing list has the player P%d, position() says P%d" % [mine + 1, rv.position()])
+	for i in range(1, rows.size()):
+		if not bool(rows[i].player) and not bool(rows[i - 1].player) and float(rows[i].s) > float(rows[i - 1].s) + 0.01:
+			errors.append("the timing list is out of order at row %d" % (i + 1))
+		if not String(rows[i].gap).begins_with("+"):
+			errors.append("row %d shows no interval: %s" % [i + 1, rows[i].gap])
+	var ko := StreetRivals.new(path, "stock", 3, 5, {"knockout": true, "lap_length": 750.0})
+	for i in 4000:
+		ko.step(1.0 / 30.0, Vector2(float(i) * 0.15, 0.0), 4.5) # a crawl: first out
+		if ko.player_out:
+			break
+	var kr := ko.standings()
+	if not ko.player_out or not bool(kr[kr.size() - 1].player) or String(kr[kr.size() - 1].gap) != "OUT":
+		errors.append("a knocked-out player is not last and OUT on the timing list: %s" % [kr])
+	var w := WorldProgress.new()
+	w.fans = 5_000_000
+	w.roads = {3: true}
+	w.landmarks = {"Kościół": true}
+	w.car_class = 2
+	w.live = {"tries": 4}
+	w.map_hidden = ["traps"]
+	w.wipe_campaign()
+	if w.fans != 0 or not w.roads.is_empty() or not w.landmarks.is_empty() or w.car_class != 0 or not w.live.is_empty():
+		errors.append("RESET CAMPAIGN left open-world progress: %s" % [w.to_dict()])
+	if w.map_hidden != ["traps"]:
+		errors.append("RESET CAMPAIGN cleared the map's filters")
 
 ## The events inside a real OpenWorld node (no town meshes): the board is filled and put in `events` with a beacon
 ## each and a map marker; standing at one shows its mission card; starting it puts the car in its grid slot with the

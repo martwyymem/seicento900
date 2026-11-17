@@ -444,6 +444,12 @@ func settle(res: Dictionary) -> Dictionary:
 	return {"success": success, "tier": tier, "pos": pos, "fans": reward(ev, pos, success, first), "first_clear": first,
 		"line": String(out.line)}
 
+## A new campaign: the events on the board forget their medals (best tier, place and score).
+func forget_medals() -> void:
+	for ev in board:
+		for k in ["best_tier", "best_pos", "best"]:
+			ev.erase(k)
+
 ## Whether a route keeps to the drawn roads (every 10 m within OFF_ROADS_MAX of a road's edge). The road graph's
 ## routes can cut a rounded corner or follow a way that is not drawn; an event there would put its line, its gates
 ## and its drift's verge off the tarmac, so generate() tries another.

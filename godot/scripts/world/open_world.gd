@@ -891,6 +891,7 @@ func _after_run() -> void:
 	_live_cp_beacon()
 	if hud:
 		hud.set_live("", "", Color.WHITE)
+		hud.set_standings([], Color.WHITE)
 	if _saved_hour >= 0.0:
 		hour = _saved_hour
 		_saved_hour = -1.0
@@ -1043,8 +1044,11 @@ func _update_live(delta: float) -> void:
 			_update_rivals(delta)
 			var lines := live.hud_lines(cp)
 			hud.set_live(String(lines[0]), String(lines[1]), lev.color)
+			var rv := live.rivals()
+			hud.set_standings(rv.standings() if rv else [], lev.color) # the timing list, as a race has
 		return
 	hud.set_live("", "", Color.WHITE)
+	hud.set_standings([], Color.WHITE)
 	var before := _live_ids()
 	var added := live.update(delta, delta * DAY_RATE, cp, _beacon_points())
 	for lev in added:
@@ -1129,6 +1133,25 @@ func _spawn_rivals() -> void:
 		node.car_key = CarCatalog.key_at(progress.car_class)
 		world.add_child(node)
 		node.set_paint(CarCatalog.field_color(String(node.car_key), k, _player_paint())) # the driven car's factory paints
+		var r: Dictionary = rv.rivals[k]
+		if r.has("number"):
+			node.set("car_number", int(r.number))
+		# the driver's name over the car, as a race's field is named on the timing list
+		var tag := Label3D.new()
+		tag.name = "NameTag"
+		tag.text = String(r.get("name", "")).split(" ")[-1].to_upper()
+		tag.font = CmrStyle.font(900)
+		tag.font_size = 40
+		tag.outline_size = 10
+		tag.fixed_size = true # the same size on screen near and far (a world-sized tag filled the view a car ahead)
+		tag.pixel_size = 0.0006
+		tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		tag.position = Vector3(0, 2.0, 0)
+		tag.modulate = Color(1, 1, 1, 0.9)
+		tag.visibility_range_begin = 7.0 # not over a car right in front of the camera
+		tag.visibility_range_end = 160.0
+		tag.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		node.add_child(tag)
 		_rival_nodes.append(node)
 	_update_rivals(0.0)
 
@@ -2191,15 +2214,12 @@ func _pause_action(action: String) -> void:
 		"reset_campaign":
 			if not _reset_armed:
 				_reset_armed = true
-				hud.notify("RESET CAMPAIGN?", "Select it again to wipe all stage progress", Color("#ff5a4a"))
+				hud.notify("RESET CAMPAIGN?", "Select it again to start over: stages, missions, cars, fans and medals", Color("#ff5a4a"))
 				return
 			_reset_armed = false
-			Campaign.reset_progress()
-			_refresh_events()
-			gps_target = _next_open_event()
-			_recompute_route()
+			reset_campaign()
 			_set_paused(false)
-			hud.notify("CAMPAIGN RESET", "Back to stage 1", OpenWorldHud.PURPLE)
+			hud.notify("CAMPAIGN RESET", "A new campaign: stage 1, no fans, the stock Seicento", OpenWorldHud.PURPLE)
 		"resume":
 			_set_paused(false)
 		"car":
@@ -2231,6 +2251,32 @@ func _pause_action(action: String) -> void:
 			_set_paused(false)
 			suspend()
 			leave_requested.emit("menu")
+
+## A new campaign (the pause menu's RESET CAMPAIGN, or Options from the main menu while this world is kept): the
+## campaign save and this world's progress wiped (WorldProgress.wipe_campaign), any run ended, the beacons and GPS
+## back on stage 1, the stock car.
+func reset_campaign() -> void:
+	if live and live.is_running():
+		live.abandon()
+		_clear_rivals()
+		_after_run()
+	Campaign.reset_progress()
+	if progress == null:
+		WorldProgress.reset_campaign()
+		return
+	progress.wipe_campaign()
+	if live:
+		live.forget_medals()
+		live.stats = progress.live
+	if drive and _fitted_class != progress.car_class:
+		_fit_car()
+	if drive:
+		_save()
+	else:
+		progress.save()
+	_refresh_events()
+	gps_target = _next_open_event()
+	_recompute_route()
 
 func _save() -> void:
 	if progress == null or drive == null:

@@ -2025,6 +2025,28 @@ func _forget_lap_records() -> void:
 	add_child(dialog)
 	dialog.popup_centered()
 
+## Options → RESET CAMPAIGN: a new campaign after a confirmation (WorldProgress.reset_campaign; the open world, if
+## it is built and kept for the way back, wipes its own copy too).
+func _confirm_reset_campaign() -> void:
+	var dialog := ConfirmationDialog.new()
+	dialog.title = "Reset campaign"
+	dialog.dialog_text = "Start the campaign over? Every stage, mission, story chapter, car won, fan and live-event medal is lost."
+	dialog.ok_button_text = "Reset"
+	dialog.confirmed.connect(func() -> void:
+		if open_world:
+			open_world.reset_campaign()
+		else:
+			WorldProgress.reset_campaign()
+		campaign_stage_index = 0
+	)
+	dialog.visibility_changed.connect(func() -> void:
+		if not dialog.visible:
+			dialog.queue_free()
+	)
+	_refocus_after(dialog)
+	add_child(dialog)
+	dialog.popup_centered()
+
 func _forget_ai_memory() -> void:
 	var key: String = _calendar()[_champ_round()] if is_championship_mode else TRACK_KEYS[track_picker.selected]
 	var dialog := ConfirmationDialog.new()
@@ -3186,6 +3208,19 @@ func _build_options_page() -> void:
 	codriver_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	codriver_note.size_flags_stretch_ratio = 2.0
 	codriver_row.add_child(codriver_note)
+	_menu_rule(column)
+	_field_label(column, "CAMPAIGN")
+	var campaign_row := HBoxContainer.new()
+	campaign_row.add_theme_constant_override("separation", 22)
+	column.add_child(campaign_row)
+	var reset_campaign_button := _button("RESET CAMPAIGN", DANGER)
+	reset_campaign_button.pressed.connect(_confirm_reset_campaign)
+	campaign_row.add_child(reset_campaign_button)
+	var campaign_note := _label("Start over: stages, missions, story, cars won, fans and live-event medals. Settings stay.", 14, MUTED)
+	campaign_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	campaign_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	campaign_note.size_flags_stretch_ratio = 2.0
+	campaign_row.add_child(campaign_note)
 	var adv_col := _fold_section(column, "gfx_adv", "ADVANCED GRAPHICS", true)
 	_set_section_summary("gfx_adv", "UPSCALING, ANTI-ALIASING, SHADOWS, REFLECTIONS")
 	_field_label(adv_col, "3D UPSCALING")

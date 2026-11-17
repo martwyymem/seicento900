@@ -134,6 +134,13 @@ func _init(path: PackedVector2Array, car_key: String, count: int, seed_value: in
 			r.lat = _fit(r.s, r.lat)
 			r.lane = _fit(r.s, r.lane)
 		rivals.append(r)
+	# names and numbers from the circuit races' field (Drivers.ROSTER), a run of them picked by the seed (no rng drawn,
+	# so the field's pace is as before)
+	var at := absi(seed_value) % Drivers.ROSTER.size()
+	for k in n:
+		var who: Dictionary = Drivers.ROSTER[(at + k) % Drivers.ROSTER.size()]
+		rivals[k].name = String(who.name)
+		rivals[k].number = int(who.number)
 	if drag:
 		_player_lat0 = float(dlats[1]) if n >= 1 else 0.0
 		var dt_ref := float(opts.get("drag_time", 0.0))
@@ -550,6 +557,57 @@ func field() -> int:
 		if not bool(r.out):
 			n += 1
 	return n
+
+## The running order for the HUD's timing list, first to last: {name, number, player, gap ("" for the leader, "+1.4"
+## seconds to the car ahead, a time once home, "OUT"), out, done}. The player sits where position() has it; cars
+## knocked out come last, the latest out first.
+func standings() -> Array:
+	var live_rows: Array = []
+	for k in rivals.size():
+		var r: Dictionary = rivals[k]
+		if not bool(r.out):
+			live_rows.append(k)
+	live_rows.sort_custom(func(a, b):
+		var ra: Dictionary = rivals[a]
+		var rb: Dictionary = rivals[b]
+		var da := float(ra.t_done) >= 0.0
+		var db := float(rb.t_done) >= 0.0
+		if da != db:
+			return da
+		if da:
+			return float(ra.t_done) < float(rb.t_done)
+		return float(ra.s) > float(rb.s))
+	var rows: Array = []
+	for k in live_rows:
+		var r: Dictionary = rivals[k]
+		rows.append({"name": String(r.get("name", "Rival %d" % (k + 1))), "number": int(r.get("number", 0)), "player": false,
+			"s": float(r.s), "t_done": float(r.t_done), "out": false})
+	var me := {"name": "YOU", "number": 0, "player": true, "s": player_s, "t_done": -1.0, "out": player_out}
+	if not player_out:
+		rows.insert(clampi(position() - 1, 0, rows.size()), me)
+	var v := maxf(player_v, 8.0)
+	for i in rows.size():
+		var row: Dictionary = rows[i]
+		row.done = float(row.t_done) >= 0.0
+		if bool(row.done):
+			row.gap = LiveEvents.clock_text(float(row.t_done))
+		elif i == 0:
+			row.gap = ""
+		else:
+			var ahead: Dictionary = rows[i - 1]
+			var d := float(ahead.s) - float(row.s) if not bool(ahead.done) else maxf(length - float(row.s), 0.0)
+			row.gap = "+%.1f" % maxf(d / v, 0.0)
+	for j in range(out_order.size() - 1, -1, -1):
+		var who := int(out_order[j])
+		if who == -1:
+			me.gap = "OUT"
+			me.done = true
+			rows.append(me)
+		else:
+			var r: Dictionary = rivals[who]
+			rows.append({"name": String(r.get("name", "Rival %d" % (who + 1))), "number": int(r.get("number", 0)),
+				"player": false, "gap": "OUT", "out": true, "done": true})
+	return rows
 
 ## The fastest rival time home so far, or -1.
 func best_time() -> float:

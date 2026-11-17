@@ -24,6 +24,8 @@ const EDGE := 30.0 ## margin from the canvas edge
 const MINIMAP_S := 250.0
 const BANNERS_W := 500.0
 const CARD_W := 470.0
+const TOWER_W := 250.0 ## the race timing list, top right (set_standings)
+const TOWER_ROW := 24.0
 
 var map: TownMap
 var map_tex: Texture2D
@@ -84,6 +86,9 @@ const PAUSE_ITEMS := [["resume", "RESUME"], ["car", "CAR: SEICENTO"], ["mods", "
 	["time", "SKIP TO NEXT TIME OF DAY"], ["menu", "MAIN MENU"]]
 var loading: OpenWorldCover ## the Forza-style cover the town builds behind
 var help_label: Label
+var tower: Control ## a race's running order on the map (StreetRivals.standings), top right
+var _standings: Array = []
+var _standings_color := Color.WHITE
 var stats_box: VBoxContainer
 var _street := ""
 var _street_t := 0.0
@@ -227,6 +232,18 @@ func _build() -> void:
 	area_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	area_label.modulate.a = 0.0
 	add_child(area_label)
+	# a race's timing list, top right (the event card is hidden while a run is on)
+	tower = Control.new()
+	tower.anchor_left = 1.0
+	tower.anchor_right = 1.0
+	tower.offset_left = -EDGE - TOWER_W
+	tower.offset_right = -EDGE
+	tower.offset_top = 24
+	tower.offset_bottom = 24 + 11 * (TOWER_ROW + 2.0)
+	tower.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tower.draw.connect(_draw_tower)
+	tower.visible = false
+	add_child(tower)
 	# event card, right
 	card = PanelContainer.new()
 	card.add_theme_stylebox_override("panel", _card_box())
@@ -537,6 +554,42 @@ func set_live(title: String, line: String, color: Color) -> void:
 	if shown != live_title.visible:
 		_layout()
 
+## The running order of a race on the map (StreetRivals.standings rows), [] hides it.
+func set_standings(rows: Array, color: Color) -> void:
+	if rows.is_empty() and _standings.is_empty():
+		return
+	_standings = rows
+	_standings_color = color
+	tower.visible = not rows.is_empty() and not map_open
+	tower.queue_redraw()
+
+func _draw_tower() -> void:
+	var font := CmrStyle.font(800)
+	var bold := CmrStyle.font(900)
+	var W := TOWER_W
+	var y := 0.0
+	for i in _standings.size():
+		var row: Dictionary = _standings[i]
+		var me := bool(row.get("player", false))
+		var out := bool(row.get("out", false)) or String(row.get("gap", "")) == "OUT"
+		var fade := 0.5 if out else 1.0
+		var bg := _standings_color.darkened(0.15) if me else Color(0.04, 0.05, 0.09, 0.72)
+		tower.draw_rect(Rect2(0, y, W, TOWER_ROW), Color(bg, (0.95 if me else 0.72) * fade))
+		tower.draw_rect(Rect2(0, y, 4, TOWER_ROW), Color(_standings_color if not me else Color.WHITE, fade))
+		var ink := Color(Color.WHITE, fade)
+		var base := y + 17.0
+		tower.draw_string(bold, Vector2(8, base), str(i + 1), HORIZONTAL_ALIGNMENT_RIGHT, 24, 15, ink)
+		var nm := String(row.get("name", ""))
+		nm = nm if me else nm.split(" ")[-1]
+		var num := int(row.get("number", 0))
+		var label := nm.to_upper() if num <= 0 else "%s  #%d" % [nm.to_upper(), num]
+		tower.draw_string(bold if me else font, Vector2(42, base), label, HORIZONTAL_ALIGNMENT_LEFT, W - 42 - 76, 14, ink)
+		var gap := String(row.get("gap", ""))
+		if i == 0 and gap == "":
+			gap = "LEADER"
+		tower.draw_string(font, Vector2(W - 82, base), gap, HORIZONTAL_ALIGNMENT_RIGHT, 76, 14, ink)
+		y += TOWER_ROW + 2.0
+
 func notify(title: String, sub: String, color := ORANGE) -> void:
 	# the same banner again while it is still up (a key pressed twice, an event reported twice) is not stacked:
 	# the one on screen is kept and its time starts over
@@ -654,6 +707,7 @@ func set_summary(text: String) -> void:
 func toggle_map(on: bool) -> void:
 	map_open = on
 	big_map.visible = on
+	tower.visible = not on and not _standings.is_empty()
 	if on and map_rect.size.x > 0.0:
 		# the car, at a medium zoom; the whole area is a key away
 		nav.markers = markers
