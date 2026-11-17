@@ -397,7 +397,9 @@ def narrow_past_buildings(out_roads, zr, buildings):
     narrowed): HOUSE_CLEAR inside the nearest wall of a building beside it (its footprint ring and its measured roof
     outlines, which is what TownBuilder may draw), flat 3 m either side and widening again at 0.15 m per m, never under
     MIN_HALF. A shed or garage under SHED_DROP_AREA that still stands in the lane is dropped from `buildings`; a house
-    the centre line runs through (a gateway, a misaligned way) is listed."""
+    the centre line runs through (a gateway, a misaligned way) is listed and the street shifted off it, after which the
+    half widths are measured again along the shifted line. A building still inside the drawn street then goes if no
+    GUGiK survey confirms it. A street climbing onto a bridge or embankment is narrowed on its ground-level part."""
     grid = {}
     for bi, b in enumerate(buildings):
         ring = b[4]
@@ -433,29 +435,37 @@ def narrow_past_buildings(out_roads, zr, buildings):
                 best = (dd, t)
         return best
 
-    out = []
     drop = set()
     through = set()
-    shifted = []
-    narrowed = 0
-    for r, z in zip(out_roads, zr):
+
+    def flat_at(r, z):
+        """Which points may be narrowed or shifted: all of a street that stays on the ground, and the on-ground part
+        of one that climbs onto a bridge or embankment somewhere (its raised part keeps its class width)."""
+        if max(z) <= 0.3:
+            return [True] * len(r['p'])
+        return [h <= 0.05 for h in z]
+
+    def scan(r, z, shift):
+        """(half widths, changed, shifts, walls still inside the drawn street as (bi, distance)) of street r as it
+        stands now; with `shift`, a wall the centre line runs (nearly) through asks for a shift off it."""
         pts = r['p']
         half = r['w'] / 2
         hw = [half] * len(pts)
-        if r['b'] or max(z) > 0.3 or len(pts) < 2:
-            out.append(None)
-            continue
+        flat = flat_at(r, z)
         cum = [0.0]
         for a, b in zip(pts, pts[1:]):
             cum.append(cum[-1] + math.dist(a, b))
         changed = False
         shifts = []
+        inside = []
         for k, (a, b) in enumerate(zip(pts, pts[1:])):
+            if not (flat[k] and flat[k + 1]):
+                continue
             seen = set()
             for gx in range(int(min(a[0], b[0]) // 20) - 1, int(max(a[0], b[0]) // 20) + 2):
                 for gy in range(int(min(a[1], b[1]) // 20) - 1, int(max(a[1], b[1]) // 20) + 2):
                     for e0, e1, bi in grid.get((gx, gy), ()):
-                        if (e0, e1) in seen:
+                        if (e0, e1) in seen or bi in drop:
                             continue
                         seen.add((e0, e1))
                         d, t = closest(a, b, e0, e1)
@@ -469,50 +479,95 @@ def narrow_past_buildings(out_roads, zr, buildings):
                             if kind in ('shed', 'garage') and area < SHED_DROP_AREA:
                                 drop.add(bi)
                                 continue
-                            # the centre line runs (nearly) through the wall: shift the street off it, up to 1.5 m
-                            # (its junction nodes stay put), then narrow it as for any other wall
-                            px, py = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
-                            wq = min((e0, e1), key=lambda q: math.dist(q, (px, py)))
-                            dl = math.dist(a, b) or 1.0
-                            nx_, ny_ = -(b[1] - a[1]) / dl, (b[0] - a[0]) / dl
-                            side = 1.0 if (wq[0] - px) * nx_ + (wq[1] - py) * ny_ < 0 else -1.0  # away from the wall
-                            push = min(1.5, MIN_HALF + HOUSE_CLEAR - d)
-                            if push > 0.05:
-                                shifts.append((cum[k] + dl * t, nx_ * side * push, ny_ * side * push))
-                            through.add((r['n'] or r['kn'], round(ring[0]), round(ring[1]), kind))
+                            if shift:
+                                # the centre line runs (nearly) through the wall: shift the street off it, up to 1.5 m
+                                # (its junction nodes stay put), then narrow it as for any other wall
+                                px, py = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+                                wq = min((e0, e1), key=lambda q: math.dist(q, (px, py)))
+                                dl = math.dist(a, b) or 1.0
+                                nx_, ny_ = -(b[1] - a[1]) / dl, (b[0] - a[0]) / dl
+                                side = 1.0 if (wq[0] - px) * nx_ + (wq[1] - py) * ny_ < 0 else -1.0  # away from it
+                                push = min(1.5, MIN_HALF + HOUSE_CLEAR - d)
+                                if push > 0.05:
+                                    shifts.append((cum[k] + dl * t, nx_ * side * push, ny_ * side * push))
+                                through.add((r['n'] or r['kn'], round(ring[0]), round(ring[1]), kind))
+                            if d < MIN_HALF - 0.02:
+                                inside.append((bi, d))
                             req = MIN_HALF
                         sc = cum[k] + math.dist(a, b) * t
                         for j in range(len(pts)):
+                            if not flat[j]:
+                                continue
                             lim = req + 0.15 * max(0.0, abs(cum[j] - sc) - 3.0)
                             if lim < hw[j]:
                                 hw[j] = lim
                                 changed = True
-        if shifts:
-            fixed = {i for i, _ in r['e']}
-            new_pts = list(pts)
-            for j in range(len(pts)):
-                if j in fixed:
-                    continue
-                ox = oy = 0.0
-                for sc, sx, sy in shifts:
-                    w = max(0.0, 1.0 - max(0.0, abs(cum[j] - sc) - 3.0) / 8.0)
-                    if abs(sx * w) > abs(ox) or abs(sy * w) > abs(oy):
-                        ox, oy = sx * w, sy * w
-                # (towards a junction node the shift dies away over the segment beside it)
-                near_fixed = min((abs(cum[j] - cum[i]) for i in fixed), default=99.0)
-                f = min(1.0, near_fixed / 6.0)
-                new_pts[j] = (pts[j][0] + ox * f, pts[j][1] + oy * f)
-            r['p'][:] = new_pts
-            shifted.append(r['n'] or r['kn'])
+        return hw, changed, shifts, inside, cum, flat
+
+    def eligible(r, z):
+        return not r['b'] and len(r['p']) >= 2
+
+    # 1. shift streets off the walls their centre line runs through
+    shifted = []
+    for r, z in zip(out_roads, zr):
+        if not eligible(r, z):
+            continue
+        _, _, shifts, _, cum, flat = scan(r, z, True)
+        if not shifts:
+            continue
+        pts = r['p']
+        fixed = {i for i, _ in r['e']} | {j for j in range(len(pts)) if not flat[j]}
+        new_pts = list(pts)
+        for j in range(len(pts)):
+            if j in fixed:
+                continue
+            ox = oy = 0.0
+            for sc, sx, sy in shifts:
+                w = max(0.0, 1.0 - max(0.0, abs(cum[j] - sc) - 3.0) / 8.0)
+                if abs(sx * w) > abs(ox) or abs(sy * w) > abs(oy):
+                    ox, oy = sx * w, sy * w
+            # (towards a junction node the shift dies away over the segment beside it)
+            near_fixed = min((abs(cum[j] - cum[i]) for i in fixed), default=99.0)
+            f = min(1.0, near_fixed / 6.0)
+            new_pts[j] = (pts[j][0] + ox * f, pts[j][1] + oy * f)
+        r['p'][:] = new_pts
+        shifted.append(r['n'] or r['kn'])
+    print(len(shifted), 'streets shifted off walls their centre line ran through:', shifted[:12])
+    # 2. a building still standing inside the drawn street after the shift, that no GUGiK survey confirms (no 'src':
+    # an OSM outline drawn off an old photo, or a passage over the street mapped as layer 1), goes: the street is there
+    unconfirmed = {}
+    blocked = {}
+    for ri, (r, z) in enumerate(zip(out_roads, zr)):
+        if not eligible(r, z):
+            continue
+        for bi, d in scan(r, z, False)[3]:
+            extra = buildings[bi][6] if len(buildings[bi]) > 6 and isinstance(buildings[bi][6], dict) else {}
+            into = (bi, ri, r['n'] or r['kn'])
+            if not extra.get('src') and not extra.get('lm'):
+                unconfirmed[into] = min(unconfirmed.get(into, 9.0), round(d, 2))
+                drop.add(bi)
+            else:
+                blocked[into] = min(blocked.get(into, 9.0), round(d, 2))
+    print(len(unconfirmed), 'unsurveyed buildings standing in a street dropped (building, road, name: wall to centre):',
+          sorted(unconfirmed.items())[:12])
+    if blocked:
+        print('WARNING:', len(blocked), 'surveyed buildings still inside a drawn street:', sorted(blocked.items())[:24])
+    # 3. the half widths along the streets as they now run, past the buildings that are left
+    out = []
+    narrowed = 0
+    for r, z in zip(out_roads, zr):
+        if not eligible(r, z):
+            out.append(None)
+            continue
+        hw, changed = scan(r, z, False)[:2]
         if changed:
             narrowed += 1
             out.append([round(h, 2) for h in hw])
         else:
             out.append(None)
-    print(len(shifted), 'streets shifted off walls their centre line ran through:', shifted[:12])
     for bi in sorted(drop, reverse=True):
         del buildings[bi]
-    print(narrowed, 'streets narrowed past buildings;', len(drop), 'sheds/garages in a lane dropped;',
+    print(narrowed, 'streets narrowed past buildings;', len(drop), 'sheds/garages and unsurveyed buildings in a lane dropped;',
           len(through), 'buildings the centre line runs through:', sorted(through)[:16])
     return out
 

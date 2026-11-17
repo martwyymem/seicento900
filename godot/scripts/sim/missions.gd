@@ -62,7 +62,7 @@ const MISSIONS := [
 		"track": "bor", "laps": 5, "opponents": 5, "difficulty": "medium",
 		"weather": "dry", "start_hour": 15.5, "target": 2, "at": 0.0,
 		"trophy": "Last Man in the Forest", "reward_car": "golf4",
-		"desc": "Six cars on the Mały Bór forest lanes next to Bór, one lap cut into five sectors: every time the leader crosses a sector line the last car is out. Make the final two-car sector, or win it.",
+		"desc": "Six cars on the Mały Bór forest lanes next to Bór, one lap cut into five sectors: every time the leader crosses a sector line the last car is out. Make the final two-car sector and Kamil Wrona's Golf IV is yours.",
 		"tip": "The sector lines are the only places that matter: never be last when the leader reaches one, even if it costs you the lead.",
 	},
 	{
@@ -70,8 +70,8 @@ const MISSIONS := [
 		"title": "Rajd Borów",
 		"track": "bor", "rally": "bor", "opponents": 9, "difficulty": "medium",
 		"weather": "fog", "start_hour": 8.5, "target": 3,
-		"trophy": "Rajd Borów Podium", "reward_car": "",
-		"desc": "The local rally runs its special stages on the roads round Brzeszcze: Mały Bór, Kolonia Stawowa and Babudy–Góra at dusk. Between them you drive the liaison to the next start yourself; the clock only runs on the stages.",
+		"trophy": "Rajd Borów Podium", "reward_car": "logan",
+		"desc": "The local rally runs its special stages on the roads round Brzeszcze: Mały Bór, Kolonia Stawowa and Babudy–Góra at dusk. Between them you drive the liaison to the next start yourself; the clock only runs on the stages. Ola reads the notes, and a podium wins the crew a Dacia Logan.",
 		"tip": "A rally is won on the stages you don't crash on: drive at nine tenths, listen to the co-driver and keep the car whole for the service.",
 	},
 	{

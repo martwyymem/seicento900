@@ -347,6 +347,7 @@ var player_color_picker: ColorPickerButton
 var player_stripes_toggle: CheckButton
 var player_finish_picker: MenuSelector
 var car_class_picker: MenuSelector
+var garage_button: Button ## CAR & PAINT on the set-up page: opens the Garage (car_class_picker and player_color_picker stay, hidden, as the saved state)
 var _car_models := {} ## CarCatalog key -> {car_model, tyres, strategy} for every car but the stock one (_models_for)
 var setup_format_row: Control
 var setup_conditions_row: Control
@@ -1043,6 +1044,22 @@ func _build_setup() -> void:
 	car_class_picker = _option_field(livery_row, "CAR", Array(CarCatalog.KEYS).map(func(k: String) -> String: return CarCatalog.display_name(k)))
 	car_class_picker.tooltip_text = "The Hypercar Seicento (a Seicento with a Ferrari 499P's power, AWD, in AF Corse's no. 83 yellow) opens at the top fan level; the other cars are won by beating campaign missions. The whole field drives the car you pick"
 	car_class_picker.item_selected.connect(_on_car_class_selected)
+	# the car and its factory paint are picked in the garage (Garage); the picker and the swatch stay, hidden, as the saved state
+	car_class_picker.get_parent().hide()
+	paint_col.hide()
+	var garage_col := VBoxContainer.new()
+	garage_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	garage_col.size_flags_stretch_ratio = 1.8
+	livery_row.add_child(garage_col)
+	livery_row.move_child(garage_col, 0)
+	_field_label(garage_col, "CAR & PAINT")
+	garage_button = Button.new()
+	garage_button.custom_minimum_size.y = 40
+	garage_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	garage_button.clip_text = true
+	garage_button.tooltip_text = "Opens the garage: every car, its figures and its factory paints. ◂ ▸ step the paint here"
+	garage_button.pressed.connect(_open_garage)
+	garage_col.add_child(garage_button)
 	player_finish_picker = _option_field(livery_row, "FINISH", ["Gloss", "Metallic", "Martini Racing", "Abarth", "Marlboro"])
 	var stripes_col := VBoxContainer.new()
 	stripes_col.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
@@ -1436,6 +1453,8 @@ func _nudge_setting(c: Control, d: int, echo: bool) -> void:
 				near = i
 		pick.color = Color(PAINTS[posmod(near + d, PAINTS.size())])
 		pick.color_changed.emit(pick.color)
+	elif c == garage_button:
+		_step_garage_paint(d)
 	else:
 		for key in setup_folds:
 			if setup_folds[key].head == c and setup_open[key] != (d > 0):
@@ -2244,10 +2263,48 @@ func _on_car_class_selected(index: int) -> void:
 		car_class_picker.select(0)
 		status_label.text = "The %s %s." % [CarCatalog.display_name(picked), CarCatalog.unlock_hint(picked)]
 		status_label.modulate = DANGER
+	player_color_picker.color = CarCatalog.saved_paint(_picked_car(), player_color_picker.color) # the new car's factory paint
 	_apply_menu_car()
 	_update_menu_car_summary()
 	_update_information_page() # the lap record shown is the picked car's
 	_queue_strategy_refresh()
+
+## The set-up's CAR & PAINT field: the car and its paint's name (the hypercar's livery for the hypercar).
+func _refresh_garage_button() -> void:
+	if not is_instance_valid(garage_button):
+		return
+	var key := _picked_car()
+	var liv := CarCatalog.livery(key)
+	var paint_name := CarCatalog.paint_name(key, liv.get("color", player_color_picker.color))
+	garage_button.text = "%s  ·  %s  ▸" % [CarCatalog.display_name(key), paint_name]
+
+## ◂ ▸ on CAR & PAINT: the next factory paint of the picked car.
+func _step_garage_paint(d: int) -> void:
+	var key := _picked_car()
+	if not CarCatalog.livery(key).is_empty():
+		return
+	var pal := CarCatalog.palette(key)
+	var col: Color = pal[posmod(CarCatalog.nearest_paint(key, player_color_picker.color) + d, pal.size())].color
+	CarCatalog.save_paint(key, col)
+	player_color_picker.color = col
+	player_color_picker.color_changed.emit(col)
+
+## Opens the garage on the picked car; choosing there sets the CAR picker and the paint.
+func _open_garage() -> Garage:
+	var g := Garage.open_in(self, _picked_car(), player_color_picker.color, _fan_total(),
+		{"number": int(player_number_picker.value), "finish": player_finish_picker.selected, "stripes": player_stripes_toggle.button_pressed})
+	g.chosen.connect(func(key: String, col: Color) -> void:
+		car_class_picker.select(CarCatalog.index_of(key))
+		_on_car_class_selected(car_class_picker.selected)
+		if CarCatalog.livery(key).is_empty():
+			player_color_picker.color = col
+			player_color_picker.color_changed.emit(col)
+		if is_instance_valid(garage_button):
+			garage_button.grab_focus())
+	g.closed.connect(func() -> void:
+		if is_instance_valid(garage_button):
+			garage_button.grab_focus())
+	return g
 
 ## The car model and strategist a race runs on: the catalogue car's (CarCatalog key, made once), else the stock Seicento.
 func _models_for(car_class: String) -> Dictionary:
@@ -2287,6 +2344,8 @@ func _load_race_settings() -> void:
 		elif control is ColorPickerButton and v is Color:
 			(control as ColorPickerButton).color = v
 	_select_format(format_picker.selected) # visibility only: the saved refuel/wear values stay
+	# a free colour saved before the factory palettes lands on the car's nearest paint
+	player_color_picker.color = CarCatalog.palette(_picked_car())[CarCatalog.nearest_paint(_picked_car(), player_color_picker.color)].color
 	var opened = cfg.get_value("page", "open", {})
 	if opened is Dictionary:
 		for key in setup_folds:
@@ -2539,6 +2598,7 @@ func _update_menu_car_summary() -> void:
 	if not is_instance_valid(menu_car_summary) or not is_instance_valid(track_picker):
 		return
 	var current_track: Track = _menu_track(_menu_track_key()) # null while it is built off the main thread
+	_refresh_garage_button()
 	if is_instance_valid(player_color_picker) and is_instance_valid(menu_preview_car):
 		menu_preview_car.call("set_paint", player_color_picker.color)
 		menu_preview_car.call("set_livery", player_finish_picker.selected)

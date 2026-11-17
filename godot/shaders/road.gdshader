@@ -331,8 +331,10 @@ void fragment() {
 
 	spark *= (1.0 - w) * (1.0 - unp);
 	rough = mix(rough, 0.28, spark * 0.65);
-	// the aggregate's relief shows dry and flattens under a film of water
-	nmap.xy += micro_n * 0.9 * (1.0 - 0.8 * (w * 0.55 + puddle * 0.45));
+	// the aggregate's relief shows dry and drowns under a film of water: at the wet film's low roughness every chip's
+	// facet caught the sun as a white pixel, a sheet of glitter on the wet road around and behind the cars (2026-11-16
+	// QA: the sun's specular on the relief, not the spray; hf 21e-3 vs 12e-3 with the sun's specular off)
+	nmap.xy += micro_n * 0.9 * (1.0 - 0.8 * (w * 0.55 + puddle * 0.45)) * (1.0 - 0.85 * smoothstep(0.15, 0.6, w));
 	ALBEDO = col;
 	ROUGHNESS = clamp(rough, 0.02, 1.0);
 	METALLIC = 0.0;

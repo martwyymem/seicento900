@@ -10,6 +10,8 @@ const CONTRACT := {
 	"res://models/seicento.glb": {"objects": ["Body", "Details", "Stripes", "Wheel"], "materials": ["Paint", "Taillight", "Glass", "Headlight"]},
 	"res://models/golf4.glb": {"objects": ["Body", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
+	"res://models/logan.glb": {"objects": ["Body", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
+		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
 	"res://models/town.glb": {"objects": ["Headframe", "ChurchSpire", "Streetlamp", "TrafficLight", "BusShelter", "LevelCrossing",
 		"FestivalStage", "FestivalArch", "Tent", "FlagPole", "CarHatch", "CarSedan", "CarVan", "Maluch"], "materials": ["Paint", "Lamp", "Banner"]},
 	"res://models/roadside.glb": {"objects": ["BushCluster"], "materials": []},
@@ -24,6 +26,10 @@ const SIZES := {
 	"res://models/golf4.glb": { # a Golf IV 5-door: 4,149 x 1,735 (mirrors out: ~1.9) x 1,439 mm; the wheel is a 195/65 R15 (634 mm)
 		"Body": [Vector3(1.8, 1.2, 4.10), Vector3(2.05, 1.50, 4.20)],
 		"Wheel": [Vector3(0.18, 0.62, 0.62), Vector3(0.24, 0.66, 0.66)],
+	},
+	"res://models/logan.glb": { # a Logan I saloon: 4,247 x 1,735 (mirrors out: ~1.96) x 1,525 mm; the wheel is a 185/65 R15 (622 mm)
+		"Body": [Vector3(1.8, 1.2, 4.20), Vector3(2.05, 1.45, 4.30)],
+		"Wheel": [Vector3(0.17, 0.60, 0.60), Vector3(0.24, 0.64, 0.64)],
 	},
 	"res://models/town.glb": {
 		"CarHatch": [Vector3(1.5, 1.2, 3.5), Vector3(2.1, 1.9, 4.6)],

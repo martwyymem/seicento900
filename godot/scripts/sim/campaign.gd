@@ -1,5 +1,5 @@
-## Campaign mode ("The Seicento Odyssey"): A 9-stage narrative racing career
-## tracing a grassroots Polish racer's journey from Silesian village lanes to Tokyo.
+## Campaign mode ("The Seicento Odyssey"): a 10-stage racing career tracing a grassroots Polish racer's journey
+## from Silesian village lanes to Tokyo and home to Brzeszcze for the Goliath. The story told round it is Story.
 class_name Campaign
 extends RefCounted
 
@@ -24,7 +24,7 @@ const STAGES := [
 		"target_pos": 3,
 		"grid": "p3",
 		"trophy": "Wilamowice Bronze Piston",
-		"desc": "Your mechanic uncle handed you the keys to a stock 1998 Fiat Seicento 900 (39 bhp). Prove your racecraft round Wilamowice: from the Rynek past Holy Trinity church, down Kęcka and Krakowska into Hecznarowice, back through the fields and the esses by the pond.",
+		"desc": "Wujek Mirek handed you the keys to Ciocia Basia's stock 1998 Fiat Seicento 900 (39 bhp). Prove your racecraft round Wilamowice: from the Rynek past Holy Trinity church, down Kęcka and Krakowska into Hecznarowice, back through the fields and the esses by the pond.",
 		"tip": "The lefts at Hecznarowice and Handlowa are sharp: brake early, then carry momentum along the open field lane."
 	},
 	{
@@ -184,7 +184,7 @@ const STAGES := [
 		"target_pos": 1,
 		"grid": "pole",
 		"trophy": "Tokyo Midnight Emperor",
-		"desc": "The international grand finale! One midnight lap of the Shuto C1 inner loop: the viaducts over the Nihonbashi river, the tunnels under the Imperial Palace moats, Hamazakibashi JCT and the Ginza trench.",
+		"desc": "The international showdown, a long way from Brzeszcze. One midnight lap of the Shuto C1 inner loop: the viaducts over the Nihonbashi river, the tunnels under the Imperial Palace moats, Hamazakibashi JCT and the Ginza trench.",
 		"tip": "Two lanes between concrete walls. Lift for the blind left at Miyakezaka in the tunnel, and carry speed round the Hamarikyu Spiral: it drops two full turns into the Ginza trench."
 	},
 	{
@@ -206,7 +206,7 @@ const STAGES := [
 		"trophy": "The Goliath Crown",
 		"car_class": "hypercar",
 		"fan_lock": true,
-		"desc": "One lap, 27 km, the whole of Brzeszcze closed for the night: the town, the S1 flat out, the villages and the Bór ponds, and back down the east side. Twelve Hypercar Seicentos in AF Corse yellow, and you on pole with eleven Legends behind you for 27 km.",
+		"desc": "The homecoming, and Pan Zbyszek's dream come true. One lap, 27 km, the whole of Brzeszcze closed for the night: the town, the S1 flat out, the villages and the Bór ponds, and back down the east side. Twelve Hypercar Seicentos in AF Corse yellow, and you on pole with eleven Legends behind you for 27 km.",
 		"tip": "The S1 is where races are won: 340 km/h, then the hardest stop of the lap into the junction. Save the tyres in town."
 	}
 ]

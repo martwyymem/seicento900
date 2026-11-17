@@ -71,17 +71,21 @@ func _initialize() -> void:
 		await _hold(Vector2(ow.drive.car.x, ow.drive.car.y), ow.drive.car.heading, 10)
 		await _shot("6_race_hud", only)
 		ow._end_run()
-	# a speed zone's start gate, seen on the run-up
-	var sz := ow.live.generate(home, PackedVector2Array(), "speed_zone")
-	if not sz.is_empty():
-		ow.live.board.append(sz)
+	# a live drag (a generated mission): its card, then the four abreast on the grid in the countdown
+	var dg := ow.live.generate(home, PackedVector2Array(), "drag")
+	if not dg.is_empty():
+		ow.live.board.append(dg)
 		ow._live_sync()
-		var h := float(sz.heading)
-		await _hold((sz.pos as Vector2) - Vector2.from_angle(h) * 30.0, h, 30)
-		await _shot("7_speed_zone_start", only)
-		ow._begin_rolling(sz, sz.pos)
-		await _hold((sz.pos as Vector2) + Vector2.from_angle(h) * 40.0, h, 30)
-		await _shot("8_speed_zone_running", only)
+		var h := float(dg.heading)
+		await _hold(dg.pos, h, 30)
+		ow._check_events()
+		await _shot("7_live_drag_card", only)
+		ow._begin_live_ev(dg)
+		ow._update_live(0.5)
+		var slot: Array = ow.live.grid_pose(dg)
+		await _hold(slot[0], float(slot[1]), 30)
+		await _shot("8_live_drag_grid", only)
+		ow._end_run()
 	quit()
 
 func _frames(n: int, keep_pause := false) -> void:

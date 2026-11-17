@@ -458,6 +458,8 @@ func build_field(player_plan) -> void:
 		else:
 			car = make_car(i + 1, BOTS[i][0], Color(BOTS[i][1]), BOT_NUMBERS[i], false)
 			car.skill = diff.skill + (rng.next() - 0.6) * diff.spread
+		# the field wears the driven car's factory paints (CarCatalog.PALETTES), the player's own left out; no rng drawn
+		car.color = CarCatalog.field_color(s.car_class if CarCatalog.is_key(s.car_class) else "stock", i, s.player_color)
 		if s.quali_grid.has("skills") and s.quali_grid.skills.has(str(car.id)):
 			car.skill = float(s.quali_grid.skills[str(car.id)]) # the field races as it qualified
 		car.stripes = rng.next() < 0.3

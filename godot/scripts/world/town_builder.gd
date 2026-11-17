@@ -2595,7 +2595,7 @@ func _build_lamps(group: Node3D) -> void:
 		# the arm reaches over the road: the model's front (-Z) points at it
 		var basis := Basis(Vector3.UP, atan2(-face.x, -face.y))
 		xfs.append(Transform3D(basis, Vector3(p.x, g, p.y)))
-		var spot := Vector3(p.x + face.x * 1.6, g + 8.6, p.y + face.y * 1.6)
+		var spot := lamp_head(map, p, face, g)
 		var cell := Vector2i(floori(spot.x / LAMP_CELL), floori(spot.z / LAMP_CELL))
 		var in_cell: PackedInt32Array = _lamp_cells.get(cell, PackedInt32Array())
 		in_cell.append(lamp_spots.size())
@@ -2610,6 +2610,53 @@ func _build_lamps(group: Node3D) -> void:
 	var mesh_xf := _model("Streetlamp", _fallback_lamp)
 	var lamp_mesh := _with_surface_material(mesh_xf[0], "Lamp", lamp_material)
 	_place_many(group, "Streetlamps", [lamp_mesh, mesh_xf[1]], xfs, [], null, LAMP_RANGE)
+
+## m a lamp's light keeps from the building walls: OpenWorld hangs its pooled OmniLight3D (falling off as d^-1.8) at
+## lamp_spots, and a head 1-2 m from a facade lit the wall 10-30x brighter than the road 8 m below, an over-bright
+## blob on the house (2026-11-16 QA, Rajsko). Only the light moves (towards the road, out from the wall); the pole
+## and its glowing head stay where they are drawn.
+const LAMP_WALL_CLEAR := 4.0
+
+## Where the light of the lamp whose pole stands at p hangs: the head 1.6 m out over the road (face: towards the road,
+## g: ground height), pushed out to LAMP_WALL_CLEAR from any building wall near it (outward along the wall's normal,
+## so a pole drawn inside a footprint still gets its light out; at most 3 m). clear 0: the head itself.
+static func lamp_head(map: TownMap, p: Vector2, face := Vector2.INF, g := NAN, clear := LAMP_WALL_CLEAR) -> Vector3:
+	if face == Vector2.INF:
+		face = Vector2(0, 1)
+		var near := map.nearest_road(p, 14.0)
+		if not near.is_empty():
+			face = ((near.pos as Vector2) - p).normalized()
+			if face == Vector2.ZERO:
+				face = Vector2(0, 1)
+	if is_nan(g):
+		g = map.ground(p.x, p.y)
+	var h := p + face * 1.6
+	var start := h
+	if clear > 0.0:
+		for it in 4:
+			var push := Vector2.ZERO
+			for bi in map.buildings_near(h, clear):
+				var f := map.building_faces(bi)
+				for k in range(0, f.size(), 6):
+					var a := Vector2(f[k], f[k + 1])
+					var b := Vector2(f[k + 2], f[k + 3])
+					var n := Vector2(f[k + 4], f[k + 5])
+					var q := Geometry2D.get_closest_point_to_segment(h, a, b)
+					var off := h - q
+					if off.length() >= clear:
+						continue
+					# signed: negative behind the wall (inside the footprint)
+					var sd := off.length() * (1.0 if off.dot(n) >= 0.0 else -1.0)
+					var amount := clear - sd
+					if amount > push.dot(n):
+						push += n * (amount - maxf(push.dot(n), 0.0))
+			if push == Vector2.ZERO:
+				break
+			h += push
+			if h.distance_to(start) > 3.0:
+				h = start + (h - start).normalized() * 3.0
+				break
+	return Vector3(h.x, g + 8.6, h.y)
 
 ## The up to count lamp heads nearest to (x, z) within radius metres, nearest first, from the lamp grid: a few dozen
 ## candidates however many lamps the town has (the open world's real lights follow the car through this).
