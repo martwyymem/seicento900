@@ -50,9 +50,18 @@ extends Resource
 @export var susp_hz := 1.5
 @export var susp_zeta := 0.55
 @export var lift_a := 0.12 ## Cl·A, a little lift at speed
+@export var aero_front := 0.55 ## share of the aero lift (or downforce) on the front axle ...
+@export var aero_rear := 0.45 ## ... and on the rear one (the two add up to 1; more at the rear steadies a car with wings at speed)
+@export var esc_grip := 1.0 ## stability control's idea of the grip, against the Seicento's: it lets the car yaw this much faster ...
+@export var esc_aero := 0.0 ## ... plus this much per (m/s)² for a car with downforce
 @export var reverse_ratio := 3.55
+@export var reverse_power := 1.0 ## share of the throttle the engine gets in reverse (a powerful car backs up gently)
 @export var steer_lock := 0.5 ## road-wheel angle at full lock (rad)
 @export var ackermann := 0.5 ## fraction of true Ackermann geometry
+@export var steer_fast := 1.0 ## share of the steering's slip allowance left at speed (1 = the same at any speed): under 1 a full
+## key press at steer_fast_to m/s and beyond asks the front tyres for that much less slip, fading in from steer_fast_from
+@export var steer_fast_from := 30.0
+@export var steer_fast_to := 80.0
 @export var steer_gain := 1.0 ## the car set-up's steering: scales the speed-sensitive lock (CarSetup)
 @export var offroad_drag := 1.0 ## the set-up's ride height: scales the extra rolling drag off the circuit
 

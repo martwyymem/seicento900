@@ -200,7 +200,7 @@ func _code_hash(errors: Array[String]) -> void:
 			errors.append("CodeHash reaches nothing for the %s step" % tag)
 	var must := {"buildings": ["_wall", "_wall_plan", "_add_lod2_roof", "_open_runs", "_palette", "hash2", "KIND_CODE", "shaft_towers"],
 		"trees": ["KIND_SPECIES", "_tree_dims", "_species_colour"], "streets": ["_build_pavements", "_style", "BRIDGE_GIRDER_DEPTH"],
-		"rail": ["_bank_quad", "_clip_half"], "terrain": ["TERRAIN_STEP", "POND_DEPTH"], "fences": ["_doubled_fences", "_chunk_cells"]}
+		"rail": ["_bank_quad", "_clip_half"], "terrain": ["TERRAIN_STEP"], "fences": ["_doubled_fences", "_chunk_cells"]}
 	var must_not := ["_build_lamps", "build_props", "build_vegetation", "_build_signals", "update_signals", "lamps_near", "_group", "_add_mesh",
 		"_surface_material", "build_buildings", "build_trees", "build_roads", "steps"]
 	for tag in must:
@@ -213,6 +213,10 @@ func _code_hash(errors: Array[String]) -> void:
 				errors.append("the %s step's fingerprint covers %s, which it does not use" % [tag, name])
 	if "_wall" in reached.trees.own or "_tree_records" in reached.buildings.own:
 		errors.append("the tree and building fingerprints overlap where they should not")
+	# the terrain sinks the pond beds through TownMap.bed_vertex (its depth, bank and road-hold constants are TownMap's)
+	for name in ["bed_vertex", "_build_bed_mask", "POND_DEPTH", "WATER_DROP", "BANK_SLOPE", "BANK_HOLD"]:
+		if not name in reached.terrain.map:
+			errors.append("the terrain's fingerprint misses TownMap.%s" % name)
 	for name in ["ground", "road_lift", "kerb_at"]:
 		if not name in reached.streets.map and name != "ground":
 			errors.append("the streets' fingerprint misses TownMap.%s" % name)

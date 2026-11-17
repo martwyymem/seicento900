@@ -1979,7 +1979,7 @@ func _update_lap_records(key: String, name: String) -> void:
 		return
 	var parts: Array[String] = []
 	for cond in LapRecords.CONDITIONS:
-		var r := LapRecords.record(key, cond)
+		var r := LapRecords.record(key, cond, _picked_car())
 		if r.has("t"):
 			parts.append("%s %s (%s)" % [Race.fmt_time(float(r.t)), cond, r.get("date", "")])
 	record_forget_button.visible = not parts.is_empty()
@@ -2246,6 +2246,7 @@ func _on_car_class_selected(index: int) -> void:
 		status_label.modulate = DANGER
 	_apply_menu_car()
 	_update_menu_car_summary()
+	_update_information_page() # the lap record shown is the picked car's
 	_queue_strategy_refresh()
 
 ## The car model and strategist a race runs on: the catalogue car's (CarCatalog key, made once), else the stock Seicento.
@@ -3834,7 +3835,7 @@ func _update_information_page() -> void:
 func _records_text(track_key: String) -> String:
 	var parts: Array[String] = []
 	for cond in LapRecords.CONDITIONS:
-		var r := LapRecords.record(track_key, cond)
+		var r := LapRecords.record(track_key, cond, _picked_car())
 		if r.has("t"):
 			parts.append("%s %s" % [Race.fmt_time(float(r.t)), cond])
 	return "\nLap record   %s" % (" · ".join(parts) if parts.size() else "none yet")
@@ -4355,7 +4356,7 @@ func _open_loading_screen(settings: RaceSettings, qualifying := false) -> void:
 		facts = [["RUN", "Rolling start" if settings.rolling_start else "Standing start"]]
 	loading_screen.open(segments, caption, "%.2f km" % length_km, {
 		"track": settings.track, "hour": settings.start_hour, "weather": settings.weather, "mode": settings.mode,
-		"facts": facts})
+		"facts": facts, "car": String(settings.car_class)})
 	await _loading_progress(0.15)
 
 func _loading_progress(fraction: float) -> void:

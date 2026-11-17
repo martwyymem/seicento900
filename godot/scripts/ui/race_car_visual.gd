@@ -154,7 +154,7 @@ func _build() -> void:
 	stripe_material.clearcoat = 0.8
 	stripe_material.clearcoat_roughness = 0.05
 	tail_material = StandardMaterial3D.new()
-	tail_material.albedo_color = Color("#3c0404")
+	tail_material.albedo_color = (_fit.get("tail_lamp", {}) as Dictionary).get("albedo", Color("#3c0404"))
 	tail_material.roughness = 0.12
 	tail_material.metallic_specular = 0.25
 	tail_material.emission_enabled = true
@@ -508,7 +508,7 @@ func set_lamps(night: float, braking := false, reversing := false) -> void:
 	if sig.is_equal_approx(_lamp_sig):
 		return
 	_lamp_sig = sig
-	tail_material.emission_energy_multiplier = tail
+	tail_material.emission_energy_multiplier = tail * float((_fit.get("tail_lamp", {}) as Dictionary).get("energy", 1.0))
 	var bulb := (4.0 + 1.5 * night) if braking else (2.4 if reversing else 0.5 * head)
 	bulb_material.emission_energy_multiplier = bulb
 	bulb_material.emission = BULB_WHITE if reversing and not braking else BULB_RED
@@ -776,7 +776,11 @@ static func _shared_resources(key := "stock") -> Dictionary:
 		details.surface_set_material(lens_surface, lens)
 	var red_glass := ShaderMaterial.new() # the tail lamps' moulded red lens (car_taillamp.gdshader): prisms, a hard sheen, a glow
 	red_glass.shader = load("res://shaders/car_taillamp.gdshader")
-	red_glass.next_pass = _env_material(1.0, 0.12, 0.0, false)
+	var tl: Dictionary = fit.get("tail_lamp", {}) # a catalogue car's own lens (the shader's defaults are the Seicento's)
+	for k in ["tint", "alpha_off", "alpha_lit", "glow_gain", "sheen"]:
+		if tl.has(k):
+			red_glass.set_shader_parameter(k, tl[k])
+	red_glass.next_pass = _env_material(float(tl.get("reflect", 1.0)), 0.12, 0.0, false) # the sky in the lens
 	var tail_glass_surface := _surface(details, "TailGlass")
 	if tail_glass_surface >= 0:
 		details.surface_set_material(tail_glass_surface, red_glass)
@@ -816,6 +820,11 @@ static func _shared_resources(key := "stock") -> Dictionary:
 		plate.shader = load("res://shaders/car_plate.gdshader")
 		plate.set_shader_parameter("atlas", load("res://textures/car/plate_pl.png"))
 		plate.set_shader_parameter("rows", float(PLATE_ROWS))
+		if fit.has("plate_y"): # a catalogue car's plates sit elsewhere than the Seicento's
+			var py: Vector3 = fit.plate_y
+			plate.set_shader_parameter("y0_front", py.x)
+			plate.set_shader_parameter("y0_rear", py.y)
+			plate.set_shader_parameter("y_max", py.z)
 		details.surface_set_material(plate_surface, plate)
 	var grille_surface := _surface(details, "Grille")
 	if grille_surface >= 0:
@@ -1037,10 +1046,14 @@ static func _merge(parts: Array) -> ArrayMesh:
 func _update_decals() -> void:
 	if not is_instance_valid(_door_decal_l):
 		return
-	var idx := clampi(car_number - 1, 0, 15)
+	var idx := clampi(car_number, 1, 99) - 1
 	var door_m := _door_plate_mesh(idx)
 	_door_decal_l.mesh = door_m
 	_door_decal_r.mesh = door_m
+	# 1-16 are cells of the atlas; above that a blank plate plus digit glyphs (car_door_plates.png) has its own material
+	var door_mat := _decal_material() if idx < 16 else _door_plates_material()
+	_door_decal_l.material_override = door_mat
+	_door_decal_r.material_override = door_mat
 	_sunstrip_decal.mesh = _sunstrip_mesh(idx % 4)
 	_hood_decal.mesh = _hood_plate_mesh(idx % 4)
 	var sill_m := _sill_stack_mesh(idx % 4)
@@ -1065,10 +1078,67 @@ static func _decal_material() -> StandardMaterial3D:
 		sh["decal_mat"] = m
 	return sh["decal_mat"]
 
+const DOOR_PLATES_TEX_PATH := "res://models/car_door_plates.png"
+
+static func _door_plates_material() -> StandardMaterial3D:
+	var sh := _shared_resources()
+	if not sh.has("door_plates_mat"):
+		var m := _decal_material().duplicate() as StandardMaterial3D
+		m.albedo_texture = load(DOOR_PLATES_TEX_PATH) as Texture2D
+		sh["door_plates_mat"] = m
+	return sh["door_plates_mat"]
+
+## Door number 17-99: the blank plate for that header variant and one quad per digit, laid out like the atlas plates
+## (0.30 m per 256 px; the number area is the plate's px 68..198 vertically, centred horizontally).
+static func _composed_door_mesh(number: int) -> ArrayMesh:
+	const SHEET := Vector2(1024.0, 512.0)
+	const PX := 0.30 / 256.0
+	const DIGIT_PITCH := 67.0 # px: Archivo's digits are tabular, 66.8 px wide at the atlas's 116 px size
+	var variant := (number - 1) % 4
+	var verts := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	var quads: Array = [[Rect2(-128, -128, 256, 256), Rect2(variant * 256, 0, 256, 256)]]
+	var text := str(number)
+	for i in text.length():
+		var d := text.unicode_at(i) - 48
+		var cell := Rect2((d % 5) * 128, 256 + (d / 5) * 128, 128, 130)
+		var cx := (float(i) - (text.length() - 1) * 0.5) * DIGIT_PITCH
+		quads.append([Rect2(cx - 64.0, -60.0, 128, 130), cell]) # y down: the number area's centre is 5 px below the plate's
+	for q in quads:
+		var r: Rect2 = q[0]
+		var u: Rect2 = q[1]
+		var base := verts.size()
+		verts.append(Vector3(r.position.x * PX, -r.end.y * PX, 0.0))
+		verts.append(Vector3(r.end.x * PX, -r.end.y * PX, 0.0))
+		verts.append(Vector3(r.end.x * PX, -r.position.y * PX, 0.0))
+		verts.append(Vector3(r.position.x * PX, -r.position.y * PX, 0.0))
+		uvs.append(Vector2(u.position.x, u.end.y) / SHEET)
+		uvs.append(Vector2(u.end.x, u.end.y) / SHEET)
+		uvs.append(Vector2(u.end.x, u.position.y) / SHEET)
+		uvs.append(Vector2(u.position.x, u.position.y) / SHEET)
+		indices.append_array(PackedInt32Array([base, base + 1, base + 2, base, base + 2, base + 3]))
+	var normals := PackedVector3Array()
+	normals.resize(verts.size())
+	normals.fill(Vector3(0, 0, 1))
+	var arr := []
+	arr.resize(Mesh.ARRAY_MAX)
+	arr[Mesh.ARRAY_VERTEX] = verts
+	arr[Mesh.ARRAY_TEX_UV] = uvs
+	arr[Mesh.ARRAY_NORMAL] = normals
+	arr[Mesh.ARRAY_INDEX] = indices
+	var m := ArrayMesh.new()
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+	return m
+
 static func _door_plate_mesh(idx: int) -> ArrayMesh:
 	var sh := _shared_resources()
 	var cache: Dictionary = sh.get("door_meshes", {})
 	if cache.has(idx):
+		return cache[idx]
+	if idx >= 16:
+		cache[idx] = _composed_door_mesh(idx + 1)
+		sh["door_meshes"] = cache
 		return cache[idx]
 	var col := idx % 4
 	var row := idx / 4

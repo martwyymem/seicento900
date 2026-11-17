@@ -38,6 +38,12 @@ func start(world_: Node3D, records_: LapRecords) -> void:
 	if not records:
 		return
 	var p := records.race.player
+	_visual.set_car(records.car_key) # the car that set the record (records are per car: the one being driven)
+	_parts.clear() # set_car rebuilds the meshes
+	for gi in _visual.find_children("*", "GeometryInstance3D", true, false):
+		gi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_parts.append(gi)
+	_see_through = -1.0
 	_visual.set_paint(p.color)
 	_visual.car_number = p.number
 	_visual.set_stripes(p.stripes)

@@ -120,6 +120,21 @@ func _visual() -> void:
 		var normal := d.transform.basis.z.normalized()
 		var hit := tri.intersect_ray(d.position + normal * 0.3, -normal)
 		check(not hit.is_empty() and absf(((d.position - (hit.position as Vector3)).dot(normal)) - 0.006) < 0.004, "the Golf's %s does not sit on the body" % n)
+	# door numbers beyond the atlas's 16 plates: a blank plate plus one glyph per digit (83 = the Hypercar's), 1-16 stay atlas cells
+	car.car_number = 83
+	var door := car.body_pivot.get_node("DoorDecalL") as MeshInstance3D
+	var uv: PackedVector2Array = (door.mesh as ArrayMesh).surface_get_arrays(0)[Mesh.ARRAY_TEX_UV]
+	check(uv.size() == 12, "door number 83 is not a plate plus two digit quads (%d uvs)" % uv.size())
+	if uv.size() == 12:
+		var sheet := Vector2(1024.0, 512.0)
+		check(is_equal_approx(uv[0].x * sheet.x, 2 * 256.0) and is_equal_approx(uv[0].y * sheet.y, 256.0), "83 uses the wrong blank plate (header variant 82 % 4 = 2)")
+		check(is_equal_approx(uv[4].x * sheet.x, 3 * 128.0) and is_equal_approx(uv[4].y * sheet.y, 256.0 + 128.0 + 130.0), "83's tens digit is not the glyph 8")
+		check(is_equal_approx(uv[8].x * sheet.x, 3 * 128.0) and is_equal_approx(uv[8].y * sheet.y, 256.0 + 130.0), "83's units digit is not the glyph 3")
+		check(door.mesh.get_aabb().position.x < -0.14 and door.mesh.get_aabb().end.x > 0.14, "door plate 83 is not the plate's width")
+	check((door.material_override as StandardMaterial3D).albedo_texture.resource_path == VISUAL.DOOR_PLATES_TEX_PATH, "door number 83 is not drawn from the digit sheet")
+	car.car_number = 9
+	check((car.body_pivot.get_node("DoorDecalR") as MeshInstance3D).material_override == VISUAL._decal_material(), "door number 9 left the atlas")
+	car.car_number = 5
 	# the Golf's wheels are the Golf's, the Seicento's are unchanged, and a swap rebuilds
 	var sei: Node3D = VISUAL.new()
 	parent.add_child(sei)

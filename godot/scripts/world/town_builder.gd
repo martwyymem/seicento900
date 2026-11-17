@@ -21,6 +21,7 @@ const LANDMARK_MODELS := "res://models/brzeszcze_landmarks.glb" ## tools/blender
 const LAND_RES := 2.5 ## metres per texel of data/world/<key>_land.png (tools/build_open_world.py)
 
 const TERRAIN_STEP := TownMap.BED_STEP
+const WATER_TESS := 20.0 ## m: longest edge of a water surface triangle (it follows the ground)
 const POND_DEPTH := TownMap.POND_DEPTH ## m: the terrain sinks this far below a pond's surface (FreeCar drives on the same bed)
 const TERRAIN_CHUNK := 32 ## quads per chunk side
 const CHUNK := 256.0 ## m: buildings and street batches
@@ -129,7 +130,7 @@ var cache_log: Array[String] = [] ## "tag hit" / "tag miss" per cached step, for
 static func cache_spec(tag: String) -> Dictionary:
 	match tag:
 		"terrain":
-			return {"data": ["terrain", "extent", "areas"], "code": "_terrain_meshes"}
+			return {"data": ["terrain", "extent", "areas", "roads"], "code": "_terrain_meshes"} # roads keep their pond banks
 		"streets":
 			return {"data": ["roads", "terrain", "buildings", "boundary"], "code": "_street_meshes"}
 		"rail":
@@ -140,7 +141,7 @@ static func cache_spec(tag: String) -> Dictionary:
 		"trees":
 			return {"data": ["trees", "terrain"], "code": "_tree_records", "files": [SURROUNDINGS.TREES_PATH]}
 		"fences":
-			return {"data": ["fences", "garden_beds", "terrain"], "code": "_fence_records", "files": [TOWN_MODELS, ROADSIDE_MODELS]}
+			return {"data": ["fences", "garden_beds", "terrain", "roads"], "code": "_fence_records", "files": [TOWN_MODELS, ROADSIDE_MODELS]}
 	return {}
 
 ## Sections of the baked map that no cached step reads (the test checks that every section is in one list or the other).
@@ -301,13 +302,7 @@ func _terrain_meshes() -> Array:
 	hs.resize(nx * ny)
 	for j in ny:
 		for i in nx:
-			var x := ex.position.x + i * TERRAIN_STEP
-			var y := ex.position.y + j * TERRAIN_STEP
-			var h := map.ground(x, y)
-			var k := j * nx + i
-			if map.bed_mask.has(k):
-				h = minf(h, float(map.bed_mask[k]) - POND_DEPTH)
-			hs[k] = h
+			hs[j * nx + i] = map.bed_vertex(i, j, nx) # the ground, sunk in and round the ponds
 	for cj in range(0, ny - 1, TERRAIN_CHUNK):
 		for ci in range(0, nx - 1, TERRAIN_CHUNK):
 			var mb := MeshBatch.new()
@@ -345,7 +340,6 @@ func build_water() -> void:
 	var batches := {}
 	for k in map.water_rings.size():
 		var ring := map.water_rings[k]
-		var level := map.water_level[k] + 0.05
 		var tris := Geometry2D.triangulate_polygon(ring)
 		if tris.is_empty():
 			continue
@@ -353,12 +347,30 @@ func build_water() -> void:
 		if not batches.has(c):
 			batches[c] = MeshBatch.new()
 		var mb: MeshBatch = batches[c]
+		# the surface follows the ground (TownMap.water_surface), so the triangles are split until none is longer than
+		# WATER_TESS: the baked ground leans by metres across a pond or along a river
+		var todo: Array[PackedVector2Array] = []
 		for t in range(0, tris.size(), 3):
-			var p0 := ring[tris[t]]
-			var p1 := ring[tris[t + 1]]
-			var p2 := ring[tris[t + 2]]
-			mb.flat_tri(Vector3(p0.x, level, p0.y), Vector3(p1.x, level, p1.y), Vector3(p2.x, level, p2.y), Vector3.UP,
-				Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 0.5), Color.WHITE)
+			todo.append(PackedVector2Array([ring[tris[t]], ring[tris[t + 1]], ring[tris[t + 2]]]))
+		while not todo.is_empty():
+			var tri: PackedVector2Array = todo.pop_back()
+			var e := 0
+			var longest := 0.0
+			for m in 3:
+				var l := tri[m].distance_squared_to(tri[(m + 1) % 3])
+				if l > longest:
+					longest = l
+					e = m
+			if longest > WATER_TESS * WATER_TESS:
+				var mid := (tri[e] + tri[(e + 1) % 3]) * 0.5
+				var o := tri[(e + 2) % 3]
+				todo.append(PackedVector2Array([tri[e], mid, o]))
+				todo.append(PackedVector2Array([mid, tri[(e + 1) % 3], o]))
+				continue
+			var v: Array[Vector3] = []
+			for q in tri:
+				v.append(Vector3(q.x, map.water_surface(q.x, q.y) + 0.05, q.y))
+			mb.flat_tri(v[0], v[1], v[2], Vector3.UP, Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 0.5), Color.WHITE)
 	# streams and ditches: a ribbon a little below the banks, following the ground
 	for ww in map.raw.get("waterways", []):
 		var width: float = ww[0]
@@ -388,6 +400,10 @@ func _chunk_of(p: Vector2, size := CHUNK) -> Vector2i:
 
 ## Marking style per road class (town_road.gdshader UV2.y).
 func _style(ri: int) -> int:
+	return _style_of(map, ri)
+
+## Marking style of street ri (town_road.gdshader's UV2.y): 0 none, 1 dashed centre, 2 centre + edges, 3 carriageway.
+static func _style_of(map: TownMap, ri: int) -> int:
 	var kind := map.road_kind[ri]
 	if kind.begins_with("motorway") or kind == "trunk":
 		return 3
@@ -396,6 +412,102 @@ func _style(ri: int) -> int:
 	if kind in ["unclassified", "residential"] and map.road_w[ri] >= 5.0 and map.road_oneway[ri] == 0:
 		return 1
 	return 0
+
+const MITER_MAX := 2.0 ## the most a ribbon's offset grows at a corner (1 / cos of half the turn: up to 120 degrees)
+
+## Street ri's ribbon as drawn: per centreline point its left and right edge (map x, y), their heights, and the half
+## width there. At a corner the offset grows by 1 / cos(half the turn) (a mitre), so the ribbon keeps its width round
+## it instead of pinching; at a way join (TownMap.way_joins) the direction takes in the next way's first segment, so
+## the two ribbons' edges meet; a way joined to a narrower one (and no kerbs) tapers to its width over its last metres.
+static func ribbon(map: TownMap, ri: int) -> Dictionary:
+	var pts := map.road_pts[ri]
+	var n := pts.size()
+	var halves := map.road_halves(ri) # (tapered into a narrower way joined end to end)
+	var before := map.joined_beyond(ri, 0)
+	var after := map.joined_beyond(ri, n - 1)
+	var left := PackedVector2Array()
+	var right := PackedVector2Array()
+	left.resize(n)
+	right.resize(n)
+	for i in n:
+		var prev := pts[i - 1] if i > 0 else before
+		var next := pts[i + 1] if i < n - 1 else after
+		var din := (pts[i] - prev).normalized() if prev.is_finite() else Vector2.ZERO
+		var dout := (next - pts[i]).normalized() if next.is_finite() else Vector2.ZERO
+		var seg := dout if not dout.is_zero_approx() else din
+		var t := din + dout
+		if t.length_squared() < 1e-4:
+			t = seg # a hairpin, or a lone end
+		t = t.normalized()
+		var nrm := Vector2(-t.y, t.x) # right of travel (x east, y south)
+		var c := absf(t.dot(seg))
+		var k := minf(1.0 / c, MITER_MAX) if c > 1e-3 else MITER_MAX
+		left[i] = pts[i] - nrm * halves[i] * k
+		right[i] = pts[i] + nrm * halves[i] * k
+	# on the inside of a bend tighter than the half width the offset edge would run backwards (a bow-tie quad):
+	# those points meet instead, so the inner edge turns at one point like a kerb's corner
+	left = _unfold(pts, left)
+	right = _unfold(pts, right)
+	var zs := map.road_z[ri]
+	var lift := map.road_lift(ri)
+	var hl := PackedFloat32Array()
+	var hr := PackedFloat32Array()
+	hl.resize(n)
+	hr.resize(n)
+	for i in n:
+		var deck := zs[i] if not zs.is_empty() else 0.0
+		# a raised deck is level across, as the car finds it (TownMap.deck_across)
+		var level := smoothstep(TownMap.DECK_LEVEL_FROM, TownMap.DECK_LEVEL_TO, deck) if deck > TownMap.DECK_LEVEL_FROM else 0.0
+		var gc := map.ground(pts[i].x, pts[i].y)
+		var gl := map.ground(left[i].x, left[i].y)
+		var gr := map.ground(right[i].x, right[i].y)
+		if map.road_pave.size() > ri and map.road_pave[ri] == 0:
+			# a street with no kerbs leans across no more than TownMap.CROSS_MAX (its downhill edge on fill)
+			var lv := TownMap.level_pair(gl, gr, left[i].distance_to(right[i]))
+			gl = lerpf(gl, lv.x, 1.0 - level)
+			gr = lerpf(gr, lv.y, 1.0 - level)
+		hl[i] = lerpf(gl, gc, level) + deck + lift
+		hr[i] = lerpf(gr, gc, level) + deck + lift
+	return {"left": left, "right": right, "hl": hl, "hr": hr, "half": halves}
+
+static func _unfold(pts: PackedVector2Array, side: PackedVector2Array) -> PackedVector2Array:
+	for _pass in 12:
+		var changed := false
+		for i in pts.size() - 1:
+			var seg := pts[i + 1] - pts[i]
+			if seg.length_squared() > 1e-6 and (side[i + 1] - side[i]).dot(seg) < -1e-4:
+				var m := (side[i] + side[i + 1]) * 0.5
+				side[i] = m
+				side[i + 1] = m
+				changed = true
+		if not changed:
+			break
+	return side
+
+## The road joined to road ri's end end_i at a way join, or -1.
+static func _joined_road(map: TownMap, ri: int, end_i: int) -> int:
+	for m in map.road_marks[ri]:
+		if int(m[0]) != end_i:
+			continue
+		for e: Array in map.way_joins().get(str(m[1]), []):
+			if not (int(e[0]) == ri and int(e[1]) == end_i):
+				return int(e[0])
+	return -1
+
+## What each junction disc is drawn as: its biggest road's marking style (town_road.gdshader pot-holes style 0 and,
+## less, 1, so a main road's junction stays as sound as the road the car finds there) and surface (a crossing of two
+## dirt tracks is no tarmac disc), ties to the paved one. node id -> Vector2i(style, surface).
+static func junction_styles(map: TownMap) -> Dictionary:
+	var best := {}
+	var out := {}
+	for ri in map.road_pts.size():
+		var key := map.road_rank[ri] * 4 + 2 - clampi(map.road_surface[ri], 0, 2)
+		for m in map.road_marks[ri]:
+			var nid := str(m[1])
+			if key > int(best.get(nid, -1)):
+				best[nid] = key
+				out[nid] = Vector2i(_style_of(map, ri), clampi(map.road_surface[ri], 0, 2))
+	return out
 
 const BRIDGE_GIRDER_DEPTH := 0.45 ## m the two girders hang under a road bridge's soffit
 const BRIDGE_GIRDER_WIDTH := 0.6
@@ -454,6 +566,7 @@ func _street_meshes() -> Array:
 			var nid := str(m[1])
 			node_width[nid] = maxf(float(node_width.get(nid, 0.0)), map.road_w[ri])
 			node_roads[nid] = int(node_roads.get(nid, 0)) + 1
+	var joins := map.way_joins()
 	for ri in map.road_pts.size():
 		var pts := map.road_pts[ri]
 		var n := pts.size()
@@ -484,7 +597,7 @@ func _street_meshes() -> Array:
 		var junction_ix := []
 		for m in map.road_marks[ri]:
 			var nid := str(m[1])
-			if int(node_roads.get(nid, 0)) >= 2:
+			if int(node_roads.get(nid, 0)) >= 2 and not joins.has(nid): # the markings run on through a way join
 				junction_ix.append([int(m[0]), float(node_width[nid]) * 0.5])
 		for i in n:
 			for jm in junction_ix:
@@ -493,29 +606,22 @@ func _street_meshes() -> Array:
 		var right := PackedVector3Array()
 		left.resize(n)
 		right.resize(n)
+		var rib := ribbon(map, ri)
+		var rl: PackedVector2Array = rib.left
+		var rr: PackedVector2Array = rib.right
+		var rhl: PackedFloat32Array = rib.hl
+		var rhr: PackedFloat32Array = rib.hr
+		var halves: PackedFloat32Array = rib.half
 		var base := mb.verts.size()
 		for i in n:
-			var t := (pts[mini(i + 1, n - 1)] - pts[maxi(i - 1, 0)]).normalized()
-			var nrm := Vector2(-t.y, t.x) # right of travel (x east, y south)
-			var deck := zs[i] if not zs.is_empty() else 0.0
-			var lp := pts[i] - nrm * half
-			var rp := pts[i] + nrm * half
-			var hl: float
-			var hr: float
-			if deck > 0.3:
-				var hc := map.ground(pts[i].x, pts[i].y) + deck + lift
-				hl = hc
-				hr = hc
-			else:
-				hl = map.ground(lp.x, lp.y) + deck + lift
-				hr = map.ground(rp.x, rp.y) + deck + lift
-			left[i] = Vector3(lp.x, hl, lp.y)
-			right[i] = Vector3(rp.x, hr, rp.y)
+			left[i] = Vector3(rl[i].x, rhl[i], rl[i].y)
+			right[i] = Vector3(rr[i].x, rhr[i], rr[i].y)
 			var show := clampf((jd[i] - 1.5) / 4.0, 0.0, 1.0)
 			var col := Color(show, surf, lanes, oneway)
 			var up := Vector3(0.0, 1.0, 0.0)
-			mb.vertex(left[i], up, Vector2(-half, s[i]), Vector2(half, style), col)
-			mb.vertex(right[i], up, Vector2(half, s[i]), Vector2(half, style), col)
+			var hw := halves[i]
+			mb.vertex(left[i], up, Vector2(-hw, s[i]), Vector2(hw, style), col)
+			mb.vertex(right[i], up, Vector2(hw, s[i]), Vector2(hw, style), col)
 		for i in n - 1:
 			var a := base + 2 * i
 			# seen from above (north up) with travel to the east, left_i is top left and right_i bottom left:
@@ -611,11 +717,16 @@ func _street_meshes() -> Array:
 					var g1 := map.ground(e1.x, e1.z) - 0.5
 					if bridge or (d0 > 4.0 and d1 > 4.0):
 						var concrete := Color(0.62, 0.61, 0.58)
+						# (no parapet across the mouth of a street joining at the deck's height: TownMap.parapet_open)
+						var open := map.parapet_open(ri, i, side)
 						db.flat_quad(e0 + out * 0.4 - Vector3.UP * 0.9, e1 + out * 0.4 - Vector3.UP * 0.9,
-							e1 + out * 0.4 + Vector3.UP * 0.95, e0 + out * 0.4 + Vector3.UP * 0.95, out, concrete)
-						db.flat_quad(e0 + Vector3.UP * 0.95, e1 + Vector3.UP * 0.95, e1 + out * 0.4 + Vector3.UP * 0.95,
-							e0 + out * 0.4 + Vector3.UP * 0.95, Vector3.UP, concrete)
-						db.flat_quad(e1, e0, e0 + Vector3.UP * 0.95, e1 + Vector3.UP * 0.95, -out, concrete.darkened(0.08))
+							e1 + out * 0.4 + (Vector3.ZERO if open else Vector3.UP * 0.95), e0 + out * 0.4 + (Vector3.ZERO if open else Vector3.UP * 0.95), out, concrete)
+						if not open:
+							db.flat_quad(e0 + Vector3.UP * 0.95, e1 + Vector3.UP * 0.95, e1 + out * 0.4 + Vector3.UP * 0.95,
+								e0 + out * 0.4 + Vector3.UP * 0.95, Vector3.UP, concrete)
+							db.flat_quad(e1, e0, e0 + Vector3.UP * 0.95, e1 + Vector3.UP * 0.95, -out, concrete.darkened(0.08))
+						else:
+							db.flat_quad(e0, e1, e1 + out * 0.4, e0 + out * 0.4, Vector3.UP, concrete) # the deck's edge, flush
 						# underside: each side's half of the soffit, from under its parapet to the centre line (one slab
 						# each, not two over the whole width in one plane), and where the deck stands clear of the ground
 						# a girder under each half, so from below it reads as a beam bridge, not a floating sheet
@@ -797,10 +908,14 @@ func _build_junction_patches(recs: Array, node_width: Dictionary, node_roads: Di
 			node_lift[nid] = maxf(float(node_lift.get(nid, 0.0)), map.road_lift(ri))
 			if map.road_z[ri].size() > int(m[0]):
 				node_deck[nid] = maxf(float(node_deck.get(nid, 0.0)), map.road_z[ri][int(m[0])])
+	var joins := map.way_joins()
+	var styles := junction_styles(map)
 	for nid in node_roads:
-		if int(node_roads[nid]) < 2 or not map.node_pos.has(nid):
-			continue
+		if int(node_roads[nid]) < 2 or not map.node_pos.has(nid) or joins.has(nid):
+			continue # (a way join: the two ribbons meet edge to edge, no disc)
 		var p: Vector2 = map.node_pos[nid]
+		var look: Vector2i = styles.get(nid, Vector2i.ZERO)
+		var style := float(look.x)
 		# the widest street's own half width: the disc fills the outside of a bend and the mouth of a side street
 		# without standing proud of the carriageway's edge (0.6 m more made a wart on every bend and T-junction)
 		var r := float(node_width[nid]) * 0.5 + 0.05
@@ -810,15 +925,15 @@ func _build_junction_patches(recs: Array, node_width: Dictionary, node_roads: Di
 		var mb: MeshBatch = batches[c]
 		var deck := float(node_deck.get(nid, 0.0))
 		var y := map.ground(p.x, p.y) + float(node_lift[nid]) + 0.004 + deck
-		var col := Color(0.0, 0.0, 0.125, 0.0)
-		var center := mb.vertex(Vector3(p.x, y, p.y), Vector3.UP, Vector2(0.0, 0.0), Vector2(r, 0.0), col)
+		var col := Color(0.0, [0.0, 0.5, 1.0][look.y], 0.125, 0.0)
+		var center := mb.vertex(Vector3(p.x, y, p.y), Vector3.UP, Vector2(0.0, 0.0), Vector2(r, style), col)
 		var seg := 14
 		var first := mb.verts.size()
 		for k in seg:
 			var a := TAU * k / seg
 			var q := p + Vector2(cos(a), sin(a)) * r
 			var qy := y if deck > 0.3 else map.ground(q.x, q.y) + float(node_lift[nid]) + 0.004
-			mb.vertex(Vector3(q.x, qy, q.y), Vector3.UP, Vector2(cos(a) * r, sin(a) * r), Vector2(r, 0.0), col)
+			mb.vertex(Vector3(q.x, qy, q.y), Vector3.UP, Vector2(cos(a) * r, sin(a) * r), Vector2(r, style), col)
 		for k in seg:
 			var a := first + k
 			var b := first + (k + 1) % seg
@@ -1296,6 +1411,9 @@ func _parapet_covered(a: Vector2, b: Vector2, y_from: float, y_to: float, bi: in
 			return true
 	return false
 
+var _drawn_faces := {} ## bi -> the walls _wall drew for it (ax, ay, bx, by, outward nx, ny each), while _building_meshes runs
+var _lod2_drawn := {} ## bi -> true: its walls stand on the measured roof's outline, not on its OSM ring
+
 ## One wall a-b (map x, y) from y_lo up to the heights top_a (at a) and top_b (at b): quads standing `push` out of the
 ## plane, minus the stretches _wall_plan() cut. UV.x is metres from the wall's start, UV.y metres over `hi`; UV2 carries
 ## the seed, kind, the wall's length and (when the top is level) its height, which the shader turns into quoins and a
@@ -1304,6 +1422,12 @@ func _wall(mb: MeshBatch, a: Vector2, b: Vector2, y_lo: float, top_a: float, top
 	var ln := a.distance_to(b)
 	if ln < 0.01:
 		return
+	if bi >= 0: # what the car meets (see _building_meshes): the wall's line, pushed out as drawn, and its outside
+		var o := Vector2(out.x, out.z).normalized()
+		var po := o * push
+		if not _drawn_faces.has(bi):
+			_drawn_faces[bi] = PackedFloat32Array()
+		_drawn_faces[bi].append_array(PackedFloat32Array([a.x + po.x, a.y + po.y, b.x + po.x, b.y + po.y, o.x, o.y]))
 	var t := (b - a) / ln
 	var level := absf(top_a - top_b) < 0.05
 	var uv2 := Vector2(seed + (roundf((top_a - hi) * 10.0) if level else 0.0), code + 20.0 * minf(roundf(ln * 10.0), 4000.0))
@@ -1560,6 +1684,10 @@ func build_buildings() -> void:
 		meshes = _building_meshes()
 		_store_meshes("buildings", meshes)
 	for mesh in meshes:
+		if mesh is Dictionary: # the walls drawn off the OSM footprint: what the car meets (TownMap.building_faces)
+			for bi: int in mesh:
+				map.set_building_faces(bi, mesh[bi])
+			continue
 		_add_mesh(group, mesh, mat)
 
 ## The buildings' meshes, one per CHUNK square (cached as the "buildings" step).
@@ -1572,6 +1700,8 @@ func _building_meshes() -> Array:
 		if (extra.has("lm") and has_model(String(extra.lm))) or shafts.hidden.has(bi):
 			not_drawn[bi] = true
 	var pushes := _wall_pushes(not_drawn)
+	_drawn_faces = {}
+	_lod2_drawn = {}
 	# the buildings of each 256 m chunk go into one mesh
 	var batches := {}
 	for bi in map.buildings.size():
@@ -1591,6 +1721,14 @@ func _building_meshes() -> Array:
 	var built: Array = []
 	for c in batches:
 		built.append((batches[c] as MeshBatch).commit())
+	# where the walls stand on the measured roof's outline (slid onto the footprint by the baker, up to 4 m), the car
+	# meets those walls, not the OSM ring: the faces go last in the step's result (and its cache)
+	var faces := {}
+	for bi: int in _lod2_drawn:
+		faces[bi] = _drawn_faces.get(bi, PackedFloat32Array())
+	built.append(faces)
+	_drawn_faces = {}
+	_lod2_drawn = {}
 	return built
 
 ## The baked detail textures (tools/build_building_textures.py) building.gdshader multiplies onto its facades and roofs.
@@ -1714,6 +1852,7 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 		var mark := mb.mark()
 		if _lod2_cover(roof_surfaces, r) >= LOD2_MIN_COVER \
 				and _add_lod2_roof(mb, roof_surfaces, hi, base, roof, wall, uv2_roof, uv2_wall, bi, push):
+			_lod2_drawn[bi] = true
 			return
 		mb.rollback(mark) # a roof given up half way leaves nothing behind
 		roof_surfaces = [] # unusable planes: the OSM walls and a roof of our own
@@ -2129,24 +2268,26 @@ func _fence_records(fence: Array) -> Array:
 		if doubled.has(wi):
 			continue
 		var w: Array = walls[wi]
-		var a := Vector2(float(w[0]), float(w[1]))
-		var b := Vector2(float(w[2]), float(w[3]))
-		var d := b - a
-		var length := d.length()
-		if length < 0.35:
-			continue
 		var style := int(w[4]) if w.size() > 4 else 0
 		if style == 2 or style == 4:
 			continue # hedge rows use the bush mesh below instead of metal panels
-		var piece := 2.5
-		var count := maxi(1, int(ceil(length / piece)))
-		for i in count:
-			var start := length * float(i) / count
-			var span := length / count
-			var p := a + d.normalized() * start
-			var scale_y := 0.68 if style == 2 else (0.9 if style == 3 else 1.0)
-			var basis := Basis(Vector3.UP, atan2(-d.y, d.x)).scaled_local(Vector3(span / 2.5, scale_y, 1.0)) # the panel runs along +X
-			xfs.append(Transform3D(basis, Vector3(p.x, map.ground(p.x, p.y), p.y)))
+		if Vector2(float(w[0]), float(w[1])).distance_to(Vector2(float(w[2]), float(w[3]))) < 0.35:
+			continue
+		# the stretches off the streets' lanes (TownMap.fence_pieces: the same ones are solid)
+		for piece_ab: Array in map.fence_pieces(Vector2(float(w[0]), float(w[1])), Vector2(float(w[2]), float(w[3]))):
+			var a: Vector2 = piece_ab[0]
+			var b: Vector2 = piece_ab[1]
+			var d := b - a
+			var length := d.length()
+			var piece := 2.5
+			var count := maxi(1, int(ceil(length / piece)))
+			for i in count:
+				var start := length * float(i) / count
+				var span := length / count
+				var p := a + d.normalized() * start
+				var scale_y := 0.68 if style == 2 else (0.9 if style == 3 else 1.0)
+				var basis := Basis(Vector3.UP, atan2(-d.y, d.x)).scaled_local(Vector3(span / 2.5, scale_y, 1.0)) # the panel runs along +X
+				xfs.append(Transform3D(basis, Vector3(p.x, map.ground(p.x, p.y), p.y)))
 	var local: Transform3D = fence[1]
 	var placed := []
 	for xf in xfs:
@@ -2167,18 +2308,18 @@ func _fence_records(fence: Array) -> Array:
 				var w: Array = walls[wi]
 				if int(w[4]) != 2:
 					continue
-				var a := Vector2(float(w[0]), float(w[1]))
-				var b := Vector2(float(w[2]), float(w[3]))
-				var d := b - a
-				if d.length() < 0.35:
+				if Vector2(float(w[0]), float(w[1])).distance_to(Vector2(float(w[2]), float(w[3]))) < 0.35:
 					continue
-				var steps := maxi(1, int(ceil(d.length() / HEDGE_STEP)))
-				var yaw := atan2(-d.y, d.x)
-				for j in steps:
-					var p := a + d * ((float(j) + 0.5) / float(steps))
-					var s := 0.8 + hash2(p.x, p.y, 17.0) * 0.3
-					var turn := yaw + (hash2(p.x, p.y, 19.0) - 0.5) * 0.5 + (PI if hash2(p.x, p.y, 23.0) > 0.5 else 0.0)
-					bushes.append(Transform3D(Basis(Vector3.UP, turn).scaled(Vector3.ONE * s), Vector3(p.x, map.ground(p.x, p.y), p.y)))
+				for piece_ab: Array in map.fence_pieces(Vector2(float(w[0]), float(w[1])), Vector2(float(w[2]), float(w[3]))):
+					var a: Vector2 = piece_ab[0]
+					var d: Vector2 = piece_ab[1] - a
+					var steps := maxi(1, int(ceil(d.length() / HEDGE_STEP)))
+					var yaw := atan2(-d.y, d.x)
+					for j in steps:
+						var p := a + d * ((float(j) + 0.5) / float(steps))
+						var s := 0.8 + hash2(p.x, p.y, 17.0) * 0.3
+						var turn := yaw + (hash2(p.x, p.y, 19.0) - 0.5) * 0.5 + (PI if hash2(p.x, p.y, 23.0) > 0.5 else 0.0)
+						bushes.append(Transform3D(Basis(Vector3.UP, turn).scaled(Vector3.ONE * s), Vector3(p.x, map.ground(p.x, p.y), p.y)))
 			bush_cells = _chunk_cells(bushes, [])
 		roadside.free()
 	var beds := []
@@ -2431,8 +2572,8 @@ func build_props() -> void:
 		if sgn == 0.0:
 			sgn = 1.0
 		var q: Vector2 = near.pos + side * sgn * (map.road_w[near.road] * 0.5 + 2.6)
-		if map.inside_building(q):
-			continue
+		if map.inside_building(q) or not map.road_at(q.x, q.y, -INF, 1.3).is_empty():
+			continue # in a house, or its 1.1 m post reaches a lane (a bend, another street)
 		var face := -side * sgn
 		stop_xfs.append(Transform3D(Basis(Vector3.UP, atan2(face.x, face.y) + PI), Vector3(q.x, map.ground(q.x, q.y), q.y)))
 		map.add_post(q, 1.1)
@@ -2670,7 +2811,9 @@ func _build_parked_cars(group: Node3D) -> void:
 					if not map.inside_building(spot) and map.posts_near(spot, 2.0).is_empty():
 						var pick := _pick_index(weights, hash2(q.x, q.y, 23.0))
 						var h := atan2(t.y, t.x) + (PI if sgn < 0.0 else 0.0)
-						_add_parked(lists[kinds[pick]], spot + side * sgn * _pavement_nudge(spot, h, side * sgn), h)
+						var at := spot + side * sgn * _pavement_nudge(spot, h, side * sgn)
+						if _parked_clear(at, h): # not across another street's lanes (a bend, a junction)
+							_add_parked(lists[kinds[pick]], at, h)
 				d += 9.0
 			acc += ln
 	var paint := StandardMaterial3D.new()
@@ -2691,6 +2834,18 @@ func _parked_corners(p: Vector2, heading: float) -> PackedVector2Array:
 	var f := Vector2(cos(heading), sin(heading)) * 2.0
 	var r := Vector2(-f.y, f.x).normalized() * 0.9
 	return PackedVector2Array([p + f + r, p + f - r, p - f - r, p - f + r])
+
+## Whether a car parked at p (its footprint and its two collision circles) keeps off every carriageway.
+func _parked_clear(p: Vector2, heading: float) -> bool:
+	var f := Vector2(cos(heading), sin(heading))
+	var r := Vector2(-f.y, f.x)
+	for u in [-2.0, -1.0, 0.0, 1.0, 2.0]:
+		for v in [-0.9, 0.0, 0.9]:
+			var q: Vector2 = p + f * u + r * v
+			var hit := map.road_at(q.x, q.y)
+			if not hit.is_empty() and float(hit.deck) < 0.5:
+				return false
+	return true
 
 ## How far to slide a car parked at the kerb along `out` (away from the road) so it stands wholly on the pavement
 ## rather than straddling the kerb step; 0 when it already does or sits wholly off it.
@@ -2847,14 +3002,14 @@ func shaft_towers() -> Dictionary:
 	_shaft_towers = {"hidden": hidden, "kept": kept}
 	return _shaft_towers
 
-## Landmark building footprints reserved by tools/open_world/landmarks.json: [model, ring, ridge height, metadata].
+## Landmark building footprints reserved by tools/open_world/landmarks.json: [model, ring, ridge height, metadata, building].
 func landmark_buildings() -> Array:
 	var out: Array = []
 	for bi in map.buildings.size():
 		var b: Array = map.buildings[bi]
 		if b.size() <= 6 or not b[6] is Dictionary or not b[6].has("lm"):
 			continue
-		out.append([String(b[6].lm), map.bld_rings[bi], float(b[6].get("lmh", b[1])), b[6]])
+		out.append([String(b[6].lm), map.bld_rings[bi], float(b[6].get("lmh", b[1])), b[6], bi])
 	return out
 
 func build_landmarks() -> void:
@@ -2890,6 +3045,8 @@ func build_landmarks() -> void:
 		var inst := _add_mesh(group, mesh_xf[0], null, model_name)
 		inst.transform = Transform3D(Basis(Vector3.UP, angle).scaled(Vector3(sx, sy, sz)),
 			Vector3(centre.x, map.ground(centre.x, centre.y), centre.y)) * (mesh_xf[1] as Transform3D)
+		# the car meets the model (scaled and turned to the footprint), not the OSM ring
+		map.set_building_faces(int(record[4]), _model_faces(mesh_xf[0], inst.transform, map.ground(centre.x, centre.y)))
 	for pl in map.places:
 		var p := Vector2(pl.x, pl.y)
 		var g := map.ground(p.x, p.y)
@@ -2908,7 +3065,14 @@ func build_landmarks() -> void:
 				# Legacy town.glb headframe model places its shaft forward of the origin.
 				var shaft := Transform3D(Basis(), Vector3(0, 0, HEADFRAME_SHAFT if model_name == "Headframe" and models.has("Headframe") else 0.0))
 				inst.transform = Transform3D(Basis(Vector3.UP, face), Vector3(p.x, g, p.y)) * shaft * (mesh_xf[1] as Transform3D)
-				if model_name == "Headframe": map.add_post(p, 6.0)
+				# the shaft houses hidden under it collide as the model stands, not as their OSM rings
+				var model_faces := _model_faces(mesh_xf[0], inst.transform, g)
+				var first := true
+				for bi in map.buildings_near(p, 0.0):
+					if shaft_towers().hidden.has(bi) and TownMap.inside(p, map.bld_rings[bi]):
+						map.set_building_faces(bi, model_faces if first else PackedFloat32Array())
+						first = false
+				if first and model_name == "Headframe": map.add_post(p, 6.0)
 			"chimney":
 				var h := float(pl.get("h", 45.0))
 				var mb := MeshBatch.new(false, true)
@@ -2950,6 +3114,34 @@ func build_landmarks() -> void:
 			Vector3(end.x, map.ground(end.x, end.y), end.y)) * (mesh_xf[1] as Transform3D)
 	_build_festival(group)
 	_build_billboards(group)
+
+## A model's footprint as building faces (TownMap.set_building_faces): the convex hull, in map x, y, of its vertices
+## within 2 m of the ground (eaves, spires and a headframe's sheaves overhang nothing a car hits).
+func _model_faces(mesh: Mesh, xf: Transform3D, ground_y: float) -> PackedFloat32Array:
+	var low := PackedVector2Array()
+	var all := PackedVector2Array()
+	for v in mesh.get_faces():
+		var w := xf * v
+		all.append(Vector2(w.x, w.z))
+		if w.y < ground_y + 2.0:
+			low.append(Vector2(w.x, w.z))
+	var hull := Geometry2D.convex_hull(low if low.size() >= 3 else all)
+	var out := PackedFloat32Array()
+	if hull.size() > 1 and hull[0].is_equal_approx(hull[hull.size() - 1]):
+		hull.remove_at(hull.size() - 1)
+	var m := hull.size()
+	if m < 3:
+		return out
+	var area := 0.0
+	for k in m:
+		area += hull[k].cross(hull[(k + 1) % m])
+	for k in m:
+		var a := hull[k]
+		var b := hull[(k + 1) % m]
+		var t := (b - a).normalized()
+		var n := Vector2(t.y, -t.x) if area > 0.0 else Vector2(-t.y, t.x)
+		out.append_array(PackedFloat32Array([a.x, a.y, b.x, b.y, n.x, n.y]))
+	return out
 
 func _build_festival(group: Node3D) -> void:
 	var spot: Array = map.spots.get("festival", [])

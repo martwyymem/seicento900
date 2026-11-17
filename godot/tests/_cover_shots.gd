@@ -1,6 +1,7 @@
 ## Windowed probe: renders the open-world loading cover's stills (OpenWorldCover.SHOTS) into textures/loading/.
 ##   godot --path godot --audio-driver Dummy --always-on-top -s tests/_cover_shots.gd -- [out dir]
-## Env: ONLY (comma list of shot numbers 1-3). Renders the world's own viewport at 1920x1080 (no HUD, no retro
+## Env: ONLY (comma list of shot numbers 1-3), CAR (a CarCatalog key, default "stock": the stock car's stills are ow_cover_<n>,
+## every other car's <key>_<n>, as OpenWorldCover.SHOTS names them; the car wears its own livery). Renders the world's own viewport at 1920x1080 (no HUD, no retro
 ## filter) with the stock red Seicento parked at an angle; the window itself stays small in the corner.
 ## Afterwards convert to JPEG: sips -s format jpeg -s formatOptions 82 X.png --out X.jpg
 extends SceneTree
@@ -25,7 +26,11 @@ func _initialize() -> void:
 	var ow := OpenWorld.new()
 	ow.render_size = func(_px: Vector2i) -> Vector2i: return SIZE
 	root.add_child(ow)
+	var car := OS.get_environment("CAR") if CarCatalog.is_key(OS.get_environment("CAR")) else "stock"
+	FanLevels.dev_unlock = true # every catalogue car fits, whatever this machine's saves have opened
 	await ow.open("industrial_sprint", {"quality": 3})
+	ow.progress.car_class = CarCatalog.index_of(car)
+	ow._fit_car()
 	ow.apply_graphics(3)
 	ow.hud.hide()
 	if ow.route_mesh:
@@ -86,7 +91,8 @@ func _initialize() -> void:
 			await process_frame
 		await RenderingServer.frame_post_draw
 		var img := ow.viewport.get_texture().get_image()
-		var path := out.path_join(String(shot[0]) + ".png")
+		var stem := String(shot[0]) if car == "stock" else String(shot[0]).replace("ow_cover", car)
+		var path := out.path_join(stem + ".png")
 		img.save_png(path)
 		print("saved ", path, " ", img.get_size())
 	quit()

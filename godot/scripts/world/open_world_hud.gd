@@ -177,7 +177,7 @@ func _build() -> void:
 	live_title.visible = false
 	chain_box.add_child(live_title)
 	chain_box.move_child(live_title, 0)
-	live_line = _label("", 16, Color(1, 1, 1, 0.85), 800)
+	live_line = _label("", 18, Color(1, 1, 1, 0.9), 800) # 16 was hard to read at 800x450 (2026-11-14 shots)
 	live_line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	live_line.visible = false
 	chain_box.add_child(live_line)
@@ -357,8 +357,8 @@ func _build_loading() -> void:
 # ------------------------------------------------------------------------------------------ updates
 
 ## Puts up the loading cover: a still of the car somewhere in Brzeszcze and the figures of the one fitted.
-func open_loading(spec: CarSpec, car_name: String) -> void:
-	loading.open(spec, car_name)
+func open_loading(spec: CarSpec, car_name: String, car_key := "stock") -> void:
+	loading.open(spec, car_name, -1, car_key)
 
 func show_loading(text: String, fraction: float) -> void:
 	if not loading.visible:
@@ -517,6 +517,8 @@ func set_live(title: String, line: String, color: Color) -> void:
 	live_title.text = title
 	live_line.text = line
 	live_title.add_theme_color_override("font_color", color.lightened(0.25))
+	# a countdown's number is drawn big, as the lights would be
+	live_title.add_theme_font_size_override("font_size", 84 if title.is_valid_int() else 30)
 	live_title.visible = title != ""
 	live_line.visible = line != ""
 	if shown != live_title.visible:

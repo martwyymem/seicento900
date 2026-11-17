@@ -46,6 +46,7 @@ func run() -> Array:
 	_save(errors)
 	await _world(map, home, errors)
 	_missions_on_map(map, errors)
+	_stunts(map, home, errors)
 	completed = true
 	return errors
 
@@ -93,6 +94,11 @@ func _shape(map: TownMap, ev: Dictionary, home: Vector2, errors: Array[String]) 
 				errors.append("drift zone is not twisty")
 	if String(ev.title) == "":
 		errors.append("%s has no title" % ev.kind)
+	if ev.kind != "trailblazer" and not LiveEvents.on_roads(map, ev.path):
+		errors.append("%s's route leaves the drawn roads" % ev.kind)
+	var nr := map.nearest_road(ev.pos, 8.0)
+	if not nr.is_empty() and absf((nr.dir as Vector2).dot(Vector2.from_angle(float(ev.heading)))) < 0.7:
+		errors.append("%s's start faces across its road" % ev.kind)
 
 func _targets(live: LiveEvents, ev: Dictionary, errors: Array[String]) -> void:
 	var t := live.tiers_for(ev, "stock")
@@ -140,8 +146,8 @@ func _run_sprint(live: LiveEvents, ev: Dictionary, errors: Array[String]) -> voi
 				errors.append("a gold-pace sprint ended '%s' with tier %d (%s)" % [got, int(live.last_result.get("tier", 0)), live.last_result.get("line", "")])
 			if int(seen.get("go", 0)) != 1 or int(seen.get("cp", 0)) != (ev.cps as PackedVector2Array).size() - 1:
 				errors.append("sprint run reported %s" % [seen])
-			if live.board.has(ev):
-				errors.append("a cleared event stayed on the board")
+			if not live.board.has(ev) or int(ev.get("best_tier", 0)) != 3:
+				errors.append("a cleared event left the board or lost its medal (best_tier %s)" % ev.get("best_tier"))
 			if int(live.last_result.get("fans", 0)) <= 0:
 				errors.append("a gold sprint paid no fans")
 		elif got != "fail":
@@ -259,21 +265,58 @@ func _world(map: TownMap, home: Vector2, errors: Array[String]) -> void:
 		errors.append("driving through every checkpoint did not finish the event")
 	if int(ow.progress.live.get("gold", 0)) != 1:
 		errors.append("the gold run was not saved in the stats: %s" % [ow.progress.live])
-	if ow.builder.beacon_nodes.has("live_cp") or ow.builder.beacon_nodes.has("live_%s" % e.live):
-		errors.append("the checkpoint or the cleared event's beacon stayed up")
-	if ow.hud.live_title.visible:
-		errors.append("the event clock stayed on the HUD")
 	var gold_banner := false
 	for b in ow.hud.banners.get_children():
 		if ((b.get_child(0) as Control).get_child(0) as Label).text.begins_with("GOLD"):
 			gold_banner = true
 	if not gold_banner:
 		errors.append("no GOLD banner after the run")
+	if ow.builder.beacon_nodes.has("live_cp") or not ow._gate_nodes.is_empty():
+		errors.append("the checkpoint beacon or gate posts stayed up")
+	if not ow.builder.beacon_nodes.has("live_%s" % e.live):
+		errors.append("the cleared event's beacon went (it stays up for another go)")
+	elif not ((ow.builder.beacon_nodes["live_%s" % e.live] as Node3D).get_child(2) as Label3D).text.begins_with("★★★"):
+		errors.append("the cleared event's beacon does not show its gold medal")
+	if not ow.hud.card.visible or not ow.hud.card_hint.text.contains("RESTART"):
+		errors.append("no results card with RESTART after the run ('%s')" % ow.hud.card_hint.text)
+	# ENTER on the results card restarts it: on the line again, countdown
+	ow._start_active_event()
+	if not ow.live.holding() or String(ow.live.run.ev.id) != String(lev.id):
+		errors.append("RESTART from the results card did not put the sprint back on the line")
+	# the pause menu has RESTART EVENT and ABANDON EVENT while it runs
+	var items: Array = ow._pause_items()
+	if not items.any(func(it): return it[0] == "restart_live") or not items.any(func(it): return it[0] == "abandon_live"):
+		errors.append("the pause menu lacks RESTART / ABANDON EVENT: %s" % [items])
+	ow._update_live(3.5)
+	# miss the first checkpoint: drive on past it beside the route
+	var tr: PackedVector2Array = ow.live.run.track
+	var cp_s: float = (ow.live.run.cp_s as PackedFloat32Array)[0]
+	var miss_i := int((cp_s + 80.0) / LiveEvents.TRACK_STEP)
+	if lev.kind == "sprint" and miss_i < tr.size() - 1:
+		var step_i := int(cp_s / LiveEvents.TRACK_STEP) - 10
+		while step_i <= miss_i:
+			var d := (tr[step_i + 1] - tr[step_i]).normalized()
+			ow.drive.place(tr[step_i] + Vector2(-d.y, d.x) * 40.0 if absf(step_i * LiveEvents.TRACK_STEP - cp_s) < 30.0 else tr[step_i], 0.0)
+			ow._update_live(0.1)
+			step_i += 3
+		if String(ow.live.run.notice) != "missed" or not ow.hud.live_line.text.begins_with("MISSED"):
+			errors.append("running past a checkpoint gave notice '%s' / HUD '%s'" % [ow.live.run.notice, ow.hud.live_line.text])
+		if not ow._reset_in_event():
+			errors.append("R during the event fell back to a plain respawn")
+		var at := Vector2(ow.drive.car.x, ow.drive.car.y)
+		if at.distance_to(lev.pos) > 6.0 or String(ow.live.run.notice) != "" or int(ow.live.run.cp) != 0:
+			errors.append("R in the event did not reset to the start: %.0f m off, notice '%s'" % [at.distance_to(lev.pos), ow.live.run.notice])
+	ow._pause_action("abandon_live")
+	if ow.live.is_running() or ow.hud.live_title.visible or not ow._gate_nodes.is_empty():
+		errors.append("ABANDON EVENT left the run, the HUD or the gates")
+	if ow.hud.live_title.visible:
+		errors.append("the event clock stayed on the HUD")
 	if ow.progress.fans <= 0:
 		errors.append("the gold run paid no fans")
 	# a campaign mission started from its beacon runs on the map: on the grid, roads closed, the field drawn; the
 	# pause menu's abandon clears them
 	var di := Missions.index_of("drag_quarter")
+	ow.hour = 9.25
 	if ow._begin_mission(di):
 		var rv := ow.live.rivals()
 		if rv == null or ow._rival_nodes.size() != rv.rivals.size() or rv.rivals.size() != int(Missions.get_def(di).opponents):
@@ -283,11 +326,17 @@ func _world(map: TownMap, home: Vector2, errors: Array[String]) -> void:
 		if absf(ow.hour - float(Missions.get_def(di).start_hour)) > 0.01:
 			errors.append("the clock did not move to the mission's hour")
 		ow._update_live(1.0)
-		if not ow.hud.live_title.text.begins_with("DRAG"):
-			errors.append("the HUD reads '%s' in a drag mission" % ow.hud.live_title.text)
+		# the countdown: the count in the big line, the event's name under it
+		if ow.hud.live_title.text != "2" or not ow.hud.live_line.text.begins_with("DRAG"):
+			errors.append("the HUD reads '%s / %s' in a drag mission's countdown" % [ow.hud.live_title.text, ow.hud.live_line.text])
+		ow._pause_action("restart_live")
+		if not ow.live.holding() or ow._rival_nodes.size() != int(Missions.get_def(di).opponents):
+			errors.append("RESTART EVENT did not put the drag back on the grid with its field")
 		ow._pause_action("abandon_live")
-		if ow.live.is_running() or not ow._rival_nodes.is_empty():
-			errors.append("abandoning the mission left the run or its field")
+		if ow.live.is_running() or not ow._rival_nodes.is_empty() or ow._roads_closed():
+			errors.append("abandoning the mission left the run, its field or the roads closed")
+		if absf(ow.hour - 9.25) > 0.01:
+			errors.append("the clock stayed at the mission's hour (%.2f) after it ended" % ow.hour)
 	else:
 		errors.append("the drag mission did not start on the map")
 	ow.queue_free()
@@ -403,3 +452,69 @@ func _rally_run(map: TownMap, ev: Dictionary, errors: Array[String]) -> void:
 	var res := live.last_result
 	if stages != (ev.stages as Array).size() or int(res.get("pos", 0)) != 1:
 		errors.append("rally on the map: %d stages driven, result %s" % [stages, res])
+
+## PR stunts start by driving through their gate (flying start, no countdown); the wrong way and off the route are
+## told; a speed zone's flying targets are harder than its standing ones; a repeat of a medal pays a tenth.
+func _stunts(map: TownMap, home: Vector2, errors: Array[String]) -> void:
+	var live := LiveEvents.new(map, 99)
+	var ev := live.generate(home, PackedVector2Array(), "speed_zone")
+	if ev.is_empty():
+		ev = live.generate(home, PackedVector2Array(), "speed_zone")
+	if ev.is_empty():
+		errors.append("no speed zone for the stunt checks")
+		return
+	live.board.append(ev)
+	var d := Vector2.from_angle(float(ev.heading))
+	var p0: Vector2 = ev.pos
+	if not live.drive_through(p0 - d * 3.0, p0 + d * 3.0, 2.0).is_empty():
+		errors.append("crawling through a stunt's gate started it")
+	if not live.drive_through(p0 + d * 3.0, p0 - d * 3.0, 20.0).is_empty():
+		errors.append("driving the wrong way through a stunt's gate started it")
+	var hit := live.drive_through(p0 - d * 3.0, p0 + d * 3.0, 20.0)
+	if hit != ev:
+		errors.append("driving through a speed zone's gate at speed did not start it")
+	var fly := live.tiers_for(ev, "stock", true)
+	var stand := live.tiers_for(ev, "stock", false)
+	if float(fly[2]) <= float(stand[2]):
+		errors.append("flying-start speed-zone gold %.1f is not above the standing one %.1f" % [fly[2], stand[2]])
+	live.begin(ev, "stock", {"rolling": true, "at": p0})
+	if live.holding() or String(live.run.state) != "running":
+		errors.append("a driven-into stunt has a countdown")
+	# wrong way: back along the route at speed
+	var tr: PackedVector2Array = live.run.track
+	var dt := 1.0 / 30.0
+	var said := ""
+	var s := 60.0
+	for k in 60:
+		live.tick(dt, tr[int(s / LiveEvents.TRACK_STEP)], 15.0, 0.0, false, false)
+	for k in 90:
+		s -= 15.0 * dt
+		var i := clampi(int(s / LiveEvents.TRACK_STEP), 0, tr.size() - 2)
+		var r := live.tick(dt, tr[i].lerp(tr[i + 1], s / LiveEvents.TRACK_STEP - i), 15.0, 0.0, false, false)
+		if r == "warn":
+			said = String(live.run.notice)
+	if said != "wrong_way":
+		errors.append("driving back along a speed zone gave notice '%s'" % said)
+	# off the route for a while
+	var far := tr[int(s / LiveEvents.TRACK_STEP)] + Vector2(0.0, 120.0)
+	for k in 200:
+		live.tick(dt, far, 0.0, 0.0, false, false)
+	if String(live.run.notice) != "off_route":
+		errors.append("120 m off the route for 6 s gave notice '%s'" % live.run.notice)
+	var pose := live.reset_to_checkpoint()
+	if pose.is_empty() or (pose[0] as Vector2).distance_to(ev.pos) > 6.0 or String(live.run.notice) != "":
+		errors.append("reset in a stunt did not go back to its start: %s" % [pose])
+	live.abandon()
+	# a repeat of a medal already won pays a tenth of it
+	ev["best_tier"] = 3
+	ev["best"] = 999.0
+	live.begin(ev, "stock", {"rolling": true})
+	for k in 2000:
+		var r := live.tick(dt, tr[mini(k * 20, tr.size() - 1)], 40.0, 0.0, false, false)
+		if r in ["done", "fail"]:
+			break
+	var full := int(LiveEvents.FANS_PER_KM * clampf(float(ev.length) / 1000.0, 0.5, 5.0) * LiveEvents.TIER_FANS[3] / 10.0) * 10
+	if int(live.last_result.get("tier", 0)) == 3 and int(live.last_result.get("fans", 0)) > full / 5:
+		errors.append("a repeat gold paid %d fans (a first gold pays %d)" % [int(live.last_result.fans), full])
+	if not live.board.has(ev):
+		errors.append("the stunt left the board after a run")

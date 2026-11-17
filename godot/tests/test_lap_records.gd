@@ -116,6 +116,77 @@ func run() -> Array:
 		errors.append("the ghost preference should be saved")
 	LapRecords.set_ghost_shown(false, ghost_pref)
 
+	# ---- records and ghosts are per car; saves from before that count as the stock car's
+	LapRecords._store = null
+	LapRecords._memory_ghosts.clear()
+	LapRecords.use_disk = false
+	var legacy := PackedFloat32Array()
+	for i in LapRecords.STRIDE * 4:
+		legacy.append(i * 0.25)
+	LapRecords.load_store().tracks["fiat"] = {"dry": {"t": 70.5, "date": "2026-01-01", "tyre": "M", "assists": "off", "gearbox": "auto"}}
+	LapRecords._save_ghost("fiat", "dry", legacy)
+	var old := LapRecords.record("fiat", "dry")
+	if float(old.get("t", 0.0)) != 70.5 or old.get("car") != "stock" or LapRecords.load_ghost("fiat", "dry") != legacy:
+		errors.append("an old record without a car key should load as the stock car's: %s" % [old])
+	if LapRecords.record("fiat", "dry", "stock") != old or LapRecords.car_of("") != "stock" or LapRecords.car_of("nonsense") != "stock":
+		errors.append("an empty or unknown car key means stock")
+	for k in CarCatalog.KEYS:
+		if k != "stock" and (not LapRecords.record("fiat", "dry", k).is_empty() or not LapRecords.load_ghost("fiat", "dry", k).is_empty()):
+			errors.append("the stock record must not be %s's" % k)
+	var other := ""
+	for k in CarCatalog.KEYS:
+		if k != "stock":
+			other = k
+			break
+	if other == "":
+		errors.append("the catalogue should hold a second car")
+	else:
+		var st2 := RaceSettings.new()
+		st2.track = "fiat"
+		st2.opponents = 0
+		st2.laps = 4
+		st2.weather = "dry"
+		st2.race_control = false
+		st2.mandatory_stop = false
+		st2.car_class = other
+		var race2 := Race.new(st2, null, 7)
+		race2.set_autopilot(true)
+		LapRecords.count_autopilot = true
+		var rec3 := LapRecords.new(race2)
+		if rec3.car_key != other or rec3.ghost_time != null or rec3.chasing():
+			errors.append("another car must not chase the stock car's lap (%s, ghost %s)" % [rec3.car_key, rec3.ghost_time])
+		var tk := 0
+		while race2.phase != "finished" and tk < 120 * 1800:
+			race2.step(dt, idle)
+			rec3.tick()
+			tk += 1
+		var mine := LapRecords.record("fiat", "dry", other)
+		if mine.is_empty() or mine.get("car") != other or rec3.new_records.is_empty():
+			errors.append("the %s should set its own record: %s" % [other, mine])
+		if LapRecords.record("fiat", "dry") != old or LapRecords.load_ghost("fiat", "dry") != legacy:
+			errors.append("a lap in the %s must leave the stock record and ghost alone" % other)
+		if LapRecords.load_ghost("fiat", "dry", other).is_empty():
+			errors.append("the %s's ghost should be saved under its own key" % other)
+		var rec4 := LapRecords.new(Race.new(st2, null, 8))
+		if rec4.ghost_time == null or absf(float(rec4.ghost_time) - float(mine.t)) > 1e-9:
+			errors.append("the next race in the %s should chase its record" % other)
+		var ghost_node := LapGhost.new()
+		Engine.get_main_loop().root.add_child(ghost_node)
+		ghost_node.start(null, rec4)
+		if ghost_node._visual.car_key != other:
+			errors.append("the ghost should draw the %s, got %s" % [other, ghost_node._visual.car_key])
+		ghost_node.start(null, LapRecords.new(Race.new(st, null, 9)))
+		if ghost_node._visual.car_key != "stock":
+			errors.append("a stock lap's ghost draws the stock car")
+		ghost_node.free()
+		# the file names: stock keeps its old one, others get a suffix
+		if not LapRecords._ghost_path("fiat", "dry").ends_with("fiat_dry.ghost") or not LapRecords._ghost_path("fiat", "wet", other).ends_with("fiat_wet_%s.ghost" % other):
+			errors.append("ghost file names: stock unchanged, other cars suffixed")
+		LapRecords.forget("fiat")
+		if not LapRecords.record("fiat", "dry", other).is_empty() or not LapRecords.load_ghost("fiat", "dry", other).is_empty():
+			errors.append("forgetting a circuit drops every car's record")
+	LapRecords.count_autopilot = false
+
 	LapRecords.use_disk = true
 	LapRecords.count_autopilot = false
 	LapRecords._store = null

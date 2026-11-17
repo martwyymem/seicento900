@@ -200,6 +200,8 @@ DRIVABLE = {
 LOOSE_GRAVEL = {'gravel', 'fine_gravel', 'compacted', 'pebblestone'}  # unpaved roads of loose stone (Physics.SURF_GRAVEL_ROAD)
 UNPAVED = {'unpaved', 'gravel', 'dirt', 'ground', 'grass', 'sand', 'compacted', 'fine_gravel', 'earth', 'mud', 'pebblestone'}
 CLASS_ID = {k: i for i, k in enumerate(DRIVABLE)}
+BARRIER_IN = 6.0  # m in from where a road meets the play edge that its closure's barrier stands
+BARRIER_PAST = 0.5  # m of road left beyond the barrier: the car's box never reaches the edge, the tree belt takes over
 RAMP_GRADE = 0.06  # embankment ramps up to a road bridge
 RAIL_RAMP_GRADE = 0.02
 RIVER_DEPTH = 1.0  # m: how far a river or canal sinks the terrain grid at its centre line
@@ -256,6 +258,383 @@ def densify(pts, step):
             t = k / n
             out.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
     return out
+
+
+FILLET_MIN_TURN = math.radians(12.0)  # a road's corner sharper than this between junctions is rounded off
+FILLET_STEP = math.radians(15.0)  # arc points every this much turn
+
+
+def fillet(pts, half):
+    """Rounds the corners of a road's polyline between two junctions (its ends stay put): each corner becomes an arc of
+    radius max(half + 2, 6) m, or as tight as the neighbouring segments leave room for (half of each, all of an end
+    segment). OSM draws a bend as one node; a ribbon offset from that pinches on the inside and spikes on the outside."""
+    n = len(pts)
+    if n < 3:
+        return pts
+    want = max(half + 2.0, 6.0)
+    out = [pts[0]]
+    for i in range(1, n - 1):
+        a, b, c = pts[i - 1], pts[i], pts[i + 1]
+        l1, l2 = math.dist(a, b), math.dist(b, c)
+        if l1 < 1e-6 or l2 < 1e-6:
+            continue
+        u1 = ((b[0] - a[0]) / l1, (b[1] - a[1]) / l1)
+        u2 = ((c[0] - b[0]) / l2, (c[1] - b[1]) / l2)
+        cr = u1[0] * u2[1] - u1[1] * u2[0]
+        turn = math.atan2(cr, u1[0] * u2[0] + u1[1] * u2[1])
+        if abs(turn) < FILLET_MIN_TURN:
+            out.append(b)
+            continue
+        th = math.tan(abs(turn) / 2.0)
+        room = min(l1 * (0.95 if i == 1 else 0.5), l2 * (0.95 if i == n - 2 else 0.5))
+        tl = min(want * th, room)
+        r = tl / th
+        p1 = (b[0] - u1[0] * tl, b[1] - u1[1] * tl)
+        side = 1.0 if cr > 0 else -1.0  # the centre lies to the left (cross > 0, y south: turning right on the map)
+        nx, ny = -u1[1] * side, u1[0] * side
+        cx, cy = p1[0] + nx * r, p1[1] + ny * r
+        a0 = math.atan2(p1[1] - cy, p1[0] - cx)
+        k = max(1, int(math.ceil(abs(turn) / FILLET_STEP)))
+        for j in range(k + 1):
+            ang = a0 + turn * j / k
+            q = (cx + math.cos(ang) * r, cy + math.sin(ang) * r)
+            if math.dist(q, out[-1]) > 0.05:  # neighbouring arcs share the midpoint of the segment between them
+                out.append(q)
+    if math.dist(pts[-1], out[-1]) <= 0.05:
+        out.pop()
+    out.append(pts[-1])
+    return out
+
+
+JUNCTION_TURN = math.radians(30.0)  # a road turning more than this at a junction node (which must stay put) is curved through it
+
+
+def round_junction_corners(dense, marks):
+    """fillet() leaves a junction node where it is, so a street that turns at a junction (Podlaska, where a side street
+    meets its corner) keeps a sharp corner there. The node stays on the road, but the street within L (up to 6 m, under
+    half the way to the next junction) either side of it becomes two Hermite curves through it, tangent to the street at
+    their outer ends and to the line between those ends at the node: the street passes the node on a smooth bend."""
+    n = len(dense)
+    if n < 3:
+        return dense, marks
+    cum = [0.0]
+    for a, b in zip(dense, dense[1:]):
+        cum.append(cum[-1] + math.dist(a, b))
+
+    def at(sv):
+        k = max(0, min(n - 2, next((i for i in range(n - 1) if cum[i + 1] >= sv), n - 2)))
+        sl = max(cum[k + 1] - cum[k], 1e-9)
+        f = max(0.0, min(1.0, (sv - cum[k]) / sl))
+        a, b = dense[k], dense[k + 1]
+        return (a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f), ((b[0] - a[0]) / sl, (b[1] - a[1]) / sl)
+
+    mark_s = sorted(cum[i] for i, _ in marks)
+    regions = {}  # mark index -> L
+    for idx, _ in marks:
+        if not 0 < idx < n - 1:
+            continue
+        sm = cum[idx]
+        before = max([x for x in mark_s if x < sm - 1e-6] + [0.0])
+        after = min([x for x in mark_s if x > sm + 1e-6] + [cum[-1]])
+        ll = min(6.0, 0.45 * (sm - before), 0.45 * (after - sm))
+        if ll < 1.5:
+            continue
+        pa, ua = at(sm - ll)
+        pb, ub = at(sm + ll)
+        u1 = at(sm - 0.3)[1]
+        u2 = at(sm + 0.3)[1]
+        if abs(math.atan2(u1[0] * u2[1] - u1[1] * u2[0], u1[0] * u2[0] + u1[1] * u2[1])) > JUNCTION_TURN:
+            regions[idx] = ll
+    if not regions:
+        return dense, marks
+
+    def hermite(p0, m0, p1, m1, t):
+        t2, t3 = t * t, t * t * t
+        h = (2 * t3 - 3 * t2 + 1, t3 - 2 * t2 + t, -2 * t3 + 3 * t2, t3 - t2)
+        return tuple(h[0] * p0[q] + h[1] * m0[q] + h[2] * p1[q] + h[3] * m1[q] for q in (0, 1))
+
+    out, new_ix = [], {}
+    j = 0
+    while j < n:
+        hit = next((m for m in regions if cum[m] - regions[m] < cum[j] < cum[m] and j != m), None)
+        if hit is None:
+            new_ix[j] = len(out)
+            out.append(dense[j])
+            j += 1
+            continue
+        m, ll = hit, regions[hit]
+        node = dense[m]
+        pa, ua = at(cum[m] - ll)
+        pb, ub = at(cum[m] + ll)
+        dl = math.dist(pa, pb) or 1.0
+        tn = ((pb[0] - pa[0]) / dl, (pb[1] - pa[1]) / dl)
+        if math.dist(out[-1], pa) > 0.05:
+            out.append(pa)
+        for t in (0.25, 0.5, 0.75):
+            out.append(hermite(pa, (ua[0] * ll, ua[1] * ll), node, (tn[0] * ll, tn[1] * ll), t))
+        new_ix[m] = len(out)
+        out.append(node)
+        for t in (0.25, 0.5, 0.75):
+            out.append(hermite(node, (tn[0] * ll, tn[1] * ll), pb, (ub[0] * ll, ub[1] * ll), t))
+        out.append(pb)
+        # skip the old points up to pb (a mark in there cannot be: L is under half the way to the next one)
+        j = m + 1
+        while j < n and cum[j] <= cum[m] + ll + 1e-6:
+            j += 1
+        if j < n and math.dist(out[-1], dense[j]) < 0.05:
+            out.pop()
+    return out, [(new_ix[i], nid) for i, nid in marks]
+
+
+HOUSE_CLEAR = 0.3  # m between a street's (narrowed) edge and a building corner beside it
+MIN_HALF = 1.5  # m: no street is narrowed below 3 m
+SHED_DROP_AREA = 60.0  # m2: a shed or garage standing in a street this narrow goes (the street was there first)
+
+
+def narrow_past_buildings(out_roads, zr, buildings):
+    """The class default width (5.4 m for a residential street) is a guess; between old houses whose walls stand 1-2 m
+    from the centre line the street is narrower. Each street gets a half width per point ('hw', only where it is
+    narrowed): HOUSE_CLEAR inside the nearest wall of a building beside it (its footprint ring and its measured roof
+    outlines, which is what TownBuilder may draw), flat 3 m either side and widening again at 0.15 m per m, never under
+    MIN_HALF. A shed or garage under SHED_DROP_AREA that still stands in the lane is dropped from `buildings`; a house
+    the centre line runs through (a gateway, a misaligned way) is listed."""
+    grid = {}
+    for bi, b in enumerate(buildings):
+        ring = b[4]
+        polys = [[(ring[k], ring[k + 1]) for k in range(0, len(ring) - 1, 2)]]
+        extra = b[6] if len(b) > 6 and isinstance(b[6], dict) else {}
+        for poly in extra.get('rs', []):
+            polys.append([(poly[k], poly[k + 1]) for k in range(0, len(poly) - 2, 3)])
+        for pl in polys:
+            for k in range(len(pl)):
+                e0, e1 = pl[k], pl[(k + 1) % len(pl)]
+                for gx in range(int(min(e0[0], e1[0]) // 20), int(max(e0[0], e1[0]) // 20) + 1):
+                    for gy in range(int(min(e0[1], e1[1]) // 20), int(max(e0[1], e1[1]) // 20) + 1):
+                        grid.setdefault((gx, gy), []).append((e0, e1, bi))
+
+    def closest(a, b, e0, e1):
+        """(distance, t along a-b) of the closest approach of segment e0-e1 to segment a-b."""
+        if seg_cross(a, b, e0, e1):
+            r = (b[0] - a[0], b[1] - a[1])
+            s2 = (e1[0] - e0[0], e1[1] - e0[1])
+            den = r[0] * s2[1] - r[1] * s2[0]
+            return 0.0, (((e0[0] - a[0]) * s2[1] - (e0[1] - a[1]) * s2[0]) / den) if den else 0.0
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        l2 = dx * dx + dy * dy or 1e-9
+        best = None
+        for q in (e0, e1):
+            t = max(0.0, min(1.0, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / l2))
+            dd = math.dist(q, (a[0] + dx * t, a[1] + dy * t))
+            if best is None or dd < best[0]:
+                best = (dd, t)
+        for q, t in ((a, 0.0), (b, 1.0)):
+            dd = dist_seg(q[0], q[1], e0, e1)
+            if dd < best[0]:
+                best = (dd, t)
+        return best
+
+    out = []
+    drop = set()
+    through = set()
+    shifted = []
+    narrowed = 0
+    for r, z in zip(out_roads, zr):
+        pts = r['p']
+        half = r['w'] / 2
+        hw = [half] * len(pts)
+        if r['b'] or max(z) > 0.3 or len(pts) < 2:
+            out.append(None)
+            continue
+        cum = [0.0]
+        for a, b in zip(pts, pts[1:]):
+            cum.append(cum[-1] + math.dist(a, b))
+        changed = False
+        shifts = []
+        for k, (a, b) in enumerate(zip(pts, pts[1:])):
+            seen = set()
+            for gx in range(int(min(a[0], b[0]) // 20) - 1, int(max(a[0], b[0]) // 20) + 2):
+                for gy in range(int(min(a[1], b[1]) // 20) - 1, int(max(a[1], b[1]) // 20) + 2):
+                    for e0, e1, bi in grid.get((gx, gy), ()):
+                        if (e0, e1) in seen:
+                            continue
+                        seen.add((e0, e1))
+                        d, t = closest(a, b, e0, e1)
+                        if d >= half + HOUSE_CLEAR:
+                            continue
+                        req = d - HOUSE_CLEAR
+                        if req < MIN_HALF:
+                            kind = buildings[bi][0]
+                            ring = buildings[bi][4]
+                            area = abs(bs.area([(ring[m], ring[m + 1]) for m in range(0, len(ring) - 1, 2)]))
+                            if kind in ('shed', 'garage') and area < SHED_DROP_AREA:
+                                drop.add(bi)
+                                continue
+                            # the centre line runs (nearly) through the wall: shift the street off it, up to 1.5 m
+                            # (its junction nodes stay put), then narrow it as for any other wall
+                            px, py = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+                            wq = min((e0, e1), key=lambda q: math.dist(q, (px, py)))
+                            dl = math.dist(a, b) or 1.0
+                            nx_, ny_ = -(b[1] - a[1]) / dl, (b[0] - a[0]) / dl
+                            side = 1.0 if (wq[0] - px) * nx_ + (wq[1] - py) * ny_ < 0 else -1.0  # away from the wall
+                            push = min(1.5, MIN_HALF + HOUSE_CLEAR - d)
+                            if push > 0.05:
+                                shifts.append((cum[k] + dl * t, nx_ * side * push, ny_ * side * push))
+                            through.add((r['n'] or r['kn'], round(ring[0]), round(ring[1]), kind))
+                            req = MIN_HALF
+                        sc = cum[k] + math.dist(a, b) * t
+                        for j in range(len(pts)):
+                            lim = req + 0.15 * max(0.0, abs(cum[j] - sc) - 3.0)
+                            if lim < hw[j]:
+                                hw[j] = lim
+                                changed = True
+        if shifts:
+            fixed = {i for i, _ in r['e']}
+            new_pts = list(pts)
+            for j in range(len(pts)):
+                if j in fixed:
+                    continue
+                ox = oy = 0.0
+                for sc, sx, sy in shifts:
+                    w = max(0.0, 1.0 - max(0.0, abs(cum[j] - sc) - 3.0) / 8.0)
+                    if abs(sx * w) > abs(ox) or abs(sy * w) > abs(oy):
+                        ox, oy = sx * w, sy * w
+                # (towards a junction node the shift dies away over the segment beside it)
+                near_fixed = min((abs(cum[j] - cum[i]) for i in fixed), default=99.0)
+                f = min(1.0, near_fixed / 6.0)
+                new_pts[j] = (pts[j][0] + ox * f, pts[j][1] + oy * f)
+            r['p'][:] = new_pts
+            shifted.append(r['n'] or r['kn'])
+        if changed:
+            narrowed += 1
+            out.append([round(h, 2) for h in hw])
+        else:
+            out.append(None)
+    print(len(shifted), 'streets shifted off walls their centre line ran through:', shifted[:12])
+    for bi in sorted(drop, reverse=True):
+        del buildings[bi]
+    print(narrowed, 'streets narrowed past buildings;', len(drop), 'sheds/garages in a lane dropped;',
+          len(through), 'buildings the centre line runs through:', sorted(through)[:16])
+    return out
+
+
+JOIN_GAP = 6.0  # m: a dead end this near another road's edge, pointing at it, is run on into it
+
+
+def join_dead_ends(out_roads, els, closures, node_xy):
+    """A street that OSM ends a few metres short of another (a drawing slip: the two were meant to meet) is run on into
+    that road's carriageway, unless a mapped barrier (fence, wall, gate) stands between or a closure is there."""
+    count = {}
+    for r in out_roads:
+        for _, nid in r['e']:
+            count[nid] = count.get(nid, 0) + 1
+    grid = SegGrid(20.0)
+    for i, r in enumerate(out_roads):
+        for a, b in zip(r['p'], r['p'][1:]):
+            grid.add(a, b, i)
+    fences = SegGrid(20.0)
+    for e in els:
+        if e['type'] == 'way' and e.get('tags', {}).get('barrier') and e.get('geometry'):
+            g = [P(q) for q in e['geometry']]
+            for a, b in zip(g, g[1:]):
+                fences.add(a, b, 0)
+    joined = []
+    for i, r in enumerate(out_roads):
+        if r['b']:
+            continue
+        for first in (True, False):
+            idx = 0 if first else len(r['p']) - 1
+            nid = r['e'][0][1] if first else r['e'][-1][1]
+            if count.get(nid, 0) != 1 or len(r['p']) < 2:
+                continue
+            end = r['p'][idx]
+            prev = r['p'][1] if first else r['p'][-2]
+            dl = math.dist(end, prev) or 1.0
+            d = ((end[0] - prev[0]) / dl, (end[1] - prev[1]) / dl)
+            if any(math.dist(end, (c['x'], c['y'])) < 12.0 for c in closures):
+                continue
+            best = None
+            for a, b, j in grid.near(end[0], end[1], JOIN_GAP + 10.0):
+                o = out_roads[j]
+                if j == i or o['b']:
+                    continue
+                dx, dy = b[0] - a[0], b[1] - a[1]
+                l2 = dx * dx + dy * dy
+                t = 0.0 if l2 < 1e-9 else max(0.0, min(1.0, ((end[0] - a[0]) * dx + (end[1] - a[1]) * dy) / l2))
+                q = (a[0] + dx * t, a[1] + dy * t)
+                dist = math.dist(end, q)
+                gap = dist - o['w'] / 2
+                if gap <= 0.05 or gap > JOIN_GAP or dist < 1e-6:
+                    continue
+                if ((q[0] - end[0]) * d[0] + (q[1] - end[1]) * d[1]) / dist < math.cos(math.radians(50.0)):
+                    continue  # not where the street points
+                if best is None or gap < best[0]:
+                    best = (gap, q, dist, o['w'])
+            if best is None:
+                continue
+            gap, q, dist, ow = best
+            run = dist - ow / 2 + 0.5
+            new = (end[0] + (q[0] - end[0]) / dist * run, end[1] + (q[1] - end[1]) / dist * run)
+            if any(seg_cross(end, new, a, b) for a, b, _ in fences.near((end[0] + new[0]) / 2, (end[1] + new[1]) / 2, run)):
+                continue
+            if first:
+                r['p'].insert(0, new)
+                r['e'] = [(0 if k == 0 else k + 1, n_) for k, n_ in r['e']]
+            else:
+                r['p'].append(new)
+                r['e'] = r['e'][:-1] + [(len(r['p']) - 1, nid)]
+            node_xy[nid] = (r1(new[0]), r1(new[1]))
+            joined.append((r['n'] or r['kn'], round(gap, 1)))
+    print(len(joined), 'dead ends run on into the road just beyond:', joined[:12])
+
+
+DUAL_REACH = 16.0  # m: a oneway way with an opposite-running oneway of the same name this near is one carriageway of a pair
+DUAL_SHARE = 0.4  # share of its points that must have the partner beside them
+
+
+def narrow_dual_carriageways(out_roads, tagged_width):
+    """OSM maps a divided road as two oneway ways, but the class default width is a two-way road's: the two drawn
+    carriageways overlap and their markings z-fight. Each half of a pair (same name, opposite directions, within
+    DUAL_REACH) without a mapped width gets its lanes' width, no wider than the gap to its partner allows."""
+    grid = SegGrid(DUAL_REACH)
+    for i, r in enumerate(out_roads):
+        if r['o'] and not r['rb'] and r['n'] and not r['kn'].startswith('motorway'):
+            for a, b in zip(r['p'], r['p'][1:]):
+                grid.add(a, b, i)
+    changed = []
+    for i, r in enumerate(out_roads):
+        if not r['o'] or r['rb'] or not r['n'] or r['kn'].startswith('motorway') or tagged_width[i]:
+            continue
+        pts = r['p']
+        dists = []
+        for k, q in enumerate(pts):
+            a = pts[max(k - 1, 0)]
+            b = pts[min(k + 1, len(pts) - 1)]
+            dl = math.dist(a, b) or 1.0
+            dirv = ((b[0] - a[0]) / dl, (b[1] - a[1]) / dl)
+            best = None
+            for c, d, j in grid.near(q[0], q[1], DUAL_REACH):
+                o = out_roads[j]
+                if j == i or o['n'] != r['n']:
+                    continue
+                sl = math.dist(c, d) or 1.0
+                if ((d[0] - c[0]) * dirv[0] + (d[1] - c[1]) * dirv[1]) / sl > -0.7:
+                    continue
+                dd = dist_seg(q[0], q[1], c, d)
+                if dd < DUAL_REACH and (best is None or dd < best):
+                    best = dd
+            if best is not None:
+                dists.append(best)
+        if len(dists) < DUAL_SHARE * len(pts):
+            continue
+        dists.sort()
+        gap = dists[len(dists) // 2]
+        lane = 3.5 if r['kn'] in ('trunk', 'primary', 'secondary', 'tertiary') else 3.0
+        w = max(1, r['l'] if r['lt'] else 1) * lane + 1.0
+        w = max(3.0, min(w, gap - 0.3))
+        if w < r['w'] - 0.05:
+            changed.append((r['n'], r['w'], round(w, 1)))
+            r['w'] = round(w, 1)
+    print(len(changed), 'dual-carriageway halves narrowed:', changed[:12])
 
 
 def smooth_grid(g, passes):
@@ -830,26 +1209,65 @@ def build(check_png=None):
         for nid in ids:
             use[nid] = use.get(nid, 0) + 1
     # a road that ends at (or within a few metres of) the polygon's edge is closed with a barrier across it
+    trims = []  # (road index, from the end?) the road stops BARRIER_PAST m past its barrier: no road on to the edge
+    rgrid = SegGrid(20.0)
     for e, k, t, ids, pts, cs, ce in roads:
+        for a, b in zip(pts, pts[1:]):
+            rgrid.add(a, b, (e['id'], DRIVABLE[k][0] / 2))
+
+    def on_other(q, own):
+        return any(rid != own and dist_seg(q[0], q[1], a, b) < hw + 1.5 for a, b, (rid, hw) in rgrid.near(q[0], q[1], 12.0))
+
+    def along(pts_, sv):
+        run, j = 0.0, 0
+        while j < len(pts_) - 1:
+            sl = math.dist(pts_[j], pts_[j + 1])
+            if run + sl >= sv:
+                f = (sv - run) / max(sl, 1e-9)
+                return (pts_[j][0] + (pts_[j + 1][0] - pts_[j][0]) * f, pts_[j][1] + (pts_[j + 1][1] - pts_[j][1]) * f)
+            run += sl
+            j += 1
+        return pts_[-1]
+
+    for ri_, (e, k, t, ids, pts, cs, ce) in enumerate(roads):
         if k == 'motorway':
             continue
         for end_id, pts_ in ((ids[0], pts), (ids[-1], pts[::-1])):
             q, nxt = pts_[0], pts_[1]
             if use[end_id] != 1 or poly_dist(q[0], q[1], PLAY_POLY) > 40.0:
                 continue
-            run, j = 0.0, 0  # the barrier stands a few metres inside
-            while j < len(pts_) - 1 and run < 4.0:
+            # the barrier stands BARRIER_IN m inside, measured along the road (not at the next OSM node, which can be
+            # 100 m in and leave the road running on past the barrier to the edge)
+            # and further in where the road leaves the polygon at a slant (Beskidzka by a corner of the outline): until
+            # its carriageway and a car on it stand clear of the edge
+            hw0 = (bs.number(t.get('width')) or DRIVABLE[k][0]) / 2
+            b_in = BARRIER_IN
+            run, j = 0.0, 0
+            while j < len(pts_) - 1 and run < min(60.0, 0.45 * seg_len(pts)):  # (trim_end takes at most half)
+                if run >= BARRIER_IN and poly_dist(pts_[j][0], pts_[j][1], PLAY_POLY) >= hw0 + 3.0:
+                    break
                 run += math.dist(pts_[j], pts_[j + 1])
                 j += 1
-            b0 = pts_[j]
-            if any(math.dist(b0, (c['x'], c['y'])) < 12.0 for c in closures):
+            if run > BARRIER_IN and j < len(pts_) - 1 and run < 0.45 * seg_len(pts):
+                b_in = run
+            # never across another street (a junction just in from the edge): back towards the edge until clear
+            while b_in > 1.5 and on_other(along(pts_, b_in), e['id']):
+                b_in -= 0.5
+            b0 = along(pts_, b_in)
+            if any(math.dist(b0, (c['x'], c['y'])) < 4.0 for c in closures):  # (one barrier already across this very road)
                 continue
             closures.append({'x': b0[0], 'y': b0[1], 'h': math.atan2(q[1] - nxt[1], q[0] - nxt[0]), 'w': 0.0, 'kind': k,
                              'name': t.get('name', '') or t.get('ref', ''), 'road': e['id'], 'turn': False})
+            if seg_len(pts) > b_in + 10.0:
+                trims.append((ri_, end_id == ids[-1] and pts_ is not pts, b_in - BARRIER_PAST))
+    for ri_, from_end, cut in trims:
+        r = roads[ri_]
+        r[3], r[4] = trim_end(r[3], r[4], cut, from_end)
     roads = [tuple(r[:5]) for r in roads]
     # junctions: nodes on two or more roads (or twice on one), plus road ends
     junction = {nid for nid, c in use.items() if c >= 2}
     out_roads = []
+    tagged_width = []
     node_xy = {}
     for e, k, t, ids, pts in roads:
         w0, lanes0, paved = DRIVABLE[k]
@@ -874,6 +1292,7 @@ def build(check_png=None):
         dense, marks = [], []
         for a, b in zip(keep, keep[1:]):
             part = bs.simplify(pts[a:b + 1], 0.25)
+            part = fillet(part, width * 0.5)
             part = densify(part, 6.0)
             if dense:
                 part = part[1:]
@@ -882,6 +1301,7 @@ def build(check_png=None):
             if not marks:
                 marks.append((0, ids[a]))
             marks.append((len(dense) - 1, ids[b]))
+        dense, marks = round_junction_corners(dense, marks)
         for idx, nid in marks:
             node_xy[nid] = (r1(dense[idx][0]), r1(dense[idx][1]))
         out_roads.append({'id': e['id'], 'n': t.get('name', '') or t.get('ref', ''), 'ref': t.get('ref', ''),
@@ -891,15 +1311,36 @@ def build(check_png=None):
                           'tn': 1 if t.get('tunnel') in ('yes',) else 0,
                           'lit': 1 if t.get('lit') == 'yes' else 0,
                           'rb': 1 if t.get('junction') == 'roundabout' else 0,
-                          'p': dense, 'e': marks,
+                          'p': dense, 'e': marks, 'lt': bool(t.get('lanes')),
                           'maxspeed': bs.number(t.get('maxspeed')) or 0})
+        tagged_width.append(bs.number(t.get('width')) is not None)
     print(len(out_roads), 'roads,', len(node_xy), 'graph nodes')
+    narrow_dual_carriageways(out_roads, tagged_width)
+    join_dead_ends(out_roads, els, closures, node_xy)
     width_of = {}
     for r in out_roads:
         width_of[r['id']] = max(width_of.get(r['id'], 0.0), r['w'])
+    cgrid = SegGrid(20.0)
+    for r in out_roads:
+        for a, b in zip(r['p'], r['p'][1:]):
+            cgrid.add(a, b, r)
     for c in closures:
         if not c['turn']:
-            c['w'] = round(width_of.get(c['road'], 5.0) + 3.0, 1)
+            w = width_of.get(c['road'], 5.0) + 3.0
+            # a barrier moved in from the edge must not reach across another street beside it
+            nx_, ny_ = -math.sin(c['h']), math.cos(c['h'])
+            o = 0.5
+            while o < w / 2:
+                hit = False
+                for sgn in (-1.0, 1.0):
+                    qx, qy = c['x'] + nx_ * o * sgn, c['y'] + ny_ * o * sgn
+                    for a, b, r in cgrid.near(qx, qy, 10.0):
+                        if r['id'] != c['road'] and dist_seg(qx, qy, a, b) < r['w'] / 2 + 0.3:
+                            hit = True
+                if hit:
+                    break
+                o += 0.25
+            c['w'] = round(min(w, 2.0 * o), 1)
     print(len(closures), 'closures:', [(c['name'] or c['kind'], round(c['x']), round(c['y'])) for c in closures])
 
     # ---- railways
@@ -1033,7 +1474,11 @@ def build(check_png=None):
                     w = list(v)
                     for k in range(1, len(v) - 1):
                         if k not in pinned and (v[k - 1] > 0 or v[k] > 0 or v[k + 1] > 0):
-                            w[k] = (v[k - 1] + 2 * v[k] + v[k + 1]) / 4.0
+                            # weighted by the spacing (a curve's short chords beside 6 m ones): a straight grade in
+                            # metres stays straight, so the ramp's grade holds however the points are spaced
+                            l0 = math.dist(l['p'][k - 1], l['p'][k]) or 1e-6
+                            l1 = math.dist(l['p'][k], l['p'][k + 1]) or 1e-6
+                            w[k] = 0.5 * v[k] + 0.5 * (l1 * v[k - 1] + l0 * v[k + 1]) / (l0 + l1)
                     v = w
             out.append(v)
         return out
@@ -1076,9 +1521,12 @@ def build(check_png=None):
                     r = out_roads[ri]
                     if not (zz >= 0.8 or r['tn']) or not seg_cross(a, b, c, d):
                         continue
-                    if max(zr[ri]) > 1.0 and not r['tn']:
-                        continue  # a raised road: it is a bridge or a ramp of its own
                     x, y = cross_pt(a, b, c, d)
+                    # a road raised where it crosses is a bridge or a ramp of its own; one that only climbs to a bridge
+                    # further on (the Kolonia track under the railway by Most Bronisław) still goes under here
+                    k = min(range(len(r['p'])), key=lambda k: math.dist(r['p'][k], (x, y)))
+                    if zr[ri][k] > 1.0 and not r['tn']:
+                        continue
                     dl = math.dist(a, b) or 1.0
                     dr = math.dist(c, d) or 1.0
                     found[(li, i, ri)] = (x, y, (b[0] - a[0]) / dl, (b[1] - a[1]) / dl, ri, (d[0] - c[0]) / dr, (d[1] - c[1]) / dr)
@@ -1876,10 +2324,21 @@ def build(check_png=None):
             out += [r1(p[0]), r1(p[1])]
         return out
 
+    road_hw = narrow_past_buildings(out_roads, zr, buildings)
+    # a street shifted off a wall may now run over a lamp placed beside it: those lamps go
+    lgrid = SegGrid(20.0)
+    for r in out_roads:
+        for a, b in zip(r['p'], r['p'][1:]):
+            lgrid.add(a, b, r['w'] / 2)
+    n_l = len(lamps)
+    lamps[:] = [q for q in lamps if not any(dist_seg(q[0], q[1], a, b) < hw + 0.6 for a, b, hw in lgrid.near(q[0], q[1], 8.0))]
+    print(n_l - len(lamps), 'lamps dropped off shifted streets')
     roads_out = []
-    for r, z in zip(out_roads, zr):
+    for r, z, hw in zip(out_roads, zr, road_hw):
         rec = {'id': r['id'], 'n': r['n'], 'k': r['kn'], 'w': r['w'], 'l': r['l'], 'o': r['o'], 's': r['s'],
                'b': r['b'], 'p': flat_pts(r['p']), 'e': [[i, nid] for i, nid in r['e']]}
+        if hw:
+            rec['hw'] = hw
         if max(z) > 0.05:
             rec['z'] = [round(v, 2) for v in z]
         if r['rb']:

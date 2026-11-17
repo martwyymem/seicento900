@@ -168,6 +168,11 @@ func init_car(car: RaceCar) -> PhysState:
 ## k: the surface's SURF_STEER (1 on tarmac).
 func max_steer(v: float, mu: float, k := 1.0) -> float:
 	var v2 := maxf(1.0, v * v)
+	if spec.steer_fast != 1.0:
+		# a car far quicker than the Seicento: calmer at speed, where a full key press would otherwise throw the fronts
+		# past their peak in a few tenths (CarSpec.steer_fast)
+		var calm := lerpf(1.0, spec.steer_fast, smoothstep(spec.steer_fast_from, spec.steer_fast_to, absf(v)))
+		return minf(spec.steer_lock, (wb * mu * G / v2 + 1.35 * APK * calm) * spec.steer_gain * k)
 	return minf(spec.steer_lock, (wb * mu * G / v2 + 1.35 * APK) * spec.steer_gain * k)
 
 ## Advance the car by dt.
@@ -200,6 +205,10 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 	var crr := spec.crr
 	var offroad := spec.offroad_drag
 	var lift_a := spec.lift_a
+	var aero_f := spec.aero_front
+	var esc_grip := spec.esc_grip
+	var esc_aero := spec.esc_aero
+	var aero_r := spec.aero_rear
 	var cd_a := spec.cd_a
 	var zeta := spec.susp_zeta
 	var clutch_cap := spec.clutch_capacity
@@ -252,7 +261,7 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 	var rho_a := ph.rho
 	var abs_k := ph.abs_k
 	var brk := input.brake
-	var thr_in := input.throttle
+	var thr_in := input.throttle * (spec.reverse_power if car.rev else 1.0)
 	var env_mu := env.mu
 	var abs_on := env.abs_on
 	var tc_on := env.tc_on
@@ -293,8 +302,8 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 		var lift := 0.5 * 1.2 * lift_a * v2
 		var W := m * G
 		var d_long := m * ax_f * cg_h / wb
-		var front := W * b / wb - d_long - lift * 0.55
-		var rear := W * a / wb + d_long - lift * 0.45
+		var front := W * b / wb - d_long - lift * aero_f
+		var rear := W * a / wb + d_long - lift * aero_r
 		var d_lat_f := m * ay_f * cg_h / tf * roll_f
 		var d_lat_r := m * ay_f * cg_h / tr * (1.0 - roll_f)
 		fz[0] = maxf(0.0, front / 2 + d_lat_f)
@@ -359,7 +368,7 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 		esc[3] = 0.0
 		if esc_on and vx > 5.0 and hb_grip > 0.95:
 			# reference: the neutral-steer yaw rate, capped at what the grip allows
-			var lim := env_mu * G * 1.1 / vx
+			var lim := env_mu * G * 1.1 / vx * (esc_grip + esc_aero * v2)
 			var target := clampf(vx * delta / wb, -lim, lim)
 			var over := r - target
 			var band := 0.05 + 0.1 * absf(target)

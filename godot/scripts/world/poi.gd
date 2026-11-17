@@ -110,7 +110,7 @@ static func find_landmarks(map: TownMap) -> Array[Poi]:
 		if not LANDMARK_LABELS.has(k) or n == "":
 			continue
 		var at := Vector2(float(pl.x), float(pl.y))
-		if map.play.size() > 2 and not Geometry2D.is_point_in_polygon(at, map.play):
+		if map.play.size() > 2 and not TownMap.inside(at, map.play):
 			continue
 		cands.append([rank.find(k) + (100 if n.begins_with("Kaplica") else 0), n, at, k])
 	cands.sort_custom(func(a, b):

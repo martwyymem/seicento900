@@ -16,6 +16,10 @@ func run() -> Array:
 	_places(errors)
 	_grid(errors)
 	_edges(errors)
+	_road(errors)
+	_drag_calibration(errors)
+	_blocking(errors)
+	_bands(errors)
 	completed = true
 	return errors
 
@@ -105,11 +109,17 @@ func _wiggly(errors: Array[String]) -> void:
 func _drag(errors: Array[String]) -> void:
 	var sr := StreetRivals.new(_line(402.0), "stock", 3, 5, {"grid": "drag"})
 	var pg := sr.player_grid()
-	if not pg.is_equal_approx(Vector2(0.0, -1.8)):
-		errors.append("drag player_grid() is %s, wanted (0, -1.8)" % pg)
+	# four abreast across an 8 m road: the player second from the right, a lane's width apart
+	if not pg.is_equal_approx(Vector2(0.0, -0.5 * sr.drag_lane)) or sr.drag_lane < 2.0 or sr.drag_lane * 3.0 + 1.7 > 8.01:
+		errors.append("drag player_grid() is %s with lanes %.2f m apart" % [pg, sr.drag_lane])
 	var plain := StreetRivals.new(_line(402.0), "stock", 3, 5)
-	if not plain.player_grid().is_equal_approx(Vector2.ZERO):
-		errors.append("default player_grid() is %s, wanted (0, 0)" % plain.player_grid())
+	# a road grid: the player on pole, every rival behind it or beside it, nobody behind the route's start
+	var pole := plain.player_grid()
+	for r in plain.rivals:
+		if float(r.s) > pole.x + 0.01 or float(r.s) < 0.0:
+			errors.append("default grid: a rival at s %.1f with the player at %.1f" % [float(r.s), pole.x])
+		if absf(float(r.s) - pole.x) < 1.0 and absf(float(r.lat) - pole.y) < 2.4:
+			errors.append("default grid: a rival beside the player only %.2f m across" % absf(float(r.lat) - pole.y))
 	var lats := [pg.y]
 	for r in sr.rivals:
 		if absf(float(r.s)) > 0.001:
@@ -124,11 +134,12 @@ func _drag(errors: Array[String]) -> void:
 	for r in sr.rivals:
 		if float(r.s) < 2.0:
 			errors.append("drag rival has barely moved after 2 s (s=%.2f)" % float(r.s))
-	_idle_run(sr, 40.0)
+	_idle_run(sr, 14.0)
 	for k in sr.rivals.size():
 		var r: Dictionary = sr.rivals[k]
-		if absf(float(r.lat) - float(lats[k + 1])) > 0.001:
-			errors.append("drag rival %d changed lane (%.2f -> %.2f)" % [k, float(lats[k + 1]), float(r.lat)])
+		if float(r.t_done) < 0.0 and absf(float(r.lat) - float(lats[k + 1])) > 0.001:
+			errors.append("drag rival %d changed lane while racing (%.2f -> %.2f)" % [k, float(lats[k + 1]), float(r.lat)])
+	_idle_run(sr, 26.0)
 	if sr.finished_count() != 3:
 		errors.append("drag: %d of 3 rivals finished" % sr.finished_count())
 
@@ -252,3 +263,86 @@ func _edges(errors: Array[String]) -> void:
 	for r in sr.rivals:
 		if float(r.v) != 0.0 or not is_finite(float(r.s)):
 			errors.append("a zero step moved a rival (v=%.2f)" % float(r.v))
+
+## On a road profile: the rivals' line is moved onto the road's centre and kept inside its half width; the pose
+## turns smoothly (no jump at a vertex); a finished rival rolls on past the line instead of stopping on it.
+func _road(errors: Array[String]) -> void:
+	var path := _wiggle()
+	var n := LiveEvents.resample(path, StreetRivals.STEP).size()
+	var centre := PackedFloat32Array()
+	var half := PackedFloat32Array()
+	centre.resize(n)
+	half.resize(n)
+	centre.fill(1.5)
+	half.fill(2.6)
+	var sr := StreetRivals.new(path, "stock", 6, 3, {"profile": {"centre": centre, "half": half}})
+	var prev := {}
+	var jumps := 0
+	var overlaps := 0
+	var wide := 0.0
+	var ps := 0.0
+	for i in 3000:
+		ps += 12.0 * DT
+		sr.step(DT, sr.pose(minf(ps, sr.length), 0.0)[0], 12.0)
+		for k in sr.rivals.size():
+			var r: Dictionary = sr.rivals[k]
+			wide = maxf(wide, absf(float(r.lat)))
+			var q: Vector2 = sr.pose(float(r.s), float(r.lat))[0]
+			if prev.has(k) and q.distance_to(prev[k]) > float(r.v) * DT * 1.5 + 0.3:
+				jumps += 1
+			prev[k] = q
+			for o in range(k + 1, sr.rivals.size()):
+				var ro: Dictionary = sr.rivals[o]
+				if float(r.t_done) < 0.0 and float(ro.t_done) < 0.0 and absf(float(ro.s) - float(r.s)) < StreetRivals.CAR_L - 0.6 \
+						and absf(float(ro.lat) - float(r.lat)) < StreetRivals.CAR_W - 0.4:
+					overlaps += 1
+	if overlaps > 0:
+		errors.append("rivals overlapped each other %d times on a 5.2 m road" % overlaps)
+	if wide > 2.6 - StreetRivals.EDGE + 0.01:
+		errors.append("a rival drove %.2f m from the centre of a 5.2 m road" % wide)
+	if jumps > 0:
+		errors.append("%d rival pose jumps on the wiggly road" % jumps)
+	var c: Vector2 = sr.pose(100.0, 0.0)[0]
+	var raw: Vector2 = StreetRivals.new(path, "stock", 0, 1).pose(100.0, 0.0)[0]
+	if absf(c.distance_to(raw) - 1.5) > 0.2:
+		errors.append("the road's centre offset is not applied (%.2f m)" % c.distance_to(raw))
+	var home := sr.rivals.filter(func(r): return float(r.t_done) >= 0.0)
+	for r in home:
+		if float(r.s) < sr.length + 5.0:
+			errors.append("a finished rival stopped on the line (s %.1f of %.1f)" % [float(r.s), sr.length])
+
+## A drag field calibrated to the car's own standing start: the quickest rival within the band of drag_time.
+func _drag_calibration(errors: Array[String]) -> void:
+	for diff in ["easy", "hard"]:
+		var want := LiveEvents.drag_time("stock", 402.0)
+		var sr := StreetRivals.new(_line(402.0), "stock", 3, 5, {"grid": "drag", "drag_time": want, "difficulty": diff})
+		_idle_run(sr, 60.0)
+		var best := sr.best_time()
+		var band: Vector2 = StreetRivals.DRAG_BANDS[diff]
+		if best < want * band.y * 0.98 or best > want * band.y * 1.03:
+			errors.append("%s drag: quickest rival %.2f s against the car's %.2f s (band %.3f)" % [diff, best, want, band.y])
+
+## A crawling player on a lane too narrow to pass does not hold the whole field up.
+func _blocking(errors: Array[String]) -> void:
+	var path := _line(1500.0)
+	var n := LiveEvents.resample(path, StreetRivals.STEP).size()
+	var half := PackedFloat32Array()
+	half.resize(n)
+	half.fill(2.2)
+	var sr := StreetRivals.new(path, "stock", 3, 9, {"profile": {"half": half}})
+	var ps := 30.0
+	for i in 1500:
+		ps += 3.0 * DT
+		sr.step(DT, sr.pose(ps, 0.0)[0], 3.0)
+	if sr.position() == 1:
+		errors.append("a crawling player still leads after 150 s: the field queued behind it")
+
+## Harder difficulty, quicker rivals.
+func _bands(errors: Array[String]) -> void:
+	var t := {}
+	for diff in ["easy", "medium", "hard"]:
+		var sr := StreetRivals.new(_wiggle(), "stock", 4, 2, {"difficulty": diff})
+		_idle_run(sr, 600.0)
+		t[diff] = sr.best_time()
+	if not (float(t.easy) > float(t.medium) and float(t.medium) > float(t.hard)):
+		errors.append("difficulty does not order the rivals' pace: %s" % [t])

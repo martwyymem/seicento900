@@ -318,7 +318,7 @@ func _grass_at(i: int, x: float, y: float, mown: bool, blk: PackedFloat32Array) 
 ## "pitch", "park" or "" at p, from the areas over cell `key`.
 func _area_at(key: int, p: Vector2) -> String:
 	for e in _areas.get(key, []):
-		if (e[2] as Rect2).has_point(p) and Geometry2D.is_point_in_polygon(p, e[1]):
+		if (e[2] as Rect2).has_point(p) and TownMap.inside(p, e[1]):
 			return e[0]
 	return ""
 

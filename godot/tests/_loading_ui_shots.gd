@@ -53,7 +53,7 @@ func _initialize() -> void:
 			var cover := OpenWorldCover.new()
 			game.add_child(cover)
 			var spec: CarSpec = CarModel.new().spec
-			for k in OpenWorldCover.SHOTS.size():
+			for k in OpenWorldCover.SHOTS.stock.size():
 				cover.open(spec, "Fiat Seicento", k)
 				cover.set_status("building the town", 0.5)
 				await _wait(8)

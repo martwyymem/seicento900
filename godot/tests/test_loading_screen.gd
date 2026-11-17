@@ -13,9 +13,33 @@ func run() -> Array:
 			errors.append("no hero still for %s (textures/loading/hero_%s.jpg)" % [key, key])
 	if LoadingScreen.hero_path("") != "" or LoadingScreen.hero_path("no_such_circuit") != "":
 		errors.append("a circuit without a still must give an empty path")
-	for shot in OpenWorldCover.SHOTS:
-		if not ResourceLoader.exists("res://textures/loading/%s" % shot[0]):
-			errors.append("the cover still %s is missing" % shot[0])
+	# every catalogue car has its own cover stills (at least 3, all on disk), a car without any falls back to the stock set,
+	# and the cover shows the driven car's set and its own figures
+	for car in OpenWorldCover.SHOTS:
+		for shot in OpenWorldCover.SHOTS[car]:
+			if not ResourceLoader.exists(OpenWorldCover.DIR + String(shot[0])):
+				errors.append("the %s cover still %s is missing" % [car, shot[0]])
+	for car in CarCatalog.KEYS:
+		var set := OpenWorldCover.shots_for(car)
+		if set.size() < 3 or (car != "stock" and set == OpenWorldCover.SHOTS.stock):
+			errors.append("%s has no cover stills of its own (textures/loading/%s_<n>.jpg)" % [car, car])
+		var hero := LoadingScreen.hero_path("monza", 13.0, car)
+		if hero == "" or (car != "stock" and hero == LoadingScreen.hero_path("monza", 13.0)):
+			errors.append("%s: the race loader shows %s at monza (the stock field)" % [car, hero])
+	if OpenWorldCover.shots_for("no_such_car") != OpenWorldCover.SHOTS.stock or LoadingScreen.hero_path("monza", 13.0, "no_such_car") != LoadingScreen.hero_path("monza", 13.0):
+		errors.append("a car without stills must fall back to the stock set")
+	if LoadingScreen.hero_path("no_such_circuit", 13.0, "hypercar") != "":
+		errors.append("a circuit without a still must give an empty path for every car")
+	var cover := OpenWorldCover.new()
+	for car in CarCatalog.KEYS:
+		cover.open(CarCatalog.spec(car), CarCatalog.display_name(car), 0, car)
+		if cover.shots != OpenWorldCover.shots_for(car) or cover._photo.texture == null:
+			errors.append("the cover for %s does not show its own still" % car)
+		var top := "%d km/h" % roundi(OpenWorldCover.car_stats(CarCatalog.spec(car)).top_kmh)
+		var shown: Label = cover._stats_row.get_child(cover._stats_row.get_child_count() - 5).get_child(1) # the new TOP SPEED (old rows wait on queue_free)
+		if shown.text != top:
+			errors.append("the cover for %s shows %s, its spec gives %s" % [car, shown.text, top])
+	cover.free()
 	# the night still is taken after dark only, and only where the circuit has one
 	for key in GAME.TRACK_KEYS:
 		var night := "res://textures/loading/hero_%s_night.jpg" % key

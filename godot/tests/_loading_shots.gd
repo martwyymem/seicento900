@@ -1,6 +1,7 @@
 ## Windowed probe: renders the race loader's hero stills (LoadingScreen.HERO) into textures/loading/hero_<key>.png.
 ##   godot --path godot --audio-driver Dummy --always-on-top -s tests/_loading_shots.gd -- [out dir]
-## Env: ONLY (comma list of track keys), SX / SY (where the car stands in the frame), SIZE ("1920x1080"), HOUR / WEATHER (override the table), A / B / H / FOV (override the camera).
+## Env: CAR (a CarCatalog key: the field drives it and the still is hero_<key>_<car>.png, which LoadingScreen.hero_path takes
+## for that car), ONLY (comma list of track keys), SX / SY (where the car stands in the frame), SIZE ("1920x1080"), HOUR / WEATHER (override the table), A / B / H / FOV (override the camera).
 ## The stock Seicento sits on the grid at the track's flattering hour, seen low from the front three-quarter with the circuit
 ## and the field behind it, lit by the race world itself (no HUD, no retro filter). The window stays small in the corner; the
 ## picture is drawn into a SubViewport of SIZE. Afterwards convert to JPEG: sips -s format jpeg -s formatOptions 82 X.png --out X.jpg
@@ -73,6 +74,8 @@ func _initialize() -> void:
 		print("building ", tag)
 		var rs := RaceSettings.new()
 		rs.track = key
+		var car := OS.get_environment("CAR") if CarCatalog.is_key(OS.get_environment("CAR")) else "stock"
+		rs.car_class = car
 		rs.opponents = 0 if tag.contains("@") else int(shot[8])
 		rs.laps = 3
 		rs.grid = "pole"
@@ -164,7 +167,7 @@ func _initialize() -> void:
 				print("  frame ", f)
 		await RenderingServer.frame_post_draw
 		var img := sv.get_texture().get_image()
-		var path := out.path_join("hero_%s.png" % tag.replace("@", "_at_"))
+		var path := out.path_join("hero_%s%s.png" % [tag.replace("@", "_at_"), "" if car == "stock" else "_" + car])
 		img.save_png(path)
 		print("saved ", path, " ", img.get_size())
 		world.release_race()
