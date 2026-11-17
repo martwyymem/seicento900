@@ -110,6 +110,14 @@ func _saves(errors: Array[String]) -> void:
 		errors.append("save: knockout car reward %s / %s, cars %s" % [first.reward_car, again.reward_car, prog.get("cars", [])])
 	if not CarCatalog.unlocked("golf4") or not CarCatalog.unlock_hint("golf4").contains("Bór"):
 		errors.append("save: golf4 not unlocked after the knockout, or hint '%s'" % CarCatalog.unlock_hint("golf4"))
+	# Rajd Borów awards the Dacia Logan on its first podium, alongside the Golf already won
+	var rally := Missions.index_of("rally_bor")
+	var rally_first := Missions.record(rally, {"pos": 3, "success": true})
+	prog = Campaign.load_progress()
+	if String(rally_first.reward_car) != "logan" or prog.get("cars", []) != ["golf4", "logan"]:
+		errors.append("save: rally car reward %s, cars %s" % [rally_first.reward_car, prog.get("cars", [])])
+	if not CarCatalog.unlocked("logan") or not CarCatalog.unlock_hint("logan").contains("Rajd Borów"):
+		errors.append("save: logan not unlocked after the rally, or hint '%s'" % CarCatalog.unlock_hint("logan"))
 	if Campaign.STAGES[4].trophy in prog.get("trophies", []) or int(prog.get("unlocked", 0)) != 1:
 		errors.append("save: a mission touched the stage chain: %s" % prog)
 	# a drift keeps its best score and tier, and never eases

@@ -19,6 +19,7 @@ var odometer := 0.0
 var car_class := 0 ## index into CarCatalog.KEYS: 0 the stock Seicento, 1 the Hypercar Seicento, 2 the Golf IV... (each once unlocked)
 var mods := {} ## CarMods switched on (id -> true)
 var tips := {} ## first-time explanations already shown (Poi kind -> true)
+var map_hidden: Array = [] ## the big map's marker categories switched off (MapNav.CATS ids)
 var live := {} ## LiveEvents medals: {tries, done, bronze, silver, gold, kinds: {kind: done}}
 
 static func load_progress() -> WorldProgress:
@@ -53,6 +54,8 @@ static func from_dict(data: Variant) -> WorldProgress:
 		w.mods[str(id)] = true
 	for k in data.get("tips", []):
 		w.tips[str(k)] = true
+	for id in data.get("map_hidden", []):
+		w.map_hidden.append(str(id))
 	var lv = data.get("live", {})
 	if lv is Dictionary:
 		w.live = lv
@@ -72,6 +75,7 @@ func to_dict() -> Dictionary:
 		"mods": mods.keys(),
 		"tips": tips.keys(),
 		"live": live,
+		"map_hidden": map_hidden,
 	}
 
 func save() -> void:
@@ -80,11 +84,17 @@ func save() -> void:
 		return
 	f.store_string(JSON.stringify(to_dict()))
 
-## A finished live event (LiveEvents): tier 0 is a try that won no medal.
+## A finished live event (LiveEvents): tier 0 is a try that missed its target. Misses in a row per kind are kept
+## in "fails" (the next field of that kind is eased, as a campaign mission's is); a clear forgets them.
 func record_live(kind: String, tier: int) -> void:
 	live["tries"] = int(live.get("tries", 0)) + 1
+	var fails: Dictionary = live.get("fails", {}) if live.get("fails", {}) is Dictionary else {}
 	if tier <= 0:
+		fails[kind] = int(fails.get(kind, 0)) + 1
+		live["fails"] = fails
 		return
+	fails.erase(kind)
+	live["fails"] = fails
 	live["done"] = int(live.get("done", 0)) + 1
 	var medal: String = ["", "bronze", "silver", "gold"][clampi(tier, 1, 3)]
 	live[medal] = int(live.get(medal, 0)) + 1

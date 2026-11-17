@@ -6,6 +6,7 @@
 extends SceneTree
 
 const GRADE_WINDOW := 4.0
+const ROADS_TEST := preload("res://tests/test_open_world_roads.gd")
 var map: TownMap
 var node_roads := {}
 var node_width := {}
@@ -175,8 +176,14 @@ func _ends() -> void:
 			var gap: float = float(near.dist) - map.road_w[int(near.road)] * 0.5
 			if gap > 0.05:
 				gaps.append([gap, ri, int(near.road), p])
-	print("ENDS %d free road ends; %d end 0.05-%.0f m short of another road's edge; %d roads shorter than 12 m" % [dead, gaps.size(), 6.0, stubs.size()])
+	print("ENDS %d free road ends; %d end 0.05-%.0f m from another road's edge (any direction); %d roads shorter than 12 m" % [dead, gaps.size(), 6.0, stubs.size()])
 	_top(gaps, 10, func(r: Array) -> String: return "gap %.1f m: %s ends near %s at %s" % [r[0], _nm(r[1]), _nm(r[2]), r[3]])
+	# of those, the ones that stop short of a street they point at (the rest run on past a junction with the road behind
+	# them, or end beside one): test_open_world_roads.gd fails on any of these away from a closure barrier
+	var short := ROADS_TEST.short_dead_ends(map)
+	var at_closure := short.filter(func(r: Array) -> bool: return r[4]).size()
+	print("  short of a street they point at (within %.0f deg, %.0f m): %d, %d of them at a closure barrier" % [ROADS_TEST.END_AIM, ROADS_TEST.END_GAP, short.size(), at_closure])
+	_top(short, 10, func(r: Array) -> String: return "gap %.1f m: %s points at %s at %s%s" % [r[0], _nm(r[1]), _nm(r[2]), r[3], " (closure)" if r[4] else ""])
 	stubs.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
 	for r in stubs.slice(0, 6):
 		print("    stub %.1f m %s at %s" % [r[0], _nm(r[1]), r[2]])

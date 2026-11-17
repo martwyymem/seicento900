@@ -23,7 +23,7 @@ func _initialize() -> void:
 	for kind in LiveEvents.KINDS:
 		if not want.call(kind):
 			continue
-		for seed_value in ([11, 22, 33, 44] if kind == "drift_zone" else [11, 22]):
+		for seed_value in ([11, 22, 33, 44] if kind == "drift" else [11, 22]):
 			var live := LiveEvents.new(map, seed_value)
 			var ev := live.generate(home, PackedVector2Array(), kind)
 			if ev.is_empty():
@@ -82,6 +82,13 @@ func _audit(ev: Dictionary, label: String) -> void:
 	# drive it
 	_drive(live, ev, gp, float(g[1]))
 
+## How far past the drawn road's edge a point is (the smallest margin at which a road is still found; 99 if none).
+func _excess(p: Vector2) -> float:
+	for m in [0.0, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0]:
+		if not map.road_at(p.x, p.y, -INF, m).is_empty():
+			return m
+	return 99.0
+
 func _road_dist(p: Vector2) -> float:
 	var h := map.nearest_road(p, 60.0)
 	return INF if h.is_empty() else (h.pos as Vector2).distance_to(p)
@@ -107,6 +114,8 @@ func _drive(live: LiveEvents, ev: Dictionary, p0: Vector2, h0: float) -> void:
 	var teleports := 0
 	var rival_off := 0
 	var rival_samples := 0
+	var rival_worst := 0.0
+	var rival_worst_at := Vector2.ZERO
 	var overlap := 0
 	var result := ""
 	var stage := 0
@@ -138,7 +147,8 @@ func _drive(live: LiveEvents, ev: Dictionary, p0: Vector2, h0: float) -> void:
 		var want := (aim - cp).angle()
 		var err := wrapf(want - car.car.heading, -PI, PI)
 		var v := absf(car.car.speed)
-		var target := fenv[clampi(i + 2, 0, fenv.size() - 1)]
+		# the slowest point between here and a braking distance on: the corner speed is held until the apex is behind
+		var target := _ahead_min(fenv, i, v)
 		if i >= follow.size() - 3:
 			target = 0.0 if (live.is_running() and live.run.state == "liaison") else 30.0
 		var thr := 1.0 if v < target else 0.0
@@ -159,7 +169,7 @@ func _drive(live: LiveEvents, ev: Dictionary, p0: Vector2, h0: float) -> void:
 			var push := {"tidy": 1.05, "flick": 1.15, "hard": 1.25}.get(style, 1.15) as float
 			var want_slip := {"tidy": 0.3, "flick": 0.45, "hard": 0.6}.get(style, 0.45) as float
 			var tap := {"tidy": 0.08, "flick": 0.12, "hard": 0.18}.get(style, 0.12) as float
-			target = fenv[clampi(i + 2, 0, fenv.size() - 1)] * push
+			target = _ahead_min(fenv, i, v) * push
 			thr = 1.0 if v < target else 0.0
 			brk = clampf((v - target) * 0.3, 0.0, 1.0) if v > target + 1.5 else 0.0
 			var vel := Vector2(car.car.vx, car.car.vy)
@@ -234,7 +244,7 @@ func _drive(live: LiveEvents, ev: Dictionary, p0: Vector2, h0: float) -> void:
 		if rv and live.run.state == "running":
 			for k in rv.rivals.size():
 				var rr: Dictionary = rv.rivals[k]
-				if bool(rr.out):
+				if bool(rr.out) or bool(rr.get("gone", false)): # (not drawn)
 					continue
 				var ps: Array = rv.pose(float(rr.s), float(rr.lat))
 				var q: Vector2 = ps[0]
@@ -245,9 +255,13 @@ func _drive(live: LiveEvents, ev: Dictionary, p0: Vector2, h0: float) -> void:
 					rival_samples += 1
 					if map.road_at(q.x, q.y, -INF, 0.5).is_empty():
 						rival_off += 1
+					var ex := _excess(q)
+					if ex > rival_worst:
+						rival_worst = ex
+						rival_worst_at = q
 					for o in range(k + 1, rv.rivals.size()):
 						var ro: Dictionary = rv.rivals[o]
-						if bool(ro.out):
+						if bool(ro.out) or bool(ro.get("gone", false)):
 							continue
 						if (rv.pose(float(ro.s), float(ro.lat))[0] as Vector2).distance_to(q) < 2.2:
 							overlap += 1
@@ -274,7 +288,7 @@ func _drive(live: LiveEvents, ev: Dictionary, p0: Vector2, h0: float) -> void:
 	if teleports > 0:
 		_bad("%d rival teleports" % teleports)
 	if rival_samples > 0:
-		print("   rivals: %.0f%% of samples off the road, %d overlaps" % [100.0 * rival_off / rival_samples, overlap])
+		print("   rivals: %.0f%% of samples off the road, %d overlaps, worst %.1f m beyond the drawn road at %s" % [100.0 * rival_off / rival_samples, overlap, rival_worst, rival_worst_at])
 		if rival_off * 10 > rival_samples:
 			_bad("rivals off the road %.0f%% of the time" % (100.0 * rival_off / rival_samples))
 	if ev.kind == "race" and res.has("pos"):
@@ -302,6 +316,16 @@ func _env(pts: PackedVector2Array) -> PackedFloat32Array:
 		var g := gr[mini(i, gr.size() - 1)] if gr.size() > 0 else 1.0
 		env[i] = minf(env[i], sqrt(env[i + 1] * env[i + 1] + 2.0 * 7.4 * 0.7 * g * 2.0))
 	return env
+
+## The lowest planned speed from the car's own sample to a little past where it could stop (v * 0.6 s and 6 m on):
+## braking starts before the bend and the corner speed holds until the slowest point is behind the car.
+func _ahead_min(env: PackedFloat32Array, i: int, v: float) -> float:
+	var n := env.size()
+	var to := mini(i + 3 + int((v * 0.6 + 6.0) / 2.0), n - 1)
+	var m := INF
+	for j in range(clampi(i, 0, n - 1), to + 1):
+		m = minf(m, env[j])
+	return m if is_finite(m) else 0.0
 
 func _project(pts: PackedVector2Array, p: Vector2, near_s: float) -> float:
 	var lo := clampi(int((near_s - 20.0) / 2.0), 0, pts.size() - 1)

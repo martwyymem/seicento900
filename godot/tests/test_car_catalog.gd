@@ -21,6 +21,8 @@ func run() -> Array:
 	_visual()
 	_calibration()
 	await _races()
+	_logan()
+	await _races("logan")
 	_settings()
 	completed = true
 	return errors
@@ -170,17 +172,17 @@ func _calibration() -> void:
 	check(slower > faster, "the Golf's grip (0.86 g against the Seicento's 0.96) should take the corners slower (%d slower, %d faster)" % [slower, faster])
 	check(is_same(track.profile_for(g), pg), "the Golf's profile is not cached")
 
-func _races() -> void:
+func _races(ck := "golf4") -> void:
 	for tk in ["gp", "fiat"]:
 		var rs := RaceSettings.new()
 		rs.track = tk
 		rs.laps = 2
 		rs.opponents = 5
-		rs.car_class = "golf4"
+		rs.car_class = ck
 		rs.race_control = false
-		var cm := CarCatalog.model("golf4")
+		var cm := CarCatalog.model(ck)
 		var r := Race.new(rs, {"stints": [{"c": "M", "laps": 2}]}, 11, {"car_model": cm, "tyres": Tyres.new(), "strategy": Strategy.new(cm, Tyres.new())})
-		check(r.spec.resource_name == "golf4" and r.cars.size() == 6, "%s: the race is not in the Golf with a field of six" % tk)
+		check(r.spec.resource_name == ck and r.cars.size() == 6, "%s: the race is not in the Golf with a field of six" % tk)
 		r.set_autopilot(true)
 		var idle := Race.PlayerInput.new()
 		var ticks := 0
@@ -191,10 +193,63 @@ func _races() -> void:
 		for c in r.cars:
 			if c.finished and not c.dnf:
 				done += 1
-		check(r.phase == "finished" and done == r.cars.size(), "%s: only %d of %d Golfs finished (phase %s after %d ticks)" % [tk, done, r.cars.size(), r.phase, ticks])
+		check(r.phase == "finished" and done == r.cars.size(), "%s: only %d of %d %ss finished (phase %s after %d ticks)" % [tk, done, r.cars.size(), ck, r.phase, ticks])
 		check(r.player.finish_time != null and float(r.player.finish_time) > 30.0, "%s: the player's Golf has no sensible finish time" % tk)
 		r.dispose()
 		await Engine.get_main_loop().process_frame
+
+## The Dacia Logan: the real car's band, the model at the spec's size, wheels at its axles, decals on its body, its own
+## calibration and rail profile.
+func _logan() -> void:
+	var m: Dictionary = PROBE.measure(Logan.model())
+	print("    logan: %.1f s 0-100, %.0f km/h, %.1f m from 100, %.2f g, %.0f kg" % [m.t100, m.top, m.brake, m.lat_g, m.mass])
+	check(m.t100 > 12.4 and m.t100 < 13.8, "the Logan's 0-100 is %.2f s (real 13.0)" % m.t100)
+	check(m.top > 157.0 and m.top < 167.0, "the Logan's top speed is %.0f km/h (real 162)" % m.top)
+	check(m.brake > 36.0 and m.brake < 44.0, "the Logan stops from 100 km/h in %.1f m (real ~40)" % m.brake)
+	check(m.lat_g > 0.78 and m.lat_g < 0.92, "the Logan holds %.2f g on the skidpad (real ~0.84)" % m.lat_g)
+	check(not Logan.spec().awd and m.mass > 990.0 and m.mass < 1120.0, "the Logan is front-wheel drive at ~1.05 t (%.0f kg)" % m.mass)
+	var g := CarCatalog.spec("logan")
+	var scene := ResourceLoader.load(CarCatalog.visual("logan").model, "", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene
+	check(scene != null, "logan.glb does not load")
+	if scene:
+		var root := scene.instantiate()
+		var body := root.find_child("Body", true, false) as MeshInstance3D
+		if body:
+			var size := body.mesh.get_aabb().size
+			check(absf(size.z - g.length) < 0.05, "the Logan's Body is %.3f m long, the spec says %.3f" % [size.z, g.length])
+			var top := body.mesh.get_aabb().end.y
+			check(top > 1.50 and top < 1.55, "the Logan's roof is %.3f m high (1.525 expected)" % top)
+			check(size.x > g.width and size.x < g.width + 0.25, "the Logan's Body is %.3f m wide (mirrors out; spec %.3f)" % [size.x, g.width])
+		var wheel := root.find_child("Wheel", true, false) as MeshInstance3D
+		if wheel:
+			var d := wheel.mesh.get_aabb().size.y
+			check(absf(d * 0.5 - CarCatalog.visual("logan").wheel_radius) < 0.004, "the Logan's wheel radius is %.4f m, the visual says %.4f" % [d * 0.5, CarCatalog.visual("logan").wheel_radius])
+		root.free()
+	var parent := Node3D.new()
+	Engine.get_main_loop().root.add_child(parent)
+	var car: Node3D = VISUAL.new()
+	car.car_key = "logan"
+	car.car_number = 7
+	parent.add_child(car)
+	var fl: Vector3 = car._wheel_spots[0]
+	var rr: Vector3 = car._wheel_spots[3]
+	check(car.wheels.size() == 4 and absf(fl.z + 1.315) < 1e-3 and absf(rr.z - 1.315) < 1e-3 and absf(fl.y - 0.3108) < 1e-4, "the Logan's wheels are not at its axles (%s %s)" % [fl, rr])
+	var tri := (VISUAL._shared_resources("logan").shell as Mesh).generate_triangle_mesh()
+	for n in ["DoorDecalL", "DoorDecalR", "Sunstrip", "HoodDecal", "SillDecalL", "SillDecalR"]:
+		var d := car.body_pivot.get_node_or_null(n) as MeshInstance3D
+		check(d != null and d.mesh != null, "the Logan visual lacks decal %s" % n)
+		if d == null:
+			continue
+		var normal := d.transform.basis.z.normalized()
+		var hit := tri.intersect_ray(d.position + normal * 0.3, -normal)
+		check(not hit.is_empty() and absf(((d.position - (hit.position as Vector3)).dot(normal)) - 0.006) < 0.004, "the Logan's %s does not sit on the body" % n)
+	parent.free()
+	var track := Race.get_track("gp")
+	var lm := CarCatalog.model("logan")
+	var cl := Strategy.new(lm, Tyres.new()).calibrate(track)
+	var cg := Strategy.new(CarCatalog.model("golf4"), Tyres.new()).calibrate(track)
+	check(not is_same(cl, cg) and absf(cl.T0 - cg.T0) > 0.01 and cl.T0 > 30.0, "the Logan shares the Golf's calibration (T0 %.2f / %.2f)" % [cl.T0, cg.T0])
+	check(not is_same(track.profile_for(lm), track.profile_for(CarCatalog.model("golf4"))), "the Logan has no rail profile of its own")
 
 func _settings() -> void:
 	var st := RaceSettings.new()

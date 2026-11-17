@@ -30,7 +30,7 @@ static func measure(cm: CarModel) -> Dictionary:
 
 func _initialize() -> void:
 	await process_frame
-	var cars := {"stock": CarModel.new(), "golf4": Golf4.model()}
+	var cars := {"stock": CarModel.new(), "golf4": Golf4.model(), "logan": Logan.model()}
 	for k in cars:
 		var m := measure(cars[k])
 		print("%-8s mass %5.0f kg  0-100 %5.2f s  400 m %5.2f s  top %5.1f km/h  brake100 %5.1f m  lat %4.2f g" % [k, m.mass, m.t100, m.t400, m.top, m.brake, m.lat_g])

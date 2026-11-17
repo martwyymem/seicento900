@@ -1,36 +1,39 @@
-## Live events: the open world's own Forza Horizon style events, generated on the real Brzeszcze roads round the
-## player and raced right there in free roam (no track to load, traffic and the train stay on the map). A board of
-## up to MAX_LIVE events stands within SPAWN_MIN..SPAWN_MAX of the car at any time; each lasts LIFE_H game hours
-## and is replaced by a new one somewhere else when it expires, is cleared or the car leaves it far behind, so the
-## map keeps throwing up something new to drive to.
+## Live events: missions the open world makes up on the real Brzeszcze roads round the player and runs right there,
+## Forza Horizon style. Each is a full mission of one of the campaign's kinds (Missions.KINDS), in the same shape as a
+## campaign mission on the map (MapMissions.event) and run by the same code (begin / tick here, OpenWorld's
+## _start_run, the rivals, the results card), only built on the roads round the car instead of a baked track:
+##   sprint    point to point through the town against a StreetRivals field (1.4-5.2 km, mostly paved)
+##   drag      402 m or 1000 m from a standstill on a straight, wide main road, four abreast
+##   knockout  a 2.4-4.6 km route cut into sectors: the last car is out at each sector line
+##   offroad   a race on a route that is mostly gravel and dirt
+##   drift     a twisty stretch, solo, scored in drift points (DriftScore) against tiers per km
+##   rally     one special stage on loose or twisty roads, from a standing start against the crews' times
+## (the old speed zones folded into the drags, which now take the straight main roads, and the trailblazers into the
+## sprints: neither fitted a race against a field.)
 ##
-## Kinds:
-##   sprint       a point-to-point street sprint through checkpoints along a route on the road graph, against the clock
-##   speed_zone   a fast, straight stretch of a main road: the average speed through it counts
-##   drift_zone   a twisty stretch: drift points (DriftScore) earned between its start and its end
-##   trailblazer  a straight-line dash to a far point: any road, field or garden, only the time counts
-## Targets are bronze / silver / gold, worked out for the car being driven from a reference lap of the route
-## (grip-limited corner speeds on the route's own surfaces, the car's acceleration and braking: pace_time), so the
-## Golf or the hypercar face harder clocks than the Seicento.
-##
-## The run plays as Forza Horizon's do. A race or a sprint starts from the card (the car is put on the line, 3 s
-## countdown); the PR stunts (speed zone, drift zone, trailblazer) start by simply driving through their start gate
-## at speed, no stop and no countdown, against targets for a flying start. Checkpoints are gates across the road
-## (crossing the line anywhere inside its width counts); the run follows the car's progress along the route and
-## says so when a checkpoint is missed, the car goes the wrong way or leaves the route, and reset_to_checkpoint()
-## puts the car back at the last gate it went through. A cleared event stays on the board (its best medal shown)
-## for another go until it expires.
+## A board of up to MAX_LIVE events stands within SPAWN_MIN..SPAWN_MAX of the car; each lasts LIFE_H game hours and is
+## replaced when it expires or the car leaves it far behind; a cleared one stays up (its best medal shown) for another
+## go. Targets are places like a mission's (drift: the bronze tier), the field's difficulty eases after missed tries
+## of that kind as a mission's does (WorldProgress.live.fails), and they pay fans by length and difficulty. They never
+## award cars or trophies and never count toward the campaign: their stats are WorldProgress.live.
 ##
 ## The class is free of the scene (OpenWorld drives it): generate() and the run (begin / tick / abandon) only need a
-## TownMap, so tests/test_live_events.gd runs it headless. Progress (counts and medals) is WorldProgress.live.
+## TownMap, so tests/test_live_events.gd runs it headless.
 class_name LiveEvents
 extends RefCounted
 
-const KINDS := ["sprint", "speed_zone", "drift_zone", "trailblazer"]
-const KIND_WEIGHTS := [0.36, 0.24, 0.22, 0.18]
-const KIND_NAMES := {"sprint": "STREET SPRINT", "speed_zone": "SPEED ZONE", "drift_zone": "DRIFT ZONE", "trailblazer": "TRAILBLAZER"}
-const COLORS := {"sprint": Color("#ff3d8b"), "speed_zone": Color("#ffd23f"), "drift_zone": Color("#7dff6a"),
-	"trailblazer": Color("#4ad8ff")}
+const KINDS := ["sprint", "drag", "knockout", "offroad", "drift", "rally"]
+const KIND_WEIGHTS := [0.26, 0.16, 0.14, 0.15, 0.14, 0.15]
+## Names by mission kind (and, for older callers, by the run's own kind).
+const KIND_NAMES := {"sprint": "SPRINT", "drag": "DRAG RACE", "knockout": "KNOCKOUT", "offroad": "OFF-ROAD", "drift": "DRIFT",
+	"rally": "RALLY", "race": "RACE", "drift_zone": "DRIFT"}
+const COLORS := {"sprint": Color("#ff3d8b"), "drag": Color("#ffd23f"), "knockout": Color("#ff8a3d"), "offroad": Color("#c9a061"),
+	"drift": Color("#7dff6a"), "rally": Color("#4ad8ff")}
+const RIVALS := {"sprint": Vector2i(5, 7), "drag": Vector2i(3, 3), "knockout": Vector2i(3, 5), "offroad": Vector2i(4, 5),
+	"drift": Vector2i(0, 0), "rally": Vector2i(6, 9)} ## the field's size (rally: the crews)
+const TARGETS := {"sprint": 3, "drag": 1, "knockout": 2, "offroad": 3, "drift": 3, "rally": 3} ## place to finish in (drift: 3 is bronze)
+const DIFFICULTY_WEIGHTS := [0.35, 0.45, 0.20] ## easy, medium, hard (Campaign.LEVELS)
+const DIFF_FANS := {"easy": 0.8, "medium": 1.0, "hard": 1.35}
 const TIER_NAMES := ["", "BRONZE", "SILVER", "GOLD"]
 const TIER_COLORS := [Color("#ff5a4a"), Color("#d08a4a"), Color("#d8dde6"), Color("#ffcc33")]
 const MAX_LIVE := 4
@@ -47,41 +50,44 @@ const GATE_HALF_MIN := 9.0 ## m: a checkpoint gate reaches at least this far eit
 const GATE_MARGIN := 4.0 ## m beyond the road's edge a gate reaches
 const MISS_PAST := 45.0 ## m the car may run on past a checkpoint's gate before it counts as missed
 const OFF_ROUTE := 40.0 ## m from the route ...
-const OFF_ROUTE_T := 4.0 ## ... for this long is off the route (a trailblazer has no route to keep to)
+const OFF_ROUTE_T := 4.0 ## ... for this long is off the route
 const WRONG_WAY_T := 1.5 ## s going backwards along the route at speed before it is called the wrong way
-const ROLL_MIN := 5.0 ## m/s through a stunt's start gate starts it (18 km/h)
-const RUNUP := 160.0 ## m back down the road where ENTER at a stunt puts the car for its run at the gate
-const STUNTS := ["speed_zone", "drift_zone", "trailblazer"] ## started by driving through, flying start
-const ROLL_ENTRY := 0.7 ## a stunt's reference driver crosses the start at this share of the top speed (corners allowing)
-const GOAL_RADIUS := 25.0 ## m round a trailblazer's goal
-const CP_SPACING := 420.0 ## m between a sprint's checkpoints
-const TIME_OUT := 1.8 ## a run fails once it takes this many times the bronze time (zones: the reference time)
-const FANS_PER_KM := 900.0
-const TIER_FANS := [0.0, 1.0, 1.6, 2.5]
-## Medal times against the reference run (sprint, trailblazer: s; speed zone: average km/h, higher is better).
-const TIME_TIERS := [1.34, 1.16, 1.04] ## bronze, silver, gold: the reference time times this
-const SPEED_TIERS := [0.72, 0.85, 0.95] ## ... the reference average times this
+const CP_SPACING := 420.0 ## m between a route's checkpoints
+const TIME_OUT := 1.8 ## a drift run fails once it takes this many times three reference runs
+const FANS_PER_KM := 1200.0 ## a clear at the target place, medium field, per km (at least 1.5 km's worth)
+const DRAG_LENGTHS := [402.0, 402.0, 1000.0]
+const DRAG_HALF := 3.1 ## m: a drag's road must be at least this wide either side of its line all the way: four abreast
+## 2 m apart (StreetRivals.drag_lane) keeps every car's centre on the tarmac
+const START_STRAIGHT := 60.0 ## m after the line over which a route may turn at most ...
+const START_TURN := 1.7 ## ... this many rad (a corner, not a U-turn or a zig-zag: the grid stands there)
+const DRAG_TURN := 0.4 ## rad: the most a drag's road may bend over its length
+const UNPAVED_OFFROAD := 0.45 ## share of an off-road route on gravel or dirt (a sprint or knockout route with more is not made)
+const UNPAVED_RALLY := 0.35 ## ... of a rally stage (or a twisty one, RALLY_TWIST)
+const RALLY_TWIST := 1.6 ## rad per km
 const VERGE := 2.5 ## m beyond the map's road edge a sliding car may run before it counts as off the road (the lanes
 ## are 3-5 m wide: a race track's 0.8 m (DriftScore.OFF_ROAD) would lose every combo on them)
-## Points per km of a drift zone, bronze / silver / gold: the Babudy drift mission's per km (300/1200/3000 on 2.6 km).
+## Points per km of a drift, bronze / silver / gold: the Babudy drift mission's per km (300/1200/3000 on 2.6 km).
 ## Measured 2026-11-14 with tests/_live_audit.gd's sliding driver (handbrake taps, counter-steer; STYLE=flick/hard):
 ## 270-376 points on Babudy, so bronze is a plain sliding run, silver about three times that, gold for the few.
 const DRIFT_PER_KM := [115.0, 460.0, 1150.0]
 ## Reference driving per car (CarCatalog key): top speed m/s, standing acceleration m/s², grip m/s², braking m/s².
-## Measured with tests/_car_probe.gd: Seicento 137 km/h, 0.96 g; Golf IV 171 km/h, 0.86 g; hypercar 346 km/h.
-const PACE := {"stock": [38.0, 2.4, 8.4, 7.4], "golf4": [47.5, 3.3, 7.6, 7.2], "hypercar": [96.0, 9.0, 13.5, 10.7]}
-## The car's own standing start on the map's S1, full throttle with the automatic box (FreeCar, tests/_live_audit.gd,
-## 2026-11-13): seconds over 402 m and 1000 m. A drag field (StreetRivals) is calibrated against these.
-const DRAG_TIMES := {"stock": [21.0, 40.7], "golf4": [19.3, 37.6], "hypercar": [10.1, 20.0]}
+## Measured with tests/_car_probe.gd (2026-11-16): Seicento 137 km/h, 0.96 g; Golf IV 171 km/h, 0.86 g; Logan 162 km/h,
+## 0.84 g, 100-0 in 39.1 m; hypercar 346 km/h. Grip and braking are the town tarmac's share of the probe's figures.
+const PACE := {"stock": [38.0, 2.4, 8.4, 7.4], "golf4": [47.5, 3.3, 7.6, 7.2], "logan": [45.0, 3.4, 7.4, 7.2], "hypercar": [96.0, 9.0, 13.5, 10.7]}
+## The car's own standing start on the map's S1 (the drag_kilometre mission's line), full throttle with the automatic
+## box (FreeCar), re-measured for every car 2026-11-17: seconds over 402 m and 1000 m. A drag field (StreetRivals)
+## is calibrated against these.
+const DRAG_TIMES := {"stock": [21.0, 40.7], "golf4": [19.1, 36.4], "logan": [18.8, 36.0], "hypercar": [9.9, 18.0]}
 const TOWN_GRIP := 0.9 ## Physics.SURF_GRIP of the map's asphalt, which PACE was measured on
 
 var map: TownMap
 var rng := RandomNumberGenerator.new()
-var board: Array = [] ## the live events: dictionaries, see _make
-var run: Dictionary = {} ## the event being raced: {ev, state ("countdown", "running"), t, cp, drift, car, tiers}
+var board: Array = [] ## the live events: mission-shaped dictionaries, see _make
+var run: Dictionary = {} ## the event being raced: {ev, state ("countdown", "running", "liaison"), t, cp, drift, car, tiers, rivals...}
 var clock_h := 0.0 ## game hours since the board was started (expiry runs on it)
 var last_result: Dictionary = {}
 var last_begin: Dictionary = {} ## the last run begun: {ev, car} (RESTART runs it again)
+var stats: Dictionary = {} ## WorldProgress.live (OpenWorld hands it over): the missed tries per kind ease the field
 var _serial := 0
 var _refill_t := 0.0
 
@@ -123,14 +129,16 @@ func generate(player: Vector2, avoid: PackedVector2Array, kind := "") -> Diction
 			continue
 		var ev: Dictionary
 		match k:
-			"sprint":
-				ev = _make_sprint(start)
-			"speed_zone":
-				ev = _make_zone(start, "speed_zone")
-			"drift_zone":
-				ev = _make_zone(start, "drift_zone")
-			"trailblazer":
-				ev = _make_trailblazer(start)
+			"sprint", "knockout":
+				ev = _make_route(start, k)
+			"offroad":
+				ev = _make_route(start, k)
+			"drag":
+				ev = _make_drag(start)
+			"drift":
+				ev = _make_drift(start)
+			"rally":
+				ev = _make_rally(start)
 		if not ev.is_empty():
 			return ev
 	return {}
@@ -144,19 +152,50 @@ func _pick_kind() -> String:
 	return KINDS[0]
 
 ## A road point in the spawn ring round p, on a road good enough for the kind: {road, i, t, pos, dir, dist}.
+## Off-road races and rallies start on a gravel or dirt road.
 func _road_point(p: Vector2, kind: String) -> Dictionary:
-	var min_rank := 6 if kind == "speed_zone" else (3 if kind == "sprint" else 1)
-	for attempt in 8:
+	var min_rank := 6 if kind == "drag" else (3 if kind in ["sprint", "knockout"] else 1)
+	if kind == "offroad":
+		return _loose_point(p, SPAWN_MIN, SPAWN_MAX)
+	var loose := kind == "rally"
+	for attempt in (16 if loose else 8):
 		var a := rng.randf() * TAU
 		var d := rng.randf_range(SPAWN_MIN, SPAWN_MAX)
 		var q := p + Vector2(cos(a), sin(a)) * d
 		if not map.in_play(q):
 			continue
-		var hit := map.nearest_road(q, 120.0, min_rank)
+		var hit := map.nearest_road(q, 120.0 if not loose else 200.0, min_rank)
 		if hit.is_empty() or not map.in_play(hit.pos) or _on_deck(hit):
+			continue
+		if loose and kind == "offroad" and map.road_surface[int(hit.road)] != 2:
 			continue
 		return hit
 	return {}
+
+## A point on a gravel or dirt road between lo and hi m from p (the map's loose roads sampled every 50 m, once):
+## the nearest_road hit there, or {}.
+func _loose_point(p: Vector2, lo: float, hi: float) -> Dictionary:
+	if _loose.is_empty():
+		for ri in map.road_pts.size():
+			if map.road_surface[ri] != 2 or map.road_len[ri] < 120.0:
+				continue
+			for q in resample(map.road_pts[ri], 50.0):
+				if map.in_play(q):
+					_loose.append(q)
+	var pick := PackedVector2Array()
+	for q in _loose:
+		var d := q.distance_to(p)
+		if d >= lo and d <= hi:
+			pick.append(q)
+	for attempt in 6:
+		if pick.is_empty():
+			return {}
+		var hit := map.nearest_road(pick[rng.randi() % pick.size()], 6.0, 1)
+		if not hit.is_empty() and map.road_surface[int(hit.road)] == 2 and not _on_deck(hit):
+			return hit
+	return {}
+
+var _loose := PackedVector2Array()
 
 func _on_deck(hit: Dictionary) -> bool:
 	var z: PackedFloat32Array = map.road_z[hit.road]
@@ -171,54 +210,112 @@ func _clear(p: Vector2, avoid: PackedVector2Array) -> bool:
 			return false
 	return true
 
-func _make_sprint(start: Dictionary) -> Dictionary:
-	var a := rng.randf() * TAU
-	var goal := map.nearest_road((start.pos as Vector2) + Vector2(cos(a), sin(a)) * rng.randf_range(1500.0, 3200.0), 150.0, 3)
+## A point-to-point race: a sprint (mostly paved), a knockout (longer, cut into sectors) or an off-road race (mostly
+## gravel and dirt, its goal on a loose road too).
+func _make_route(start: Dictionary, kind: String) -> Dictionary:
+	var lo := 1400.0
+	var hi := 5200.0
+	var reach := Vector2(1500.0, 3200.0)
+	if kind == "knockout":
+		lo = 2400.0
+		hi = 4600.0
+		reach = Vector2(2000.0, 3400.0)
+	elif kind == "offroad":
+		lo = 1200.0
+		hi = 4500.0
+		reach = Vector2(1100.0, 2800.0)
+	var goal := {}
+	if kind == "offroad":
+		goal = _loose_point(start.pos, reach.x, reach.y)
+	else:
+		var a := rng.randf() * TAU
+		goal = map.nearest_road((start.pos as Vector2) + Vector2(cos(a), sin(a)) * rng.randf_range(reach.x, reach.y), 150.0, 3)
 	if goal.is_empty() or not map.in_play(goal.pos):
 		return {}
 	var path := map.route(start.pos, goal.pos)
 	var length := path_length(path)
-	if length < 1400.0 or length > 5200.0 or length > 2.3 * (start.pos as Vector2).distance_to(goal.pos):
+	if length < lo or length > hi or length > 2.3 * (start.pos as Vector2).distance_to(goal.pos):
 		return {}
-	var cps := checkpoints(path, CP_SPACING)
-	var title := "%s ▸ %s" % [_street(start), _street(goal)]
-	return _make("sprint", path, cps, title)
+	var loose := unpaved_share(map, path)
+	if kind == "offroad" and loose < UNPAVED_OFFROAD:
+		return {}
+	if kind != "offroad" and loose >= UNPAVED_OFFROAD:
+		return {} # mostly loose: that is an off-road race
+	var ev := _make(kind, path, checkpoints(path, CP_SPACING), "%s ▸ %s" % [_street(start), _street(goal)])
+	if ev.is_empty():
+		return ev
+	if kind == "knockout":
+		ev.knockout = true
+		ev.sectors = true
+		ev.laps = int(ev.rivals) # N rivals: N sector lines, the final sector between the last two
+		ev.lap_length = float(ev.length) / float(ev.laps)
+	return ev
 
-## A zone: from the start along the road it stands on for 500..1100 m. Speed zones must be nearly straight, drift
-## zones properly twisty.
-func _make_zone(start: Dictionary, kind: String) -> Dictionary:
+## A drag: from a standstill DRAG_LENGTHS m along a straight main road wide enough for four abreast (either way
+## along the road from the start).
+func _make_drag(start: Dictionary) -> Dictionary:
+	var want: float = DRAG_LENGTHS[rng.randi() % DRAG_LENGTHS.size()]
+	var flip := rng.randf() < 0.5
+	for way in 2:
+		var dir: Vector2 = start.dir if (way == 0) != flip else -(start.dir as Vector2)
+		var end := map.nearest_road((start.pos as Vector2) + dir * (want + 60.0), 40.0, 6)
+		if end.is_empty() or not map.in_play(end.pos):
+			continue
+		var full := map.route(start.pos, end.pos)
+		if path_length(full) < want + 20.0:
+			continue
+		var path := trim(full, want)
+		if (start.pos as Vector2).distance_to(path[path.size() - 1]) < want * 0.97 or turning(path) > DRAG_TURN:
+			continue
+		var wide := true
+		for h in (route_profile(map, path, 20.0).half as PackedFloat32Array):
+			if h < DRAG_HALF:
+				wide = false
+				break
+		if wide:
+			return _make("drag", path, PackedVector2Array([path[path.size() - 1]]), _street(start))
+	return {}
+
+## A drift: 500..1100 m along the road it starts on, properly twisty.
+func _make_drift(start: Dictionary) -> Dictionary:
 	var want := rng.randf_range(500.0, 1100.0)
 	var dir: Vector2 = start.dir if rng.randf() < 0.5 else -(start.dir as Vector2)
-	var end := map.nearest_road((start.pos as Vector2) + dir * want, 80.0, 6 if kind == "speed_zone" else 1)
+	var end := map.nearest_road((start.pos as Vector2) + dir * want, 80.0, 1)
 	if end.is_empty() or not map.in_play(end.pos):
 		return {}
 	var path := map.route(start.pos, end.pos)
 	var length := path_length(path)
 	if length < 0.7 * want or length > 1.6 * want:
 		return {}
-	var straight := (start.pos as Vector2).distance_to(end.pos) / maxf(length, 1.0)
-	var twist := turning(path) / (length / 1000.0)
-	if kind == "speed_zone" and straight < 0.88:
+	if turning(path) / (length / 1000.0) < 2.2:
 		return {}
-	if kind == "drift_zone" and twist < 2.2:
-		return {}
-	var cps := PackedVector2Array([path[path.size() - 1]])
-	return _make(kind, path, cps, _street(start))
+	return _make("drift", path, PackedVector2Array([path[path.size() - 1]]), _street(start))
 
-## A trailblazer: 1.1..2.8 km as the crow flies to a point on a road, any way there.
-func _make_trailblazer(start: Dictionary) -> Dictionary:
+## A rally: one special stage of 1.5..4 km on loose or twisty roads.
+func _make_rally(start: Dictionary) -> Dictionary:
 	var a := rng.randf() * TAU
-	var goal := map.nearest_road((start.pos as Vector2) + Vector2(cos(a), sin(a)) * rng.randf_range(1100.0, 2800.0), 150.0, 1)
+	var goal := map.nearest_road((start.pos as Vector2) + Vector2(cos(a), sin(a)) * rng.randf_range(1300.0, 2800.0), 150.0, 1)
 	if goal.is_empty() or not map.in_play(goal.pos):
 		return {}
-	var path := map.route(start.pos, goal.pos) # the reference: by road (a shortcut is how gold is won)
-	if path.size() < 2:
+	var path := map.route(start.pos, goal.pos)
+	var length := path_length(path)
+	if length < 1500.0 or length > 4000.0 or length > 2.3 * (start.pos as Vector2).distance_to(goal.pos):
 		return {}
-	return _make("trailblazer", path, PackedVector2Array([goal.pos]), "to %s" % _street(goal))
+	if unpaved_share(map, path) < UNPAVED_RALLY and turning(path) / (length / 1000.0) < RALLY_TWIST:
+		return {}
+	var name := _street(start)
+	var ev := _make("rally", path, checkpoints(path, CP_SPACING), name)
+	if not ev.is_empty():
+		ev.stages = [{"name": name, "path": path, "length": float(ev.length), "cps": ev.cps}]
+	return ev
 
-func _make(kind: String, path: PackedVector2Array, cps: PackedVector2Array, title: String) -> Dictionary:
-	if kind != "trailblazer" and not on_roads(map, path):
+## The event in the shape MapMissions.event gives a campaign mission (kind: how the run goes; mkind: the mission
+## kind), plus the board's own keys (id, expires, color, base_difficulty).
+func _make(mkind: String, path: PackedVector2Array, cps: PackedVector2Array, title: String) -> Dictionary:
+	if not on_roads(map, path):
 		return {}
+	if turning(trim(path, START_STRAIGHT)) > START_TURN:
+		return {} # the route doubles back (or zig-zags round a corner) right off the line: no grid fits there
 	_serial += 1
 	# the start's heading along the first 10 m (the first few points of a route can sit on a junction's corner)
 	var head := resample(path, 5.0)
@@ -230,9 +327,26 @@ func _make(kind: String, path: PackedVector2Array, cps: PackedVector2Array, titl
 			cp_z.append(float(hit.height))
 		else:
 			cp_z.append(map.ground(p.x, p.y))
-	return {"id": "live_%d" % _serial, "kind": kind, "title": title, "pos": path[0], "heading": h, "path": path,
-		"length": path_length(path), "cps": cps, "cp_z": cp_z, "goal": cps[cps.size() - 1],
-		"expires": clock_h + rng.randf_range(LIFE_H.x, LIFE_H.y), "color": COLORS[kind]}
+	var kind := "race"
+	if mkind == "drift":
+		kind = "drift_zone"
+	elif mkind == "rally":
+		kind = "rally"
+	var rv: Vector2i = RIVALS[mkind]
+	var diff: String = Campaign.LEVELS[_pick_difficulty()]
+	return {"id": "live_%d" % _serial, "kind": kind, "mkind": mkind, "title": title, "pos": path[0], "heading": h,
+		"path": path, "length": path_length(path), "cps": cps, "cp_z": cp_z, "goal": cps[cps.size() - 1],
+		"rivals": rng.randi_range(rv.x, rv.y), "grid": "drag" if mkind == "drag" else "", "knockout": false,
+		"lap_length": 0.0, "laps": 1, "target": int(TARGETS[mkind]), "base_difficulty": diff, "difficulty": diff,
+		"expires": clock_h + rng.randf_range(LIFE_H.x, LIFE_H.y), "color": COLORS[mkind]}
+
+func _pick_difficulty() -> int:
+	var r := rng.randf()
+	for i in DIFFICULTY_WEIGHTS.size():
+		r -= DIFFICULTY_WEIGHTS[i]
+		if r <= 0.0:
+			return i
+	return 1
 
 ## The street a point is on, or for a nameless lane the nearest named street round it ("off Lipowa").
 func _street(hit: Dictionary) -> String:
@@ -250,28 +364,89 @@ func _street(hit: Dictionary) -> String:
 func _name_of(ri: int) -> String:
 	return String(map.road_name[ri]) if ri < map.road_name.size() else ""
 
-# ------------------------------------------------------------------------------------------ targets
+## Share of a route (every 25 m) on gravel or dirt, or off the map's roads.
+static func unpaved_share(town: TownMap, path: PackedVector2Array) -> float:
+	var pts := resample(path, 25.0)
+	var n := 0
+	for p in pts:
+		var hit := town.road_at(p.x, p.y, -INF, 2.0)
+		if hit.is_empty() or int(hit.surface) == 2:
+			n += 1
+	return float(n) / maxf(pts.size(), 1)
 
-## The medal targets [bronze, silver, gold] of an event for a car (CarCatalog key). `rolling`: from a flying start
-## (a stunt driven into), otherwise from a standstill on the line.
-func tiers_for(ev: Dictionary, car_key: String, rolling := false) -> Array:
+# ------------------------------------------------------------------------------------------ difficulty, targets
+
+## A live event's field eased after missed tries of its kind, as a mission's is (Missions.as_stage): every
+## Campaign.FAILS_PER_EASE misses drop it a level, down to easy. Sets difficulty, eased, fails on the event.
+func ease_field(ev: Dictionary) -> void:
+	if ev.has("mission"):
+		return
+	var mk := String(ev.get("mkind", ""))
+	var base := String(ev.get("base_difficulty", ev.get("difficulty", "medium")))
+	var at := maxi(Campaign.LEVELS.find(base), 0)
+	var all = stats.get("fails", {})
+	var f := int((all as Dictionary).get(mk, 0)) if all is Dictionary else 0
+	var eased := mini(f / Campaign.FAILS_PER_EASE, at) if Missions.eases(mk) else 0
+	ev["difficulty"] = Campaign.LEVELS[at - eased]
+	ev["eased"] = eased
+	ev["fails"] = f
+
+## A drift's point tiers [bronze, silver, gold] (a mission's own, or per km); [] for a race.
+func tiers_for(ev: Dictionary, _car_key := "stock") -> Array:
 	if ev.has("mission_tiers"):
 		return ev.mission_tiers
-	var g := grip_of(ev)
-	var ref := pace_time(ev.path, car_key, entry_speed(ev.path, car_key, g) if rolling else 0.0, g)
-	match String(ev.kind):
-		"speed_zone":
-			var v := float(ev.length) / ref * 3.6
-			return [v * SPEED_TIERS[0], v * SPEED_TIERS[1], v * SPEED_TIERS[2]]
-		"drift_zone":
-			var km := float(ev.length) / 1000.0
-			return [DRIFT_PER_KM[0] * km, DRIFT_PER_KM[1] * km, DRIFT_PER_KM[2] * km]
-	return [ref * TIME_TIERS[0], ref * TIME_TIERS[1], ref * TIME_TIERS[2]]
+	if String(ev.kind) == "drift_zone":
+		var km := float(ev.length) / 1000.0
+		return [DRIFT_PER_KM[0] * km, DRIFT_PER_KM[1] * km, DRIFT_PER_KM[2] * km]
+	return []
 
-## Whether an event is a PR stunt (started by driving through its gate).
+## What the event asks for: as Missions.target_text words a mission's.
+func target_text(ev: Dictionary, car_key := "stock") -> String:
+	var target := int(ev.get("target", 3))
+	match String(ev.get("mkind", "")):
+		"drift":
+			var t := tiers_for(ev, car_key)
+			return "Score %s for bronze (silver %s, gold %s)" % [OpenWorldHud._thousands(int(t[0])),
+				OpenWorldHud._thousands(int(t[1])), OpenWorldHud._thousands(int(t[2]))]
+		"knockout":
+			return "Win the knockout" if target == 1 else "Survive to the final (top %d)" % target
+		"rally":
+			return "Top %d overall" % target
+	return "Win" if target == 1 else "Finish P%d or better" % target
+
+## Fans a result pays: FANS_PER_KM over the route (at least 1.5 km's worth, at most 5) times the field's difficulty,
+## a quarter more for each place better than the target (as FanLevels.stage_reward), a share for a miss, a quarter
+## for an event cleared before.
+static func reward(ev: Dictionary, pos: int, success: bool, first_clear: bool) -> int:
+	var base := FANS_PER_KM * clampf(float(ev.get("length", 0.0)) / 1000.0, 1.5, 5.0) * float(DIFF_FANS.get(String(ev.get("difficulty", "medium")), 1.0))
+	if not success:
+		return int(base * FanLevels.FAIL_SHARE / 10.0) * 10
+	var beat := clampf(float(int(ev.get("target", 3)) - pos), 0.0, 3.0)
+	var pay := base * (1.0 + 0.25 * beat)
+	return int((pay if first_clear else pay * FanLevels.REPEAT_SHARE) / 10.0) * 10
+
+## A finished (or failed) live run settled: the outcome as MapMissions.outcome reads it, the medal (P1 gold, P2
+## silver, P3 bronze within the target; a drift's own tier), the fans; the event keeps its best for the beacon and the
+## card. Nothing here touches the campaign.
+func settle(res: Dictionary) -> Dictionary:
+	var ev: Dictionary = res.get("ev", {})
+	var out := MapMissions.outcome(res)
+	var success := bool(out.success)
+	var pos := int(out.pos)
+	var tier := clampi(4 - pos, 1, 3) if success else 0
+	var first := success and int(ev.get("best_tier", 0)) == 0
+	if success:
+		ev["best_tier"] = maxi(int(ev.get("best_tier", 0)), tier)
+	if String(ev.get("mkind", "")) == "drift":
+		ev["best"] = maxf(float(ev.get("best", 0.0)), float(res.get("score", 0.0)))
+	elif pos < 999:
+		ev["best_pos"] = mini(int(ev.get("best_pos", 999)), pos)
+	return {"success": success, "tier": tier, "pos": pos, "fans": reward(ev, pos, success, first), "first_clear": first,
+		"line": String(out.line)}
+
 ## Whether a route keeps to the drawn roads (every 10 m within OFF_ROADS_MAX of a road's edge). The road graph's
 ## routes can cut a rounded corner or follow a way that is not drawn; an event there would put its line, its gates
-## and its drift zone's verge off the tarmac, so generate() tries another.
+## and its drift's verge off the tarmac, so generate() tries another.
 const OFF_ROADS_MAX := 2.5
 static func on_roads(town: TownMap, path: PackedVector2Array) -> bool:
 	if town == null:
@@ -283,20 +458,6 @@ static func on_roads(town: TownMap, path: PackedVector2Array) -> bool:
 
 static func off_road(town: TownMap, p: Vector2, z: float) -> bool:
 	return town.road_at(p.x, p.y, z, VERGE).is_empty()
-
-static func is_stunt(ev: Dictionary) -> bool:
-	return String(ev.get("kind", "")) in STUNTS and not ev.has("mission")
-
-## The speed the reference driver crosses a stunt's start at: ROLL_ENTRY of the top speed, or less where the route
-## bends right away.
-static func entry_speed(path: PackedVector2Array, car_key: String, grip_k := 1.0) -> float:
-	var pc: Array = PACE.get(car_key, PACE.stock)
-	var pts := resample(path, 5.0)
-	var v := float(pc[0]) * ROLL_ENTRY
-	for i in range(1, mini(pts.size() - 1, 12)):
-		var turn := absf(wrapf((pts[i + 1] - pts[i]).angle() - (pts[i] - pts[i - 1]).angle(), -PI, PI))
-		v = minf(v, sqrt(float(pc[2]) * grip_k / maxf(turn / 10.0, 1e-5)))
-	return v
 
 ## The surface grip of an event's route against town tarmac (1; dirt lanes ~0.75), averaged: the reference driver's
 ## corners and braking scale with it. Measured on the map once per event.
@@ -431,13 +592,11 @@ func is_running() -> bool:
 func holding() -> bool:
 	return is_running() and run.state == "countdown"
 
-## Starts an event. opts: rolling (a stunt driven into at speed: no countdown, the flying-start targets), at (the
-## car's map position as it starts).
-func begin(ev: Dictionary, car_key: String, opts := {}) -> void:
-	var rolling := bool(opts.get("rolling", false)) and is_stunt(ev)
-	run = {"ev": ev, "state": "running" if rolling else "countdown", "t": 0.0 if rolling else -COUNTDOWN, "cp": 0,
-		"car": car_key, "tiers": tiers_for(ev, car_key, rolling), "rolling": rolling,
-		"drift": DriftScore.new() if ev.kind == "drift_zone" else null, "speed_sum": 0.0, "cps": ev.cps,
+## Starts an event (a live one or a campaign mission from MapMissions.event): the field on the grid, the countdown.
+func begin(ev: Dictionary, car_key: String) -> void:
+	ease_field(ev)
+	run = {"ev": ev, "state": "countdown", "t": -COUNTDOWN, "cp": 0, "car": car_key, "tiers": tiers_for(ev, car_key),
+		"drift": DriftScore.new() if ev.kind == "drift_zone" else null, "cps": ev.cps,
 		"rivals": null, "stage": 0, "stage_times": [], "rally": [], "notice": "", "wrong_t": 0.0, "off_t": 0.0,
 		"lost_t": 0.0, "resets": 0}
 	var seed_value := rng.randi()
@@ -447,6 +606,9 @@ func begin(ev: Dictionary, car_key: String, opts := {}) -> void:
 			"profile": profile(ev, StreetRivals.STEP)}
 		if String(ev.get("grid", "")) == "drag":
 			ro["drag_time"] = drag_time(car_key, float(ev.length))
+		ro["beyond"] = beyond(ev)
+		if ro.beyond.size() >= 2:
+			ro["beyond_profile"] = route_profile(map, ro.beyond, StreetRivals.STEP)
 		run.rivals = StreetRivals.new(ev.path, car_key, int(ev.rivals), seed_value, ro)
 	elif ev.kind == "rally":
 		var grips := []
@@ -459,8 +621,6 @@ func begin(ev: Dictionary, car_key: String, opts := {}) -> void:
 		_arm(ev.stages[0].path, ev.stages[0].cps)
 	else:
 		_arm(ev.path, ev.cps)
-	if opts.has("at"):
-		run.prev = opts.at
 	last_begin = {"ev": ev, "car": car_key}
 	last_result = {}
 
@@ -522,6 +682,35 @@ func gates_ahead() -> Array:
 func rivals() -> StreetRivals:
 	return run.get("rivals") as StreetRivals if is_running() else null
 
+## The road on past an event's finish (cached on the event), StreetRivals.RUNOUT_MAX m of it from the finish: a lap
+## carries on round from its start, a route along the map's roads straight on from its end (none where the road
+## ends or turns back there). The field rolls on along it and parks instead of running off through a junction.
+func beyond(ev: Dictionary) -> PackedVector2Array:
+	if ev.has("_beyond"):
+		return ev._beyond
+	var path: PackedVector2Array = ev.path
+	var out := PackedVector2Array()
+	if path.size() >= 2:
+		var end := path[path.size() - 1]
+		var d := (end - path[maxi(path.size() - 4, 0)]).normalized()
+		if end.distance_to(path[0]) < 15.0: # a lap: round again from the line
+			out = trim(path, StreetRivals.RUNOUT_MAX)
+			out[0] = end
+		elif map != null:
+			var r := map.route(end, end + d * (StreetRivals.RUNOUT_MAX + 30.0))
+			if r.size() >= 2 and path_length(r) > 10.0 and (r[mini(2, r.size() - 1)] - r[0]).normalized().dot(d) > 0.3:
+				out = trim(r, StreetRivals.RUNOUT_MAX)
+				out[0] = end
+		# only as far as it stays on the drawn roads (the router's last hop to a point off them does not)
+		var on := 0.0
+		for q in resample(out, 2.0):
+			if map != null and map.road_at(q.x, q.y, -INF, 0.3).is_empty():
+				break
+			on += 2.0
+		out = trim(out, on - 2.0) if on >= 10.0 else PackedVector2Array()
+	ev["_beyond"] = out
+	return out
+
 ## Where the player stands on the grid: [map position, heading] (in its own lane for a drag race), on the road.
 func grid_pose(ev: Dictionary) -> Array:
 	var h := float(ev.heading)
@@ -573,41 +762,6 @@ func reset_to_checkpoint() -> Array:
 		(run.drift as DriftScore).step(0.0, 0.0, false, true, 0.0, float(run.t))
 	return pose
 
-## The PR stunt on the board whose start gate the car just drove through (a -> b at v m/s, the right way), or {}.
-func drive_through(a: Vector2, b: Vector2, v: float) -> Dictionary:
-	if is_running() or v < ROLL_MIN:
-		return {}
-	for ev in board:
-		if not is_stunt(ev) or (ev.pos as Vector2).distance_to(b) > 40.0:
-			continue
-		if crossed(start_gate(ev), a, b):
-			return ev
-	return {}
-
-## A stunt's start gate {pos, dir, half} (cached on the event).
-func start_gate(ev: Dictionary) -> Dictionary:
-	if not ev.has("gate"):
-		ev["gate"] = {"pos": ev.pos, "dir": Vector2.from_angle(float(ev.heading)), "half": _gate_half(ev.pos)}
-	return ev.gate
-
-## Where ENTER at a stunt puts the car for its run at the gate: [map position, heading] on the road RUNUP m (or less)
-## back from the start, the road there leading into the gate; [] when there is no such road (a dead end behind it).
-func runup_pose(ev: Dictionary) -> Array:
-	if map == null:
-		return []
-	var d := Vector2.from_angle(float(ev.heading))
-	for back in [RUNUP, RUNUP * 0.6, RUNUP * 0.35]:
-		var hit := map.nearest_road((ev.pos as Vector2) - d * back, 25.0)
-		if hit.is_empty() or not map.in_play(hit.pos) or _on_deck(hit):
-			continue
-		var r := map.route(hit.pos, ev.pos)
-		if r.size() < 2 or path_length(r) > back * 1.6 + 30.0:
-			continue
-		if (r[r.size() - 1] - r[maxi(r.size() - 4, 0)]).normalized().dot(d) < 0.7:
-			continue
-		return [hit.pos as Vector2, (r[mini(3, r.size() - 1)] - r[0]).angle()]
-	return []
-
 ## One frame of the run: p the car's map position, v its speed m/s, slip its slip angle (rad), off whether it is
 ## off the road, crash whether it hit something hard, z the car's vertical height.
 ## Returns "" or what happened: "go", "cp", "warn" (a new notice: missed checkpoint, wrong way, off the route),
@@ -652,13 +806,7 @@ func tick(dt: float, p: Vector2, v: float, slip: float, off: bool, crash: bool, 
 	var z_ok := true
 	if is_finite(z) and cp < cp_z.size():
 		z_ok = absf(z - cp_z[cp]) <= 4.0
-	var through := false
-	if z_ok:
-		if ev.kind == "trailblazer":
-			through = p.distance_to(cps[cp]) < GOAL_RADIUS
-		else:
-			through = p.distance_to(cps[cp]) < CHECK_RADIUS or crossed(run.gates[cp], prev, p, run.notice == "missed")
-	if through:
+	if z_ok and (p.distance_to(cps[cp]) < CHECK_RADIUS or crossed(run.gates[cp], prev, p, run.notice == "missed")):
 		cp += 1
 		run.cp = cp
 		if run.notice == "missed":
@@ -673,7 +821,7 @@ func tick(dt: float, p: Vector2, v: float, slip: float, off: bool, crash: bool, 
 			return "done"
 		return "cp"
 	if float(run.t) > _time_limit():
-		last_result = {"ev": ev, "success": false, "tier": 0, "score": 0.0, "fans": 0, "line": "Out of time", "failed": true}
+		last_result = {"ev": ev, "success": false, "tier": 0, "score": 0.0, "line": "Out of time", "failed": true}
 		if ev.kind in ["race", "rally"]:
 			last_result.merge({"pos": 999, "finished": false, "knocked": false, "time": null})
 		run = {}
@@ -683,8 +831,6 @@ func tick(dt: float, p: Vector2, v: float, slip: float, off: bool, crash: bool, 
 ## The car's progress along the route and the notices it earns: a checkpoint run past (missed), going backwards
 ## at speed (wrong way), far off the route for a while (off route). Returns "warn" when a new notice comes up.
 func _follow(dt: float, p: Vector2, v: float) -> String:
-	if String(run.ev.kind) == "trailblazer":
-		return ""
 	var pts: PackedVector2Array = run.track
 	if pts.size() < 2:
 		return ""
@@ -739,68 +885,28 @@ func progress() -> Vector2:
 	return Vector2(float(run.s), maxf((run.track as PackedVector2Array).size() - 1, 0) * TRACK_STEP)
 
 func _time_limit() -> float:
-	var tiers: Array = run.tiers
 	match String(run.ev.kind):
-		"race":
-			return pace_time(run.ev.path, String(run.car), 0.0, grip_of(run.ev)) * 2.5 + 30.0
 		"rally":
 			var st: Dictionary = run.ev.stages[int(run.stage)]
 			return pace_time(st.path, String(run.car), 0.0, float(st.get("grip", 1.0))) * 2.5 + 30.0
-		"speed_zone":
-			return float(run.ev.length) / (float(tiers[0]) / 3.6) * TIME_OUT
 		"drift_zone":
 			return pace_time(run.ev.path, String(run.car)) * 3.0 * TIME_OUT
-	return float(tiers[0]) * TIME_OUT
+	return pace_time(run.ev.path, String(run.car), 0.0, grip_of(run.ev)) * 2.5 + 30.0
 
+## A drift over: its score against the tiers.
 func _finish() -> void:
 	var ev: Dictionary = run.ev
 	var tiers: Array = run.tiers
 	var t := float(run.t)
-	var score := t
-	var tier := 0
-	var line := ""
-	var higher := true
-	match String(ev.kind):
-		"speed_zone":
-			score = float(ev.length) / maxf(t, 0.01) * 3.6
-			tier = _tier_high(score, tiers)
-			line = "%.1f km/h average" % score
-		"drift_zone":
-			var d := run.drift as DriftScore
-			d.bank(t)
-			score = d.score
-			tier = _tier_high(score, tiers)
-			line = "%s drift points" % OpenWorldHud._thousands(int(score))
-		_:
-			higher = false
-			tier = 3 if t <= float(tiers[2]) else (2 if t <= float(tiers[1]) else (1 if t <= float(tiers[0]) else 0))
-			line = clock_text(t)
-	# the personal best and the best medal stay on the event (it stays up for another go)
-	var had := ev.has("best")
-	var new_best := not had or (score > float(ev.best) if higher else score < float(ev.best))
-	if new_best:
-		ev["best"] = score
-	var before := int(ev.get("best_tier", 0))
-	ev["best_tier"] = maxi(before, tier)
-	# fans: a medal better than the one already won pays the difference; a repeat of it pays a tenth
-	var per := FANS_PER_KM * clampf(float(ev.length) / 1000.0, 0.5, 5.0) / 10.0
-	var fans := 0
-	if tier > before:
-		fans = int(per * (TIER_FANS[tier] - TIER_FANS[before])) * 10
-	elif tier > 0:
-		fans = int(per * TIER_FANS[tier] * 0.1) * 10
-	last_result = {"ev": ev, "success": tier > 0, "tier": tier, "score": score, "fans": fans, "line": line,
-		"next": _next_text(score, tier, tiers, String(ev.kind)), "new_best": new_best and had, "first": not had,
-		"best_line": _score_text(String(ev.kind), float(ev.best)), "rolling": bool(run.rolling), "time": t}
+	var d := run.drift as DriftScore
+	var score := 0.0
+	if d:
+		d.bank(t)
+		score = d.score
+	var tier := _tier_high(score, tiers) if tiers.size() >= 3 else 0
+	last_result = {"ev": ev, "success": tier > 0, "tier": tier, "score": score,
+		"line": "%s drift points" % OpenWorldHud._thousands(int(score)), "next": _next_text(score, tier, tiers), "time": t}
 	run = {}
-
-static func _score_text(kind: String, score: float) -> String:
-	match kind:
-		"speed_zone":
-			return "%.1f km/h" % score
-		"drift_zone":
-			return "%s points" % OpenWorldHud._thousands(int(score))
-	return clock_text(score)
 
 ## A race over: the player's place (knocked: out of a knockout in that place).
 func _finish_race(pos: int, knocked: bool) -> void:
@@ -815,7 +921,7 @@ func _finish_race(pos: int, knocked: bool) -> void:
 		line += ", knocked out in %s %d" % ["sector" if ev.get("sectors", false) else "lap", rv.player_lap() + 1 if rv else 1]
 	else:
 		line += " · %s" % clock_text(t)
-	last_result = {"ev": ev, "success": pos <= int(ev.get("target", 3)), "tier": 0, "score": 0.0, "fans": 0, "line": line,
+	last_result = {"ev": ev, "success": pos <= int(ev.get("target", 3)), "tier": 0, "score": 0.0, "line": line,
 		"pos": pos, "finished": not knocked, "knocked": knocked, "time": t if not knocked else null}
 	run = {}
 
@@ -847,7 +953,7 @@ func _rally_stage_done() -> String:
 	var line := "P%d overall of %d · %s" % [pos, (run.rally as Array).size() + 1, clock_text(mine)]
 	if pos > 1 and is_finite(best):
 		line += " (+%.1f s)" % (mine - best)
-	last_result = {"ev": ev, "success": pos <= int(ev.get("target", 3)), "tier": 0, "score": 0.0, "fans": 0,
+	last_result = {"ev": ev, "success": pos <= int(ev.get("target", 3)), "tier": 0, "score": 0.0,
 		"line": line, "pos": pos, "finished": true, "knocked": false, "time": mine}
 	run = {}
 	return "done"
@@ -875,62 +981,79 @@ func rally_place() -> int:
 static func _tier_high(score: float, tiers: Array) -> int:
 	return 3 if score >= float(tiers[2]) else (2 if score >= float(tiers[1]) else (1 if score >= float(tiers[0]) else 0))
 
-static func _next_text(score: float, tier: int, tiers: Array, kind: String) -> String:
-	if tier >= 3:
+static func _next_text(score: float, tier: int, tiers: Array) -> String:
+	if tier >= 3 or tiers.size() < 3:
 		return ""
-	var want := float(tiers[tier])
-	match kind:
-		"speed_zone":
-			return "%.1f km/h short of %s" % [want - score, TIER_NAMES[tier + 1].to_lower()]
-		"drift_zone":
-			return "%s points short of %s" % [OpenWorldHud._thousands(int(want - score)), TIER_NAMES[tier + 1].to_lower()]
-	return "%.2f s off %s" % [score - want, TIER_NAMES[tier + 1].to_lower()]
+	return "%s points short of %s" % [OpenWorldHud._thousands(int(float(tiers[tier]) - score)), TIER_NAMES[tier + 1].to_lower()]
 
 # ------------------------------------------------------------------------------------------ text
 
 static func clock_text(t: float) -> String:
 	return "%d:%05.2f" % [int(t) / 60, fmod(t, 60.0)]
 
-## The stars line: "★ 54  ★★ 64  ★★★ 71" (km/h, points or times).
-static func stars_text(kind: String, tiers: Array) -> String:
+## The stars line of a drift: "★ 540  ★★ 2,160  ★★★ 5,400".
+static func stars_text(tiers: Array) -> String:
 	var parts := PackedStringArray()
 	for k in 3:
-		var v := float(tiers[k])
-		var txt := "%.0f" % v if kind == "speed_zone" else (OpenWorldHud._thousands(int(v)) if kind == "drift_zone" else clock_text(v))
-		parts.append("%s %s" % ["★".repeat(k + 1), txt])
+		parts.append("%s %s" % ["★".repeat(k + 1), OpenWorldHud._thousands(int(tiers[k]))])
 	return "  ".join(parts)
 
-func target_text(ev: Dictionary, car_key: String) -> String:
-	var t := tiers_for(ev, car_key, is_stunt(ev))
-	match String(ev.kind):
-		"speed_zone":
-			return "Average %.0f km/h for bronze (silver %.0f, gold %.0f)" % t
-		"drift_zone":
-			return "Score %s for bronze (silver %s, gold %s)" % [OpenWorldHud._thousands(int(t[0])),
-				OpenWorldHud._thousands(int(t[1])), OpenWorldHud._thousands(int(t[2]))]
-	return "Bronze %s · silver %s · gold %s" % [clock_text(t[0]), clock_text(t[1]), clock_text(t[2])]
+## The mission kind's name ("DRAG RACE") of an event.
+static func kind_name(ev: Dictionary) -> String:
+	return String(KIND_NAMES.get(String(ev.get("mkind", ev.get("kind", ""))), "EVENT"))
 
 const BLURB := {
-	"sprint": "Somebody chalked a start line on the road. Point to point through the town, every checkpoint gate in order, traffic and all.",
-	"speed_zone": "A long, quick stretch. Hit the start gate flat out and carry the most speed you can to the end: the average counts.",
-	"drift_zone": "The lads are filming this bit. Come in sideways and keep it there to the end of the zone; a crash or the verge loses the combo.",
-	"trailblazer": "The goal is there and the clock starts at the gate. Roads, fields, gardens: whichever way is quickest.",
+	"sprint": "Somebody chalked a start line on the road. Point to point through the town against the local crews, every checkpoint gate in order, the roads closed while it runs.",
+	"drag": "A straight bit of main road, four cars abreast and somebody's cousin with a torch for the lights. Nothing to it but the launch and the gears.",
+	"knockout": "A run across town cut into sectors: each time the leader crosses a sector line the last car is out. Never be last at a line.",
+	"offroad": "The lads with the mud tyres found a way across on the gravel and the field tracks. Wheel to wheel on the loose stuff.",
+	"drift": "The lads are filming this bit. Come in sideways and keep it there to the end; a crash or the verge loses the combo.",
+	"rally": "A special stage on the back roads, one car at a time against the clock; the crews' times are already on the board.",
 }
 
-## The briefing card: [subtitle, title, body, hint].
-func card(ev: Dictionary, car_key: String) -> Array:
+## The length as Missions.length_text words a mission's.
+static func length_text(ev: Dictionary) -> String:
+	var km := float(ev.length) / 1000.0
+	match String(ev.get("mkind", "")):
+		"drag":
+			return "%d m standing start" % int(round(float(ev.length)))
+		"drift":
+			return "%.1f km solo" % km
+		"knockout":
+			return "%.1f km, %d sectors, one car out per sector" % [km, int(ev.laps)]
+		"rally":
+			return "one %.1f km special stage" % km
+	return "%.1f km point to point" % km
+
+func surface_text(ev: Dictionary) -> String:
+	if not ev.has("_loose"):
+		ev["_loose"] = unpaved_share(map, ev.path) if map else 0.0
+	var share := float(ev._loose)
+	return "Tarmac" if share < 0.1 else ("Mostly gravel and dirt" if share >= 0.5 else "Tarmac and gravel")
+
+static func field_text(ev: Dictionary) -> String:
+	var n := int(ev.get("rivals", 0))
+	var field := "solo" if n == 0 else "%d %s (%s)" % [n, "crews" if String(ev.get("mkind", "")) == "rally" else "rivals",
+		String(ev.get("difficulty", "medium")).capitalize()]
+	if int(ev.get("eased", 0)) > 0:
+		field += ", eased after %d tries" % int(ev.get("fails", 0))
+	return field
+
+## The briefing card, laid out as a campaign mission's (Missions.card): [subtitle, title, body, hint].
+func card(ev: Dictionary, car_key: String, fans_level := 0) -> Array:
+	ease_field(ev)
 	var mins := int(maxf(0.0, float(ev.expires) - clock_h) * 80.0 / 60.0)
-	var length := "%.1f km" % (float(ev.length) / 1000.0) if ev.kind != "trailblazer" else \
-		"%.1f km as the crow flies" % ((ev.pos as Vector2).distance_to(ev.goal) / 1000.0)
-	var extra := " · %d checkpoints" % (ev.cps as PackedVector2Array).size() if ev.kind == "sprint" else ""
 	var best := ""
-	if ev.has("best"):
-		best = "\nYour best: %s%s" % [_score_text(String(ev.kind), float(ev.best)),
-			(" · %s" % TIER_NAMES[int(ev.best_tier)]) if int(ev.get("best_tier", 0)) > 0 else ""]
-	var body := "%s\n\n%s%s · live for about %d more min\n%s%s" % [BLURB[ev.kind], length, extra, maxi(mins, 1),
-		target_text(ev, car_key), best]
-	var hint := "DRIVE THROUGH THE GATE TO START  ·  ENTER / B  ▸  RUN-UP" if is_stunt(ev) else "ENTER / B  ▸  START EVENT"
-	return ["LIVE EVENT · %s" % KIND_NAMES[ev.kind], String(ev.title), body, hint]
+	if String(ev.get("mkind", "")) == "drift" and float(ev.get("best", 0.0)) > 0.0:
+		best = " · Best %s" % OpenWorldHud._thousands(int(ev.best))
+	elif int(ev.get("best_pos", 999)) < 999:
+		best = " · Best P%d" % int(ev.best_pos)
+	if int(ev.get("best_tier", 0)) > 0:
+		best += " %s" % "★".repeat(int(ev.best_tier))
+	var body := "%s\n\n%s · %s · %s · live for about %d more min\nTarget: %s%s\nUp to %s fans on a first clear (fan level %d)" % [
+		BLURB.get(String(ev.get("mkind", "")), ""), length_text(ev), surface_text(ev), field_text(ev), maxi(mins, 1),
+		target_text(ev, car_key), best, OpenWorldHud._thousands(reward(ev, 1, true, true)), fans_level]
+	return ["LIVE %s MISSION" % kind_name(ev), String(ev.title), body, "ENTER / B  ▸  START EVENT HERE ON THE MAP"]
 
 const NOTICES := {"missed": "MISSED CHECKPOINT · turn back, or R to reset", "wrong_way": "WRONG WAY",
 	"off_route": "OFF ROUTE · follow the GPS, or R to reset"}
@@ -941,53 +1064,44 @@ func hud_lines(p: Vector2) -> Array:
 	if not is_running():
 		return ["", ""]
 	var ev: Dictionary = run.ev
-	var name := String(Missions.KIND_NAMES.get(ev.get("mkind", ""), "")) if ev.has("mission") else String(KIND_NAMES.get(ev.kind, ""))
+	var name := kind_name(ev)
 	if run.state == "liaison":
 		var st: Dictionary = ev.stages[int(run.stage)]
 		return ["LIAISON · P%d" % rally_place(), "to SS%d %s · %d m · stop on the line" % [int(run.stage) + 1, st.name,
 			int(p.distance_to(next_target()))]]
 	if run.state == "countdown":
 		return ["%d" % ceili(-float(run.t)), name] # the count in the big line
-	var tiers: Array = run.tiers
 	var t := float(run.t)
 	var cps: PackedVector2Array = run.cps
 	var pr := progress()
 	var dist := "%.1f / %.1f km" % [pr.x / 1000.0, pr.y / 1000.0] if pr.y >= 1500.0 else "%d m to go" % maxi(int(pr.y - pr.x), 0)
-	var title := ""
-	var line := ""
+	var title := "%s  %s" % [name, clock_text(t)]
+	var line := dist
 	match String(ev.kind):
 		"race":
 			var rv := run.rivals as StreetRivals
+			var gap := rv.gap_text() if rv else ""
 			title = "%s  P%d/%d  %s" % [name, rv.position() if rv else 1, rv.field() if rv else 1, clock_text(t)]
 			line = "CP %d/%d · %s" % [mini(int(run.cp) + 1, cps.size()), cps.size(), dist] if cps.size() > 1 else dist
 			if rv and bool(ev.get("knockout", false)):
 				line = "%s %d/%d · %d cars left · %s" % ["SECTOR" if ev.get("sectors", false) else "LAP",
 					mini(rv.player_lap() + 1, int(ev.laps)), int(ev.laps), rv.field(), dist]
+			if gap != "":
+				line += " · %s" % gap
 		"rally":
 			var st: Dictionary = ev.stages[int(run.stage)]
 			title = "SS%d %s  %s" % [int(run.stage) + 1, String(st.name).to_upper(), clock_text(t)]
 			line = "CP %d/%d · %s · P%d overall so far" % [int(run.cp) + 1, cps.size(), dist, rally_place()]
-		"speed_zone":
-			var avg := pr.x / maxf(t, 0.1) * 3.6
-			title = "SPEED ZONE  %s  %s" % ["%.0f km/h" % avg if t >= 1.5 else "--- km/h", "★".repeat(_tier_high(avg, tiers)) if t >= 1.5 else ""]
-			line = "%s · %s" % [stars_text("speed_zone", tiers), dist]
 		"drift_zone":
 			var d := run.drift as DriftScore
-			title = "%s  %s  ×%.1f  %s" % ["DRIFT ZONE" if not ev.has("mission") else name, OpenWorldHud._thousands(d.total()),
-				d.mult, "★".repeat(_tier_high(d.total(), tiers))]
-			line = "%s · %s" % [stars_text("drift_zone", tiers), dist]
-		"trailblazer":
-			var got := 3 if t <= float(tiers[2]) else (2 if t <= float(tiers[1]) else (1 if t <= float(tiers[0]) else 0))
-			title = "TRAILBLAZER  %s  %s" % [clock_text(t), "★".repeat(got)]
-			line = "%d m to the goal · %s" % [int(p.distance_to(ev.goal)), stars_text("trailblazer", tiers)]
-		_:
-			title = "%s  %s" % [name, clock_text(t)]
-			line = "CP %d/%d · %s · %s" % [mini(int(run.cp) + 1, cps.size()), cps.size(), dist, stars_text("sprint", tiers)]
+			var tiers: Array = run.tiers
+			title = "%s  %s  ×%.1f  %s" % [name, OpenWorldHud._thousands(d.total()), d.mult, "★".repeat(_tier_high(d.total(), tiers))]
+			line = "%s · %s" % [stars_text(tiers), dist]
 	if String(run.notice) != "":
 		line = String(NOTICES.get(run.notice, ""))
 	return [title, line]
 
-## Where the GPS should point while running: the next checkpoint (or the goal, or the next stage's start).
+## Where the GPS should point while running: the next checkpoint (or the next stage's start).
 func next_target() -> Vector2:
 	if not is_running():
 		return Vector2.ZERO
@@ -1003,6 +1117,22 @@ static func path_length(path: PackedVector2Array) -> float:
 	for i in range(1, path.size()):
 		l += path[i - 1].distance_to(path[i])
 	return l
+
+## The path's first `dist` m (cut inside its last segment).
+static func trim(path: PackedVector2Array, dist: float) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	if path.is_empty():
+		return out
+	out.append(path[0])
+	var s := 0.0
+	for i in range(1, path.size()):
+		var l := path[i - 1].distance_to(path[i])
+		if s + l >= dist:
+			out.append(path[i - 1].lerp(path[i], (dist - s) / maxf(l, 1e-6)))
+			return out
+		s += l
+		out.append(path[i])
+	return out
 
 ## Total heading change along the path (rad), measured on a 10 m resample so polyline noise doesn't count.
 static func turning(path: PackedVector2Array) -> float:

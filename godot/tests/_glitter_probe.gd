@@ -172,7 +172,7 @@ func _initialize() -> void:
 	var frames := int(_env("FLK", "6"))
 	var weather: Array = [w.rain_particles, w.rain_splash_particles, w.rain_mist_particles]
 	var road_mats: Array = w._wet_materials
-	var layers := _env("LAYERS", "base,no_car_fx,no_weather_fx,no_sharpen,no_car_probe,no_fx_all,no_beams,no_sky_refl,no_detail,dry_road").split(",")
+	var layers := _env("LAYERS", "base,no_car_fx,no_weather_fx,no_sharpen,no_car_probe,no_fx_all,no_beams,no_sky_refl,no_sun,no_sun_spec,no_detail,dry_road").split(",")
 	for layer in layers:
 		match layer:
 			"no_car_fx":
@@ -204,8 +204,16 @@ func _initialize() -> void:
 					b.visible = false
 			"no_sky_refl":
 				w.world_environment.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
+			"no_sun":
+				w.world_environment.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
+				w.sun.visible = false
+			"no_sun_spec":
+				w.world_environment.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
+				w.sun.visible = true
+				w.sun.light_specular = 0.0
 			"no_detail":
 				w.world_environment.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
+				w.sun.visible = true
 				for m in road_mats:
 					if m.shader and m.shader.resource_path.ends_with("road.gdshader"):
 						m.set_shader_parameter("detail", 0.0)

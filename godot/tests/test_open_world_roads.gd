@@ -31,6 +31,7 @@ func run() -> Array:
 	_discs(map, errors)
 	_ride(map, ribs, errors)
 	_dual(map, errors)
+	_dead_ends(map, errors)
 	_route_steps(map, errors)
 	_s1_full_throttle(map, errors)
 	completed = true
@@ -150,6 +151,71 @@ func _ride(map: TownMap, ribs: Array, errors: Array[String]) -> void:
 		errors.append("roads: only %d ride samples" % samples)
 	if off > MAX_RIDE_OFF:
 		errors.append("roads: the car's height is off the drawn street by over %.2f m at %d of %d samples (worst %.2f m, '%s')" % [RIDE_TOL, off, samples, worst, where])
+
+## Free road ends (a node on that road alone) that stop short of a street they point at: within END_GAP m of its drawn
+## edge, within END_AIM of the end's heading, and not already inside another street's carriageway. Rows
+## [gap, road, other road, end point, at_closure]; at_closure is an end within 12 m of a closure barrier (the play edge,
+## the street stops there on purpose). The baker runs such ends on into the road (join_dead_ends). A stub that runs on a
+## few metres past a junction with the road behind it, or ends beside a road, is a real dead end and not listed.
+const END_GAP := 6.0
+const END_AIM := 50.0
+static func short_dead_ends(map: TownMap) -> Array:
+	var on_roads := {}
+	for ri in map.road_pts.size():
+		for m in map.road_marks[ri]:
+			on_roads[str(m[1])] = int(on_roads.get(str(m[1]), 0)) + 1
+	var closures: Array = map.raw.get("closures", [])
+	var rows := []
+	var reach := END_GAP + 8.0
+	for ri in map.road_pts.size():
+		var pts := map.road_pts[ri]
+		var n := pts.size()
+		if n < 2:
+			continue
+		for m in map.road_marks[ri]:
+			var idx := int(m[0])
+			if (idx != 0 and idx != n - 1) or int(on_roads.get(str(m[1]), 0)) >= 2:
+				continue
+			var p := pts[idx]
+			var dir := (p - pts[1 if idx == 0 else n - 2]).normalized()
+			var inside := false
+			var best := []
+			var r := int(ceil(reach / TownMap.CELL))
+			var cx := int(floor(p.x / TownMap.CELL))
+			var cy := int(floor(p.y / TownMap.CELL))
+			for dx in range(-r, r + 1):
+				for dy in range(-r, r + 1):
+					for sid in map._seg_cells.get(map._cell_key(cx + dx, cy + dy), PackedInt32Array()):
+						var rj := map._seg_road[sid]
+						if rj == ri:
+							continue
+						var i := map._seg_i[sid]
+						var a := map.road_pts[rj][i]
+						var ab := map.road_pts[rj][i + 1] - a
+						var t := clampf((p - a).dot(ab) / maxf(ab.length_squared(), 1e-6), 0.0, 1.0)
+						var q := a + ab * t
+						var gap := p.distance_to(q) - map.half_at(rj, i, t)
+						if gap <= 0.05:
+							inside = true
+						elif gap <= END_GAP and (q - p).normalized().dot(dir) >= cos(deg_to_rad(END_AIM)) and (best.is_empty() or gap < float(best[0])):
+							best = [gap, ri, rj, p]
+			if inside or best.is_empty():
+				continue
+			var at_closure := false
+			for c in closures:
+				if p.distance_to(Vector2(c[0], c[1])) < 12.0:
+					at_closure = true
+			best.append(at_closure)
+			rows.append(best)
+	return rows
+
+func _dead_ends(map: TownMap, errors: Array[String]) -> void:
+	var short := []
+	for row in short_dead_ends(map):
+		if not row[4]:
+			short.append("'%s' #%d %.1f m short at %s" % [map.road_name[row[1]], row[1], row[0], row[3]])
+	if not short.is_empty():
+		errors.append("roads: %d dead ends stop short of the street they point at: %s" % [short.size(), short.slice(0, 6)])
 
 ## Within 15 m of a junction or end of road ri (where the halves of a divided road converge into its mouth).
 func _near_end(map: TownMap, ri: int, p: Vector2) -> bool:
