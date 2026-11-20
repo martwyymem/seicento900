@@ -101,9 +101,6 @@ static func index_of(id: String) -> int:
 static func get_def(index: int) -> Dictionary:
 	return MISSIONS[clampi(index - BASE, 0, MISSIONS.size() - 1)]
 
-static func kind_of(index: int) -> String:
-	return String(get_def(index).kind) if is_mission(index) else ""
-
 static func progress(prog: Dictionary, index: int) -> Dictionary:
 	var all = prog.get("missions", {})
 	if not all is Dictionary:

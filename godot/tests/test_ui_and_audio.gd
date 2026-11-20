@@ -278,13 +278,6 @@ func _check_menu_modes(errors: Array[String], game_script: GDScript) -> void:
 			if game.campaign_stage_picker.item_count != CampaignData.STAGES.size():
 				errors.append("The campaign list has %d rows for %d stages (missions belong on the map)" % [game.campaign_stage_picker.item_count,
 					CampaignData.STAGES.size()])
-			elif game._campaign_unpick(3) != 3:
-				errors.append("The campaign list's stage rows do not map to their stages")
-			var back_to: int = game.campaign_stage_index
-			game._apply_campaign_stage(Missions.index_of("drag_quarter"))
-			if not String(game.campaign_target_label.text).contains("Win") or not String(game.campaign_title_label.text).begins_with("Drag"):
-				errors.append("A mission's briefing reads '%s' / '%s'" % [game.campaign_title_label.text, game.campaign_target_label.text])
-			game._apply_campaign_stage(back_to)
 			if not game.campaign_side.visible or game.track_picker.visible or game.setup_conditions_row.visible or game.setup_format_row.visible:
 				errors.append("The campaign briefing should show the stage and hide circuit, format and conditions")
 			if game.setup_race_button.visible or not items.has(game.campaign_start_button):

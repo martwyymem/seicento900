@@ -9,6 +9,8 @@ uniform vec3 conifer_color : source_color = vec3(0.13, 0.22, 0.14);
 uniform vec3 broadleaf_color : source_color = vec3(0.24, 0.34, 0.16);
 uniform float conifer_share = 0.5;
 uniform float wet = 0.0;
+uniform float rain : hint_range(0.0, 1.0) = 0.0;
+uniform float snow : hint_range(0.0, 1.0) = 0.0;
 
 varying vec3 world_pos;
 
@@ -31,8 +33,21 @@ void fragment() {
 	float conifer = step(stands, conifer_share);
 	vec3 col = mix(broadleaf_color, conifer_color, conifer);
 	col *= 0.62 + 0.55 * crowns * (0.7 + 0.6 * fine);
-	ALBEDO = col * mix(1.0, 0.8, wet);
-	ROUGHNESS = 0.95;
-	SPECULAR = 0.2;
-	BACKLIGHT = vec3(0.12, 0.16, 0.08);
+	float w = clamp(max(wet, rain * 0.65), 0.0, 1.0);
+	col *= mix(1.0, 0.8, w);
+	float rough = mix(0.95, 0.55, w);
+	float spec = mix(0.2, 0.32, w);
+	float back_k = 1.0;
+	if (snow > 0.001) {
+		float sn = crowns * 0.6 + fine * 0.4;
+		float snow_cover = clamp(snow * smoothstep(0.25, 0.75, n.y + (sn - 0.5) * 0.45), 0.0, 1.0);
+		col = mix(col, vec3(0.90, 0.93, 0.98) * (0.90 + 0.16 * sn), snow_cover * 0.88);
+		rough = mix(rough, 0.85, snow_cover);
+		spec = mix(spec, 0.22, snow_cover);
+		back_k *= 1.0 - snow_cover * 0.85;
+	}
+	ALBEDO = col;
+	ROUGHNESS = rough;
+	SPECULAR = spec;
+	BACKLIGHT = vec3(0.12, 0.16, 0.08) * back_k;
 }

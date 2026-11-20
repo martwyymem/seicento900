@@ -14,6 +14,8 @@ render_mode blend_mix, depth_draw_opaque, cull_back;
 
 uniform float night = 0.0;
 uniform float wet = 0.0;
+uniform float rain : hint_range(0.0, 1.0) = 0.0;
+uniform float snow : hint_range(0.0, 1.0) = 0.0;
 uniform sampler2D grain : filter_linear_mipmap, repeat_enable;
 uniform vec3 glass_color : source_color = vec3(0.24, 0.32, 0.42);
 uniform vec3 frame_color : source_color = vec3(0.92, 0.91, 0.88);
@@ -32,6 +34,7 @@ const vec3 ACCENTS[6] = vec3[](vec3(0.55, 0.08, 0.05), vec3(0.05, 0.18, 0.45), v
 const vec3 CURTAINS[4] = vec3[](vec3(0.85, 0.82, 0.74), vec3(0.75, 0.55, 0.40), vec3(0.55, 0.62, 0.70), vec3(0.80, 0.78, 0.60));
 
 varying vec3 world_pos;
+varying vec3 world_normal;
 varying flat float v_seed;
 varying flat float v_kind;
 varying flat float v_face;
@@ -46,6 +49,7 @@ float hash12(vec2 p) {
 
 void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	world_normal = normalize(MODEL_NORMAL_MATRIX * NORMAL);
 	float top_dm = floor(UV2.x + 0.0001);
 	v_seed = UV2.x - top_dm;
 	v_top = top_dm * 0.1;
@@ -349,12 +353,14 @@ void fragment() {
 			rough = 0.6;
 		}
 	}
+	float wall_streak = 0.0;
 	if (v_face < 0.5) {
 		// weathering: rain streaks running down from the top, and a stone or concrete plinth
 		// broad, faint stains rather than thin dark lines (a headlight on the wall turned the thin ones into scratches)
 		float streak = texture(grain, vec2(uv.x * 0.3, uv.y * 0.03 + v_seed)).r;
 		float streak_fade = 1.0 - smoothstep(0.1, 0.4, fw.x); // and none once a pixel spans a few cm
-		col *= 1.0 - 0.06 * smoothstep(0.45, 0.85, streak) * streak_fade * (is_window ? 0.0 : 1.0);
+		wall_streak = smoothstep(0.45, 0.85, streak) * streak_fade * (is_window ? 0.0 : 1.0);
+		col *= 1.0 - 0.06 * wall_streak;
 		float plinth = 1.0 - step(0.55, uv.y);
 		if (!is_window && kind != 3 && kind != 2) {
 			col = mix(col, vec3(0.32, 0.31, 0.29) * (0.85 + 0.3 * g), plinth * 0.85);
@@ -376,10 +382,44 @@ void fragment() {
 			col = col * (1.0 + 0.1 * band) * (1.0 - 0.16 * shade);
 		}
 	}
-	col *= mix(1.0, 0.7, wet);
+	vec3 wn = normalize(world_normal);
+	float up = clamp(wn.y, 0.0, 1.0);
+	float spec = is_window ? 0.8 : 0.35;
+	float w_eff = clamp(max(wet, rain * 0.75), 0.0, 1.0);
+	if (w_eff > 0.001) {
+		// roofs and windward walls soak more; a strip under the eave stays slightly sheltered
+		float wind_face = smoothstep(-0.2, 0.8, dot(wn.xz, normalize(vec2(0.75, 0.65))));
+		float exposed = mix(0.45 + 0.55 * wind_face, 1.0, smoothstep(0.1, 0.5, up));
+		if (v_face < 0.5 && v_top > 2.0) {
+			exposed *= mix(0.65, 1.0, smoothstep(0.0, 0.8, v_top - uv.y));
+		}
+		float w_surf = clamp(w_eff * exposed + rain * exposed * wall_streak * 0.25, 0.0, 1.0);
+		col *= mix(1.0, is_window ? 0.9 : 0.68, w_surf);
+		// keep wet vertical walls matte enough that headlights do not blow out into a specular blob
+		float wet_rough = is_window ? rough * 0.7 : (v_face > 0.5 ? 0.26 : max(rough * 0.48, 0.36));
+		rough = mix(rough, wet_rough, w_surf);
+		if (!is_window) {
+			spec = mix(spec, 0.48, w_surf);
+		}
+	}
+	if (snow > 0.001) {
+		float sn = g * 0.45 + g2 * 0.55;
+		float snow_cover = snow * smoothstep(0.30, 0.70, up + (sn - 0.5) * 0.32);
+		if (v_face < 0.5 && !is_window) {
+			// subtle ground-level snow drift at the foot of walls (below shop glazing)
+			float drift = smoothstep(0.30, 0.0, uv.y) * smoothstep(0.32, 0.75, sn) * 0.55;
+			snow_cover = max(snow_cover, snow * drift);
+		}
+		snow_cover = clamp(snow_cover, 0.0, 1.0);
+		vec3 snow_col = vec3(0.90, 0.93, 0.98) * (0.91 + 0.15 * sn);
+		col = mix(col, snow_col, snow_cover * 0.92);
+		rough = mix(rough, 0.85, snow_cover);
+		metal *= 1.0 - snow_cover;
+		spec = mix(spec, 0.25, snow_cover);
+	}
 	ALBEDO = col;
-	ROUGHNESS = mix(rough, rough * 0.5, wet);
+	ROUGHNESS = rough;
 	METALLIC = metal;
-	SPECULAR = is_window ? 0.8 : 0.35;
+	SPECULAR = spec;
 	EMISSION = glow;
 }

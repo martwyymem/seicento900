@@ -11,6 +11,8 @@ instance uniform vec4 shutter_color : source_color = vec4(0.25, 0.38, 0.3, 1.0);
 instance uniform vec4 dims = vec4(12.0, 18.0, 10.0, 0.0); // width, height, depth, seed
 uniform float night = 0.0;
 uniform float wet = 0.0;
+uniform float rain : hint_range(0.0, 1.0) = 0.0;
+uniform float snow : hint_range(0.0, 1.0) = 0.0;
 uniform float floor_height = 3.1;
 uniform float bay_width = 2.6;
 uniform sampler2D grain : filter_linear_mipmap, repeat_enable;
@@ -21,6 +23,7 @@ const vec3 SHUTTERS[4] = vec3[](vec3(0.25, 0.37, 0.28), vec3(0.36, 0.44, 0.48), 
 varying vec3 local_pos;
 varying vec3 local_normal;
 varying vec3 world_pos;
+varying vec3 world_normal;
 varying flat vec4 v_dims;
 varying flat vec3 v_wall;
 varying flat vec3 v_shutter;
@@ -35,6 +38,7 @@ void vertex() {
 	local_pos = VERTEX;
 	local_normal = NORMAL;
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	world_normal = normalize(MODEL_NORMAL_MATRIX * NORMAL);
 	v_dims = dims;
 	v_wall = wall_color.rgb;
 	v_shutter = shutter_color.rgb;
@@ -47,11 +51,26 @@ void vertex() {
 }
 
 void fragment() {
-	vec3 wall = v_wall * (0.9 + 0.2 * texture(grain, world_pos.xy * 0.13 + world_pos.zy * 0.11).r);
+	float g_n = texture(grain, world_pos.xy * 0.13 + world_pos.zy * 0.11).r;
+	vec3 wall = v_wall * (0.9 + 0.2 * g_n);
 	float seed = v_dims.w;
+	vec3 wn = normalize(world_normal);
+	float up = clamp(wn.y, 0.0, 1.0);
+	float w_eff = clamp(max(wet, rain * 0.75), 0.0, 1.0);
 	if (local_normal.y > 0.5) {
-		ALBEDO = wall * vec3(0.55, 0.52, 0.5);
-		ROUGHNESS = 0.9;
+		vec3 col = wall * vec3(0.55, 0.52, 0.5);
+		float rough = 0.9;
+		if (w_eff > 0.001) {
+			col *= mix(1.0, 0.68, w_eff);
+			rough = mix(rough, 0.28, w_eff);
+		}
+		if (snow > 0.001) {
+			float snow_cover = clamp(snow * smoothstep(0.30, 0.70, up + (g_n - 0.5) * 0.30), 0.0, 1.0);
+			col = mix(col, vec3(0.90, 0.93, 0.98) * (0.91 + 0.15 * g_n), snow_cover * 0.92);
+			rough = mix(rough, 0.85, snow_cover);
+		}
+		ALBEDO = col;
+		ROUGHNESS = rough;
 	} else if (local_normal.y < -0.5) {
 		ALBEDO = wall * 0.4;
 		ROUGHNESS = 0.9;
@@ -103,8 +122,14 @@ void fragment() {
 				col += vec3(0.1, 0.14, 0.2) * smoothstep(0.7, 0.3, f.y) * 0.6; // the sky in the pane
 			}
 		}
-		ALBEDO = col * mix(1.0, 0.75, wet);
-		ROUGHNESS = mix(rough, rough * 0.5, wet);
+		if (w_eff > 0.001) {
+			float wind_face = smoothstep(-0.2, 0.8, dot(wn.xz, normalize(vec2(0.75, 0.65))));
+			float w_wall = w_eff * (0.45 + 0.55 * wind_face);
+			col *= mix(1.0, 0.75, w_wall);
+			rough = mix(rough, rough * 0.5, w_wall);
+		}
+		ALBEDO = col;
+		ROUGHNESS = rough;
 		METALLIC = metal;
 		EMISSION = glow;
 	}

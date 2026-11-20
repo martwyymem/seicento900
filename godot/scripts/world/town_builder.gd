@@ -1018,23 +1018,49 @@ func _street_meshes() -> Array:
 								var along := Vector3(t2.x, 0.0, t2.y) * 0.6
 								db.flat_quad(ca - along, cb - along, cb + along, ca + along, Vector3.DOWN, soffit) # beam() has no bottom
 					else:
-						# grassy embankment at 1:1.5
-						var w0 := maxf(0.5, (e0.y - g0) * 1.5)
-						var w1 := maxf(0.5, (e1.y - g1) * 1.5)
-						var b0 := e0 + out * w0
-						var b1 := e1 + out * w1
+						# grassy embankment at 1:1.5, as the car rides it (FreeCar.support, and the cone round a raised end:
+						# no step where they meet): down to the ground at its foot, then a skirt sunk under the grass
+						# (the road's lift fades over LIFT_RAMP past the edge, as the ride's does)
+						var rlift := map.road_lift(ri)
+						var h0 := e0.y - rlift - g0 - 0.5
+						var h1 := e1.y - rlift - g1 - 0.5
+						var f0 := maxf(0.3, h0 * TownMap.EMBANKMENT)
+						var f1 := maxf(0.3, h1 * TownMap.EMBANKMENT)
+						var o0 := minf(TownMap.LIFT_RAMP, f0)
+						var o1 := minf(TownMap.LIFT_RAMP, f1)
+						var r0 := e0 + out * o0
+						var r1 := e1 + out * o1
+						r0.y = g0 + 0.5 + maxf(0.0, h0 - o0 / TownMap.EMBANKMENT) + rlift * (1.0 - smoothstep(0.0, TownMap.LIFT_RAMP, o0))
+						r1.y = g1 + 0.5 + maxf(0.0, h1 - o1 / TownMap.EMBANKMENT) + rlift * (1.0 - smoothstep(0.0, TownMap.LIFT_RAMP, o1))
+						var m0 := e0 + out * f0
+						var m1 := e1 + out * f1
+						m0.y = map.ground(m0.x, m0.z)
+						m1.y = map.ground(m1.x, m1.z)
+						var b0 := e0 + out * (f0 + 0.45)
+						var b1 := e1 + out * (f1 + 0.45)
 						b0.y = map.ground(b0.x, b0.z) - 0.3
 						b1.y = map.ground(b1.x, b1.z) - 0.3
-						var nrm3 := (e1 - e0).cross(b0 - e0).normalized()
-						if nrm3.y < 0.0:
-							nrm3 = -nrm3
-						bb.flat_quad(e0, e1, b1, b0, nrm3, Color.WHITE)
+						var quads := [[e0, e1, r1, r0], [m0, m1, b1, b0]]
+						if f0 - o0 > 0.01 or f1 - o1 > 0.01:
+							quads.append([r0, r1, m1, m0])
+						for qd: Array in quads:
+							var q0: Vector3 = qd[0]
+							var nrm3: Vector3 = ((qd[1] as Vector3) - q0).cross((qd[3] as Vector3) - q0).normalized()
+							if nrm3.y < 0.0:
+								nrm3 = -nrm3
+							bb.flat_quad(qd[0], qd[1], qd[2], qd[3], nrm3, Color.WHITE)
 	# the earth round each raised embankment's end: a grassy half-cone (TownMap.embankment_cones, ridden as drawn)
 	drawn_cones.clear()
 	for cone: Dictionary in map.embankment_cones():
 		var rp := map.road_pts[int(cone.road)]
 		if cone.lead or (cone.pad as Array).is_empty(): # (one mound round a raised junction, drawn by its first end)
 			drawn_cones.append(_embankment_cone(bank_b[_chunk_of(rp[rp.size() / 2])], cone)) # (in its road's chunk)
+	# a raised junction pad where no raised end meets (roads joining mid-way): its mound too, as decks_at rides it
+	for cone: Dictionary in map.pad_mounds():
+		var rp := map.road_pts[int(cone.road)]
+		var dc := _embankment_cone(bank_b[_chunk_of(rp[rp.size() / 2])], cone)
+		dc.mid = true
+		drawn_cones.append(dc)
 	for c in road_b:
 		recs.append([(road_b[c] as MeshBatch).commit(), STREET_ROAD, false])
 		if not (kerb_b[c] as MeshBatch).is_empty():

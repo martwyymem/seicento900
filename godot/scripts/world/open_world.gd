@@ -595,14 +595,14 @@ func _build_headlights() -> void:
 		var s := SpotLight3D.new()
 		s.position = Vector3(x, 0.66, -1.75)
 		s.spot_range = 50.0
-		s.spot_angle = 24.0
+		s.spot_angle = 16.0 # the beam's top edge 8 degrees up: on a wall 4 m ahead it stops under the roof
 		s.spot_angle_attenuation = 0.75 # most of the light in the middle of the beam, a soft edge
 		s.spot_attenuation = 1.3 # nearer the inverse square than the old 0.8: 20 m gets a third of 8 m's light
 		s.light_specular = 0.15 # no glare off wet tarmac and glazing
 		s.light_color = Color(1.0, 0.95, 0.82)
 		s.shadow_enabled = false
 		s.visible = false
-		s.rotation = Vector3(deg_to_rad(-6.0), 0.0, 0.0)
+		s.rotation = Vector3(deg_to_rad(-8.0), 0.0, 0.0)
 		car_visual.add_child(s)
 		headlights.append(s)
 

@@ -948,7 +948,13 @@ func decks_at(x: float, y: float, reach: float) -> Array:
 ## width), deck (the highest there), that road], hashed by CELL (decks_at).
 const PAD_FROM := 0.3
 var _pad_cells := {}
+var _pads: Array = []
 var _pads_built := false
+## Every raised junction pad (raised_pads_near's entries, once each).
+func raised_pads() -> Array:
+	raised_pads_near(Vector2.ZERO)
+	return _pads
+
 func raised_pads_near(p: Vector2) -> Array:
 	if not _pads_built:
 		_pads_built = true
@@ -971,6 +977,7 @@ func raised_pads_near(p: Vector2) -> Array:
 			if float(pad[2]) <= PAD_FROM or float(pad[2]) > 4.0 or int(pad[4]) < 2:
 				continue # (over 4 m the roads stand on piers, TownBuilder draws no earth under them)
 			var c: Vector2 = pad[0]
+			_pads.append(pad.slice(0, 4))
 			var r := float(pad[1]) + DRIVE_REACH + float(pad[2]) * EMBANKMENT
 			for cx in range(int(floor((c.x - r) / CELL)), int(floor((c.x + r) / CELL)) + 1):
 				for cy in range(int(floor((c.y - r) / CELL)), int(floor((c.y + r) / CELL)) + 1):
@@ -1027,6 +1034,22 @@ func embankment_cones() -> Array:
 	for cone: Dictionary in _cones: # (indices, not the dictionaries: the map's snapshot holds no cycles)
 		cone.ends = at[Vector2i(roundi(cone.c.x * 20.0), roundi(cone.c.y * 20.0))]
 	return _cones
+
+## The raised junction pads with no embankment end at their node (raised roads meeting mid-way: decks_at rides the pad
+## there all the same), as embankment_cones entries with no ends of their own (cone_rise is then the pad alone), so
+## TownBuilder draws their mound too. None on the current bake: every raised pad is some road's raised end.
+func pad_mounds() -> Array:
+	var at := {}
+	for cone: Dictionary in embankment_cones():
+		at[Vector2i(roundi(cone.c.x * 20.0), roundi(cone.c.y * 20.0))] = true
+	var out := []
+	for pad: Array in raised_pads():
+		var c: Vector2 = pad[0]
+		if at.has(Vector2i(roundi(c.x * 20.0), roundi(c.y * 20.0))):
+			continue
+		out.append({"road": int(pad[3]), "seg": 0, "c": c, "out": Vector2.RIGHT, "ab": Vector2.RIGHT, "half": float(pad[1]),
+			"deck": float(pad[2]), "pad": pad, "lead": true, "ends": []})
+	return out
 
 ## True when past end `last` (0 first point, 1 last) of road ri stands an embankment cone (embankment_cones).
 func has_cone(ri: int, last: int) -> bool:

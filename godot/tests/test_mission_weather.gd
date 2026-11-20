@@ -9,6 +9,7 @@ var completed := false
 func run() -> Array:
 	var errors: Array[String] = []
 	_states(errors)
+	_shaders(errors)
 	var map := TownMap.load_map(OpenWorld.MAP_KEY)
 	if map == null:
 		errors.append("data/world/%s.json did not load" % OpenWorld.MAP_KEY)
@@ -16,6 +17,31 @@ func run() -> Array:
 		await _world(map, errors)
 	completed = true
 	return errors
+
+## Foliage and building shaders (shared by races and the open world) declare wet, rain and snow defaulting to 0.
+func _shaders(errors: Array[String]) -> void:
+	var surroundings_s: GDScript = preload("res://scripts/ui/surroundings.gd")
+	var race_world_s: GDScript = preload("res://scripts/ui/race_world.gd")
+	for pair in [
+		[TownBuilder.BUILDING_SHADER, "building.gdshader"],
+		[TownBuilder.FOLIAGE_SHADER, "foliage.gdshader"],
+		[surroundings_s.CANOPY_SHADER, "canopy.gdshader"],
+		[race_world_s.FACADE_SHADER, "facade.gdshader"],
+	]:
+		var sh: Shader = pair[0]
+		var label: String = pair[1]
+		var names := {}
+		for info in sh.get_shader_uniform_list():
+			names[String(info.get("name", ""))] = true
+		for u in ["wet", "rain", "snow"]:
+			if not names.has(u):
+				errors.append("%s does not declare uniform '%s'" % [label, u])
+			else:
+				var def_v = RenderingServer.shader_get_parameter_default(sh.get_rid(), u)
+				if def_v != null and absf(float(def_v)) > 1e-6:
+					errors.append("%s uniform '%s' defaults to %s, not 0" % [label, u, str(def_v)])
+	if surroundings_s.BUILDING_SHADER != TownBuilder.BUILDING_SHADER or surroundings_s.FOLIAGE_SHADER != TownBuilder.FOLIAGE_SHADER or race_world_s.FOLIAGE_SHADER != TownBuilder.FOLIAGE_SHADER:
+		errors.append("race and open-world building/foliage shaders diverged")
 
 ## The weather modes as the races set them up, and their grip against a dry road.
 func _states(errors: Array[String]) -> void:
@@ -59,7 +85,14 @@ func _world(map: TownMap, errors: Array[String]) -> void:
 	ow.builder = TownBuilder.new(map, ow.world)
 	var ground_mat := ow.builder._surface_material(TownBuilder.GROUND_SHADER, "grass")
 	var road_mat := ow.builder._surface_material(TownBuilder.ROAD_SHADER, "asphalt")
+	var building_mat := ShaderMaterial.new()
+	building_mat.shader = TownBuilder.BUILDING_SHADER
+	var foliage_mat := ShaderMaterial.new()
+	foliage_mat.shader = TownBuilder.FOLIAGE_SHADER
+	ow.builder.wet_materials.append(building_mat)
+	ow.builder.wet_materials.append(foliage_mat)
 	ow.builder.night_materials.append(road_mat)
+	ow.builder.night_materials.append(building_mat)
 	ow.drive = FreeCar.new(map)
 	ow.drive.place(home, 0.0)
 	ow.live = LiveEvents.new(map, 4242)
@@ -105,11 +138,11 @@ func _world(map: TownMap, errors: Array[String]) -> void:
 	# whatever the map had before is what comes back (a wet street here), and a dry mission runs dry;
 	# wet_materials (terrain, embankments, buildings, foliage as well as the streets) get wet, rain and snow
 	ow.set_weather(MapMissions.weather_state("snow"))
-	if float(ground_mat.get_shader_parameter("snow")) < 0.8 or float(road_mat.get_shader_parameter("snow")) < 0.8:
-		errors.append("snow weather did not reach both the ground and road materials in wet_materials")
+	if float(ground_mat.get_shader_parameter("snow")) < 0.8 or float(road_mat.get_shader_parameter("snow")) < 0.8 or float(building_mat.get_shader_parameter("snow")) < 0.8 or float(foliage_mat.get_shader_parameter("snow")) < 0.8:
+		errors.append("snow weather did not reach ground, road, building and foliage materials in wet_materials")
 	ow.set_weather(MapMissions.weather_state("wet"))
-	if float(ground_mat.get_shader_parameter("wet")) < 0.8 or float(road_mat.get_shader_parameter("rain")) <= 0.0 or float(ground_mat.get_shader_parameter("snow")) != 0.0:
-		errors.append("wet weather did not update wet_materials")
+	if float(ground_mat.get_shader_parameter("wet")) < 0.8 or float(road_mat.get_shader_parameter("rain")) <= 0.0 or float(ground_mat.get_shader_parameter("snow")) != 0.0 or float(building_mat.get_shader_parameter("wet")) < 0.8 or float(foliage_mat.get_shader_parameter("wet")) < 0.8 or float(foliage_mat.get_shader_parameter("rain")) <= 0.0 or float(building_mat.get_shader_parameter("snow")) != 0.0 or float(foliage_mat.get_shader_parameter("snow")) != 0.0:
+		errors.append("wet weather did not update wet_materials (including building and foliage)")
 	var di := Missions.index_of("drag_quarter")
 	if ow._begin_mission(di):
 		if ow.weather != "dry" or ow.wet != 0.0 or ow.drive.mu != 1.0:

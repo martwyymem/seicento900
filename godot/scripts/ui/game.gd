@@ -2631,8 +2631,6 @@ func _update_menu_car_summary() -> void:
 	elif is_campaign_mode:
 		var st := CampaignData.get_stage(campaign_stage_index)
 		race_label = "STAGE %02d / %02d  ·  %d LAPS" % [campaign_stage_index + 1, CampaignData.STAGES.size(), st.laps]
-		if Missions.is_mission(campaign_stage_index):
-			race_label = "%s MISSION  ·  %s" % [Missions.KIND_NAMES[st.kind], Missions.length_text(campaign_stage_index).to_upper()]
 	elif is_rally_mode:
 		var ev := _rally()
 		var i := mini(ev.stage_index, ev.stage_count() - 1)
@@ -4978,29 +4976,18 @@ func _populate_campaign_stages() -> void:
 		campaign_stage_picker.add_item("%s%s" % [prefix, st.title])
 		campaign_stage_picker.set_item_disabled(i, not is_un)
 	# the missions are not in the list: they are raced on the open-world map only, from their beacons
-	if Missions.is_mission(campaign_stage_index):
-		campaign_stage_index = clampi(unlocked, 0, CampaignData.STAGES.size() - 1)
-	campaign_stage_picker.selected = _campaign_pick(campaign_stage_index)
-
-## The campaign picker's row for a stage or mission index, and back (missions are listed after the stages).
-func _campaign_pick(index: int) -> int:
-	return CampaignData.STAGES.size() + index - Missions.BASE if Missions.is_mission(index) else index
-
-func _campaign_unpick(row: int) -> int:
-	return Missions.BASE + row - CampaignData.STAGES.size() if row >= CampaignData.STAGES.size() else row
+	campaign_stage_picker.selected = campaign_stage_index
 
 func _select_campaign_stage(row: int) -> void:
-	var index := _campaign_unpick(row)
-	if CampaignData.is_unlocked(index, _fan_total()):
-		_apply_campaign_stage(index)
+	if CampaignData.is_unlocked(row, _fan_total()):
+		_apply_campaign_stage(row)
 	else:
-		campaign_stage_picker.select(_campaign_pick(campaign_stage_index)) # ◂ ▸ can land on a locked stage: stay put
+		campaign_stage_picker.select(campaign_stage_index) # ◂ ▸ can land on a locked stage: stay put
 
 func _apply_campaign_stage(stage_idx: int) -> void:
 	campaign_stage_index = stage_idx
-	var st: Dictionary = CampaignData.get_stage(stage_idx)
-	if is_instance_valid(campaign_stage_picker) and campaign_stage_picker.selected != _campaign_pick(stage_idx):
-		campaign_stage_picker.select(_campaign_pick(stage_idx))
+	if is_instance_valid(campaign_stage_picker) and campaign_stage_picker.selected != stage_idx:
+		campaign_stage_picker.select(stage_idx)
 	_update_campaign_view()
 	_update_information_page()
 	_update_menu_car_summary()
@@ -5031,8 +5018,6 @@ func _update_campaign_view() -> void:
 		campaign_target_label.text = "★ TARGET OBJECTIVE: Win the race (P1)"
 	else:
 		campaign_target_label.text = "★ TARGET OBJECTIVE: Finish P%d or higher" % target_pos
-	if st.has("mission"):
-		campaign_target_label.text = "★ TARGET OBJECTIVE: %s" % Missions.target_text(campaign_stage_index)
 	campaign_trophy_label.text = "🏆 Trophy: %s" % str(st.get("trophy", ""))
 	campaign_desc_label.text = str(st.get("desc", ""))
 	campaign_tip_label.text = "💡 Mechanic: \"%s\"" % str(st.get("tip", ""))
@@ -5062,8 +5047,6 @@ func _update_setup_title() -> void:
 	if is_campaign_mode:
 		var st := CampaignData.get_stage(campaign_stage_index)
 		setup_title_label.text = "CAMPAIGN · STAGE %d/%d" % [campaign_stage_index + 1, CampaignData.STAGES.size()]
-		if Missions.is_mission(campaign_stage_index):
-			setup_title_label.text = "CAMPAIGN · %s MISSION" % Missions.KIND_NAMES[st.kind]
 		setup_subtitle_label.text = str(st.get("act_name", "THE SEICENTO ODYSSEY")).to_upper()
 	elif is_championship_mode:
 		setup_title_label.text = "CHAMPIONSHIP · ROUND %d/%d" % [_champ_round() + 1, _calendar().size()]
