@@ -17,7 +17,6 @@ func run() -> Array:
 	var saved_file := Campaign.save_file
 	Campaign.save_file = TEST_SAVE
 	_saves(errors)
-	_settings(errors)
 	Campaign.save_file = saved_file
 	_drift_unit(errors)
 	_knockout(errors)
@@ -134,24 +133,6 @@ func _saves(errors: Array[String]) -> void:
 		errors.append("save: reset left mission progress: %s" % prog)
 	DirAccess.remove_absolute(SaveData.path(TEST_SAVE))
 
-func _settings(errors: Array[String]) -> void:
-	var plain := RaceSettings.new()
-	var st := RaceSettings.new()
-	Missions.apply_settings(st, 3) # a stage: untouched
-	for k in ["knockout", "finish_distance", "loose_spans", "drift_score", "mission", "mandatory_stop"]:
-		if st.get(k) != plain.get(k):
-			errors.append("settings: a stage index changed %s" % k)
-	var want := {"knockout_bor": {"knockout": true, "laps": 5}, "drag_quarter": {"finish_distance": 402.0, "grid": "pole"},
-		"drift_babudy": {"drift_score": true, "opponents": 0}, "offroad_kolonia": {"loose_spans": true}}
-	for id in want:
-		st = RaceSettings.new()
-		Missions.apply_settings(st, Missions.index_of(id))
-		for k in want[id]:
-			if st.get(k) != want[id][k]:
-				errors.append("settings: %s sets %s = %s, want %s" % [id, k, st.get(k), want[id][k]])
-		if st.mission == "" or st.mandatory_stop:
-			errors.append("settings: %s has no mission kind or keeps the mandatory stop" % id)
-
 func _drift_unit(errors: Array[String]) -> void:
 	var d := DriftScore.new()
 	for i in 366: # 3.05 s at 20 m/s and 0.5 rad
@@ -233,9 +214,6 @@ func _knockout(errors: Array[String]) -> void:
 				errors.append("knockout: %s left without being cleared off (%s)" % [c.name, c.dnf_reason])
 	if not rows[0].car.finished or not rows[1].car.finished or race.winner != rows[0].car:
 		errors.append("knockout: the final two should both finish, the winner first")
-	var o := Missions.judge(race, Missions.index_of("knockout_bor"))
-	if bool(o.success) != (int(o.pos) <= 2) or String(o.line) == "":
-		errors.append("knockout: judged %s" % o)
 	race.dispose()
 
 	# Projected finish in knockout mode (skipping / early DNF)
@@ -296,9 +274,6 @@ func _drag(errors: Array[String]) -> void:
 		for r in rows:
 			if r.total != null and (float(r.total) < 19.0 or float(r.total) > 26.0):
 				errors.append("%s: %s took %.2f s" % [tag, r.car.name, float(r.total)])
-		var o := Missions.judge(race, Missions.index_of("drag_quarter"))
-		if bool(o.success) != (int(me.pos) == 1) or not String(o.line).contains("402 m in"):
-			errors.append("%s: judged %s" % [tag, o])
 		race.dispose()
 
 ## A sprint or an off-road race on a baked route: every car gets home (the AI copes with the loose roads).
@@ -337,7 +312,10 @@ func _drift_driver(errors: Array[String]) -> void:
 	var idx := Missions.index_of("drift_babudy")
 	var m: Dictionary = Missions.get_def(idx)
 	var st := _settings_for(String(m.track), 1, 0)
-	Missions.apply_settings(st, idx)
+	st.mission = "drift"
+	st.drift_score = true
+	st.drift_tiers = PackedInt32Array(m.tiers)
+	st.finish_distance = float(m.finish_distance)
 	st.assists = "abs"
 	var race := Race.new(st, null, 3)
 	var inp := Race.PlayerInput.new()
@@ -362,15 +340,16 @@ func _drift_driver(errors: Array[String]) -> void:
 		race.step(DT, inp)
 		n += 1
 	var tiers: Array = m.tiers
-	var o := Missions.judge(race, idx)
+	var score := race.drift.total() if race.drift else 0
+	var tier := DriftScore.tier(score, tiers)
 	print("    drift calibration: scripted driver %d points (bronze %d, gold %d), best combo %d, lost %d, %.0f s" % [
-		int(o.score), int(tiers[0]), int(tiers[2]), race.drift.best_combo, race.drift.lost, race.race_time])
+		score, int(tiers[0]), int(tiers[2]), race.drift.best_combo, race.drift.lost, race.race_time])
 	if race.phase != "finished" or not race.player.finished:
 		errors.append("drift: the scripted run did not finish the %.0f m" % float(m.finish_distance))
-	if int(o.score) < int(tiers[0]) or not bool(o.success):
-		errors.append("drift: the scripted driver scored %d, short of bronze %d" % [int(o.score), int(tiers[0])])
-	if int(o.score) >= int(tiers[2]):
-		errors.append("drift: the scripted driver reached gold (%d): gold is trivial" % int(o.score))
+	if score < int(tiers[0]) or tier < 1:
+		errors.append("drift: the scripted driver scored %d, short of bronze %d" % [score, int(tiers[0])])
+	if score >= int(tiers[2]):
+		errors.append("drift: the scripted driver reached gold (%d): gold is trivial" % score)
 	race.dispose()
 
 ## Every mission's beacon stands inside the play area, on a road, and apart from the stage beacons.

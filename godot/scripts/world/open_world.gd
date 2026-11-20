@@ -96,9 +96,14 @@ var look := CameraLook.new()
 var _chase_cam: ChaseCam
 var hour := 18.5
 var night := 0.0
-## 0..1 how wet the streets are (town_road.gdshader puddles, sheen, rain rings). Nothing rains in the open world yet:
-## set it from a weather system; after dark the streets get a little dew of their own (NIGHT_DAMP)
+## 0..1 how wet the streets are (town_road.gdshader puddles, sheen, rain rings). Free roam is dry: a campaign mission
+## sets its weather for the run (set_weather); after dark the streets get a little dew of their own (NIGHT_DAMP)
 var wet := 0.0
+var weather := "dry" ## the weather mode on the map (a mission's while it runs, MapMissions.weather_state)
+var rain := 0.0 ## 0..1 the road shaders' rain rings (no falling rain is drawn in the open world)
+var snow := 0.0 ## 0..1 snow on the streets (road shaders)
+var fog := 0.0 ## 0..1 fog: the haze thickens to a race's fog (FOG_DENSITY), the sky greys, the sun dims
+const FOG_DENSITY := 0.02 ## a race's fog (race_world.gd)
 const NIGHT_DAMP := 0.3
 const LAMP_POOL_GLOW := 0.7 ## emission at the middle of a lamp's pool on the ground (reads on the dark tarmac)
 
@@ -116,6 +121,7 @@ var wp_on := false
 const WAYPOINT_REACH := 18.0 ## m from the waypoint that counts as having arrived
 var _reset_armed := false ## RESET CAMPAIGN was pressed once and waits for its confirmation
 var _saved_hour := -1.0 ## the clock before a mission set its own hour (put back when the run ends), -1 none
+var _saved_weather := {} ## the weather before a mission set its own (weather_state(), put back when the run ends), {} none
 var _result := {} ## the results card after an event: {pos (where the car finished), mission (index) or live (event)}
 var _gate_nodes: Array[Node3D] = [] ## the posts of the next checkpoint gate and, dimmer, the one after
 const RESULT_LEAVE := 30.0 ## m the car drives on from the finish before the results card goes (CONTINUE)
@@ -196,9 +202,11 @@ func open(spawn = "", opts := {}) -> void:
 	paused = false
 	hud.show_pause(false)
 	_fit_view()
-	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	if not built:
+		# (the 3D view stays off behind the loading cover: drawing an empty world there only took time from the build)
 		await _build_world()
+	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	var t := Time.get_ticks_msec()
 	apply_graphics(int(opts.get("quality", quality)), bool(opts.get("ssao", true)), int(opts.get("reflections", -1)))
 	if drive:
 		drive.gearbox = gearbox
@@ -206,14 +214,21 @@ func open(spawn = "", opts := {}) -> void:
 	if surface_fx:
 		surface_fx.reset_car_bus()
 	_refresh_events()
+	_t_log("graphics and events", t)
+	t = Time.get_ticks_msec()
 	_spawn(spawn)
+	_t_log("spawn", t)
+	t = Time.get_ticks_msec()
 	_live_open()
+	_t_log("live-event board", t)
+	t = Time.get_ticks_msec()
 	if not CarCatalog.unlocked(CarCatalog.key_at(progress.car_class), progress.fans):
 		progress.car_class = 0
 	if _fitted_class != progress.car_class:
 		_fit_car()
 	else:
 		_apply_look()
+	_t_log("fit car", t)
 	accumulator = 0.0
 	throttle = 0.0
 	brake = 0.0
@@ -261,17 +276,22 @@ func _build_world() -> void:
 	world.name = "Brzeszcze"
 	var map_tex: Texture2D = null
 	if by_frame:
-		# twice: the frame that shows the cover must be drawn before the work starts
-		await get_tree().process_frame
-		await get_tree().process_frame
 		# the map and the town build on a worker thread into a world that is not in the tree yet, so this thread
-		# keeps drawing the cover (its spinner never stalls); the world joins the viewport when it is done
+		# keeps drawing the cover (its spinner never stalls); the world joins the viewport when it is done. The work
+		# starts at once: waiting for the cover's first frame first only added idle time.
 		_build_status = ["Reading the map of Brzeszcze", 0.02]
 		var task := WorkerThreadPool.add_task(_build_town_threaded, true, "Open world build")
 		var fps_was := Engine.max_fps
 		Engine.max_fps = 30 # the cover needs few frames; leave the cores to the build
 		while not WorkerThreadPool.is_task_completed(task):
 			hud.show_loading(String(_build_status[0]), float(_build_status[1]))
+			# every RenderingServer call of the worker that returns something (a model's or a texture's load, a mesh
+			# read back) waits until this thread flushes the server's queue, which a frame does only once: flushing it
+			# here for most of each frame let the build run three times faster (windowed at 30 fps 4.9 s -> 1.4 s)
+			var until := Time.get_ticks_usec() + BUILD_PUMP_USEC
+			while Time.get_ticks_usec() < until and not WorkerThreadPool.is_task_completed(task):
+				RenderingServer.force_sync()
+				OS.delay_usec(200)
 			await get_tree().process_frame
 		WorkerThreadPool.wait_for_task_completion(task)
 		Engine.max_fps = fps_was
@@ -285,24 +305,18 @@ func _build_world() -> void:
 		world = null
 		building = false
 		return
-	# the rest runs here, a piece a frame so the cover keeps drawing between them
+	# the rest runs here, in one go: its pieces take about 20 ms together (a frame for each only added idle time)
 	hud.show_loading("Starting the engine", 0.95)
 	var t := Time.get_ticks_msec()
 	viewport.add_child(world)
 	_t_log("add world", t)
-	if by_frame:
-		await get_tree().process_frame
 	t = Time.get_ticks_msec()
 	_build_environment()
 	_apply_vegetation_quality()
 	_t_log("environment", t)
-	if by_frame:
-		await get_tree().process_frame
 	t = Time.get_ticks_msec()
 	hud.setup(map, map_tex if map_tex else load("res://data/world/%s_map.png" % MAP_KEY) as Texture2D)
 	_t_log("hud", t)
-	if by_frame:
-		await get_tree().process_frame
 	t = Time.get_ticks_msec()
 	drive = FreeCar.new(map)
 	car_visual = CAR_SCENE.instantiate()
@@ -321,8 +335,6 @@ func _build_world() -> void:
 	reflections.follow(car_visual)
 	_build_route_mesh()
 	_t_log("car and lights", t)
-	if by_frame:
-		await get_tree().process_frame
 	t = Time.get_ticks_msec()
 	traffic = Traffic.new(map, world, builder)
 	train = Train.new(map, world, builder)
@@ -337,17 +349,28 @@ func _t_log(what: String, since: int) -> void:
 	if OS.get_environment("OW_BUILD_TIMES") != "":
 		print("built %s in %d ms" % [what, Time.get_ticks_msec() - since])
 
+const BUILD_PUMP_USEC := 22000 ## of each cover frame spent serving the build's RenderingServer calls (the rest draws it)
 var _build_status: Array = ["", 0.0] ## [what is building, fraction] the worker reports to the cover
 var _build_map_tex: Texture2D
 
 ## Reads the map and runs every TownBuilder step into `world` (not yet in the tree, so this may run on a worker
 ## thread). Nothing here may touch the scene tree; the steps never hand frames back here (frame_budget_usec 0).
 func _build_town_threaded() -> void:
+	# textures the steps load one after another: read on other threads meanwhile (load() then takes them)
+	var prefetch: Array[String] = []
+	for path in ["res://data/world/%s_map.png" % MAP_KEY, "res://data/world/%s_land.png" % MAP_KEY, SurfaceTextures.MICRO, SurfaceTextures.MACRO]:
+		if ResourceLoader.exists(path) and not ResourceLoader.has_cached(path) and ResourceLoader.load_threaded_request(path, "", true) == OK:
+			prefetch.append(path)
+	var t := Time.get_ticks_msec()
 	map = TownMap.load_map(MAP_KEY, TownBuilder.MESH_CACHE_DIR) # warm starts read a snapshot of the indexed map
 	if map == null:
 		return
+	_t_log("map (TownMap.load_map)", t)
+	t = Time.get_ticks_msec()
 	builder = TownBuilder.new(map, world)
+	_t_log("TownBuilder.new (models)", t)
 	builder.mesh_cache_dir = TownBuilder.MESH_CACHE_DIR # warm starts load the slow steps' meshes from disk
+	builder.start_ahead() # a cold start builds the terrain, water, buildings and trees alongside the streets
 	var steps: Array = builder.steps()
 	for i in steps.size():
 		_build_status = ["Building %s" % String(steps[i][0]).to_lower(), 0.05 + 0.85 * float(i) / steps.size()]
@@ -356,7 +379,16 @@ func _build_town_threaded() -> void:
 		if OS.get_environment("OW_BUILD_TIMES") != "":
 			print("built %s in %d ms" % [steps[i][0], Time.get_ticks_msec() - t0])
 	_build_status = ["Starting the engine", 0.95]
+	t = Time.get_ticks_msec()
+	builder.wait_for_stores()
+	_t_log("mesh cache writes", t)
+	t = Time.get_ticks_msec()
 	_build_map_tex = load("res://data/world/%s_map.png" % MAP_KEY) as Texture2D
+	for path in prefetch:
+		ResourceLoader.load_threaded_get(path) # (done by now: this only lets go of the request)
+	_t_log("map texture", t)
+	if OS.get_environment("OW_BUILD_TIMES") != "":
+		print("mesh cache: ", builder.cache_log)
 
 # ================================================================================================ environment
 
@@ -497,6 +529,14 @@ func _apply_time() -> void:
 	# plus a daytime haze, so the far blocks and trees fall back into a paler blue and the near ones stand out
 	env.fog_density = 0.00028 * lerpf(1.0, 2.4, golden) * lerpf(1.0, 1.6, night) + 0.00045 * midday
 	env.fog_aerial_perspective = lerpf(0.6, 0.85, midday)
+	# a mission's fog: the haze thickens to a race's fog, grey and lit by the dimmed sun, and hides the sky's horizon
+	env.fog_sky_affect = 0.85 * fog
+	if fog > 0.0:
+		env.fog_density = lerpf(env.fog_density, FOG_DENSITY, fog)
+		env.fog_light_color = env.fog_light_color.lerp(Color(0.6, 0.62, 0.64) * lerpf(0.05, 1.0, day), 0.75 * fog)
+		env.fog_sun_scatter *= 1.0 - fog
+		sun.light_energy *= lerpf(1.0, 0.55, fog)
+		sun.shadow_opacity *= lerpf(1.0, 0.6, fog)
 	# the fill: a cool sky blue by day (the shadow colour), lavender at the golden hour, a dim moonlit blue at night
 	env.ambient_light_energy = lerpf(0.95, 0.48, day) * lerpf(1.0, 0.75, golden) * (1.0 - 0.25 * midday)
 	env.ambient_light_color = Color(0.34, 0.42, 0.72).lerp(Color(0.78, 0.8, 0.86).lerp(Color(0.66, 0.66, 0.88), golden * 0.7), day) \
@@ -507,7 +547,7 @@ func _apply_time() -> void:
 	env.ssao_light_affect = lerpf(0.12, 0.3, midday)
 	env.ssao_intensity = lerpf(2.2, 2.8, midday)
 	# Ultra: sun shafts through the trees and between the houses (volumetric fog lit by the low sun)
-	var shafts := _volumetric and golden > 0.05 and day > 0.2
+	var shafts := _volumetric and golden > 0.05 and day > 0.2 and fog < 0.1
 	if env.volumetric_fog_enabled != shafts:
 		env.volumetric_fog_enabled = shafts
 	if shafts:
@@ -524,8 +564,11 @@ func _apply_time() -> void:
 		var damp := maxf(wet, NIGHT_DAMP * lamps_on)
 		for m in builder.night_materials:
 			m.set_shader_parameter("night", lamps_on)
-			if m.shader == TOWN_ROAD_SHADER or m.shader == PAVEMENT_SHADER: # the streets, not the walls
-				m.set_shader_parameter("wet", damp)
+		for m in builder.wet_materials:
+			var street := m.shader == TOWN_ROAD_SHADER or m.shader == PAVEMENT_SHADER # night dew is on the streets, not the walls
+			m.set_shader_parameter("wet", damp if street else wet)
+			m.set_shader_parameter("rain", rain)
+			m.set_shader_parameter("snow", snow)
 	# the beams with the lamp lenses (race_car_visual.gd set_lamps follows the same level)
 	var beams: float = CAR_VISUAL.headlamp_level(night)
 	for h in headlights:
@@ -892,6 +935,9 @@ func _after_run() -> void:
 	if hud:
 		hud.set_live("", "", Color.WHITE)
 		hud.set_standings([], Color.WHITE)
+	if not _saved_weather.is_empty():
+		set_weather(_saved_weather)
+		_saved_weather = {}
 	if _saved_hour >= 0.0:
 		hour = _saved_hour
 		_saved_hour = -1.0
@@ -1113,11 +1159,31 @@ func _begin_mission(index: int) -> bool:
 	if _saved_hour < 0.0:
 		_saved_hour = hour # put back when the run ends
 	hour = float(def.get("start_hour", hour))
+	if _saved_weather.is_empty():
+		_saved_weather = weather_state() # put back when the run ends
+	set_weather(MapMissions.weather_state(String(def.get("weather", "dry"))))
 	if sun: # (built worlds only: _process applies it every frame anyway)
 		_apply_time()
 	_start_run(lev)
 	hud.notify("%s MISSION" % Missions.KIND_NAMES[def.kind], String(def.title), Missions.COLOR)
 	return true
+
+## The map's weather now, in MapMissions.weather_state's form (mu is the driven car's weather grip).
+func weather_state() -> Dictionary:
+	return {"mode": weather, "wet": wet, "rain": rain, "snow": snow, "fog": fog, "mu": drive.mu if drive else 1.0}
+
+## Puts a weather (MapMissions.weather_state, or one weather_state() saved) on the map: the road shaders' wet, rain
+## and snow, the fog, and the car's grip (FreeCar.mu, as a race's Race.grip). The look follows at the next _apply_time.
+func set_weather(st: Dictionary) -> void:
+	weather = String(st.get("mode", "dry"))
+	wet = float(st.get("wet", 0.0))
+	rain = float(st.get("rain", 0.0))
+	snow = float(st.get("snow", 0.0))
+	fog = float(st.get("fog", 0.0))
+	if drive:
+		drive.mu = float(st.get("mu", 1.0))
+	if sun:
+		_apply_time()
 
 ## A mission (campaign or live) is on: the town's traffic is kept off its roads.
 func _roads_closed() -> bool:

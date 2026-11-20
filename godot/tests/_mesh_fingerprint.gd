@@ -11,8 +11,9 @@ func _initialize() -> void:
 	var builder := TownBuilder.new(map, world)
 	if OS.get_environment("CACHE") != "":
 		builder.mesh_cache_dir = OS.get_environment("CACHE")
+		builder.start_ahead()
 	for s in builder.steps():
-		if not s[0] in ["Terrain", "Streets", "Railway", "Buildings", "Woods and gardens", "Garden fences"]:
+		if not s[0] in ["Terrain", "Ponds and streams", "Streets", "Railway", "Buildings", "Woods and gardens", "Garden fences"]:
 			continue
 		var a := Time.get_ticks_usec()
 		await (s[1] as Callable).call()
@@ -23,6 +24,7 @@ func _initialize() -> void:
 		_feed(ctx, group)
 		print("%-18s %7.0f ms  %s  %d nodes  %d buffer floats" % [s[0], ms, ctx.finish().hex_encode(), group.get_child_count(), _buf_total])
 		_buf_total = 0
+	builder.wait_for_stores()
 	quit()
 
 func _feed(ctx: HashingContext, n: Node) -> void:

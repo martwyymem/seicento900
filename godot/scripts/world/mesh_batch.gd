@@ -12,6 +12,26 @@ var indices := PackedInt32Array()
 var use_uv2 := false
 var use_color := false
 
+## On a thread set_keep_arrays(true) was called on, commit() keeps each surface's arrays on the mesh, meta KEEP_META, so
+## the open world's mesh cache can store them without reading the mesh back from the GPU (TownBuilder sets and clears it).
+const KEEP_META := &"surface_arrays"
+static var _keep_lock := Mutex.new()
+static var _keep_threads := {} ## thread caller id -> true
+
+static func set_keep_arrays(on: bool) -> void:
+	_keep_lock.lock()
+	if on:
+		_keep_threads[OS.get_thread_caller_id()] = true
+	else:
+		_keep_threads.erase(OS.get_thread_caller_id())
+	_keep_lock.unlock()
+
+static func keeps_arrays(any_thread := false) -> bool:
+	_keep_lock.lock()
+	var on := not _keep_threads.is_empty() if any_thread else _keep_threads.has(OS.get_thread_caller_id())
+	_keep_lock.unlock()
+	return on
+
 func _init(with_uv2 := false, with_color := false) -> void:
 	use_uv2 = with_uv2
 	use_color = with_color
@@ -113,4 +133,8 @@ func commit(mesh: ArrayMesh = null) -> ArrayMesh:
 		arr[Mesh.ARRAY_COLOR] = colors
 	arr[Mesh.ARRAY_INDEX] = indices
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+	if keeps_arrays():
+		var kept: Array = mesh.get_meta(KEEP_META, [])
+		kept.append(arr)
+		mesh.set_meta(KEEP_META, kept)
 	return mesh

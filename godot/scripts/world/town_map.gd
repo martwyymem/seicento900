@@ -334,7 +334,7 @@ func _load_roads() -> void:
 			var zmax := 0.0
 			for zv in r.z:
 				zmax = maxf(zmax, float(zv))
-			half = maxf(half, float(r.w) * 0.5 + zmax * EMBANKMENT)
+			half = maxf(half, float(r.w) * 0.5 + zmax * EMBANKMENT + CONE_REACH) # (+: a cone's foot downhill)
 		for i in pts.size() - 1:
 			var sid := _seg_road.size()
 			_seg_road.append(ri)
@@ -885,8 +885,15 @@ func decks_at(x: float, y: float, reach: float) -> Array:
 		var solid := road_bridge[ri] != 1 and minf(road_z[ri][i], road_z[ri][i + 1]) <= 4.0
 		if solid:
 			reach_r = maxf(reach, maxf(road_z[ri][i], road_z[ri][i + 1]) * EMBANKMENT)
+		var capped := (tr < 0.0 and i == 0) or (tr > 1.0 and i == pts.size() - 2)
+		if capped and solid and has_cone(ri, 0 if tr < 0.0 else 1):
+			# past a raised embankment's end its drawn cone (cone_height): a side slope, not a stub's flat run-on, out to
+			# its foot (the deck is level across, so on falling ground the foot lies further out)
+			capped = false
+			if d <= road_w[ri] * 0.5 + reach_r + CONE_REACH:
+				var dc := deck_across(deck_at(ri, i, t), p, a + ab * t)
+				reach_r = maxf(reach_r, (dc + level_extra(ri, p, a + ab * t, ab, dc)) * EMBANKMENT)
 		if d <= road_w[ri] * 0.5 + reach_r:
-			var capped := (tr < 0.0 and i == 0) or (tr > 1.0 and i == pts.size() - 2)
 			var dk := deck_across(deck_at(ri, i, t), p, a + ab * t)
 			var entry := [ri, dk + level_extra(ri, p, a + ab * t, ab, dk), d - road_w[ri] * 0.5, ab.normalized(), (p - (a + ab * t)), not solid, capped, i == 0 or i == pts.size() - 2]
 			# one entry per road and kind: an embankment's slope (or the cone round its end) and the deck on piers it
@@ -912,7 +919,7 @@ func decks_at(x: float, y: float, reach: float) -> Array:
 	# one, that road's own deck decides)
 	var on_any := false
 	for e: Array in out:
-		if float(e[2]) <= 0.0:
+		if float(e[2]) <= 0.0 and not e[6]: # (a stub's run-on past its end is no carriageway: the pad is the node's top)
 			on_any = true
 	if not on_any:
 		for pad: Array in raised_pads_near(p):
@@ -972,6 +979,87 @@ func raised_pads_near(p: Vector2) -> Array:
 						_pad_cells[ck] = []
 					_pad_cells[ck].append(pad.slice(0, 4))
 	return _pad_cells.get(_cell_key(int(floor(p.x / CELL)), int(floor(p.y / CELL))), [])
+
+## The earth round a raised embankment's end (a road on solid earth, no bridge, whose deck at its first or last point
+## is over CONE_FROM: where a bridge starts, or several ramps meet): past the end a half-disc at deck height as wide as
+## the road, then a 1:EMBANKMENT cone down to the ground. Where the end is a raised junction (raised_pads_near) the
+## pad's full disc and cone round the node count too. TownBuilder draws it with cone_height (one mound per node: the
+## first end there, `lead`, draws it), decks_at returns it as a side slope, so the car rides what is drawn.
+## [{road, seg (its end segment), c (the end point), out (unit, away from the road), ab (the end segment), half, deck,
+## pad ([] or raised_pads_near's entry at c), lead, ends (indices of every cone at c, itself included)}]
+const CONE_FROM := 0.25 ## m: TownBuilder draws no embankment under a deck this low
+const CONE_REACH := 4.0 ## m a cone's foot may lie beyond deck * EMBANKMENT where the ground falls away from its end
+var _cones: Array = []
+var _cone_seg := {} # road * 2 + (0 at its first point, 1 at its last) -> true
+var _cones_built := false
+func embankment_cones() -> Array:
+	if _cones_built:
+		return _cones
+	_cones_built = true
+	var at := {} # end point -> the cones there
+	for ri in road_pts.size():
+		var zs := road_z[ri]
+		var pts := road_pts[ri]
+		var n := pts.size()
+		if zs.size() < n or n < 2 or road_bridge[ri] == 1:
+			continue
+		for last: int in [0, 1]:
+			var k := n - 1 if last == 1 else 0
+			var j := n - 2 if last == 1 else 1
+			if zs[k] <= CONE_FROM or minf(zs[k], zs[j]) > 4.0:
+				continue # (over 4 m at both ends of the segment the road stands on piers)
+			var seg := n - 2 if last == 1 else 0
+			var ab := pts[seg + 1] - pts[seg]
+			if ab.length_squared() < 1e-6:
+				continue
+			_cone_seg[ri * 2 + last] = true
+			var cone := {"road": ri, "seg": seg, "c": pts[k], "out": (pts[k] - pts[j]).normalized(), "ab": ab,
+				"half": road_w[ri] * 0.5, "deck": float(zs[k]), "pad": [], "lead": false}
+			for pad: Array in raised_pads_near(pts[k]):
+				if (pad[0] as Vector2).distance_to(pts[k]) < 0.05:
+					cone.pad = pad
+			var key := Vector2i(roundi(pts[k].x * 20.0), roundi(pts[k].y * 20.0))
+			if not at.has(key):
+				at[key] = []
+				cone.lead = true
+			at[key].append(_cones.size())
+			_cones.append(cone)
+	for cone: Dictionary in _cones: # (indices, not the dictionaries: the map's snapshot holds no cycles)
+		cone.ends = at[Vector2i(roundi(cone.c.x * 20.0), roundi(cone.c.y * 20.0))]
+	return _cones
+
+## True when past end `last` (0 first point, 1 last) of road ri stands an embankment cone (embankment_cones).
+func has_cone(ri: int, last: int) -> bool:
+	if not _cones_built:
+		embankment_cones()
+	return _cone_seg.has(ri * 2 + last)
+
+## The height of an embankment mound's surface at p, as FreeCar.support rides it (lift included): the highest of
+## the cones at its node (each past its own road's end) and the raised junction's pad there, on the ground.
+func cone_height(cone: Dictionary, p: Vector2) -> float:
+	# (on a road's footprint, a bridge's over it included, the car's ground is the plain ground, else the drawn terrain)
+	var base := ground(p.x, p.y) if not road_at(p.x, p.y).is_empty() else terrain(p.x, p.y) + pave_top_at(p.x, p.y)
+	return base + cone_rise(cone, p)
+
+## How far an embankment mound's surface stands over the ground the car finds at p (zero past its foot), -INF where
+## nothing of it is (behind every road end at a node without a pad).
+func cone_rise(cone: Dictionary, p: Vector2) -> float:
+	var c: Vector2 = cone.c
+	var best := -INF
+	for ei: int in cone.ends:
+		var e: Dictionary = _cones[ei]
+		if (p - c).dot(e.out) < 0.0:
+			continue # (behind this end its road's own body and side slopes decide)
+		var ri: int = e.road
+		var over := p.distance_to(c) - float(e.half)
+		var dk := deck_across(float(e.deck), p, c)
+		dk += level_extra(ri, p, c, e.ab, dk)
+		best = maxf(best, maxf(0.0, dk - maxf(over, 0.0) / EMBANKMENT) + road_lift(ri) * (1.0 - smoothstep(0.0, LIFT_RAMP, over)))
+	var pad: Array = cone.pad
+	if not pad.is_empty():
+		var dd := p.distance_to(c) - float(pad[1])
+		best = maxf(best, maxf(0.0, float(pad[2]) - maxf(dd, 0.0) / EMBANKMENT) + road_lift(int(pad[3])) * (1.0 - smoothstep(0.0, LIFT_RAMP, dd)))
+	return best
 
 ## Point on road ri at arc length s from its start: [Vector2 position, Vector2 direction, point index].
 func along(ri: int, s: float) -> Array:

@@ -104,7 +104,7 @@ func has_model(name: String) -> bool:
 
 # ============================================================================================ mesh cache
 
-## Set to a folder (the open world uses MESH_CACHE_DIR) to keep what the slow steps (terrain, streets, railway, buildings,
+## Set to a folder (the open world uses MESH_CACHE_DIR) to keep what the slow steps (terrain, water, streets, railway, buildings,
 ## trees, fences) build between runs: a warm start loads it from disk in tens of milliseconds instead of rebuilding it for
 ## seconds. Off by default so tests always build.
 ##
@@ -131,6 +131,8 @@ static func cache_spec(tag: String) -> Dictionary:
 	match tag:
 		"terrain":
 			return {"data": ["terrain", "extent", "areas", "roads"], "code": "_terrain_meshes"} # roads keep their pond banks
+		"water":
+			return {"data": ["areas", "terrain", "waterways"], "code": "_water_meshes"}
 		"streets":
 			return {"data": ["roads", "terrain", "buildings", "boundary"], "code": "_street_meshes"}
 		"rail":
@@ -145,9 +147,9 @@ static func cache_spec(tag: String) -> Dictionary:
 	return {}
 
 ## Sections of the baked map that no cached step reads (the test checks that every section is in one list or the other).
-const UNCACHED_SECTIONS := ["name", "origin", "bounds", "play", "closures", "nodes", "waterways", "lamps", "signals", "level_crossings",
-	"stops", "spots", "credits"] ## ("extent" and "areas" are read by the terrain step only)
-const CACHED_TAGS := ["terrain", "streets", "rail", "buildings", "trees", "fences"]
+const UNCACHED_SECTIONS := ["name", "origin", "bounds", "play", "closures", "nodes", "lamps", "signals", "level_crossings",
+	"stops", "spots", "credits"]
+const CACHED_TAGS := ["terrain", "water", "streets", "rail", "buildings", "trees", "fences"]
 
 func _stamp(tag: String) -> String:
 	if _stamps.has(tag):
@@ -191,27 +193,165 @@ func _cached_meshes(tag: String) -> Array:
 	if FileAccess.file_exists(path):
 		var res := ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
 		if res != null and res.has_meta("meshes"):
-			hit = res.get_meta("meshes")
+			hit = _unpack_meshes(res.get_meta("meshes"))
 	cache_log.append("%s %s" % [tag, "hit" if not hit.is_empty() else "miss"])
 	return hit
+
+const PACKED_MESH := "packed_mesh" ## a cached mesh stored as its surfaces' arrays: {PACKED_MESH: [arrays per surface]}
+
+## The records with every mesh MeshBatch kept the arrays of (MeshBatch.set_keep_arrays) swapped for those arrays.
+## Saving an ArrayMesh reads it back from the GPU, which from the build's worker thread waits on the main thread's
+## frames: windowed, that doubled a cold build (20 s instead of 11 s). The arrays are the very ones the mesh was made of.
+static func _pack_meshes(v: Variant) -> Variant:
+	if v is ArrayMesh:
+		var m := v as ArrayMesh
+		var kept: Array = m.get_meta(MeshBatch.KEEP_META, [])
+		if kept.size() == m.get_surface_count() and not kept.is_empty():
+			return {PACKED_MESH: kept}
+		return v
+	if v is Array:
+		var a := v as Array
+		# (a typed array keeps its type, unless it holds objects a packed mesh could not take the place of)
+		var out: Array = a.duplicate() if a.is_typed() and a.get_typed_builtin() != TYPE_OBJECT else []
+		out.resize(a.size())
+		for i in a.size():
+			var e: Variant = a[i]
+			out[i] = _pack_meshes(e) if (e is Object or e is Array or e is Dictionary) else e
+		return out
+	if v is Dictionary:
+		var d := {}
+		for k in v:
+			var e: Variant = v[k]
+			d[k] = _pack_meshes(e) if (e is Object or e is Array or e is Dictionary) else e
+		return d
+	return v
+
+## _pack_meshes undone: each packed mesh made again from its arrays, as MeshBatch.commit made it.
+static func _unpack_meshes(v: Variant) -> Variant:
+	if v is Dictionary and (v as Dictionary).size() == 1 and (v as Dictionary).has(PACKED_MESH):
+		var m := ArrayMesh.new()
+		for arr in v[PACKED_MESH]:
+			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+		return m
+	if v is Array:
+		for i in (v as Array).size():
+			var e: Variant = v[i]
+			if e is Array or e is Dictionary:
+				v[i] = _unpack_meshes(e)
+		return v
+	if v is Dictionary:
+		for k in v:
+			var e: Variant = v[k]
+			if e is Array or e is Dictionary:
+				v[k] = _unpack_meshes(e)
+		return v
+	return v
+
+## Drops the arrays MeshBatch kept on the records' meshes (once they are stored, or not wanted).
+static func _drop_kept(v: Variant) -> void:
+	if v is ArrayMesh:
+		(v as ArrayMesh).remove_meta(MeshBatch.KEEP_META)
+	elif v is Array:
+		for e in v:
+			if e is Object or e is Array or e is Dictionary:
+				_drop_kept(e)
+	elif v is Dictionary:
+		for e in (v as Dictionary).values():
+			if e is Object or e is Array or e is Dictionary:
+				_drop_kept(e)
 
 ## Keeps what step `tag` built for the next run and drops the files older stamps left for it. Written to a temporary
 ## name and renamed, so a game or test running at the same time never reads half a file.
 func _store_meshes(tag: String, meshes: Array) -> void:
+	MeshBatch.set_keep_arrays(false)
 	var path := _cache_path(tag)
 	if path == "":
+		_drop_kept(meshes)
 		return
 	DirAccess.make_dir_recursive_absolute(mesh_cache_dir)
 	var res := Resource.new()
-	res.set_meta("meshes", meshes)
+	res.set_meta("meshes", _pack_meshes(meshes))
+	_drop_kept(meshes)
 	var tmp := "%s/%s_%s.tmp%d.res" % [mesh_cache_dir, tag, _stamp(tag), OS.get_process_id()]
+	# written on another thread while the next steps build (it took a fifth of a cold build); wait_for_stores() joins it
+	_store_tasks.append(WorkerThreadPool.add_task(_save_cache.bind(res, tmp, path, tag, mesh_cache_dir), false, "Open world cache"))
+
+var _store_tasks: Array[int] = []
+
+static func _save_cache(res: Resource, tmp: String, path: String, tag: String, dir: String) -> void:
 	if ResourceSaver.save(res, tmp) != OK or DirAccess.rename_absolute(tmp, path) != OK:
 		push_warning("Could not cache the open world's %s at %s" % [tag, path])
 		DirAccess.remove_absolute(tmp)
 		return
-	for f in DirAccess.get_files_at(mesh_cache_dir):
-		if f.begins_with(tag + "_") and ".tmp" not in f and mesh_cache_dir.path_join(f) != path:
-			DirAccess.remove_absolute(mesh_cache_dir.path_join(f))
+	for f in DirAccess.get_files_at(dir):
+		if f.begins_with(tag + "_") and ".tmp" not in f and dir.path_join(f) != path:
+			DirAccess.remove_absolute(dir.path_join(f))
+
+## The cached steps a cold build makes on other threads (start_ahead) while the ones before them build: they read only
+## what TownMap loaded (the terrain's grid and pond beds, the raw map, the buildings' rings) and builder state of their
+## own, never what the steps running meanwhile add to the map (the buildings' faces go in in build_buildings, after the
+## join). The streets, railway and fences stay on the step thread: they read the map's lazily built road indexes.
+const AHEAD_TAGS := ["buildings", "terrain", "water", "trees"]
+var _ahead_tasks := {} ## tag -> WorkerThreadPool task (only the thread running the steps touches this)
+var _ahead_buildings: Array = [] ## (one member per tag: each task writes only its own)
+var _ahead_terrain: Array = []
+var _ahead_water: Array = []
+var _ahead_trees: Array = []
+
+## Starts every AHEAD_TAGS step whose cache misses on another thread; the step takes the result (_take_ahead). A cold
+## build of the slow steps then takes about as long as the streets alone. Call before the steps, on their thread.
+func start_ahead() -> void:
+	for tag: String in AHEAD_TAGS:
+		var path := _cache_path(tag)
+		if path == "" or FileAccess.file_exists(path) or _ahead_tasks.has(tag):
+			continue
+		var build: Callable
+		match tag:
+			"buildings": build = _building_meshes
+			"terrain": build = _terrain_meshes
+			"water": build = _water_meshes
+			"trees": build = _tree_records.bind(SURROUNDINGS.tree_meshes())
+		_ahead_tasks[tag] = WorkerThreadPool.add_task(_run_ahead.bind(tag, build), false, "Open world " + tag)
+
+func _run_ahead(tag: String, build: Callable) -> void:
+	MeshBatch.set_keep_arrays(true)
+	set("_ahead_" + tag, build.call())
+	MeshBatch.set_keep_arrays(false)
+
+## Step `tag`'s records: what start_ahead made for it (waiting for it), else build.call() here (keeping MeshBatch's
+## arrays for _store_meshes only around the call itself, when the mesh cache is on).
+func _take_ahead(tag: String, build: Callable) -> Array:
+	if not _ahead_tasks.has(tag):
+		MeshBatch.set_keep_arrays(mesh_cache_dir != "")
+		var res: Array = build.call()
+		MeshBatch.set_keep_arrays(false)
+		return res
+	var task: int = _ahead_tasks[tag]
+	_ahead_tasks.erase(tag)
+	# its RenderingServer calls wait for the main thread to flush the server's queue: on the main thread (headless), do
+	# that while waiting; a build on a worker thread has the main thread doing it (OpenWorld._build_world)
+	var on_main := OS.get_thread_caller_id() == OS.get_main_thread_id()
+	while on_main and not WorkerThreadPool.is_task_completed(task):
+		RenderingServer.force_sync()
+		OS.delay_usec(200)
+	WorkerThreadPool.wait_for_task_completion(task)
+	if on_main:
+		RenderingServer.force_sync()
+	var out: Array = get("_ahead_" + tag)
+	set("_ahead_" + tag, [])
+	return out
+
+## Waits until every step's cache is on disk (the files are written on other threads, see _store_meshes).
+func wait_for_stores() -> void:
+	# a step start_ahead began but nobody took (its cache file turned up meanwhile, from another game or test): join it
+	# and drop what it built, so no pool task outlives the build
+	for tag in _ahead_tasks:
+		WorkerThreadPool.wait_for_task_completion(_ahead_tasks[tag])
+		set("_ahead_" + tag, [])
+	_ahead_tasks.clear()
+	for id in _store_tasks:
+		WorkerThreadPool.wait_for_task_completion(id)
+	_store_tasks.clear()
 
 ## The steps in order, for the caller to run one per frame: [label, Callable].
 func steps() -> Array:
@@ -287,7 +427,7 @@ func build_terrain() -> void:
 		mat.set_shader_parameter("land_size", Vector2(land.get_width(), land.get_height()) * LAND_RES)
 	var meshes := _cached_meshes("terrain")
 	if meshes.is_empty():
-		meshes = _terrain_meshes()
+		meshes = _take_ahead("terrain", _terrain_meshes)
 		_store_meshes("terrain", meshes)
 	for mesh in meshes:
 		_add_mesh(group, mesh, mat, "", false)
@@ -337,6 +477,15 @@ func build_water() -> void:
 	mat.set_shader_parameter("deep_color", Color("#1b4752"))
 	mat.set_shader_parameter("shallow_color", Color("#2f6b66"))
 	mat.set_shader_parameter("choppy", 0.3)
+	var meshes := _cached_meshes("water")
+	if meshes.is_empty():
+		meshes = _take_ahead("water", _water_meshes)
+		_store_meshes("water", meshes)
+	for mesh in meshes:
+		_add_mesh(group, mesh, mat, "", false)
+
+## The ponds' and streams' meshes, one per CHUNK square (cached as the "water" step).
+func _water_meshes() -> Array:
 	var batches := {}
 	for k in map.water_rings.size():
 		var ring := map.water_rings[k]
@@ -390,8 +539,10 @@ func build_water() -> void:
 			mb.flat_quad(Vector3(a.x - side.x, ya, a.y - side.y), Vector3(a.x + side.x, ya, a.y + side.y),
 				Vector3(b.x + side.x, yb, b.y + side.y), Vector3(b.x - side.x, yb, b.y - side.y), Vector3.UP, Color.WHITE,
 				[Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 0.5)])
+	var meshes: Array = []
 	for c in batches:
-		_add_mesh(group, (batches[c] as MeshBatch).commit(), mat, "", false)
+		meshes.append((batches[c] as MeshBatch).commit())
+	return meshes
 
 func _chunk_of(p: Vector2, size := CHUNK) -> Vector2i:
 	return Vector2i(int(floor(p.x / size)), int(floor(p.y / size)))
@@ -538,10 +689,98 @@ func build_roads() -> void:
 	var slots: Array = [mat, kerb_mat, deck_mat, bank_mat, pave_mat] # what STREET_* name
 	var recs := _cached_meshes("streets")
 	if recs.is_empty():
-		recs = _street_meshes()
+		recs = _take_ahead("streets", _street_meshes)
 		_store_meshes("streets", recs)
 	for rec in recs:
 		_add_mesh(group, rec[0], slots[rec[1]], "", rec[2])
+
+## What _street_meshes drew round each raised embankment's end (when it ran, not on a cache hit), for the tests:
+## [{road, c, tris (three points a triangle, the drawn surface), roads and outs (the road ends it stands past)}].
+var drawn_cones: Array = []
+const CONE_RAYS := 18 ## sectors of an embankment cone's half-disc (10 degrees: the chord sags 2 cm under the cone)
+const CONE_STEP := 0.6 ## m between the rings down a cone's slope
+const CONE_SINK := 0.03 ## m: the cone lies this far under the deck it continues (no flicker against a bridge's deck)
+
+## One raised embankment's end (TownMap.embankment_cones) into mb: a disc at the deck's height (a half-disc past a
+## lone end, the whole disc round a raised junction's node), then the slope down to the ground on rings at
+## TownMap.cone_height (what the car rides), the last ring sunk under the grass.
+func _embankment_cone(mb: MeshBatch, cone: Dictionary) -> Dictionary:
+	var c: Vector2 = cone.c
+	var out: Vector2 = cone.out
+	var pad: Array = cone.pad
+	var full := not pad.is_empty()
+	var rays_n := CONE_RAYS * 2 if full else CONE_RAYS
+	var half := float(cone.half)
+	var cones := map.embankment_cones()
+	for ei: int in cone.ends:
+		half = maxf(half, float(cones[ei].half))
+	if full:
+		half = maxf(half, float(pad[1]))
+	var dirs: Array[Vector2] = []
+	var feet: Array[float] = []
+	var steps := 1
+	for k in rays_n + 1:
+		var dir := out.rotated(lerpf(-PI, PI, float(k) / rays_n) if full else lerpf(-PI * 0.5, PI * 0.5, float(k) / rays_n))
+		# the foot on this ray: where the slope meets the ground (the ground under it may rise or fall)
+		var foot := 0.0
+		while foot < 30.0:
+			var q := c + dir * (half + foot + 0.1)
+			if map.cone_rise(cone, q) <= 0.001:
+				break
+			foot += 0.1
+		dirs.append(dir)
+		feet.append(foot)
+		steps = maxi(steps, ceili((foot - 0.6) / CONE_STEP)) # (one ring count on every ray: quads between them)
+	var rays: Array[PackedVector3Array] = []
+	for k in rays_n + 1:
+		var dir := dirs[k]
+		var foot := feet[k]
+		var overs: Array[float] = [-half, -half * 0.5, 0.0, 0.2, 0.4] # (the lift fades over LIFT_RAMP from the rim)
+		for s in steps + 1:
+			overs.append(lerpf(minf(0.6, foot), foot, float(s) / steps))
+		var ray := PackedVector3Array()
+		for o in overs:
+			var q := c + dir * (half + minf(o, foot))
+			ray.append(Vector3(q.x, _cone_vertex_y(cone, q), q.y))
+		var qf := c + dir * (half + foot + 0.45)
+		ray.append(Vector3(qf.x, map.ground(qf.x, qf.y) - 0.3, qf.y))
+		rays.append(ray)
+	var tris := PackedVector3Array()
+	for k in rays_n:
+		var r0 := rays[k]
+		var r1 := rays[k + 1]
+		for j in r0.size() - 1:
+			var quad := [r0[j], r0[j + 1], r1[j + 1], r1[j]]
+			for t: Array in [[0, 1, 2], [0, 2, 3]]:
+				var a: Vector3 = quad[t[0]]
+				var b: Vector3 = quad[t[1]]
+				var d: Vector3 = quad[t[2]]
+				var nrm := (b - a).cross(d - a)
+				if nrm.length_squared() < 1e-10:
+					continue # (the rays meet at the centre)
+				nrm = nrm.normalized()
+				if nrm.y < 0.0:
+					nrm = -nrm
+				mb.flat_tri(a, b, d, nrm, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, Color.WHITE)
+				tris.append_array([a, b, d])
+	var ends := []
+	var outs := []
+	for ei: int in cone.ends:
+		ends.append(cones[ei].road)
+		outs.append(cones[ei].out)
+	return {"road": cone.road, "c": c, "tris": tris, "roads": ends, "outs": outs}
+
+## A cone's drawn height at q: TownMap.cone_height, kept under any road's carriageway there (where raised roads meet
+## and one falls away from the node, the car rides that road: FreeCar.support).
+func _cone_vertex_y(cone: Dictionary, q: Vector2) -> float:
+	var h := map.cone_height(cone, q)
+	for e: Array in map.decks_at(q.x, q.y, 0.0):
+		if not e[5] and float(e[2]) <= 0.0 and e[3] != Vector2.RIGHT: # (a pad's disc is the mound's own top)
+			h = minf(h, map.ground(q.x, q.y) + float(e[1]) + map.road_lift(int(e[0])))
+	var low := map.road_at(q.x, q.y)
+	if not low.is_empty() and float(low.deck) <= 0.05:
+		h = minf(h, float(low.height))
+	return h - CONE_SINK
 
 ## Material slots of the street step's meshes (build_roads' `slots`).
 const STREET_ROAD := 0
@@ -787,6 +1026,12 @@ func _street_meshes() -> Array:
 						if nrm3.y < 0.0:
 							nrm3 = -nrm3
 						bb.flat_quad(e0, e1, b1, b0, nrm3, Color.WHITE)
+	# the earth round each raised embankment's end: a grassy half-cone (TownMap.embankment_cones, ridden as drawn)
+	drawn_cones.clear()
+	for cone: Dictionary in map.embankment_cones():
+		var rp := map.road_pts[int(cone.road)]
+		if cone.lead or (cone.pad as Array).is_empty(): # (one mound round a raised junction, drawn by its first end)
+			drawn_cones.append(_embankment_cone(bank_b[_chunk_of(rp[rp.size() / 2])], cone)) # (in its road's chunk)
 	for c in road_b:
 		recs.append([(road_b[c] as MeshBatch).commit(), STREET_ROAD, false])
 		if not (kerb_b[c] as MeshBatch).is_empty():
@@ -958,7 +1203,7 @@ func build_rail() -> void:
 	var slots: Array = [mat_v, steel_mat, bank_mat] # what RAIL_* name
 	var recs := _cached_meshes("rail")
 	if recs.is_empty():
-		recs = _rail_meshes()
+		recs = _take_ahead("rail", _rail_meshes)
 		_store_meshes("rail", recs)
 	for rec in recs:
 		var inst := _add_mesh(group, rec[0], slots[rec[1]], "", rec[2])
@@ -1615,7 +1860,7 @@ static func _on_other_plane_edge(polys: Array[PackedVector3Array], cands: Array,
 				for q in polys[pj]:
 					flat.append(Vector2(q.x, q.z))
 				flats[pj] = flat
-			if Geometry2D.is_point_in_polygon(beyond, flats[pj]):
+			if TownMap.inside(beyond, flats[pj]):
 				return true
 			skip = pj # only the first of a plane's edges near p counts
 	return false
@@ -1681,7 +1926,7 @@ func build_buildings() -> void:
 	night_materials.append(mat)
 	var meshes := _cached_meshes("buildings")
 	if meshes.is_empty():
-		meshes = _building_meshes()
+		meshes = _take_ahead("buildings", _building_meshes)
 		_store_meshes("buildings", meshes)
 	for mesh in meshes:
 		if mesh is Dictionary: # the walls drawn off the OSM footprint: what the car meets (TownMap.building_faces)
@@ -1991,10 +2236,10 @@ static func _lod2_cover(faces: Array, ring: PackedVector2Array) -> float:
 		var x := lo.x + step * 0.5
 		while x < hi.x:
 			var pt := Vector2(x, y)
-			if Geometry2D.is_point_in_polygon(pt, ring):
+			if TownMap.inside(pt, ring):
 				inside += 1
 				for poly in polys:
-					if Geometry2D.is_point_in_polygon(pt, poly):
+					if TownMap.inside(pt, poly):
 						covered += 1
 						break
 			x += step
@@ -2116,7 +2361,7 @@ func build_trees() -> void:
 	quad.center_offset = Vector3(0.0, 0.5, 0.0)
 	var recs := _cached_meshes("trees")
 	if recs.is_empty():
-		recs = _tree_records(meshes)
+		recs = _take_ahead("trees", _tree_records.bind(meshes))
 		_store_meshes("trees", recs)
 	for rec in recs: # [species ("" for the far cards), instance buffer, count]
 		_add_trees(group, rec[0], rec[1], rec[2], meshes, foliage, quad, impostor_mat)
@@ -2240,7 +2485,7 @@ func build_fences() -> void:
 	var fence := _model("Fence", _fallback_fence)
 	var recs := _cached_meshes("fences")
 	if recs.is_empty():
-		recs = _fence_records(fence)
+		recs = _take_ahead("fences", _fence_records.bind(fence))
 		_store_meshes("fences", recs)
 	var cells: Array = recs[0] # the panels
 	var panels := _multimesh_cells(group, fence[0], cells, false, null, 280.0)
@@ -3038,7 +3283,7 @@ func shaft_towers() -> Dictionary:
 		var under: Array[int] = []
 		var tall := false
 		for bi in map.buildings_near(sp, 0.0):
-			if Geometry2D.is_point_in_polygon(sp, map.bld_rings[bi]):
+			if TownMap.inside(sp, map.bld_rings[bi]):
 				under.append(bi)
 				tall = tall or float(map.buildings[bi][1]) >= SHAFT_TOWER_H
 		if tall and not bespoke:

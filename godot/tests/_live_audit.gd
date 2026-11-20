@@ -6,6 +6,7 @@ extends SceneTree
 
 const DT := 1.0 / 120.0
 const MAX_T := 900.0
+const BEHIND_M := 10.0 ## the corner speed is held this far past the apex (a hairpin's exit is still turning)
 
 var map: TownMap
 var anomalies := 0
@@ -110,6 +111,7 @@ func _drive(live: LiveEvents, ev: Dictionary, p0: Vector2, h0: float) -> void:
 	var style := OS.get_environment("STYLE") if OS.get_environment("STYLE") != "" else "flick"
 	var resets := 0
 	var max_dev := 0.0
+	var max_dev_at := ""
 	var prev_rv := {}
 	var teleports := 0
 	var rival_off := 0
@@ -141,7 +143,9 @@ func _drive(live: LiveEvents, ev: Dictionary, p0: Vector2, h0: float) -> void:
 			fenv = live.run["_lenv"]
 		s = _project(follow, cp, s)
 		var i := clampi(int(s / 2.0), 0, follow.size() - 1)
-		max_dev = maxf(max_dev, follow[i].distance_to(cp)) if not (live.is_running() and live.run.state == "liaison") else max_dev
+		if not (live.is_running() and live.run.state == "liaison") and follow[i].distance_to(cp) > max_dev:
+			max_dev = follow[i].distance_to(cp)
+			max_dev_at = "stage %d s %.0f m" % [stage, s]
 		var look := clampi(i + 2 + int(absf(car.car.speed) * 0.18), 0, follow.size() - 1)
 		var aim := follow[look]
 		var want := (aim - cp).angle()
@@ -279,8 +283,8 @@ func _drive(live: LiveEvents, ev: Dictionary, p0: Vector2, h0: float) -> void:
 	if ev.kind == "drift_zone":
 		print("   drift: %.0f s in the zone, sliding %.1f s, off the road %.1f s, %d crashes, max slip %.2f rad, lost %s" % [dstat.t,
 			dstat.slide, dstat.off, dstat.crash, dstat.slip, str(live.last_result.get("lost", "-"))])
-	print("   bot: %s after %.1f s  events %s  max off-path %.1f m  line '%s' tier %d pos %s" % [result, t, str(events),
-		max_dev, String(res.get("line", "")), int(res.get("tier", 0)), str(res.get("pos", "-"))])
+	print("   bot: %s after %.1f s  events %s  max off-path %.1f m (%s)  line '%s' tier %d pos %s" % [result, t, str(events),
+		max_dev, max_dev_at, String(res.get("line", "")), int(res.get("tier", 0)), str(res.get("pos", "-"))])
 	if result == "":
 		_bad("never finished in %.0f s" % MAX_T)
 	if result == "fail":
@@ -317,13 +321,14 @@ func _env(pts: PackedVector2Array) -> PackedFloat32Array:
 		env[i] = minf(env[i], sqrt(env[i + 1] * env[i + 1] + 2.0 * 7.4 * 0.7 * g * 2.0))
 	return env
 
-## The lowest planned speed from the car's own sample to a little past where it could stop (v * 0.6 s and 6 m on):
+## The lowest planned speed from BEHIND_M behind the car's own sample to a little past where it could stop (v * 0.6 s and 6 m on):
 ## braking starts before the bend and the corner speed holds until the slowest point is behind the car.
 func _ahead_min(env: PackedFloat32Array, i: int, v: float) -> float:
 	var n := env.size()
 	var to := mini(i + 3 + int((v * 0.6 + 6.0) / 2.0), n - 1)
 	var m := INF
-	for j in range(clampi(i, 0, n - 1), to + 1):
+	# and from BEHIND_M back: the car is still turning (and its projected sample can jump) a little past the apex
+	for j in range(clampi(i - int(BEHIND_M / 2.0), 0, n - 1), to + 1):
 		m = minf(m, env[j])
 	return m if is_finite(m) else 0.0
 

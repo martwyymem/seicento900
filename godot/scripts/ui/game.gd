@@ -311,7 +311,6 @@ var campaign_start_button: Button
 var campaign_cleared := false ## the last campaign race met its target: back at the menu, the briefing moves on
 var open_world: OpenWorld = null ## the campaign's free roam round Brzeszcze (scripts/world/open_world.gd), kept once built
 var world_return := -1 ## the campaign stage started from the open world: its results lead back to its beacon
-var mission_rally := -1 ## a rally mission (Missions) being run through the rally flow: its campaign index, else -1
 var campaign_world_button: Button
 var champ_data: Dictionary = {}
 var track_picker: MenuSelector
@@ -4203,9 +4202,6 @@ func _build_results() -> void:
 func _start_race(restart := false) -> void:
 	if _starting:
 		return
-	if is_campaign_mode and Missions.kind_of(campaign_stage_index) == "rally":
-		_start_mission_rally(campaign_stage_index)
-		return
 	if not restart and (is_championship_mode or is_campaign_mode or is_rally_mode) and _service_due():
 		# CMR 2.0: between events the car goes through the service area first
 		if race:
@@ -4316,8 +4312,6 @@ func _set_up_race() -> void:
 	settings.parallel = parallel_toggle.button_pressed
 	settings.crew = ["pro", "club", "amateur"][crew_picker.selected]
 	settings.car_setup = CarSetup.clean(car_setups.get(settings.track, {}))
-	if is_campaign_mode:
-		Missions.apply_settings(settings, campaign_stage_index) # a mission's own rules (a stage is left as it is)
 	if quali_run:
 		Qualifying.configure(settings)
 	elif is_championship_mode and not _round_quali().is_empty():
@@ -4494,9 +4488,7 @@ func _show_results() -> void:
 	if fast:
 		sub += " · Fastest lap %s %s" % [fast.car.name, Race.fmt_time(fast.t)]
 	col.add_child(_label("CHEQUERED FLAG · %s" % title, 26, INK))
-	if is_campaign_mode and Missions.is_mission(campaign_stage_index):
-		_add_mission_outcome(col, Missions.judge(race, campaign_stage_index))
-	elif is_campaign_mode and me.car.dnf:
+	if is_campaign_mode and me.car.dnf:
 		var dnf_res := CampaignData.record_result(campaign_stage_index, 999) # a retirement counts as a failed try
 		col.add_child(_label("OBJECTIVE FAILED — you did not finish. Retry to advance!", 14, DANGER))
 		col.add_child(_label(_award_stage_fans(int(dnf_res.fans)), 13, CmrStyle.AMBER))
@@ -4603,10 +4595,7 @@ func _show_results() -> void:
 			primary = _button(next_label, ACCENT)
 			primary.pressed.connect(_start_race)
 	elif is_campaign_mode:
-		if Missions.is_mission(campaign_stage_index):
-			primary = _button("RUN IT AGAIN ▸" if campaign_cleared else "RETRY MISSION ▸", ACCENT)
-			primary.pressed.connect(_start_race)
-		elif campaign_cleared and campaign_stage_index < CampaignData.STAGES.size() - 1:
+		if campaign_cleared and campaign_stage_index < CampaignData.STAGES.size() - 1:
 			primary = _button("NEXT STAGE ▸", ACCENT)
 			primary.pressed.connect(func() -> void:
 				campaign_stage_index += 1
@@ -4841,8 +4830,6 @@ func _return_to_setup(to_service := false) -> void:
 	status_label.text = ""
 	status_label.modulate = MUTED
 	result_panel.hide()
-	if mission_rally >= 0 and not to_service:
-		_end_mission_rally()
 	var raced := campaign_stage_index
 	if is_campaign_mode and campaign_cleared and CampaignData.is_unlocked(campaign_stage_index + 1) and campaign_stage_index < CampaignData.STAGES.size() - 1:
 		campaign_stage_index += 1 # stage won: the menu briefs the next one
@@ -4895,10 +4882,13 @@ func _start_campaign_mode() -> void:
 	campaign_cleared = false
 	var prog := CampaignData.load_progress()
 	campaign_stage_index = clampi(int(prog.get("unlocked", 0)), 0, CampaignData.STAGES.size() - 1)
-	_update_mode_view()
 	if OpenWorld.available():
-		_enter_open_world("") # the campaign lives in the open world: drive to the next stage's beacon
+		await _enter_open_world("") # the campaign lives in the open world: drive to the next stage's beacon
+		# the setup page behind it, brought up to date once the world is up: it takes a quarter of a second (its circuit
+		# map), twice that while the town builds, and before the build it held the loading cover back by as much
+		_update_mode_view()
 	else:
+		_update_mode_view()
 		_show_setup_page()
 
 ## The campaign's open world (scripts/world/open_world.gd), built on first use and kept for the way back.
@@ -4963,50 +4953,6 @@ func _on_world_stage(index: int) -> void:
 	open_world.suspend()
 	_update_mode_view()
 	_start_race()
-
-## A rally mission runs through the rally flow (stage results, service) on a rally of its own, never saved over
-## the menu's; when the event is over its results record the mission and lead back to the beacon.
-func _start_mission_rally(index: int) -> void:
-	mission_rally = index
-	campaign_stage_index = index
-	is_campaign_mode = false
-	is_rally_mode = true
-	rally_event = Missions.new_rally(index)
-	rally_car = {}
-	_rally_recorded = null
-	_start_race()
-
-## Leaves a rally mission: the menu's own rally is read back from its save, the campaign is the mode again.
-func _end_mission_rally() -> void:
-	campaign_stage_index = mission_rally
-	mission_rally = -1
-	rally_event = null
-	rally_car = {}
-	_rally_recorded = null
-	is_rally_mode = false
-	is_campaign_mode = true
-
-## The results' mission block: cleared or missed (and by how much), the trophy, the fans.
-func _add_mission_outcome(col: VBoxContainer, outcome: Dictionary) -> void:
-	var res := Missions.record(campaign_stage_index, outcome)
-	campaign_cleared = res.success
-	_add_mission_result_lines(col, res)
-
-func _add_mission_result_lines(col: VBoxContainer, res: Dictionary) -> void:
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 3)
-	col.add_child(box)
-	if res.success:
-		box.add_child(_label("★ MISSION CLEARED ★  %s" % res.line, 18, CmrStyle.GREEN))
-		if res.first_clear:
-			box.add_child(_label("🏆 Trophy Awarded: %s" % res.trophy, 14, CmrStyle.AMBER))
-		if String(res.get("reward_car", "")) != "":
-			box.add_child(_label("New car won: %s (pick it under CAR)" % CarCatalog.display_name(String(res.reward_car)), 14, CmrStyle.AMBER))
-	else:
-		box.add_child(_label("MISSION MISSED — %s. Retry it from its beacon." % res.line, 14, DANGER))
-	for l in box.get_children():
-		(l as Label).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	box.add_child(_label(_award_stage_fans(int(res.fans)), 13, CmrStyle.AMBER))
 
 func _on_world_leave(to: String) -> void:
 	if to == "stages":
@@ -5956,7 +5902,7 @@ func _load_rally() -> void:
 	_new_rally(Rally.EVENTS[0].key)
 
 func _save_rally() -> void:
-	if rally_event == null or mission_rally >= 0: # a rally mission is never saved over the menu's rally
+	if rally_event == null:
 		return
 	var d := rally_event.to_dict()
 	d["car"] = rally_car
@@ -6106,13 +6052,7 @@ func _show_rally_results() -> void:
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 12)
 	var primary: Button
-	if ev.is_over() and mission_rally >= 0:
-		var res := Missions.record(mission_rally, Missions.judge_rally(ev, mission_rally))
-		campaign_cleared = res.success
-		_add_mission_result_lines(col, res)
-		primary = _button("BACK TO BRZESZCZE  ▸" if world_return >= 0 else "BACK TO THE CAMPAIGN  ▸", ACCENT)
-		primary.pressed.connect(_return_to_setup)
-	elif ev.is_over():
+	if ev.is_over():
 		primary = _button("RALLY COMPLETE · BACK TO THE RALLY PAGE", ACCENT)
 		primary.pressed.connect(_return_to_setup)
 	elif _service_due():

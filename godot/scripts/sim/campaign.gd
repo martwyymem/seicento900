@@ -270,7 +270,7 @@ static func is_unlocked(stage_idx: int, fans := -1) -> bool:
 	return stage_idx <= int(prog.get("unlocked", 0))
 
 static func record_result(stage_idx: int, pos: int) -> Dictionary:
-	if Missions.is_mission(stage_idx): # a place-only result (the game judges missions with Missions.judge)
+	if Missions.is_mission(stage_idx): # a place-only result (the map judges missions with MapMissions.outcome)
 		var st := get_stage(stage_idx)
 		return Missions.record(stage_idx, {"pos": pos, "success": pos <= int(st.target_pos), "tier": 0, "score": 0})
 	var stage := get_stage(stage_idx)

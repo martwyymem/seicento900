@@ -72,7 +72,7 @@ func _target() -> float:
 	var world := source if source else get_parent()
 	var camera: Camera3D = world.get("camera")
 	var sky: ShaderMaterial = world.get("sky_material") if world.get("sky_material") else world.get("sky_mat")
-	var race = world.get("race") # none in the open world, which has no weather
+	var race = world.get("race") # none in the open world, whose weather (a mission's fog) is its own
 	if not camera or not sky or world.get("overview") or camera.projection != Camera3D.PROJECTION_PERSPECTIVE:
 		return 0.0
 	if "race" in world and not race:
@@ -91,6 +91,8 @@ func _target() -> float:
 		amount *= 1.0 - smoothstep(0.05, 0.3, weather.fog)
 		if weather.mode == "fog":
 			return 0.0
+	elif not ("race" in world) and world.get("fog") is float: # the open world in a mission's fog
+		amount *= 1.0 - smoothstep(0.05, 0.3, float(world.get("fog")))
 	if amount < 0.01:
 		return 0.0
 	var eye := camera.global_position

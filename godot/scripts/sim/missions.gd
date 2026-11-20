@@ -153,30 +153,6 @@ static func as_stage(index: int) -> Dictionary:
 		st.laps = int(m.opponents) # N cars: the leader completes N-1 laps
 	return st
 
-## Turns a campaign race's settings into the mission's rules (a stage index passes through untouched).
-static func apply_settings(st: RaceSettings, index: int) -> void:
-	if not is_mission(index):
-		return
-	var m := as_stage(index)
-	st.mission = String(m.kind)
-	st.mandatory_stop = false # one lap, a sprint or a quarter mile: no pit stop to make
-	st.two_compounds = false
-	match String(m.kind):
-		"knockout":
-			st.knockout = true
-			st.laps = int(m.laps)
-		"drag":
-			st.finish_distance = float(m.finish_distance)
-			st.laps = 1
-			st.grid = "pole"
-		"drift":
-			st.drift_score = true
-			st.drift_tiers = PackedInt32Array(m.tiers)
-			st.opponents = 0
-			st.finish_distance = float(m.finish_distance)
-		"offroad":
-			st.loose_spans = true
-
 ## The text a mission's target reads as.
 static func target_text(index: int) -> String:
 	var m := as_stage(index)
@@ -207,96 +183,7 @@ static func length_text(index: int) -> String:
 
 # ------------------------------------------------------------------ results
 
-## A finished race judged against the mission: {kind, pos, of, dnf, time, score, tier, success, line}.
-static func judge(race: Race, index: int) -> Dictionary:
-	var m := as_stage(index)
-	var kind := String(m.kind)
-	var out := {"kind": kind, "pos": 999, "of": race.cars.size(), "dnf": race.player.dnf, "time": null, "score": 0,
-		"tier": 0, "success": false, "line": ""}
-	if kind == "drift":
-		var sc := race.drift.total() if race.drift else 0
-		if race.player.dnf:
-			sc = race.drift.score if race.drift else 0
-		out.score = sc
-		out.tier = DriftScore.tier(sc, m.tiers)
-		out.success = out.tier >= 1
-		out.pos = 4 - int(out.tier) if out.success else 999
-		var t: Array = m.tiers
-		if out.tier >= 3:
-			out.line = "%s points: GOLD (gold is %s)" % [_k(sc), _k(int(t[2]))]
-		elif out.success:
-			out.line = "%s points: %s · %s more for %s" % [_k(sc), DriftScore.TIER_NAMES[out.tier], _k(int(t[out.tier]) - sc),
-				DriftScore.TIER_NAMES[int(out.tier) + 1].to_lower()]
-		else:
-			out.line = "%s points: missed bronze by %s" % [_k(sc), _k(int(t[0]) - sc)]
-		return out
-	var rows := race.results()
-	var target := int(m.target_pos)
-	var mine: Dictionary = {}
-	var at_target: Dictionary = {}
-	for r in rows:
-		if (r.car as RaceCar).is_player:
-			mine = r
-		if int(r.pos) == target:
-			at_target = r
-	out.pos = int(mine.pos)
-	out.time = mine.total
-	var knocked := kind == "knockout" and race.out_order.has(race.player) and race.player.dnf_reason.begins_with("Knocked")
-	out.success = out.pos <= target and (not race.player.dnf or (knocked and kind == "knockout" and out.pos <= target))
-	var place := "P%d of %d" % [out.pos, rows.size()]
-	if race.player.dnf and not knocked:
-		out.line = "Did not finish (%s): target %s" % [race.player.dnf_reason, target_text(index).to_lower()]
-		out.pos = 999
-		out.success = false
-		return out
-	if knocked:
-		place = "%s, knocked out on lap %d" % [place, _ko_lap(race)]
-	if out.success:
-		var better: int = target - int(out.pos)
-		out.line = "%s: cleared%s" % [place, (" with %d place%s to spare" % [better, "" if better == 1 else "s"]) if better > 0 else ""]
-	else:
-		var short: int = int(out.pos) - target
-		out.line = "%s: missed by %d place%s" % [place, short, "" if short == 1 else "s"]
-		if mine.total != null and not at_target.is_empty() and at_target.total != null:
-			out.line += ", %.3f s behind P%d" % [float(mine.total) - float(at_target.total), target]
-	if kind == "drag" and mine.total != null:
-		out.line += " · %d m in %.3f s" % [int(m.finish_distance), float(mine.total)]
-	return out
-
-static func _ko_lap(race: Race) -> int:
-	for e in race.knocked_out:
-		if e.car == race.player:
-			return int(e.lap)
-	return 0
-
-## A finished rally event judged against the mission.
-static func judge_rally(ev: RallyEvent, index: int) -> Dictionary:
-	var m := as_stage(index)
-	var target := int(m.target_pos)
-	var table := ev.standings()
-	var me: Dictionary = {}
-	var at_target: Dictionary = {}
-	for r in table:
-		if r.is_player:
-			me = r
-		if int(r.pos) == target:
-			at_target = r
-	var pos := int(me.get("pos", 999))
-	var out := {"kind": "rally", "pos": pos, "of": table.size(), "dnf": false, "time": me.get("time"), "score": 0, "tier": 0,
-		"success": pos <= target, "line": ""}
-	if out.success:
-		out.line = "P%d overall of %d: cleared" % [pos, table.size()]
-	else:
-		out.line = "P%d overall of %d: missed by %d place%s, %.1f s behind P%d" % [pos, table.size(), pos - target,
-			"" if pos - target == 1 else "s", float(me.get("time", 0.0)) - float(at_target.get("time", 0.0)), target]
-	return out
-
-## A fresh rally for a rally mission (never saved over the main menu's rally).
-static func new_rally(index: int) -> RallyEvent:
-	var m := as_stage(index)
-	return RallyEvent.new(String(m.rally), -1, String(m.difficulty))
-
-## Writes a judged result into campaign.json: {success, first_clear, fans, trophy, line}.
+## Writes a judged result (MapMissions.outcome) into campaign.json: {success, first_clear, fans, trophy, line}.
 static func record(index: int, outcome: Dictionary) -> Dictionary:
 	var m := as_stage(index)
 	var prog := Campaign.load_progress()

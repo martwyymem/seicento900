@@ -1,4 +1,4 @@
-## The open world's mesh cache (TownBuilder.mesh_cache_dir): a warm build of every cached step (terrain, streets, railway,
+## The open world's mesh cache (TownBuilder.mesh_cache_dir): a warm build of every cached step (terrain, water, streets, railway,
 ## buildings, trees, fences) gives the same meshes and instances as the cold build that stored them; each step's stamp
 ## covers what that step reads and nothing else (editing the lamps leaves the buildings valid, editing the map's roads or
 ## _wall() does not); the map snapshot reads back equal; and the loading cover's car figures are about right.
@@ -11,9 +11,9 @@ const MAP := "res://scripts/world/town_map.gd"
 var completed := false
 ## (one folder per process: suites running at the same time, other agents' or a parallel CI job's, share user://)
 var DIR := "user://test_open_world_cache_%d" % OS.get_process_id()
-const STEPS := ["build_terrain", "build_roads", "build_rail", "build_buildings", "build_trees", "build_fences"]
-const TAGS := ["terrain", "streets", "rail", "buildings", "trees", "fences"]
-const GROUPS := ["Terrain", "Streets", "Railway", "Buildings", "Trees", "Garden Fences"]
+const STEPS := ["build_terrain", "build_water", "build_roads", "build_rail", "build_buildings", "build_trees", "build_fences"]
+const TAGS := ["terrain", "water", "streets", "rail", "buildings", "trees", "fences"]
+const GROUPS := ["Terrain", "Water", "Streets", "Railway", "Buildings", "Trees", "Garden Fences"]
 
 func run() -> Array:
 	var errors: Array[String] = []
@@ -29,10 +29,20 @@ func run() -> Array:
 	for tag in TAGS:
 		if not FileAccess.file_exists((cold.builder as TownBuilder)._cache_path(tag)):
 			errors.append("the cold build stored no %s cache" % tag)
-	if (cold.builder as TownBuilder).cache_log != ["terrain miss", "streets miss", "rail miss", "buildings miss", "trees miss", "fences miss"]:
+	if (cold.builder as TownBuilder).cache_log != ["terrain miss", "water miss", "streets miss", "rail miss", "buildings miss", "trees miss", "fences miss"]:
 		errors.append("a cold build logs %s" % [(cold.builder as TownBuilder).cache_log])
+	# the meshes are stored as the arrays MeshBatch made them of (no read-back from the GPU), and dropped from the meshes
+	var stored := ResourceLoader.load((cold.builder as TownBuilder)._cache_path("terrain"), "", ResourceLoader.CACHE_MODE_IGNORE)
+	if stored == null or not ((stored.get_meta("meshes") as Array)[0] is Dictionary):
+		errors.append("the cache stores the terrain's meshes as ArrayMeshes (read back from the GPU), not as their arrays")
+	if MeshBatch.keeps_arrays(true):
+		errors.append("MeshBatch still keeps its arrays after the build")
+	for n in (cold.world as Node3D).get_node("Terrain").get_children():
+		if n is MeshInstance3D and (n as MeshInstance3D).mesh.has_meta(MeshBatch.KEEP_META):
+			errors.append("a built terrain mesh still holds its arrays")
+			break
 	var warm := _build(map)
-	if (warm.builder as TownBuilder).cache_log != ["terrain hit", "streets hit", "rail hit", "buildings hit", "trees hit", "fences hit"]:
+	if (warm.builder as TownBuilder).cache_log != ["terrain hit", "water hit", "streets hit", "rail hit", "buildings hit", "trees hit", "fences hit"]:
 		errors.append("a warm build logs %s" % [(warm.builder as TownBuilder).cache_log])
 	for group in GROUPS:
 		var a: Array = cold.summary[group]
@@ -63,6 +73,8 @@ func run() -> Array:
 		errors.append("the terrain's stamp depends on the wall plan")
 	if not other._cached_meshes("buildings").is_empty():
 		errors.append("a builder with another stamp read the cached buildings")
+	if MeshBatch.keeps_arrays(true):
+		errors.append("a cache miss in _cached_meshes left MeshBatch keeping its arrays")
 	other.root.free()
 	for w in [cold, warm]:
 		(w.world as Node3D).free()
@@ -81,8 +93,10 @@ func _build(map: TownMap) -> Dictionary:
 	var world := Node3D.new()
 	var builder := TownBuilder.new(map, world)
 	builder.mesh_cache_dir = DIR
+	builder.start_ahead() # (as the open world does: a cold build makes the buildings on another thread)
 	for step in STEPS:
 		builder.call(step)
+	builder.wait_for_stores()
 	var summary := {}
 	for group in GROUPS:
 		var rows: Array = []
@@ -192,7 +206,7 @@ func _code_hash(errors: Array[String]) -> void:
 		if same != cases[what][1]:
 			errors.append("CodeHash: %s %s the fingerprint" % [what, "changed" if not same else "left"])
 	# the real thing: what each step's fingerprint covers
-	var mesh_roots := {"terrain": "_terrain_meshes", "streets": "_street_meshes", "rail": "_rail_meshes", "buildings": "_building_meshes", "trees": "_tree_records", "fences": "_fence_records"}
+	var mesh_roots := {"terrain": "_terrain_meshes", "water": "_water_meshes", "streets": "_street_meshes", "rail": "_rail_meshes", "buildings": "_building_meshes", "trees": "_tree_records", "fences": "_fence_records"}
 	var reached := {}
 	for tag in mesh_roots:
 		reached[tag] = CODE_HASH.reached(BUILDER, [mesh_roots[tag]], MAP, ["_load"])
@@ -200,7 +214,7 @@ func _code_hash(errors: Array[String]) -> void:
 			errors.append("CodeHash reaches nothing for the %s step" % tag)
 	var must := {"buildings": ["_wall", "_wall_plan", "_add_lod2_roof", "_open_runs", "_palette", "hash2", "KIND_CODE", "shaft_towers"],
 		"trees": ["KIND_SPECIES", "_tree_dims", "_species_colour"], "streets": ["_build_pavements", "_style", "BRIDGE_GIRDER_DEPTH"],
-		"rail": ["_bank_quad", "_clip_half"], "terrain": ["TERRAIN_STEP"], "fences": ["_doubled_fences", "_chunk_cells"]}
+		"rail": ["_bank_quad", "_clip_half"], "terrain": ["TERRAIN_STEP"], "water": ["WATER_TESS", "_chunk_of"], "fences": ["_doubled_fences", "_chunk_cells"]}
 	var must_not := ["_build_lamps", "build_props", "build_vegetation", "_build_signals", "update_signals", "lamps_near", "_group", "_add_mesh",
 		"_surface_material", "build_buildings", "build_trees", "build_roads", "steps"]
 	for tag in must:

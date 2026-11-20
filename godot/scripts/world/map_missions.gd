@@ -10,7 +10,7 @@
 ##             player driving the liaison to the next stage start between them; the rival crews' stage times
 ##             come from a reference run of each stage (pace_time) times their own pace
 ## event() gives the dictionary LiveEvents.begin takes (the live events' own keys plus "mission", "rivals",
-## "grid", "knockout", "lap_length", "laps", "target", "stages"); outcome() turns the finished run into what
+## "grid", "knockout", "lap_length", "laps", "target", "stages", "weather", "mu"); outcome() turns the finished run into what
 ## Missions.record expects.
 class_name MapMissions
 extends RefCounted
@@ -88,6 +88,10 @@ static func event(index: int) -> Dictionary:
 	var ev := {"id": "mission_%s" % m.id, "mission": index, "mkind": kind, "title": String(def.title),
 		"color": Missions.COLOR, "rivals": 0, "grid": "", "knockout": false, "lap_length": 0.0, "laps": 1,
 		"target": int(m.target_pos), "difficulty": String(m.difficulty), "expires": INF}
+	# the mission's weather: OpenWorld puts it on the map for the run, LiveEvents slows the field by its grip
+	var wx := weather_state(String(def.get("weather", "dry")))
+	ev["weather"] = wx.mode
+	ev["mu"] = wx.mu
 	match kind:
 		"drag":
 			var at := float(def.get("at", 0.0))
@@ -140,6 +144,22 @@ static func event(index: int) -> Dictionary:
 	ev.pos = path[0]
 	ev.heading = (path[mini(3, path.size() - 1)] - path[0]).angle()
 	return ev
+
+## A weather mode ("dry", "wet", "snow", "hail", "fog", "variable") as the open world drives it, set up as a race's
+## Race.Weather starts it: {mode, wet, rain, snow, fog (0..1), mu: the grip against a dry road}. mu is Race.grip with
+## road tyres: the better of the medium and the wet compound at that wetness against a dry medium, times the snow,
+## hail and fog factors (fog 0.88, wet 0.82, snow 0.54, dry and variable, which starts dry, 1).
+static func weather_state(mode: String) -> Dictionary:
+	var w := Race.Weather.new(mode, 600.0, SimUtil.Rng.new(1))
+	var ty := Tyres.new()
+	var g := maxf(ty.compound_grip("M", w.wet), ty.compound_grip("W", w.wet)) / ty.compound_grip("M", 0.0)
+	if w.snow > 0.1:
+		g *= 1.0 - w.snow * 0.42
+	if w.hail > 0.1:
+		g *= 1.0 - w.hail * 0.36
+	if w.fog > 0.1:
+		g *= 0.94
+	return {"mode": mode, "wet": w.wet, "rain": w.rain, "snow": w.snow, "fog": w.fog, "mu": minf(g, 1.0)}
 
 ## The rally crews' stage times: [[t stage 0, t stage 1, ...] per rival]. `grips`: each stage's surface grip
 ## (LiveEvents.grip_of), so a gravel stage's reference is as slow as the gravel makes the player.

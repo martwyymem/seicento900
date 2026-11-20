@@ -609,19 +609,19 @@ func begin(ev: Dictionary, car_key: String) -> void:
 	if ev.kind == "race" and int(ev.get("rivals", 0)) > 0:
 		var ro := {"grid": String(ev.get("grid", "")), "knockout": bool(ev.get("knockout", false)),
 			"lap_length": float(ev.get("lap_length", 0.0)), "difficulty": String(ev.get("difficulty", "medium")),
-			"profile": profile(ev, StreetRivals.STEP)}
+			"profile": _weather_profile(profile(ev, StreetRivals.STEP), float(ev.get("mu", 1.0)))}
 		if String(ev.get("grid", "")) == "drag":
 			ro["drag_time"] = drag_time(car_key, float(ev.length))
 		ro["beyond"] = beyond(ev)
 		if ro.beyond.size() >= 2:
-			ro["beyond_profile"] = route_profile(map, ro.beyond, StreetRivals.STEP)
+			ro["beyond_profile"] = _weather_profile(route_profile(map, ro.beyond, StreetRivals.STEP), float(ev.get("mu", 1.0)))
 		run.rivals = StreetRivals.new(ev.path, car_key, int(ev.rivals), seed_value, ro)
 	elif ev.kind == "rally":
 		var grips := []
 		for st in ev.stages:
 			if not st.has("grip"):
 				st["grip"] = grip_of({"path": st.path})
-			grips.append(float(st.grip))
+			grips.append(float(st.grip) * float(ev.get("mu", 1.0))) # a mission's weather (MapMissions.weather_state)
 		run.rally = MapMissions.rally_times(ev, car_key, seed_value, grips)
 	if ev.kind == "rally":
 		_arm(ev.stages[0].path, ev.stages[0].cps)
@@ -629,6 +629,17 @@ func begin(ev: Dictionary, car_key: String) -> void:
 		_arm(ev.path, ev.cps)
 	last_begin = {"ev": ev, "car": car_key}
 	last_result = {}
+
+## A route profile with its grip scaled by the weather's (a mission's mu): the cached profile is left as it is.
+static func _weather_profile(prof: Dictionary, mu: float) -> Dictionary:
+	if is_equal_approx(mu, 1.0) or not prof.has("grip"):
+		return prof
+	var out := prof.duplicate()
+	var g: PackedFloat32Array = (prof.grip as PackedFloat32Array).duplicate()
+	for i in g.size():
+		g[i] *= mu
+	out["grip"] = g
+	return out
 
 ## The run's route followed from its start: the samples, the distance along it of each checkpoint and each
 ## checkpoint's gate {pos, dir, half}.

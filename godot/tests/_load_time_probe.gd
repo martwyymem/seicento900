@@ -36,4 +36,5 @@ func _initialize() -> void:
 	print("Train               %7.0f ms" % ((Time.get_ticks_usec() - b) / 1000.0))
 	print("TOTAL               %7.0f ms" % ((Time.get_ticks_usec() - t0) / 1000.0))
 	print("cache: ", builder.cache_log)
+	builder.wait_for_stores() # the cache files are written on other threads
 	quit()

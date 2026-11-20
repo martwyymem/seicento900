@@ -152,7 +152,7 @@ kept off the roads (`OpenWorld._roads_closed`), the clock jumps to the mission's
 (user, 2026-11-10): the campaign stage list no longer lists them, `Game._on_world_stage` ignores a mission index, and a
 mission whose route is not on the map gets no beacon. The old Bór circuit is not on the map's roads, so the knockout runs one
 lap of Mały Bór cut into sectors (`MapMissions.OFF_MAP`, `ev.sectors`) and the rally leaves the Bór stage out. The game's
-mission race code (`Missions.apply_settings`, `judge`, the mission rally flow) is no longer reached. The campaign stages
+old race-side mission code (`Missions.apply_settings`, `judge`, the mission rally flow) was removed (2026-11-20). The campaign stages
 (circuits, most in other towns) still load their own tracks.
 
 Open-world geometry rules (2026-11-13): streets are drawn by `TownBuilder.ribbon()`; the baker rounds corners between
