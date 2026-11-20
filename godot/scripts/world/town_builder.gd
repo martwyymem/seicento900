@@ -328,8 +328,14 @@ func _take_ahead(tag: String, build: Callable) -> Array:
 		return res
 	var task: int = _ahead_tasks[tag]
 	_ahead_tasks.erase(tag)
-	# its RenderingServer calls wait for the main thread to flush the server's queue: on the main thread (headless), do
-	# that while waiting; a build on a worker thread has the main thread doing it (OpenWorld._build_world)
+	_join_ahead(task)
+	var out: Array = get("_ahead_" + tag)
+	set("_ahead_" + tag, [])
+	return out
+
+## Joins an ahead task. Its RenderingServer calls wait for the main thread to flush the server's queue: on the main
+## thread (headless), do that while waiting; a build on a worker thread has the main thread doing it (OpenWorld._build_world).
+func _join_ahead(task: int) -> void:
 	var on_main := OS.get_thread_caller_id() == OS.get_main_thread_id()
 	while on_main and not WorkerThreadPool.is_task_completed(task):
 		RenderingServer.force_sync()
@@ -337,16 +343,13 @@ func _take_ahead(tag: String, build: Callable) -> Array:
 	WorkerThreadPool.wait_for_task_completion(task)
 	if on_main:
 		RenderingServer.force_sync()
-	var out: Array = get("_ahead_" + tag)
-	set("_ahead_" + tag, [])
-	return out
 
 ## Waits until every step's cache is on disk (the files are written on other threads, see _store_meshes).
 func wait_for_stores() -> void:
 	# a step start_ahead began but nobody took (its cache file turned up meanwhile, from another game or test): join it
 	# and drop what it built, so no pool task outlives the build
 	for tag in _ahead_tasks:
-		WorkerThreadPool.wait_for_task_completion(_ahead_tasks[tag])
+		_join_ahead(_ahead_tasks[tag])
 		set("_ahead_" + tag, [])
 	_ahead_tasks.clear()
 	for id in _store_tasks:
