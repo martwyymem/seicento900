@@ -22,6 +22,10 @@ static var INK: Color:
 	get: return CmrStyle.INK
 const EDGE := 30.0 ## margin from the canvas edge
 const MINIMAP_S := 250.0
+const SPEEDO_W := 320.0 ## bottom-right sweep dash width (fits clear of StoryCard and controls strip)
+const SPEEDO_H := 184.0 ## 164 px sweep + DashGauge.NITRO_BAND underneath
+const SPEEDO_RIGHT := 24.0 ## margin from the right edge
+const SPEEDO_BOTTOM := 14.0 ## margin from the bottom edge
 const BANNERS_W := 500.0
 const CARD_W := 470.0
 const TOWER_W := 250.0 ## the race timing list, top right (set_standings)
@@ -33,7 +37,7 @@ var map_rect := Rect2() ## the map picture in map metres
 var minimap: ColorRect
 var minimap_mat: ShaderMaterial
 var overlay: Control
-var speedo: Control
+var speedo: DashGauge
 var big_map: ColorRect
 var big_map_mat: ShaderMaterial
 var big_overlay: Control
@@ -93,6 +97,7 @@ var stats_box: VBoxContainer
 var _street := ""
 var _street_t := 0.0
 var _area_t := 0.0
+var _clock := 0.0
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -139,19 +144,20 @@ func _build() -> void:
 	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	overlay.draw.connect(_draw_minimap_overlay)
 	minimap.add_child(overlay)
-	# speedometer, bottom right
-	speedo = Control.new()
+	# speedometer, bottom right (shared segmented sweep dash with RaceHud)
+	speedo = DashGauge.new()
+	speedo.reserve_nitro = true
 	speedo.anchor_left = 1.0
 	speedo.anchor_right = 1.0
 	speedo.anchor_top = 1.0
 	speedo.anchor_bottom = 1.0
-	speedo.offset_left = -300
-	speedo.offset_right = -30
-	speedo.offset_top = -230
-	speedo.offset_bottom = -30
+	speedo.offset_left = -(SPEEDO_RIGHT + SPEEDO_W)
+	speedo.offset_right = -SPEEDO_RIGHT
+	speedo.offset_top = -(SPEEDO_BOTTOM + SPEEDO_H)
+	speedo.offset_bottom = -SPEEDO_BOTTOM
 	speedo.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	speedo.draw.connect(_draw_speedo)
 	add_child(speedo)
+	_sync_speedo()
 	# stats, top left
 	var stats := VBoxContainer.new()
 	stats_box = stats
@@ -401,9 +407,10 @@ func set_nitro(level: float, burning: bool) -> void:
 	if absf(level - nitro) > 0.004 or burning != nitro_burning:
 		nitro = level
 		nitro_burning = burning
-		speedo.queue_redraw()
+		_sync_speedo()
 
 func update_drive(kmh: float, g: int, r: float, r_max: float, pos: Vector2, heading: float, dt: float) -> void:
+	_clock += dt
 	speed = kmh
 	gear = g
 	rpm = r
@@ -417,7 +424,7 @@ func update_drive(kmh: float, g: int, r: float, r_max: float, pos: Vector2, head
 	minimap_mat.set_shader_parameter("radius_m", radius)
 	overlay.set_meta("radius", radius)
 	overlay.queue_redraw()
-	speedo.queue_redraw()
+	_sync_speedo()
 	if map_open:
 		map_tick(dt)
 		big_overlay.queue_redraw()
@@ -469,7 +476,7 @@ func _layout() -> void:
 		return
 	var H := size.y
 	var cx := W * 0.5
-	var low := minf(cx - (28.0 + MINIMAP_S + 16.0), (W - 300.0 - 16.0) - cx) # satnav left, speedometer right
+	var low := minf(cx - (28.0 + MINIMAP_S + 16.0), (W - (SPEEDO_RIGHT + SPEEDO_W) - 16.0) - cx) # satnav left, speedometer right
 	_fit_label(street_label, low, 24, 16)
 	_fit_label(help_label, low, 12, 10)
 	# the key help on the bottom edge, the street name just above it
@@ -507,7 +514,7 @@ func _line_h(l: Label) -> float:
 func _fit_card() -> void:
 	if not card.visible or card_body.max_lines_visible <= 2:
 		return
-	var limit := size.y - 230.0 - 12.0
+	var limit := size.y - (SPEEDO_BOTTOM + SPEEDO_H) - 12.0
 	var over := card.position.y + card.size.y - limit
 	if over > 0.5:
 		var lh := card_body.get_line_height() + card_body.get_theme_constant("line_spacing")
@@ -665,7 +672,7 @@ func _skin_changed() -> void:
 			sb.bg_color = Color(CmrStyle.PLATE, 0.88)
 	loading.restyle()
 	overlay.queue_redraw()
-	speedo.queue_redraw()
+	speedo._skin_changed()
 	big_overlay.queue_redraw()
 
 func show_event(sub: String, title: String, body: String, hint: String, color: Color) -> void:
@@ -918,27 +925,14 @@ func _draw_map_legend(at: Vector2) -> void:
 		big_overlay.draw_string(font, Vector2(x + 20.0, at.y + 6.0), entry[2], HORIZONTAL_ALIGNMENT_LEFT, -1, LEGEND_SIZE, Color(1, 1, 1, 0.8))
 		x += 28.0 + font.get_string_size(String(entry[2]), HORIZONTAL_ALIGNMENT_LEFT, -1, LEGEND_SIZE).x + 14.0
 
-func _draw_speedo() -> void:
-	var sz := speedo.size
-	var c := Vector2(sz.x - 110, sz.y - 100)
-	var r := 92.0
-	var start := deg_to_rad(140.0)
-	var sweep := deg_to_rad(260.0)
-	speedo.draw_arc(c, r, start, start + sweep, 64, Color(0, 0, 0, 0.45), 14.0, true)
+func _gear_text() -> String:
+	if gear < 0:
+		return "R"
+	if roundi(absf(speed)) < 1 and rpm <= 1150.0:
+		return "N"
+	return str(gear + 1)
+
+func _sync_speedo() -> void:
 	var frac := clampf(rpm / maxf(rpm_max, 1.0), 0.0, 1.0)
-	var red := frac > 0.88
-	speedo.draw_arc(c, r, start, start + sweep * frac, 64, CmrStyle.RED if red else ORANGE, 10.0, true)
-	for k in 8:
-		var a := start + sweep * k / 7.0
-		speedo.draw_line(c + Vector2(cos(a), sin(a)) * (r - 16), c + Vector2(cos(a), sin(a)) * (r - 6), Color(1, 1, 1, 0.6), 2.0)
-	var digits := CmrStyle.digits()
-	var txt := str(int(round(speed)))
-	speedo.draw_string(digits, c + Vector2(-90, 18), txt, HORIZONTAL_ALIGNMENT_CENTER, 180, 64, Color.WHITE)
-	speedo.draw_string(CmrStyle.font(800), c + Vector2(-90, 44), "KM/H", HORIZONTAL_ALIGNMENT_CENTER, 180, 14, Color(1, 1, 1, 0.7))
-	var g := "R" if gear < 0 else str(gear + 1)
-	speedo.draw_string(CmrStyle.font(900), c + Vector2(-90, 82), g, HORIZONTAL_ALIGNMENT_CENTER, 180, 30, GOLD)
-	if nitro >= 0.0:
-		var bar := Rect2(c + Vector2(-r - 14, r + 4), Vector2(2.0 * r + 28, 8))
-		speedo.draw_rect(bar, Color(0, 0, 0, 0.5))
-		speedo.draw_rect(Rect2(bar.position, Vector2(bar.size.x * nitro, bar.size.y)), Color("#7fe8ff") if nitro_burning else Color("#3aa8ff"))
-		speedo.draw_string(CmrStyle.font(800), bar.position + Vector2(0, -4), "N2O", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.75))
+	var red := DashGauge.is_redline(frac, _clock)
+	speedo.set_state(roundi(absf(speed)), _gear_text(), frac, red, false, nitro, nitro_burning)

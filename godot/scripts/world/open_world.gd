@@ -533,6 +533,9 @@ func _apply_time() -> void:
 	env.fog_sky_affect = 0.85 * fog
 	if fog > 0.0:
 		env.fog_density = lerpf(env.fog_density, FOG_DENSITY, fog)
+		# fog has its own grey, not the sky's: aerial perspective would tint it with the clear sky behind (a blue haze
+		# under a blue sky, not fog)
+		env.fog_aerial_perspective = lerpf(env.fog_aerial_perspective, 0.0, fog)
 		env.fog_light_color = env.fog_light_color.lerp(Color(0.6, 0.62, 0.64) * lerpf(0.05, 1.0, day), 0.75 * fog)
 		env.fog_sun_scatter *= 1.0 - fog
 		sun.light_energy *= lerpf(1.0, 0.55, fog)
@@ -918,7 +921,19 @@ func _start_run(lev: Dictionary) -> void:
 	gps_waypoint = false
 	_spawn_rivals()
 	_live_cp_beacon()
+	_event_beacons(false)
 	_recompute_route()
+
+## The other events' beacons (stages, missions, live events) hidden while a run is driven, as Forza clears its
+## markers: their labels show through walls and one near the route covers the view. The run's own checkpoint
+## beacon and the player's waypoint stay.
+func _event_beacons(on: bool) -> void:
+	if builder == null:
+		return
+	for key in builder.beacon_nodes:
+		var n: Variant = builder.beacon_nodes[key]
+		if n is Node3D and is_instance_valid(n) and key != "live_cp" and key != "waypoint":
+			(n as Node3D).visible = on
 
 ## Ends the run being driven (abandoned: nothing recorded) and puts the world back.
 func _end_run(title := "", sub := "") -> void:
@@ -932,6 +947,7 @@ func _end_run(title := "", sub := "") -> void:
 ## moved put back; the GPS back on the next campaign target (traffic returns by itself once the roads reopen).
 func _after_run() -> void:
 	_live_cp_beacon()
+	_event_beacons(true)
 	if hud:
 		hud.set_live("", "", Color.WHITE)
 		hud.set_standings([], Color.WHITE)
@@ -1217,6 +1233,7 @@ func _spawn_rivals() -> void:
 		tag.visibility_range_begin = 7.0 # not over a car right in front of the camera
 		tag.visibility_range_end = 160.0
 		tag.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		tag.layers = CarReflections.OVERLAY_LAYER # never mirrored in the car's glass
 		node.add_child(tag)
 		_rival_nodes.append(node)
 	_update_rivals(0.0)
@@ -1548,6 +1565,7 @@ func _add_trap_sign(p: Vector2, dir: Vector2, ri: int) -> void:
 	label.position = Vector3(0, 3.7, 0)
 	label.modulate = Color("#9ecbff")
 	label.visibility_range_end = 220.0
+	label.layers = CarReflections.OVERLAY_LAYER # never mirrored in the car's glass
 	node.add_child(label)
 	world.add_child(node)
 	map.add_post(q, 0.15)

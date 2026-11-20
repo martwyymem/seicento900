@@ -22,6 +22,7 @@ func run() -> Array:
 	_check_solo_huds(errors, tree)
 	_check_skins(errors, tree)
 	await _check_open_world_hud(errors, tree)
+	await _check_shared_speedo(errors, tree)
 	await _check_menus(errors, tree)
 	completed = true
 	return errors
@@ -285,10 +286,121 @@ func _check_open_world_hud(errors: Array[String], tree: SceneTree) -> void:
 			"street": _text_rect(hud.street_label, canvas),
 			"key help": _text_rect(hud.help_label, canvas),
 			"satnav": _intended(hud.minimap, canvas),
-			"speedometer": Rect2(canvas.x - 300, canvas.y - 230, 270, 200),
+			"speedometer": _intended(hud.speedo, canvas),
 		}
 		_no_overlap(errors, "open-world HUD", rects, canvas)
 		host.free()
+
+## Both HUDs draw their speedometer through the shared DashGauge sweep: verifies OpenWorldHud renders speed,
+## KM/H, GEAR (N / R / forward), redline white segments and the N2O bar inside its bounds across skins and
+## resolutions (720p, 1080p, 16:9, scaled) without overlapping the controls strip or street plate.
+func _check_shared_speedo(errors: Array[String], tree: SceneTree) -> void:
+	var host := _host(tree, Vector2(1600, 900))
+	var rhud := RaceHud.new()
+	host.add_child(rhud)
+	var ow := OpenWorldHud.new()
+	host.add_child(ow)
+	if not (rhud.dash is DashGauge and ow.speedo is DashGauge):
+		errors.append("shared speedo: RaceHud.dash and OpenWorldHud.speedo must both be DashGauge")
+		host.free()
+		return
+	var drawn: Array = []
+	ow.speedo.audit_fn = func(c: Control, f: Font, at: Vector2, s: String, align: int, width: float, fs: int) -> void:
+		drawn.append([c, f, at, s, align, width, fs])
+	# neutral at idle
+	ow.update_drive(0.0, 0, 850.0, 6500.0, Vector2.ZERO, 0.0, 0.0)
+	await _settle(tree, 2)
+	var texts := _audit_texts(drawn)
+	for want in ["0", "KM/H", "GEAR", "N"]:
+		if want not in texts:
+			errors.append("shared speedo (idle): expected '%s' in %s" % [want, texts])
+	if "N2O" in texts:
+		errors.append("shared speedo (idle): N2O should stay hidden when nitro < 0")
+	# reverse
+	drawn.clear()
+	ow.update_drive(14.0, -1, 2400.0, 6500.0, Vector2.ZERO, 0.0, 0.016)
+	await _settle(tree, 2)
+	texts = _audit_texts(drawn)
+	for want in ["14", "R"]:
+		if want not in texts:
+			errors.append("shared speedo (reverse): expected '%s' in %s" % [want, texts])
+	# forward + redline flash + N2O bar across every retro skin
+	for skin in ["cmr", "ps1", "mw", "sa", "carbon", "fh1"]:
+		CmrStyle.apply_skin(skin, host)
+		drawn.clear()
+		ow._clock = 0.01 # inside the redline flash-on half-cycle
+		ow.set_nitro(0.65, true)
+		ow.update_drive(137.0, 4, 6400.0, 6500.0, Vector2.ZERO, 0.0, 0.0)
+		await _settle(tree, 2)
+		texts = _audit_texts(drawn)
+		for want in ["137", "KM/H", "GEAR", "5", "N2O"]:
+			if want not in texts:
+				errors.append("shared speedo (%s redline+nitro): expected '%s' in %s" % [skin, want, texts])
+		if ow.speedo._points.size() != DashGauge.SEGMENTS * 4 or ow.speedo._indices.size() != DashGauge.SEGMENTS * 6:
+			errors.append("shared speedo (%s): unexpected segment mesh (%d pts)" % [skin, ow.speedo._points.size()])
+		var has_white := false
+		for col in ow.speedo._colors:
+			if col.is_equal_approx(Color.WHITE):
+				has_white = true
+				break
+		if not has_white:
+			errors.append("shared speedo (%s): redline segments did not flash white" % skin)
+		var panel := Rect2(Vector2.ZERO, ow.speedo.size).grow(1.5)
+		var boxes: Array[Rect2] = []
+		var labels: Array[String] = []
+		for t: Array in drawn:
+			var f: Font = t[1]
+			var at: Vector2 = t[2]
+			var s: String = t[3]
+			var align: int = t[4]
+			var limit: float = t[5]
+			var fs: int = t[6]
+			var w := f.get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+			if limit >= 0.0 and w > limit + 1.0:
+				errors.append("shared speedo (%s): '%s' (%d px) exceeds %d px box" % [skin, s, w, limit])
+			var left := at.x
+			if limit >= 0.0:
+				if align == HORIZONTAL_ALIGNMENT_RIGHT:
+					left += limit - w
+				elif align == HORIZONTAL_ALIGNMENT_CENTER:
+					left += (limit - w) * 0.5
+			var box := Rect2(left, at.y - fs * 0.75, minf(w, limit) if limit >= 0.0 else w, fs * 0.95)
+			if not panel.encloses(box):
+				errors.append("shared speedo (%s): '%s' %s leaves speedo %s" % [skin, s, box, ow.speedo.size])
+			boxes.append(box)
+			labels.append(s)
+		for i in boxes.size():
+			for j in range(i + 1, boxes.size()):
+				var cut := boxes[i].grow_individual(0, -3, 0, -3).intersection(boxes[j].grow_individual(0, -3, 0, -3))
+				if cut.size.x > 2.0 and cut.size.y > 1.0:
+					errors.append("shared speedo (%s): '%s' overlaps '%s'" % [skin, labels[i], labels[j]])
+	CmrStyle.apply_skin("cmr")
+	host.free()
+	# 720p, 1080p and scaled canvases: speedo stays clear of controls strip, street plate, satnav and event card
+	for canvas: Vector2 in [Vector2(1280, 720), Vector2(1600, 900), Vector2(1920, 1080), Vector2(1231, 692)]:
+		var h2 := _host(tree, canvas)
+		var hud := OpenWorldHud.new()
+		h2.add_child(hud)
+		hud.set_street("Ulica Księdza Józefa Stanisława Kaczmarczyka")
+		hud.set_nitro(0.5, false)
+		hud.show_event("LIVE", "S1 Sprint", "Flat out down the S1 carriageway. ".repeat(6), "ENTER  ▸  START", CmrStyle.ORANGE)
+		await _settle(tree, 4)
+		hud._layout()
+		var rects := {
+			"speedometer": _intended(hud.speedo, canvas),
+			"satnav": _intended(hud.minimap, canvas),
+			"key help": _text_rect(hud.help_label, canvas),
+			"street plate": _intended(hud.street_plate, canvas),
+			"event card": Rect2(hud.card.position, hud.card.size),
+		}
+		_no_overlap(errors, "open-world speedo", rects, canvas)
+		h2.free()
+
+static func _audit_texts(drawn: Array) -> Array[String]:
+	var out: Array[String] = []
+	for t: Array in drawn:
+		out.append(String(t[3]))
+	return out
 
 ## The part of a centred label its text covers (at the font size _layout picked).
 static func _text_rect(l: Label, canvas: Vector2) -> Rect2:

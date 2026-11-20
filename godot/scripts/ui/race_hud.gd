@@ -76,7 +76,7 @@ var banner: Label
 var banner_small: Label
 var feed: Control
 var pitwall: Control
-var dash: Control
+var dash: DashGauge
 var minimap: Control
 var minimap_base: Control ## the map's backdrop, line and flags under minimap's dots, redrawn only when they change
 var tags: Control
@@ -136,10 +136,6 @@ var _map_waters: Array[PackedVector2Array] = []
 var _map_buildings: Array[PackedVector2Array] = []
 var _dash_key := [] ## what the dash last drew (size, lit segments, gear, speed)
 var _note_key := [] ## what the pace note last drew (race, the notes up, the sector between notes)
-var _dash_points := PackedVector2Array() ## the rev band's segments and their outlines, built once per size
-var _dash_colors := PackedColorArray()
-var _dash_indices := PackedInt32Array()
-var _dash_size := Vector2.ZERO
 ## Batching: every polygon, circle, arc and polyline drawn on its own is a separate draw call, and text
 ## between them breaks the glyph batches too (the HUD came to over 500 draw calls a frame). The busy
 ## panels gather their flat shapes into one triangle list (_tri_*), draw circles from small textures
@@ -211,7 +207,10 @@ func _ready() -> void:
 	_place(feed, 1.0, 0.0, 1.0, 0.0, -14 - FEED_W, 428, -14, 700)
 	pitwall = _canvas(_draw_pitwall)
 	_place(pitwall, 0.0, 1.0, 0.0, 1.0, 14, -214, 14 + PITWALL_W, -14)
-	dash = _canvas(_draw_dash)
+	dash = DashGauge.new()
+	dash.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	dash.audit_fn = _audit_text
+	add_child(dash)
 	_place(dash, 1.0, 1.0, 1.0, 1.0, -360, -190, -14, -14)
 
 	_overtake_control = _canvas(_draw_overtake)
@@ -350,7 +349,9 @@ func update(dt: float) -> void:
 	var dash_key = _dash_state()
 	if dash_key is Array and dash_key != _dash_key:
 		_dash_key = dash_key
-		dash.queue_redraw()
+		if dash_key.size() >= 6:
+			var frac := clampf(race.player.rpm / race.spec.limiter, 0.0, 1.0)
+			dash.set_state(int(dash_key[3]), String(dash_key[2]), frac, bool(dash_key[4]), bool(dash_key[5]))
 	if co_driver:
 		co_driver.voice_on = voice_on
 		co_driver.update(audio != null and audio.muted, warp)
@@ -678,7 +679,8 @@ func _skin_changed() -> void:
 	for b in [banner, banner_small]:
 		if b:
 			(b as Label).add_theme_color_override("font_outline_color", _shade(0.9))
-	_dash_size = Vector2.ZERO
+	if dash:
+		dash._skin_changed()
 	_dash_key = []
 	_note_key = []
 	_map_key = ""
@@ -1576,13 +1578,11 @@ func _draw_pitwall() -> void:
 	_flush_badges(pitwall)
 	_q_flush(pitwall)
 
-# ---------------- dash ----------------
 # ---------------- dash (bottom right) ----------------
-## CMR 2.0 rev counter: slanted segments rising along a curve (cyan, amber near the top, red at the
-## limiter), rpm figures underneath, the gear as one big digit and the speed beside it.
-const DASH_SEGMENTS := 26
+## CMR 2.0 rev counter: drawn by the shared DashGauge control (also used by OpenWorldHud).
+const DASH_SEGMENTS := DashGauge.SEGMENTS
 
-## What the dash shows: [size, segments lit, gear, km/h]. It is only redrawn when this changes.
+## What the dash shows: [size, segments lit, gear, km/h, redline, drafting]. It is only redrawn when this changes.
 func _dash_state() -> Array:
 	if not race:
 		return []
@@ -1594,71 +1594,10 @@ func _dash_state() -> Array:
 	elif kmh < 1 and p.control == "free" and p.throttle < 0.05:
 		gear = "N"
 	var frac := clampf(p.rpm / race.spec.limiter, 0.0, 1.0)
-	# segment i is lit while (i + 0.78) / n <= frac + 0.03
-	var lit := clampi(floori((frac + 0.03) * DASH_SEGMENTS - 0.78) + 1, 0, DASH_SEGMENTS)
-	var redline: bool = frac >= 0.91 and fmod(_clock * 12.0, 1.0) < 0.5
+	var lit := DashGauge.lit_segments(frac)
+	var redline := DashGauge.is_redline(frac, _clock)
 	var drafting: bool = p.tow > 0.18
 	return [dash.size, lit, gear, kmh, redline, drafting]
-
-## The rev band: slanted segments along a curve that rises and thickens toward the redline (CMR's swoosh).
-func _build_dash(W: float, H: float) -> void:
-	_dash_size = Vector2(W, H)
-	var n := DASH_SEGMENTS
-	var arc_w := W - 84.0
-	var bottom := H - 8.0
-	_dash_points = PackedVector2Array()
-	_dash_colors = PackedColorArray()
-	_dash_indices = PackedInt32Array()
-	for i in n:
-		var t0 := float(i) / n
-		var t1 := (i + 0.78) / n
-		var p0 := Vector2(arc_w * t0, bottom - 96.0 * pow(t0, 2.6))
-		var p1 := Vector2(arc_w * t1, bottom - 96.0 * pow(t1, 2.6))
-		var d := (p1 - p0).normalized()
-		var up := Vector2(d.y, -d.x)
-		var poly := PackedVector2Array([p0, p1, p1 + up * (10.0 + 22.0 * t1), p0 + up * (10.0 + 22.0 * t0)])
-		var k := _dash_points.size()
-		_dash_points.append_array(poly)
-		for j in 4:
-			_dash_colors.append(Color.WHITE)
-		_dash_indices.append_array(PackedInt32Array([k, k + 1, k + 2, k, k + 2, k + 3]))
-
-func _draw_dash() -> void:
-	if not race:
-		return
-	var W := dash.size.x
-	var H := dash.size.y
-	var state := _dash_state()
-	var lit: int = state[1]
-	var redline: bool = state[4] if state.size() > 4 else false
-	var drafting: bool = state[5] if state.size() > 5 else false
-
-	if _dash_size != dash.size:
-		_build_dash(W, H)
-	var n := DASH_SEGMENTS
-	for i in n:
-		var t0 := float(i) / n
-		var col := Color(CmrStyle.TEXT, 0.2)
-		if i < lit:
-			if redline and t0 >= 0.85:
-				col = Color.WHITE
-			else:
-				col = RED if t0 >= 0.9 else (YELLOW if t0 >= 0.78 else BLUE)
-		for j in 4:
-			_dash_colors[i * 4 + j] = col
-	RenderingServer.canvas_item_add_triangle_array(dash.get_canvas_item(), _dash_indices, _dash_points, _dash_colors)
-
-	# the speed sits above the low end of the swoosh, the gear in the column its high end leaves free
-	_q(Vector2(0, 74), "%d" % state[3], 88, TEXT, _digits, HORIZONTAL_ALIGNMENT_LEFT, W - 90, true)
-	_q(Vector2(0, 100), "KM/H", 17, MUTED, _bold, HORIZONTAL_ALIGNMENT_LEFT, 80, true)
-	var gear_col := RED if redline else (YELLOW if state[2] != "N" else MUTED)
-	_q(Vector2(W - 84, H - 22), state[2], 72, gear_col, _bold, HORIZONTAL_ALIGNMENT_CENTER, 84, true)
-	_q(Vector2(W - 84, H - 94), "GEAR", 12, MUTED, _bold, HORIZONTAL_ALIGNMENT_CENTER, 84, true)
-
-	if drafting:
-		_q(Vector2(0, 16), "SLIPSTREAM", 12, BLUE, _bold, HORIZONTAL_ALIGNMENT_RIGHT, W, true)
-
-	_q_flush(dash)
 
 func _build_map() -> void:
 	var tr := race.track

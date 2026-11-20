@@ -3744,6 +3744,7 @@ func add_beacon(name: String, p: Vector2, color: Color, label_text: String) -> N
 	label.fixed_size = false
 	label.position = Vector3(0, 9.0, 0)
 	label.visibility_range_end = 450.0
+	label.layers = CarReflections.OVERLAY_LAYER # seen, never mirrored in the car parked under it
 	node.add_child(label)
 	root.add_child(node)
 	beacon_nodes[name] = node

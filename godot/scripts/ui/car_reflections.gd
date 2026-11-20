@@ -8,6 +8,9 @@ class_name CarReflections
 extends ReflectionProbe
 
 const CAR_LAYER := 1 << 19 ## render layer 20: the followed car, left out of its own reflections
+## render layer 19: overlays the cameras show but no paint or glass should mirror (beacon titles hanging over a stage
+## spot: from the probe inside a car parked under one they filled the windscreen and rear glass with mirrored lettering)
+const OVERLAY_LAYER := 1 << 18
 const RESNAP := 14.0 ## m the car moves before the reflections are drawn again
 const MAX_AGE := 5.0 ## s between redraws when the car stands still (the hour, lamps switching on)
 
@@ -28,7 +31,7 @@ func _init() -> void:
 	intensity = 1.0
 	blend_distance = 30.0
 	mesh_lod_threshold = 4.0
-	cull_mask = 0xFFFFF & ~CAR_LAYER
+	cull_mask = 0xFFFFF & ~CAR_LAYER & ~OVERLAY_LAYER
 
 ## Follows car (null stops). The car before it goes back to the ordinary render layer.
 func follow(car: Node3D) -> void:
