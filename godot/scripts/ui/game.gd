@@ -3366,6 +3366,8 @@ func _apply_upscaling() -> void:
 	if not is_instance_valid(render_viewport):
 		return
 	var mode: int = UPSCALERS[graphics_upscaler].mode
+	if _compat_renderer() and mode != Viewport.SCALING_3D_MODE_BILINEAR:
+		mode = Viewport.SCALING_3D_MODE_BILINEAR # FSR/MetalFX need Forward+ (an old GPU on OpenGL: plain scaling)
 	render_viewport.scaling_3d_mode = mode
 	render_viewport.scaling_3d_scale = 1.0 if graphics_upscaler == 0 else UPSCALE_PRESETS[graphics_upscale_preset].scale
 	render_viewport.fsr_sharpness = SHARPENING[graphics_sharpening].value
@@ -3521,14 +3523,20 @@ func _on_antialiasing_selected(index: int) -> void:
 	_apply_antialiasing()
 	_save_graphics_settings()
 
+## The OpenGL Compatibility renderer (an old GPU without Vulkan, or --rendering-driver opengl3): no FSR, MetalFX or
+## screen-space AA there.
+static func _compat_renderer() -> bool:
+	return RenderingServer.get_current_rendering_method() == "gl_compatibility"
+
 func _apply_antialiasing() -> void:
 	if not is_instance_valid(render_viewport):
 		return
 	# temporal upscalers anti-alias the image themselves
 	var temporal := render_viewport.scaling_3d_mode in [Viewport.SCALING_3D_MODE_FSR2, Viewport.SCALING_3D_MODE_METALFX_TEMPORAL]
+	var compat := _compat_renderer() # screen-space AA needs Forward+ or Mobile
 	if is_instance_valid(antialiasing_picker):
-		antialiasing_picker.disabled = temporal
-	if temporal:
+		antialiasing_picker.disabled = temporal or compat
+	if temporal or compat:
 		render_viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
 		return
 	match graphics_antialiasing:
@@ -3557,7 +3565,7 @@ func _apply_world_graphics_settings() -> void:
 	var environment := world_view.get("world_environment") as Environment
 	if environment:
 		environment.ssao_enabled = graphics_ssao
-		environment.ssr_enabled = graphics_reflections == 1
+		environment.ssr_enabled = graphics_reflections == 1 and not _compat_renderer() # SSR is Forward+ only
 	var ray_tracing := world_view.get("ray_tracing") as RayTracing
 	if ray_tracing:
 		ray_tracing.enabled = graphics_reflections == 2

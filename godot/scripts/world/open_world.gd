@@ -160,7 +160,7 @@ func _ready() -> void:
 	viewport.own_world_3d = true
 	viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	viewport.msaa_3d = Viewport.MSAA_2X
-	viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
+	viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA if RenderingServer.get_current_rendering_method() != "gl_compatibility" else Viewport.SCREEN_SPACE_AA_DISABLED # Forward+ / Mobile only
 	viewport.positional_shadow_atlas_size = 2048
 	add_child(viewport)
 	view = TextureRect.new()
@@ -409,7 +409,7 @@ func apply_graphics(level: int, ssao := true, reflections_mode := -1) -> void:
 			else DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	if env:
 		env.ssao_enabled = ssao
-		env.ssr_enabled = (int(p.reflections) if reflections_mode < 0 else reflections_mode) > 0
+		env.ssr_enabled = (int(p.reflections) if reflections_mode < 0 else reflections_mode) > 0 and RenderingServer.get_current_rendering_method() != "gl_compatibility" # SSR is Forward+ only
 		env.ssil_enabled = bool(p.get("ssil", false))
 	if reflections:
 		reflections.visible = bool(p.get("car_reflections", false))

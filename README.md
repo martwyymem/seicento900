@@ -101,6 +101,26 @@ Menus use the arrow keys, Enter and Esc, or the gamepad's d-pad, A and B.
    godot --headless --path godot -s tests/run_tests.gd
    ```
 
+### Running on NixOS
+
+The repository is a flake (`flake.nix`, pinned in `flake.lock`) with Godot 4.7.2 from nixpkgs:
+
+```sh
+nix run                       # the game (= godot --path godot); extra args go to Godot
+nix develop                   # shell with `godot` and python3 + numpy for tools/
+nix-shell                     # the same shell without flakes (shell.nix, via flake-compat)
+```
+
+Godot 4.5+ for x86_64 is compiled for SSE4.2, so on older CPUs without it (AMD K10/Llano such as
+the E2-3000M, Intel Core 2) both nixpkgs' and the official binary die with `Illegal instruction`.
+For those use the `nosse42` variants (`nix run .#nosse42`, `nix develop .#nosse42`,
+`nix-shell -A nosse42`). They rebuild Godot from source at the SSE3 baseline without LTO, which takes hours the
+first time. On a GPU without Vulkan (pre-GCN Radeons and other old GPUs) Godot picks Mesa's
+software Vulkan (lavapipe, `llvmpipe` in the log), which draws nothing for minutes. Use the
+OpenGL Compatibility renderer there: `nix run .#nosse42` does by default, and
+`SEICENTO_RENDERING_DRIVER=opengl3 nix run` (or `godot --path godot --rendering-driver opengl3`)
+does it for the standard build. The headless tests need no GPU.
+
 Optional: `python3 tools/fetch_assets.py` downloads CC0 HDRI skies and photo textures from Poly Haven
 for extra detail. The game looks complete without them.
 
