@@ -186,6 +186,7 @@ var camera_snap := true
 var _cam_head := 0.0
 ## Free look (right stick, B / R3 to look back, right-mouse drag) for the chase and on-car cameras
 var look := CameraLook.new()
+var _chase_pivot := Vector3.ZERO ## the car the chase base was eased about last frame
 var _chase_base := Vector3.ZERO ## the chase camera's eased spot before the free look swings it round the car
 var _last_cam_mode := -1 ## the mode _update_camera ran in last frame (_chase_base is only good after a chase frame)
 var _focus_pos := Vector3.ZERO
@@ -782,12 +783,12 @@ func _update_camera(delta: float) -> void:
 	var fwd := Vector3(cos(_cam_head), 0.0, sin(_cam_head))
 	var v := Vector2(player.vx, player.vy).length()
 	# the view opens out with speed, easing in off the line and settling by top speed rather than at a hard cap
-	var fov := 60.0 + 16.0 * smoothstep(4.0, 44.0, v)
+	var fov := 56.0 + 12.0 * smoothstep(4.0, 50.0, v) # (60-76 deg made the car a speck at speed on wide screens)
 
 	match camera_mode:
 		0, 1: # chase / far chase
 			var far := camera_mode == 1
-			var dist: float = (11.5 if far else 6.2) + float(CarCatalog.visual(race.s.car_class if race else "stock").get("chase_back", 0.0)) # the same gap behind a longer tail
+			var dist: float = (10.0 if far else 5.4) + float(CarCatalog.visual(race.s.car_class if race else "stock").get("chase_back", 0.0)) # the same gap behind a longer tail
 			var height := 4.6 if far else 2.2
 			var want := p - fwd * dist + Vector3.UP * height
 			# never dip under the road over a crest
@@ -796,7 +797,12 @@ func _update_camera(delta: float) -> void:
 				want.y += sin(Time.get_ticks_msec() * 0.05) * (v - 26.0) * 0.001
 			if snap or was_mode not in [0, 1]:
 				_chase_base = camera.global_position
-			_chase_base = _chase_base.lerp(want, _ease(7.0 if far else 10.0, delta, snap))
+			# eased about the car (the offset, not the world point, which trailed it by speed / rate at speed)
+			if not snap and was_mode in [0, 1]:
+				_chase_base = p + (_chase_base - _chase_pivot).lerp(want - p, _ease(7.0 if far else 10.0, delta, snap))
+			else:
+				_chase_base = _chase_base.lerp(want, _ease(7.0 if far else 10.0, delta, snap))
+			_chase_pivot = p
 			var view := look.turn(fwd)
 			var spot := look.orbit(p, _chase_base)
 			if look.active():

@@ -91,6 +91,7 @@ var shift_down := false
 var gamepad_device := -1
 var cam_mode := 0
 var cam_pos := Vector3.ZERO
+var cam_off := Vector3(0.0, 1.75, 5.0) ## the chase camera's eased offset from the car (cam_pos = car + this)
 var cam_vel_dir := Vector2.RIGHT
 ## Free look (right stick, B / R3 to look back, right-mouse drag); the chase cameras orbit the car with it
 var look := CameraLook.new()
@@ -1565,7 +1566,8 @@ func snap_camera() -> void:
 	_prev_pos = Vector3(drive.car.x, drive.z, drive.car.y)
 	_prev_heading = drive.car.heading
 	var f := Vector3(cos(drive.car.heading), 0.0, sin(drive.car.heading))
-	cam_pos = _prev_pos - f * 7.0 + Vector3.UP * 2.6
+	cam_pos = _prev_pos - f * 5.0 + Vector3.UP * 1.75
+	cam_off = cam_pos - _prev_pos
 	cam_vel_dir = Vector2(f.x, f.z)
 	_chase_cam = null # snaps to the car's new spot
 	look.reset()
@@ -2204,11 +2206,12 @@ func _update_camera(delta: float) -> void:
 	var at_car := smoothstep(0.0, 1.2, absf(look.yaw)) * 0.7
 	match cam_mode:
 		1:
-			var target := p - d3 * 10.5 + Vector3.UP * 3.6
-			cam_pos = cam_pos.lerp(target, 1.0 - exp(-delta * 5.0))
+			var target := p - d3 * (8.5 + float(CarCatalog.visual(String(car_visual.car_key)).get("chase_back", 0.0))) + Vector3.UP * 3.2
+			cam_off = cam_off.lerp(target - p, 1.0 - exp(-delta * 6.0))
+			cam_pos = p + cam_off
 			camera.position = _clear_of_walls(p, look.orbit(p, cam_pos), delta, look.cut)
 			camera.look_at((p + view * 5.0 * cos(look.pitch) + Vector3.UP * 1.0).lerp(p + Vector3.UP * 0.8, at_car), Vector3.UP)
-			camera.fov = HudLayout.camera_fov_for(camera, 66.0 + kmh * 0.06)
+			camera.fov = HudLayout.camera_fov_for(camera, 58.0 + smoothstep(10.0, 200.0, kmh) * 10.0)
 		2:
 			camera.global_transform = car_visual.global_transform * Transform3D(Basis(), Vector3(0.0, 1.22, -0.35))
 			camera.rotate_object_local(Vector3.RIGHT, deg_to_rad(-2.0))
@@ -2217,15 +2220,20 @@ func _update_camera(delta: float) -> void:
 				camera.rotate_object_local(Vector3.RIGHT, -look.pitch)
 			camera.fov = HudLayout.camera_fov_for(camera, 78.0 + kmh * 0.05)
 		_:
-			var back := 6.0 + kmh * 0.012
-			var target := p - d3 * back + Vector3.UP * (2.15 + kmh * 0.004)
-			cam_pos = cam_pos.lerp(target, 1.0 - exp(-delta * 7.0))
+			# close in, Forza style: the offset from the car is what eases (a lerp of the world position trailed the
+			# car by speed / rate, 7 m more at 180 km/h, and with 8 m of boom and an 84 deg view the car was a dot,
+			# 2026-11-21); a longer car sits its own chase_back further out
+			var tail := float(CarCatalog.visual(String(car_visual.car_key)).get("chase_back", 0.0))
+			var back := 4.1 + tail + kmh * 0.004
+			var target := p - d3 * back + Vector3.UP * (1.6 + kmh * 0.0015)
+			cam_off = cam_off.lerp(target - p, 1.0 - exp(-delta * 9.0))
+			cam_pos = p + cam_off
 			# keep it out of the walls and buildings (shortened or swung aside, ChaseCam) and above the ground
 			var spot := _clear_of_walls(p, look.orbit(p, cam_pos), delta, look.cut)
 			spot.y = maxf(spot.y, map.ground(spot.x, spot.z) + 0.8)
 			camera.position = spot
-			camera.look_at((p + view * 3.5 * cos(look.pitch) + Vector3.UP * 1.05).lerp(p + Vector3.UP * 0.8, at_car), Vector3.UP)
-			camera.fov = lerpf(camera.fov, HudLayout.camera_fov_for(camera, 70.0 + clampf(kmh, 0.0, 140.0) * 0.1), 1.0 - exp(-delta * 3.0))
+			camera.look_at((p + view * 4.0 * cos(look.pitch) + Vector3.UP * 0.95).lerp(p + Vector3.UP * 0.8, at_car), Vector3.UP)
+			camera.fov = lerpf(camera.fov, HudLayout.camera_fov_for(camera, 54.0 + smoothstep(10.0, 200.0, kmh) * 11.0), 1.0 - exp(-delta * 3.0))
 	if weather_fx:
 		weather_fx.place(camera)
 

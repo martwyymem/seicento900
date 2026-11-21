@@ -285,7 +285,8 @@ func _make_drag(start: Dictionary) -> Dictionary:
 		if wide:
 			var ev := _make("drag", path, PackedVector2Array([path[path.size() - 1]]), _street(start))
 			# three abreast where four would hang over the kerbs (StreetRivals.drag_rivals_fit)
-			ev.rivals = mini(int(ev.rivals), StreetRivals.drag_rivals_fit(narrow))
+			if not ev.is_empty():
+				ev.rivals = mini(int(ev.rivals), StreetRivals.drag_rivals_fit(narrow))
 			return ev
 	return {}
 

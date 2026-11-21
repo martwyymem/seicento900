@@ -17,6 +17,7 @@ const EASE := 10.0 ## 1/s
 var pos := Vector3.ZERO
 var _swing := 0.0
 var _ready := false
+var _pivot := Vector3.ZERO ## the pivot pos was eased about last frame
 
 ## The camera position for this frame. pivot: the car (look-at height); desired: the free camera point.
 func update(map, pivot: Vector3, desired: Vector3, delta: float, snap := false) -> Vector3:
@@ -24,6 +25,7 @@ func update(map, pivot: Vector3, desired: Vector3, delta: float, snap := false) 
 	var want_len := off.length()
 	if want_len < 0.01:
 		pos = desired
+		_pivot = pivot
 		return pos
 	var dir := off / want_len
 	var walls: Array[PackedFloat32Array] = map.walls_near(Vector2(pivot.x, pivot.z) + dir * want_len * 0.5, want_len * 0.5 + MARGIN + 1.0)
@@ -52,7 +54,9 @@ func update(map, pivot: Vector3, desired: Vector3, delta: float, snap := false) 
 		pos = spot
 		_ready = true
 	else:
-		pos = pos.lerp(spot, 1.0 - exp(-delta * EASE))
+		# eased relative to the car (pivot moved since last frame: _pivot): easing the world point trailed it by
+		# speed / EASE, metres at speed (2026-11-21)
+		pos = pivot + (pos - _pivot).lerp(spot - pivot, 1.0 - exp(-delta * EASE))
 		# the eased point must never be through a wall: pull it in at once along its own line
 		var po := Vector2(pos.x - c.x, pos.z - c.y)
 		var pl := po.length()
@@ -60,6 +64,7 @@ func update(map, pivot: Vector3, desired: Vector3, delta: float, snap := false) 
 			var cl := _clear(c, po / pl, pl, guards, rings)
 			if cl < pl - 0.001:
 				pos = Vector3(c.x + po.x / pl * cl, pos.y, c.y + po.y / pl * cl)
+	_pivot = pivot
 	return pos
 
 func _rings(map, at: Vector2, r: float) -> Array:
