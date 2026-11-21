@@ -13,7 +13,7 @@ func run() -> Array:
 		veg.free()
 		completed = true
 		return errors
-	for kind in ["GrassPatch", "GrassPatchLow", "WheatPatch", "WheatPatchLow", "Corn", "Flower", "BushCluster"]:
+	for kind in ["GrassPatch", "GrassPatchLow", "WheatPatch", "WheatPatchLow", "WheatFar", "Corn", "CornFar", "Flower", "BushCluster"]:
 		if not veg.meshes.has(kind):
 			errors.append("roadside.glb has no %s mesh (rebuild tools/blender/build_roadside.py)" % kind)
 	# a wheat field and a maize field found in the land map
@@ -29,6 +29,26 @@ func run() -> Array:
 	veg.plant_all()
 	if int(veg.counts.get("WheatPatchLow", 0)) < 500:
 		errors.append("only %d wheat patches around a wheat field" % int(veg.counts.get("WheatPatchLow", 0)))
+	if int(veg.counts.get("WheatFar", 0)) < 100:
+		errors.append("only %d far wheat tufts around a wheat field" % int(veg.counts.get("WheatFar", 0)))
+	# Wola maize field: dense row-planted near Corn + far CornFar fill, with draw ranges scaling with ow_draw_scale
+	var corn := Vector2(-1901.0, -2959.0)
+	veg.update_around(corn)
+	veg.plant_all()
+	if int(veg.counts.get("Corn", 0)) < 5000:
+		errors.append("only %d maize patches around Wola cornfield (expected dense rows)" % int(veg.counts.get("Corn", 0)))
+	if int(veg.counts.get("CornFar", 0)) < 500:
+		errors.append("only %d far maize tufts around Wola cornfield" % int(veg.counts.get("CornFar", 0)))
+	var corn_r1 := _first_range(veg, "Corn")
+	var cfar_r1 := _first_range(veg, "CornFar")
+	veg.set_draw_scale(0.6)
+	var corn_r0 := _first_range(veg, "Corn")
+	var cfar_r0 := _first_range(veg, "CornFar")
+	if corn_r1 <= 0.0 or corn_r0 >= corn_r1 * 0.85:
+		errors.append("set_draw_scale(0.6) did not shorten Corn range (%.1f -> %.1f)" % [corn_r1, corn_r0])
+	if cfar_r1 <= 0.0 or cfar_r0 >= cfar_r1 * 0.75:
+		errors.append("set_draw_scale(0.6) did not shorten CornFar range (%.1f -> %.1f)" % [cfar_r1, cfar_r0])
+	veg.set_draw_scale(1.0)
 	# a meadow carpet: grass patches near the town's open ground, the dense ones only nearest the camera
 	veg.update_around(Vector2(1500.0, -1200.0))
 	veg.plant_all()
@@ -46,6 +66,8 @@ func run() -> Array:
 		var sp: Array = map.spots[spot]
 		veg.update_around(Vector2(sp[0], sp[1]))
 		veg.plant_all()
+	veg.update_around(corn)
+	veg.plant_all()
 	var r := _plants_on_road(veg, map)
 	on_road += r[0]
 	checked += r[1]
@@ -75,10 +97,17 @@ func run() -> Array:
 static func _plants_on_road(veg, map: TownMap) -> Array:
 	var on_road := 0
 	var checked := 0
-	for kind in ["GrassPatchLow", "Flower", "BushCluster"]:
+	for kind in ["GrassPatchLow", "Flower", "BushCluster", "Corn", "CornFar", "WheatPatchLow", "WheatFar"]:
 		for o in veg.recorded.get(kind, PackedVector3Array()):
 			checked += 1
 			var hit: Dictionary = map.road_at(o.x, o.z, -INF, 0.75)
 			if (not hit.is_empty() and float(hit.deck) < 1.0) or map.kerb_at(o.x, o.z) > 0.0:
 				on_road += 1
 	return [on_road, checked]
+
+static func _first_range(veg, kind: String) -> float:
+	for k in veg.cells:
+		for ch in (veg.cells[k] as Node3D).get_children():
+			if ch is MultiMeshInstance3D and String(ch.name) == kind:
+				return (ch as MultiMeshInstance3D).visibility_range_end
+	return -1.0

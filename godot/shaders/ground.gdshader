@@ -125,12 +125,29 @@ void fragment() {
 		vec2 luv = (p - land_origin) / land_size;
 		if (luv.x > 0.0 && luv.y > 0.0 && luv.x < 1.0 && luv.y < 1.0) {
 			vec4 lm = texture(land_map, luv);
-			// farmland: G is 0.35-1 in a field, its value the field's crop; rows in the tractor's direction
+			// farmland: G is 0.35-1 in a field, its value the field's crop; smooth anti-aliased rows + leafy canopy fill
+			// so maize and wheat fields never show bare flat soil between stalks or past the far LOD ring
 			float field = smoothstep(0.12, 0.3, lm.g);
 			float crop = clamp((lm.g - 0.35) / 0.65, 0.0, 1.0);
 			vec3 farm = crop < 0.45 ? farm_color_b : (crop < 0.75 ? farm_color_a : farm_color_c);
 			farm *= 0.9 + 0.15 * fract(crop * 7.3);
-			farm *= 0.88 + 0.16 * step(0.5, fract(dot(p, vec2(0.6, 0.8)) * 0.9)) * (0.4 + fine);
+			float row_fade = 1.0 - smoothstep(0.08, 0.55, px);
+			float row_wave = 0.5 + 0.5 * sin(dot(p, vec2(0.6, 0.8)) * 8.05); // 0.78 m row period (matches planted maize rows)
+			if (crop < 0.45) {
+				// maize understorey and distant canopy: dark shaded troughs + lush mottled foliage + faint pale tassel speckle
+				float canopy = texture(grain, p * 0.22 + 0.17).r;
+				float leaves = 0.78 + 0.34 * canopy + 0.14 * (fine - 0.5) * row_fade;
+				farm *= mix(0.84, 1.08, row_wave * row_fade + 0.5 * (1.0 - row_fade)) * leaves;
+				float tassel = smoothstep(0.68, 0.86, fine * 0.65 + canopy * 0.35);
+				farm = mix(farm, vec3(0.55, 0.52, 0.26), tassel * 0.18);
+			} else if (crop < 0.75) {
+				// ripe wheat understorey and distant grain mass: soft row drift + warm sunlit ear mottling
+				float grain_tex = texture(grain, p * 0.28 + 0.41).r;
+				farm *= mix(0.90, 1.08, row_wave * row_fade + 0.5 * (1.0 - row_fade)) * (0.86 + 0.26 * grain_tex);
+			} else {
+				// ploughed earth: clean tractor furrows
+				farm *= 0.86 + 0.20 * (row_wave * row_fade + 0.5 * (1.0 - row_fade)) * (0.5 + 0.5 * fine);
+			}
 			col = mix(col, farm * (0.88 + 0.2 * broad), field);
 			col = mix(col, forest_floor_color * (0.7 + 0.5 * fine), lm.a * 0.9);
 			col = mix(col, bare_color * (0.8 + 0.3 * fine + 0.15 * micro), lm.b);

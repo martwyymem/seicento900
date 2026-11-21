@@ -420,8 +420,8 @@ func build_terrain() -> void:
 	var mat := _surface_material(GROUND_SHADER, "grass")
 	mat.set_shader_parameter("base_color", Color(0.36, 0.52, 0.2))
 	mat.set_shader_parameter("forest_floor_color", Color(0.17, 0.22, 0.1))
-	mat.set_shader_parameter("farm_color_a", Color(0.78, 0.66, 0.3)) # ripe wheat
-	mat.set_shader_parameter("farm_color_b", Color(0.42, 0.58, 0.2)) # young crops
+	mat.set_shader_parameter("farm_color_a", VEGETATION.WHEAT_FAR_COLOR) # ripe wheat
+	mat.set_shader_parameter("farm_color_b", VEGETATION.CORN_FAR_COLOR) # maize (matches corn_mat far_color)
 	mat.set_shader_parameter("farm_color_c", Color(0.45, 0.34, 0.23)) # ploughed
 	mat.set_shader_parameter("paved_color", Color(0.46, 0.45, 0.42))
 	mat.set_shader_parameter("bare_color", Color(0.58, 0.5, 0.36))
@@ -3101,7 +3101,9 @@ func _impostor_material() -> StandardMaterial3D:
 
 # ============================================================================================ props
 
-## How far the trees and the range-limited props (fences, hedges, garden beds, lamps, signals, shelters, parked
+var _vegetation: Node3D
+
+## How far the trees, crops and the range-limited props (fences, hedges, garden beds, lamps, signals, shelters, parked
 ## cars) draw, as a share of their full ranges: the graphics preset's ow_draw_scale. The impostor cards hand over at
 ## the near trees' new range.
 func set_draw_scale(k: float) -> void:
@@ -3113,6 +3115,8 @@ func set_draw_scale(k: float) -> void:
 	if _impostor_mat:
 		_impostor_mat.distance_fade_min_distance = TREE_NEAR * k - 50.0
 		_impostor_mat.distance_fade_max_distance = TREE_NEAR * k - 5.0
+	if is_instance_valid(_vegetation) and _vegetation.has_method("set_draw_scale"):
+		_vegetation.set_draw_scale(k)
 
 ## A town.glb mesh by name, or the fallback built here.
 func _model(name: String, fallback: Callable) -> Array:
@@ -3176,6 +3180,9 @@ func build_vegetation() -> void:
 	var veg: Node3D = VEGETATION.new()
 	veg.name = "Vegetation"
 	if veg.setup(map):
+		_vegetation = veg
+		if not is_equal_approx(draw_scale, 1.0):
+			veg.set_draw_scale(draw_scale)
 		root.add_child(veg)
 	else:
 		veg.free()

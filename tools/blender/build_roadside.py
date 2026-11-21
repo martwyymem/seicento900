@@ -123,51 +123,149 @@ def wheat():
 
 
 def corn():
-	"""Maize: three tall plants (1.9 m) with arching leaves, a tassel on top and a cob on the stalk."""
+	"""Maize patch: two parallel rows (0.78 m apart) of 4 tall stalks each (1.9-2.3 m) with broad arching leaves,
+	inter-row arched fronds and top tassels, all on the single 'Blade' surface for shaders/grass.gdshader.
+	Vertex colour encodes (dryness/stalk, height fraction, tassel flag, per-plant random)."""
 	m = MB()
-	for px, py, ph, pa in [(0.0, 0.0, 1.95, 0.3), (0.32, 0.18, 1.75, 1.9), (-0.25, 0.3, 1.85, 4.0)]:
-		# the stalk: two crossed thin cards
-		for da in (0.0, 1.5708):
-			ca, sa = math.cos(pa + da), math.sin(pa + da)
-			card(m, [(px - ca * 0.03, py - sa * 0.03, 0.0), (px + ca * 0.03, py + sa * 0.03, 0.0),
-				(px + ca * 0.02, py + sa * 0.02, ph * 0.94), (px - ca * 0.02, py - sa * 0.02, ph * 0.94)],
-				"CornStalk", [(0.6, 0.6, 0.5)] * 2 + [(1.0, 1.0, 0.85)] * 2)
-		# arching leaves in four directions, three segments each
-		for k in range(6):
-			a = pa + k * 1.047 + 0.3 * (k % 2)
-			z0 = 0.35 + 0.28 * k
-			if z0 > ph * 0.9:
-				z0 = ph * 0.8
-			length = 0.9 - 0.06 * k
-			ca, sa = math.cos(a), math.sin(a)
-			side = (-sa, ca)
-			prev = [(px, py, z0)]
-			segs = []
-			for s in range(1, 4):
-				t = s / 3.0
-				reach = length * t
-				rise = z0 + length * 0.55 * math.sin(t * 1.5) - length * 0.35 * t * t
-				w = 0.085 * math.sin(math.pi * (0.2 + 0.8 * t) * 0.9) + 0.01
-				segs.append((px + ca * reach, py + sa * reach, rise, w))
-			ring = [(px, py, z0, 0.012)] + segs
-			for i in range(len(ring) - 1):
-				x0, y0, z0_, w0 = ring[i]
-				x1, y1, z1, w1 = ring[i + 1]
-				c0 = (0.55, 0.62, 0.4) if i == 0 else (0.85, 0.95, 0.65)
-				c1 = (0.85, 0.95, 0.65) if i < 2 else (1.0, 1.0, 0.8)
-				card(m, [(x0 - side[0] * w0, y0 - side[1] * w0, z0_), (x0 + side[0] * w0, y0 + side[1] * w0, z0_),
-					(x1 + side[0] * w1, y1 + side[1] * w1, z1), (x1 - side[0] * w1, y1 - side[1] * w1, z1)],
-					"CornLeaf", [c0, c0, c1, c1])
-		# the cob, wrapped in husk, on the side of the stalk
-		cx, cy = px + math.cos(pa + 0.8) * 0.07, py + math.sin(pa + 0.8) * 0.07
-		m.box((cx - 0.035, cy - 0.035, ph * 0.52), (cx + 0.035, cy + 0.035, ph * 0.52 + 0.24), "CornHusk")
-		# the tassel: thin pale spikes fanning from the top
-		for k in range(5):
-			a = pa + k * 1.2566
-			ca, sa = math.cos(a), math.sin(a)
-			tx, ty = px + ca * 0.2, py + sa * 0.2
-			card(m, [(px - sa * 0.012, py + ca * 0.012, ph * 0.9), (px + sa * 0.012, py - ca * 0.012, ph * 0.9),
-				(tx, ty, ph + 0.12)], "CornTassel", [(0.8, 0.75, 0.5)] * 2 + [(1.0, 0.9, 0.6)])
+	max_h = 2.3
+	# 2 parallel rows along X (y = -0.39, +0.39 -> 0.78 m row spacing), 4 stalks per row (~0.56 m apart)
+	idx = 0
+	for row_i, ry in enumerate((-0.39, 0.39)):
+		for col_i in range(4):
+			idx += 1
+			jx = (_rand(idx, 11.0) - 0.5) * 0.14
+			jy = (_rand(idx, 12.0) - 0.5) * 0.10
+			px = -0.84 + col_i * 0.56 + (0.12 if row_i == 1 else -0.12) + jx
+			py = ry + jy
+			ph = 1.92 + 0.36 * _rand(idx, 13.0)
+			pa = _rand(idx, 14.0) * math.tau
+			rnd = _rand(idx, 15.0)
+			# sturdy stalk: two crossed tapered cards (R=0.55 warms it slightly vs leaves)
+			for da in (0.0, 1.5708):
+				ca, sa = math.cos(pa + da), math.sin(pa + da)
+				h_top = ph * 0.94
+				ht = min(1.0, h_top / max_h)
+				wb, wt = 0.042, 0.020
+				ids = [
+					m.vert((px - ca * wb, py - sa * wb, 0.0), (0.55, 0.0, 0.0, rnd)),
+					m.vert((px + ca * wb, py + sa * wb, 0.0), (0.55, 0.0, 0.0, rnd)),
+					m.vert((px + ca * wt, py + sa * wt, h_top), (0.45, ht, 0.0, rnd)),
+					m.vert((px - ca * wt, py - sa * wt, h_top), (0.45, ht, 0.0, rnd)),
+				]
+				m.face(ids, "Blade")
+			# 6 broad, arching maize leaves per stalk (2-segment arch: 1 quad + 1 tip tri = 3 tris)
+			for k in range(6):
+				a = pa + k * 2.39996 + (_rand(idx * 7 + k, 16.0) - 0.5) * 0.45
+				z0 = 0.22 + (ph * 0.72) * (k / 5.0) + (_rand(idx * 7 + k, 17.0) - 0.5) * 0.08
+				length = (1.06 - 0.05 * k) * (0.9 + 0.22 * _rand(idx * 7 + k, 18.0))
+				ca, sa = math.cos(a), math.sin(a)
+				# tilt leaf sideways so it catches light and blocks horizontal sightlines from the road
+				roll = 0.42 + 0.45 * _rand(idx * 7 + k, 19.0)
+				if k % 2 == 1:
+					roll = -roll
+				sx, sy, sz = -sa * math.cos(roll), ca * math.cos(roll), math.sin(roll)
+				lrnd = _rand(idx * 11 + k, 20.0)
+				dry = 0.20 if k == 0 else (0.04 + 0.14 * _rand(idx * 11 + k, 21.0))
+				r1 = length * 0.50
+				z1 = z0 + length * 0.36
+				r2 = length
+				z2 = max(0.08, z0 + length * 0.02)
+				w0, w1 = 0.05, 0.155
+				h0 = min(1.0, z0 / max_h)
+				h1 = min(1.0, z1 / max_h)
+				h2 = min(1.0, z2 / max_h)
+				v0l = m.vert((px - sx * w0, py - sy * w0, z0 - sz * w0), (dry, h0, 0.0, lrnd))
+				v0r = m.vert((px + sx * w0, py + sy * w0, z0 + sz * w0), (dry, h0, 0.0, lrnd))
+				v1r = m.vert((px + ca * r1 + sx * w1, py + sa * r1 + sy * w1, z1 + sz * w1), (dry, h1, 0.0, lrnd))
+				v1l = m.vert((px + ca * r1 - sx * w1, py + sa * r1 - sy * w1, z1 - sz * w1), (dry, h1, 0.0, lrnd))
+				v2 = m.vert((px + ca * r2, py + sa * r2, z2), (dry * 0.6, h2, 0.0, lrnd))
+				m.face([v0l, v0r, v1r, v1l], "Blade")
+				m.face([v1l, v1r, v2], "Blade")
+			# tassel on top (B = 1 -> ear_color in grass.gdshader): 2 crossed tapered plumes
+			for da in (0.4, 1.97):
+				ca, sa = math.cos(pa + da), math.sin(pa + da)
+				z_base = ph * 0.90
+				z_mid = ph + 0.06
+				z_top = ph + 0.20
+				tw = 0.10
+				v0 = m.vert((px - ca * 0.02, py - sa * 0.02, z_base), (0.3, min(1.0, z_base / max_h), 1.0, rnd))
+				v1 = m.vert((px + ca * 0.02, py + sa * 0.02, z_base), (0.3, min(1.0, z_base / max_h), 1.0, rnd))
+				v2 = m.vert((px + ca * tw, py + sa * tw, z_mid), (0.25, 0.98, 1.0, rnd))
+				v3 = m.vert((px - ca * tw, py - sa * tw, z_mid), (0.25, 0.98, 1.0, rnd))
+				vt = m.vert((px, py, z_top), (0.2, 1.0, 1.0, rnd))
+				m.face([v0, v1, v2, v3], "Blade")
+				m.face([v3, v2, vt], "Blade")
+	# 6 broad, tapered lower/mid leafy fronds filling between the two rows (organic pointed tips, no box edges)
+	for k in range(6):
+		fx = -0.82 + k * 0.33 + (_rand(k, 24.0) - 0.5) * 0.1
+		fy = -0.22 + 0.44 * (k % 2)
+		fa = (0.45 if k % 2 == 0 else -0.45) + (_rand(k, 25.0) - 0.5) * 0.5
+		fh = 1.35 + 0.45 * _rand(k, 26.0)
+		fw = 0.26 + 0.08 * _rand(k, 27.0)
+		frnd = _rand(k, 28.0)
+		curved_blade(m, fx, fy, fh, fw, fa, 0.22 + 0.2 * _rand(k, 29.0), 0.14, frnd, segs=(0.0, 0.55))
+	return m
+
+
+def corn_far():
+	"""Cheap far-LOD maize tuft (~4.6 m across, 1.8-2.3 m tall, ~80 tris) on 'Blade' for grass.gdshader.
+	22 organic arching foliage fronds + slim tassel plumes (like a tall GrassTuft) so distant cornfields
+	read as a dense, uneven 2 m green canopy out past 200 m with zero boxy or spiky edges."""
+	m = MB()
+	for k in range(22):
+		r = 2.05 * math.sqrt((k + 0.5) / 22.0)
+		a = k * 2.39996 + _rand(k, 41.0) * 0.5
+		x, y = math.cos(a) * r, math.sin(a) * r
+		h = 1.72 + 0.52 * _rand(k, 42.0)
+		w = 0.20 + 0.09 * _rand(k, 43.0)
+		yaw = _rand(k, 44.0) * math.tau
+		lean = 0.22 + 0.28 * _rand(k, 45.0)
+		dry = 0.08 + 0.16 * _rand(k, 46.0)
+		rnd = _rand(k, 47.0)
+		curved_blade(m, x, y, h, w, yaw, lean, dry, rnd, segs=(0.0, 0.55))
+		# Every 3rd frond carries a slim pale tassel plume on top (B = 1)
+		if k % 3 == 0:
+			ca, sa = math.cos(yaw), math.sin(yaw)
+			tx = x + ca * lean * h * 0.55
+			ty = y + sa * lean * h * 0.55
+			px, py = -sa, ca
+			tw = 0.11
+			zb = h * 0.88
+			zt = h + 0.18
+			v0 = m.vert((tx - px * tw, ty - py * tw, zb), (0.2, 0.9, 1.0, rnd))
+			v1 = m.vert((tx + px * tw, ty + py * tw, zb), (0.2, 0.9, 1.0, rnd))
+			vt = m.vert((tx + ca * 0.10, ty + sa * 0.10, zt), (0.2, 1.0, 1.0, rnd))
+			m.face([v0, v1, vt], "Blade")
+	return m
+
+
+def wheat_far():
+	"""Cheap far-LOD wheat tuft (~4.4 m across, 0.82-1.08 m tall, ~66 tris) on 'Blade' for grass.gdshader.
+	22 slender golden grain sheaves keep ripe wheat fields standing out past 200 m with an organic silhouette."""
+	m = MB()
+	for k in range(22):
+		r = 2.0 * math.sqrt((k + 0.5) / 22.0)
+		a = k * 2.39996 + _rand(k, 51.0) * 0.5
+		x, y = math.cos(a) * r, math.sin(a) * r
+		h = 0.82 + 0.24 * _rand(k, 52.0)
+		w = 0.18 + 0.08 * _rand(k, 53.0)
+		yaw = _rand(k, 54.0) * math.tau
+		lean = 0.12 + 0.18 * _rand(k, 55.0)
+		rnd = _rand(k, 56.0)
+		ca, sa = math.cos(yaw), math.sin(yaw)
+		px, py = -sa, ca
+		off1 = lean * h * 0.35
+		z1 = h * 0.60
+		off2 = lean * h
+		z2 = h * (1.0 - 0.14 * lean)
+		w1 = w * 0.72
+		v0l = m.vert((x - px * w, y - py * w, 0.0), (0.55, 0.0, 0.0, rnd))
+		v0r = m.vert((x + px * w, y + py * w, 0.0), (0.55, 0.0, 0.0, rnd))
+		v1l = m.vert((x + ca * off1 - px * w1, y + sa * off1 - py * w1, z1), (0.65, 0.62, 0.25, rnd))
+		v1r = m.vert((x + ca * off1 + px * w1, y + sa * off1 + py * w1, z1), (0.65, 0.62, 0.25, rnd))
+		vt = m.vert((x + ca * off2, y + sa * off2, z2), (0.85, 1.0, 1.0, rnd))
+		m.face([v0l, v0r, v1r, v1l], "Blade")
+		m.face([v1l, v1r, vt], "Blade")
 	return m
 
 
@@ -223,16 +321,16 @@ def wheat_patch(stalks, width_mul=1.0, salt=7.0):
 		yaw = _rand(k, salt + 4) * math.tau
 		lean = 0.04 + 0.08 * _rand(k, salt + 5)
 		rnd = _rand(k, salt + 8)
-		curved_blade(m, x, y, h, 0.012 * width_mul, yaw, lean, 0.6, rnd)
-		if k % 3 == 0:  # a drooping leaf half way up
-			curved_blade(m, x, y, h * 0.55, 0.02 * width_mul, yaw + 1.6, 0.6, 0.4, rnd)
-		# the ear: a narrow spindle, two crossed cards
+		curved_blade(m, x, y, h, 0.017 * width_mul, yaw, lean, 0.6, rnd)
+		if k % 2 == 0:  # a broader drooping leaf half way up for fuller canopy fill
+			curved_blade(m, x, y, h * 0.58, 0.030 * width_mul, yaw + 1.6, 0.65, 0.4, rnd)
+		# the ear: a fuller spindle, two crossed cards
 		ca, sa = math.cos(yaw), math.sin(yaw)
 		ex, ey = x + ca * lean * h, y + sa * lean * h
 		top = h * (1.0 - 0.18 * lean)
 		for da in ((0.0, 1.5708) if width_mul > 1.0 else (0.8,)):
 			cx, cy = math.cos(yaw + da), math.sin(yaw + da)
-			ear = 0.017 * width_mul
+			ear = 0.022 * width_mul
 			ids = [m.vert(p, (0.8, f, 1.0, rnd)) for p, f in [((ex - cx * ear, ey - cy * ear, top - 0.11), 0.85),
 				((ex + cx * ear, ey + cy * ear, top - 0.11), 0.85), ((ex + cx * ear * 0.8, ey + cy * ear * 0.8, top + 0.02), 0.95),
 				((ex + ca * 0.02, ey + sa * 0.02, top + 0.08), 1.0), ((ex - cx * ear * 0.8, ey - cy * ear * 0.8, top + 0.02), 0.95)]]
@@ -306,6 +404,7 @@ def main():
 	bpy.ops.object.delete(use_global=False)
 	objects = []
 	for name, builder in [("BushCluster", bush), ("TallGrass", grass), ("Wheat", wheat), ("Corn", corn),
+		("CornFar", corn_far), ("WheatFar", wheat_far),
 		("Flower", flower), ("GrassPatch", lambda: grass_patch(110)), ("GrassPatchLow", lambda: grass_patch(30, 2.2, 3.0)),
 		# the far layer (vegetation.gd): a few broad blades in a tight clump, so a meadow still reads as grass 200 m off
 		("GrassTuft", lambda: grass_patch(14, 3.0, 5.0, 0.55)),
@@ -315,11 +414,19 @@ def main():
 	kit.export_glb(OUT_GLB, objects)
 	render_dir = kit.arg("--renders")
 	if render_dir:
-		cam = kit.setup_preview(ground=30.0)
+		cam = kit.setup_preview(ground=44.0)
 		# A lineup makes silhouettes and relative scale easy to inspect.
 		for i, ob in enumerate(objects):
-			kit.place(ob, ((i - 6) * 2.4, 0.0, 0.0))
-		kit.render(cam, os.path.join(render_dir, "roadside.png"), (9, -14, 6), (0, 0, 0.8), 55.0)
+			kit.place(ob, ((i - 7) * 3.8, 0.0, 0.0))
+		kit.render(cam, os.path.join(render_dir, "roadside.png"), (6, -24, 8), (0, 0, 1.0), 42.0)
+		# Close-up of the crop meshes (Corn, CornFar, WheatFar, WheatPatch)
+		for ob in objects:
+			ob.hide_render = ob.name not in ("Corn", "CornFar", "WheatFar", "WheatPatch")
+		for idx, name in enumerate(("Corn", "CornFar", "WheatFar", "WheatPatch")):
+			for ob in objects:
+				if ob.name == name:
+					kit.place(ob, ((idx - 1.5) * 4.8, 0.0, 0.0))
+		kit.render(cam, os.path.join(render_dir, "crops.png"), (0, -14, 3.8), (0, 0, 1.0), 45.0)
 
 
 if __name__ == "__main__":

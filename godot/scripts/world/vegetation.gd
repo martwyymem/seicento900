@@ -29,16 +29,19 @@ const HALF_DIAG := 0.71 ## a square's half diagonal over its side: a cell's near
 ## grass come up all at once.
 const LEAD := 26.0
 const LAYERS := 4 ## near: wheat, maize, grass, flowers
-const FAR_LAYERS := 2 ## far: grass tufts, bushes
-const CORN_STEP := 2.3 ## m between clumps
+const FAR_LAYERS := 4 ## far: grass tufts, bushes, far maize, far wheat
 const FLOWER_STEP := 1.6
 const TUFT_STEP := 3.0 ## m between far-layer grass tufts (before thinning)
 const BUSH_STEP := 4.0
+const CORN_FAR_STEP := 5.0 ## m between far-layer maize canopy tufts
+const WHEAT_FAR_STEP := 5.0 ## m between far-layer wheat canopy tufts
 const GRASS_REACH := 1.0 ## m: a grass patch's blades spread this far from its middle (0.8 m, widened up to 1.25x)
 const BUDGET_USEC := 2500 ## planting time per frame
 const HANDOVER := 14.0 ## m over which the dense patches give way to the sparse ones (grass.gdshader lod_out/lod_in)
 const FAR_FADE := 50.0 ## m over which the blades sink at the far edge (at most half the reach)
 const TUFT_FADE := 60.0 ## m over which the tufts sink at the far ring's edge
+const CORN_FADE := 22.0 ## m over which near maize sinks as CornFar rises
+const CROP_FAR_FADE := 60.0 ## m over which far crop tufts sink into the terrain's field colour
 const TONE_NEAR := 30.0 ## m from which every grass blade starts to take the far colour (to the tufts' edge)
 const BUSH_FADE := 35.0 ## m over which a bush dithers in at the far ring's edge
 const FIELD_MIN := 100 ## land map G (0-255) from which a pixel is a field
@@ -46,20 +49,29 @@ const EDGE_RES := 5.0 ## m per cell of the edge mask (fences, hedges, garden tre
 const GRASS_SHADER := preload("res://shaders/grass.gdshader")
 const SHRUB_SHADER := preload("res://shaders/shrub.gdshader")
 const RACE_WORLD := preload("res://scripts/ui/race_world.gd")
-## The meadow's colour seen from afar: the grass fades to it towards the edge of the planted ring, and the ground shader
-## paints the bare meadows beyond with it (TownBuilder.build_terrain), so the ring has no edge of colour
+## The meadow's and fields' colours seen from afar: the plants fade to them towards the edge of their ring, and the
+## ground shader paints the terrain beyond with the same colours (TownBuilder.build_terrain), so there is no colour seam
 const MEADOW_FAR := Color(0.46, 0.52, 0.22)
 const MEADOW_FAR_DRY := Color(0.56, 0.54, 0.25)
+const CORN_FAR_COLOR := Color(0.28, 0.44, 0.14)
+const WHEAT_FAR_COLOR := Color(0.78, 0.66, 0.3)
+## Global row axes for planted maize: perpendicular to ground.gdshader's vec2(0.6, 0.8) tractor-row stripes
+const CORN_ROW_DIR := Vector2(-0.8, 0.6)
+const CORN_ROW_PERP := Vector2(0.6, 0.8)
+## Base crop draw ranges at ow_draw_scale = 1.0 (High preset), scaled by draw_scale
+const CORN_NEAR_RANGE := 66.0
+const CORN_FAR_RANGE := 210.0
+const WHEAT_FAR_RANGE := 200.0
 const FLOWER_RANGE := 50.0 ## m: a flower cell's centre shows within this, fading out over the next FLOWER_MARGIN
 const FLOWER_MARGIN := 18.0
-const CORN_MARGIN := 20.0 ## m: a maize cell dithers out over this beyond its range
-## per graphics preset (0 Low .. 3 Ultra): m between grass patches (before _block thins them) and wheat patches, how near a cell's centre must be for the
+## per graphics preset (0 Low .. 3 Ultra): m between grass patches (before _block thins them), wheat patches, and
+## maize row-blocks (corn_u along row, corn_v across 2-row block), how near a cell's centre must be for the
 ## dense patches (0: never), where the patches have sunk away, where the far layer's tufts have, and where the bushes
 ## have faded out
-const GRASS_QUALITY := [{"step": 2.0, "wheat": 1.6, "near": 0.0, "far": 50.0, "tuft": 150.0, "bush": 130.0},
-	{"step": 1.7, "wheat": 1.35, "near": 22.0, "far": 58.0, "tuft": 180.0, "bush": 160.0},
-	{"step": 1.45, "wheat": 1.15, "near": 28.0, "far": 66.0, "tuft": 210.0, "bush": 190.0},
-	{"step": 1.25, "wheat": 1.0, "near": 34.0, "far": 76.0, "tuft": 240.0, "bush": 220.0}]
+const GRASS_QUALITY := [{"step": 2.0, "wheat": 1.6, "corn_u": 2.65, "corn_v": 1.80, "near": 0.0, "far": 50.0, "tuft": 150.0, "bush": 130.0},
+	{"step": 1.7, "wheat": 1.35, "corn_u": 2.50, "corn_v": 1.65, "near": 22.0, "far": 58.0, "tuft": 180.0, "bush": 160.0},
+	{"step": 1.45, "wheat": 1.15, "corn_u": 2.35, "corn_v": 1.56, "near": 28.0, "far": 66.0, "tuft": 210.0, "bush": 190.0},
+	{"step": 1.25, "wheat": 1.0, "corn_u": 2.05, "corn_v": 1.56, "near": 34.0, "far": 76.0, "tuft": 240.0, "bush": 220.0}]
 const FLOWER_COLOURS := [Color(1.0, 1.0, 0.95), Color(1.0, 0.85, 0.15), Color(0.95, 0.2, 0.18), Color(0.62, 0.38, 0.95),
 	Color(1.0, 0.55, 0.12), Color(1.0, 0.62, 0.78)]
 
@@ -74,10 +86,14 @@ var queued := {} ## cell key -> true while it has tasks waiting
 var _last_cell := Vector2i(1 << 30, 1 << 30)
 var counts := {} ## kind -> instances alive, for the probes
 var quality := 2
+var draw_scale := 1.0
 var grass_mat: ShaderMaterial
 var wheat_mat: ShaderMaterial
 var grass_near_mat: ShaderMaterial ## the dense patches' copies: their blades leave across the hand-over band
 var wheat_near_mat: ShaderMaterial
+var wheat_far_mat: ShaderMaterial ## far-layer wheat tufts
+var corn_mat: ShaderMaterial ## near dense maize row-blocks
+var corn_far_mat: ShaderMaterial ## far-layer maize canopy tufts
 var bush_mat: ShaderMaterial
 var tuft_mat: ShaderMaterial ## the far layer's grass
 ## Where tall grass grows whatever the meadow around does: one byte per EDGE_RES square over the land map, 1 along a
@@ -123,7 +139,7 @@ func setup(m: TownMap) -> bool:
 	wheat_mat.set_shader_parameter("mid_color", Color(0.66, 0.6, 0.28))
 	wheat_mat.set_shader_parameter("tip_color", Color(0.86, 0.76, 0.42))
 	wheat_mat.set_shader_parameter("dry_color", Color(0.82, 0.68, 0.34))
-	wheat_mat.set_shader_parameter("far_color", Color(0.78, 0.66, 0.3)) # the ground shader's ripe field (farm_color_a)
+	wheat_mat.set_shader_parameter("far_color", WHEAT_FAR_COLOR) # the ground shader's ripe field (farm_color_a)
 	wheat_mat.set_shader_parameter("wind_strength", 0.1)
 	grass_mat.set_shader_parameter("far_color", MEADOW_FAR)
 	grass_near_mat = grass_mat.duplicate() as ShaderMaterial
@@ -132,6 +148,20 @@ func setup(m: TownMap) -> bool:
 	bush_mat.shader = SHRUB_SHADER
 	bush_mat.set_shader_parameter("grain", RACE_WORLD.noise_texture("grain"))
 	wheat_near_mat = wheat_mat.duplicate() as ShaderMaterial
+	wheat_far_mat = wheat_mat.duplicate() as ShaderMaterial
+	wheat_far_mat.set_shader_parameter("wind_strength", 0.06)
+	corn_mat = ShaderMaterial.new()
+	corn_mat.shader = GRASS_SHADER
+	corn_mat.set_shader_parameter("root_color", Color(0.06, 0.11, 0.04))
+	corn_mat.set_shader_parameter("mid_color", Color(0.20, 0.36, 0.10))
+	corn_mat.set_shader_parameter("tip_color", Color(0.36, 0.50, 0.16))
+	corn_mat.set_shader_parameter("dry_color", Color(0.48, 0.54, 0.22))
+	corn_mat.set_shader_parameter("ear_color", Color(0.82, 0.74, 0.44))
+	corn_mat.set_shader_parameter("far_color", CORN_FAR_COLOR)
+	corn_mat.set_shader_parameter("wind_strength", 0.12)
+	corn_mat.set_shader_parameter("translucency", 0.45)
+	corn_far_mat = corn_mat.duplicate() as ShaderMaterial
+	corn_far_mat.set_shader_parameter("wind_strength", 0.07)
 	_build_edges()
 	set_quality(quality)
 	return land_w > 0 and not meshes.is_empty()
@@ -155,8 +185,8 @@ func _load_meshes() -> void:
 	if scene == null:
 		return
 	# the materials the instance colour tints (the others keep their own colours)
-	var tinted := {"Corn": [], "BushCluster": [], "Flower": ["Petal"]}
-	for kind in ["GrassPatch", "GrassPatchLow", "GrassTuft", "WheatPatch", "WheatPatchLow"]:
+	var tinted := {"BushCluster": [], "Flower": ["Petal"]}
+	for kind in ["GrassPatch", "GrassPatchLow", "GrassTuft", "WheatPatch", "WheatPatchLow", "WheatFar", "Corn", "CornFar"]:
 		for mi in scene.find_children(kind, "MeshInstance3D", true, false):
 			meshes[kind] = (mi as MeshInstance3D).mesh
 			break
@@ -322,41 +352,119 @@ func _area_at(key: int, p: Vector2) -> String:
 			return e[0]
 	return ""
 
+func _corn_near() -> float:
+	return CORN_NEAR_RANGE * draw_scale
+
+func _corn_far() -> float:
+	return CORN_FAR_RANGE * draw_scale
+
+func _wheat_far() -> float:
+	return WHEAT_FAR_RANGE * draw_scale
+
+func _wheat_near_end() -> float:
+	var preset_scale := maxf(float(GraphicsPresets.preset(quality).ow_draw_scale), 0.1)
+	return float(GRASS_QUALITY[quality].far) * (draw_scale / preset_scale)
+
 ## m from the camera within which a near cell's centre is planted: its nearest blades LEAD m beyond where they have
 ## sunk away.
 func radius() -> float:
-	return float(GRASS_QUALITY[quality].far) + CELL * HALF_DIAG + LEAD
+	return maxf(float(GRASS_QUALITY[quality].far), maxf(_wheat_near_end(), _corn_near())) + CELL * HALF_DIAG + LEAD
 
-## The same for the far cells (tufts and bushes).
+## The same for the far cells (tufts, bushes, far crops).
 func far_radius() -> float:
 	var q: Dictionary = GRASS_QUALITY[quality]
-	return maxf(float(q.tuft), float(q.bush)) + FAR_CELL * HALF_DIAG + LEAD
+	return maxf(maxf(float(q.tuft), float(q.bush)), maxf(_corn_far(), _wheat_far())) + FAR_CELL * HALF_DIAG + LEAD
 
-## Sets the graphics preset (0 Low .. 3 Ultra) and replants: how dense and how far the grass grows.
-func set_quality(level: int) -> void:
-	quality = clampi(level, 0, GRASS_QUALITY.size() - 1)
+## Applies current quality + draw_scale ranges to all shader uniforms and live crop MultiMesh instances.
+func _apply_ranges() -> void:
 	var q: Dictionary = GRASS_QUALITY[quality]
 	var band := Vector2(maxf(0.0, float(q.near) - HANDOVER), float(q.near)) if float(q.near) > 0.0 else Vector2.ZERO
-	for mat in [grass_mat, wheat_mat, grass_near_mat, wheat_near_mat, tuft_mat]:
+	for mat in [grass_mat, grass_near_mat, tuft_mat]:
 		if mat:
 			mat.set_shader_parameter("fade_start", float(q.far) - minf(FAR_FADE, float(q.far) * 0.5))
 			mat.set_shader_parameter("fade_end", float(q.far))
-			# one tone by distance for every grass blade, near patch or far tuft, so the layers never differ in colour
-			# (wheat has no far layer: it takes the field's colour as it sinks)
-			var grass: bool = mat == grass_mat or mat == grass_near_mat or mat == tuft_mat
-			mat.set_shader_parameter("tone_range", Vector2(TONE_NEAR, float(q.tuft)) if grass else Vector2.ZERO)
+			mat.set_shader_parameter("tone_range", Vector2(TONE_NEAR, float(q.tuft)))
 	if tuft_mat:
 		tuft_mat.set_shader_parameter("fade_start", float(q.tuft) - TUFT_FADE)
 		tuft_mat.set_shader_parameter("fade_end", float(q.tuft))
 	if bush_mat:
 		bush_mat.set_shader_parameter("fade_near", float(q.bush) - BUSH_FADE)
 		bush_mat.set_shader_parameter("fade_far", float(q.bush))
+	var w_end := _wheat_near_end()
+	var w_far := _wheat_far()
+	var w_fade := minf(FAR_FADE, w_end * 0.5)
+	for mat in [wheat_mat, wheat_near_mat]:
+		if mat:
+			mat.set_shader_parameter("fade_start", w_end - w_fade)
+			mat.set_shader_parameter("fade_end", w_end)
+			mat.set_shader_parameter("tone_range", Vector2(TONE_NEAR, w_far))
+	if wheat_far_mat:
+		var w_in_a := maxf(0.0, w_end - w_fade)
+		var w_in_b := maxf(w_in_a + 4.0, w_end - 4.0)
+		wheat_far_mat.set_shader_parameter("lod_in", Vector2(w_in_a, w_in_b))
+		wheat_far_mat.set_shader_parameter("fade_start", maxf(w_in_b + 8.0, w_far - CROP_FAR_FADE * draw_scale))
+		wheat_far_mat.set_shader_parameter("fade_end", w_far)
+		wheat_far_mat.set_shader_parameter("tone_range", Vector2(TONE_NEAR, w_far))
+	var c_near := _corn_near()
+	var c_far := _corn_far()
+	var c_fade := minf(CORN_FADE, c_near * 0.4)
+	if corn_mat:
+		corn_mat.set_shader_parameter("fade_start", c_near - c_fade)
+		corn_mat.set_shader_parameter("fade_end", c_near)
+		corn_mat.set_shader_parameter("tone_range", Vector2(TONE_NEAR, c_far))
+	if corn_far_mat:
+		var c_in_a := maxf(0.0, c_near - c_fade)
+		var c_in_b := maxf(c_in_a + 4.0, c_near - 4.0)
+		corn_far_mat.set_shader_parameter("lod_in", Vector2(c_in_a, c_in_b))
+		corn_far_mat.set_shader_parameter("fade_start", maxf(c_in_b + 8.0, c_far - CROP_FAR_FADE * draw_scale))
+		corn_far_mat.set_shader_parameter("fade_end", c_far)
+		corn_far_mat.set_shader_parameter("tone_range", Vector2(TONE_NEAR, c_far))
 	for mat in [grass_mat, wheat_mat]:
 		if mat:
 			mat.set_shader_parameter("lod_in", band)
 	for mat in [grass_near_mat, wheat_near_mat]:
 		if mat:
 			mat.set_shader_parameter("lod_out", band)
+	# update live crop MultiMeshes when draw_scale changes without forcing a full replant
+	var c_near_mmi_end := c_near + CELL * 0.75
+	var c_far_mmi_begin := maxf(0.0, c_near - c_fade - FAR_CELL * HALF_DIAG)
+	var c_far_mmi_end := c_far + FAR_CELL * HALF_DIAG
+	var w_near_mmi_end := w_end + CELL * 0.75
+	var w_far_mmi_begin := maxf(0.0, w_end - w_fade - FAR_CELL * HALF_DIAG)
+	var w_far_mmi_end := w_far + FAR_CELL * HALF_DIAG
+	for k in cells:
+		for ch in (cells[k] as Node3D).get_children():
+			var mmi := ch as MultiMeshInstance3D
+			if mmi == null:
+				continue
+			match String(mmi.name):
+				"Corn":
+					mmi.visibility_range_end = c_near_mmi_end
+				"CornFar":
+					mmi.visibility_range_begin = c_far_mmi_begin
+					mmi.visibility_range_end = c_far_mmi_end
+				"WheatPatchLow":
+					mmi.visibility_range_end = w_near_mmi_end
+				"WheatFar":
+					mmi.visibility_range_begin = w_far_mmi_begin
+					mmi.visibility_range_end = w_far_mmi_end
+
+## Scales crop draw distances with the preset's ow_draw_scale (forwarded by TownBuilder.set_draw_scale).
+func set_draw_scale(k: float) -> void:
+	var clamped := clampf(k, 0.25, 2.0)
+	if is_equal_approx(draw_scale, clamped):
+		return
+	var grew := clamped > draw_scale
+	draw_scale = clamped
+	_apply_ranges()
+	if grew:
+		_last_cell = Vector2i(1 << 30, 1 << 30)
+
+## Sets the graphics preset (0 Low .. 3 Ultra) and replants: how dense and how far the grass and crops grow.
+func set_quality(level: int) -> void:
+	quality = clampi(level, 0, GRASS_QUALITY.size() - 1)
+	draw_scale = float(GraphicsPresets.preset(quality).ow_draw_scale)
+	_apply_ranges()
 	for k in cells.keys():
 		_free_cell(k)
 	queue.clear()
@@ -501,6 +609,8 @@ func _plant(cell: Node3D, cx: int, cy: int, layer: int, far := false) -> void:
 		match layer:
 			0: _plant_tufts(cell, x0, y0)
 			1: _plant_bushes(cell, x0, y0)
+			2: _plant_corn_far(cell, x0, y0)
+			3: _plant_wheat_far(cell, x0, y0)
 		return
 	if not map.in_play(Vector2(x0 + CELL * 0.5, y0 + CELL * 0.5)):
 		return
@@ -615,11 +725,44 @@ func _grid(x0: float, y0: float, step: float, salt: float, size := CELL) -> Arra
 			out.append([x0 + (gx + 0.5 + (h - 0.5) * 0.8) * step, y0 + (gy + 0.5 + (h2 - 0.5) * 0.8) * step, h])
 	return out
 
+## Global row-aligned grid inside [x0, x0 + size) x [y0, y0 + size): seamless across cell boundaries, with small
+## organic jitter (jitter_u along dir, jitter_v across perp). Each entry is [x, y, hash].
+func _row_grid(x0: float, y0: float, step_u: float, step_v: float, dir: Vector2, perp: Vector2,
+		jitter_u: float, jitter_v: float, salt: float, size := CELL) -> Array:
+	var umin := INF
+	var umax := -INF
+	var vmin := INF
+	var vmax := -INF
+	for c: Vector2 in [Vector2(x0, y0), Vector2(x0 + size, y0), Vector2(x0, y0 + size), Vector2(x0 + size, y0 + size)]:
+		var u: float = c.dot(dir)
+		var v: float = c.dot(perp)
+		umin = minf(umin, u)
+		umax = maxf(umax, u)
+		vmin = minf(vmin, v)
+		vmax = maxf(vmax, v)
+	var iu0 := floori(umin / step_u) - 1
+	var iu1 := ceili(umax / step_u) + 1
+	var iv0 := floori(vmin / step_v) - 1
+	var iv1 := ceili(vmax / step_v) + 1
+	var out := []
+	for iv in range(iv0, iv1 + 1):
+		for iu in range(iu0, iu1 + 1):
+			var h := hash2(float(iu) * 0.37, float(iv) * 0.71, salt)
+			var h2 := hash2(float(iv) * 0.13, float(iu) * 0.57, salt + 3.0)
+			var u := (float(iu) + 0.5) * step_u + (h - 0.5) * 2.0 * jitter_u
+			var v := (float(iv) + 0.5) * step_v + (h2 - 0.5) * 2.0 * jitter_v
+			var p := dir * u + perp * v
+			if p.x >= x0 and p.x < x0 + size and p.y >= y0 and p.y < y0 + size:
+				out.append([p.x, p.y, h])
+	return out
+
 func _plant_wheat(cell: Node3D, x0: float, y0: float) -> void:
 	var xfs := []
 	var cols := []
 	for p in _grid(x0, y0, float(GRASS_QUALITY[quality].wheat), 1.0):
 		if _crop_at(_px(p[0], p[1])) != 1:
+			continue
+		if map.inside_building(Vector2(p[0], p[1])) or not _clear_of_road(p[0], p[1], 0.85):
 			continue
 		var h: float = p[2]
 		xfs.append(_place(p[0], p[1], h * TAU * 7.0, Vector3(1.0, 0.9 + hash2(p[0], p[1], 2.0) * 0.25, 1.0), -0.03))
@@ -631,7 +774,7 @@ func _plant_wheat(cell: Node3D, x0: float, y0: float) -> void:
 func _commit_patches(cell: Node3D, kind: String, xfs: Array, cols: Array, mat: Material) -> void:
 	var q: Dictionary = GRASS_QUALITY[quality]
 	var near := float(q.near)
-	var far := float(q.far) + CELL * 0.75 # the cell centre's distance; the shader sinks the blades by their own
+	var far := (_wheat_near_end() if mat == wheat_mat else float(q.far)) + CELL * 0.75 # the cell centre's distance; the shader sinks the blades by their own
 	# visibility ranges go by the cell's centre, so both kinds are drawn wherever the cell may reach into the
 	# hand-over band; the shader hands each blade over at its own distance
 	var buf := PackedFloat32Array()
@@ -639,23 +782,69 @@ func _commit_patches(cell: Node3D, kind: String, xfs: Array, cols: Array, mat: M
 		buf = _commit(cell, kind, xfs, cols, near + CELL * 0.75, wheat_near_mat if mat == wheat_mat else grass_near_mat)
 	_commit(cell, kind + "Low", xfs, cols, far, mat, maxf(0.0, near - HANDOVER - CELL * 0.75), buf)
 
+## Maize: 2-row patches aligned to CORN_ROW_DIR so rows interlock across cell boundaries (0.78 m row spacing at High/Ultra),
+## drawn with grass.gdshader (corn_mat) for wind sway, root darkening, backlight and smooth per-plant sinking into CornFar.
 func _plant_corn(cell: Node3D, x0: float, y0: float) -> void:
 	var xfs := []
 	var cols := []
-	for p in _grid(x0, y0, CORN_STEP, 5.0):
+	var q: Dictionary = GRASS_QUALITY[quality]
+	var su := float(q.corn_u)
+	var sv := float(q.corn_v)
+	var base_yaw := atan2(-CORN_ROW_DIR.y, CORN_ROW_DIR.x)
+	for p in _row_grid(x0, y0, su, sv, CORN_ROW_DIR, CORN_ROW_PERP, su * 0.14, 0.08, 5.0):
 		if _crop_at(_px(p[0], p[1])) != 0:
 			continue
+		if map.inside_building(Vector2(p[0], p[1])) or not _clear_of_road(p[0], p[1], 1.2):
+			continue
 		var h: float = p[2]
-		xfs.append(_place(p[0], p[1], h * TAU * 5.0, Vector3(1.0, 0.8 + hash2(p[0], p[1], 6.0) * 0.4, 1.0) * (0.9 + h * 0.2)))
-		var t := 0.85 + hash2(p[0], p[1], 8.0) * 0.25
-		cols.append(Color(t, t, t * 0.95))
-	# a cell's maize dithers out over CORN_MARGIN, all of it within the planted ring's lead
-	var end := float(GRASS_QUALITY[quality].far) + CELL * HALF_DIAG - CORN_MARGIN
-	_commit(cell, "Corn", xfs, cols, end)
-	var mz := cell.get_child(cell.get_child_count() - 1) as GeometryInstance3D if cell.get_child_count() > 0 else null
-	if mz and mz.name == "Corn":
-		mz.visibility_range_end_margin = CORN_MARGIN
-		mz.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+		var yaw := base_yaw + (PI if h > 0.5 else 0.0) + (hash2(p[0], p[1], 7.0) - 0.5) * 0.16
+		var sy := 0.90 + hash2(p[0], p[1], 6.0) * 0.24
+		var sxz := 0.95 + h * 0.14
+		xfs.append(_place(p[0], p[1], yaw, Vector3(sxz, sy, sxz), -0.04))
+		var t := 0.88 + hash2(p[0], p[1], 8.0) * 0.24
+		var dry := 0.08 + 0.22 * vnoise(p[0], p[1], 36.0, 9.0)
+		cols.append(Color(t * (0.96 + 0.08 * h), t, t * (0.92 + 0.1 * h), dry))
+	_commit(cell, "Corn", xfs, cols, _corn_near() + CELL * 0.75, corn_mat)
+
+## Far-layer maize canopy tufts in FAR_CELL squares: rise smoothly as near Corn sinks, keeping fields a dense 2 m wall out past 200 m.
+func _plant_corn_far(cell: Node3D, x0: float, y0: float) -> void:
+	var xfs := []
+	var cols := []
+	for p in _grid(x0, y0, CORN_FAR_STEP, 41.0, FAR_CELL):
+		if _crop_at(_px(p[0], p[1])) != 0:
+			continue
+		if map.inside_building(Vector2(p[0], p[1])) or not _clear_of_road(p[0], p[1], 2.3):
+			continue
+		var h: float = p[2]
+		var sy := 0.92 + hash2(p[0], p[1], 42.0) * 0.20
+		var sxz := 0.96 + hash2(p[0], p[1], 43.0) * 0.18
+		xfs.append(_place(p[0], p[1], h * TAU * 3.0, Vector3(sxz, sy, sxz), -0.05))
+		var t := 0.90 + hash2(p[0], p[1], 44.0) * 0.20
+		cols.append(Color(t, t, t * 0.96, 0.12 + 0.2 * vnoise(p[0], p[1], 40.0, 45.0)))
+	var c_near := _corn_near()
+	var c_fade := minf(CORN_FADE, c_near * 0.4)
+	_commit(cell, "CornFar", xfs, cols, _corn_far() + FAR_CELL * HALF_DIAG, corn_far_mat,
+		maxf(0.0, c_near - c_fade - FAR_CELL * HALF_DIAG))
+
+## Far-layer wheat canopy tufts in FAR_CELL squares: rise smoothly as WheatPatchLow sinks, keeping ripe fields standing out past 200 m.
+func _plant_wheat_far(cell: Node3D, x0: float, y0: float) -> void:
+	var xfs := []
+	var cols := []
+	for p in _grid(x0, y0, WHEAT_FAR_STEP, 51.0, FAR_CELL):
+		if _crop_at(_px(p[0], p[1])) != 1:
+			continue
+		if map.inside_building(Vector2(p[0], p[1])) or not _clear_of_road(p[0], p[1], 2.3):
+			continue
+		var h: float = p[2]
+		var sy := 0.92 + hash2(p[0], p[1], 52.0) * 0.20
+		var sxz := 0.96 + hash2(p[0], p[1], 53.0) * 0.18
+		xfs.append(_place(p[0], p[1], h * TAU * 3.0, Vector3(sxz, sy, sxz), -0.04))
+		var t := 0.90 + hash2(p[0], p[1], 54.0) * 0.20
+		cols.append(Color(t, t * (0.97 + 0.05 * h), t * (0.92 + 0.1 * h), 0.2 + 0.3 * vnoise(p[0], p[1], 36.0, 55.0)))
+	var w_end := _wheat_near_end()
+	var w_fade := minf(FAR_FADE, w_end * 0.5)
+	_commit(cell, "WheatFar", xfs, cols, _wheat_far() + FAR_CELL * HALF_DIAG, wheat_far_mat,
+		maxf(0.0, w_end - w_fade - FAR_CELL * HALF_DIAG))
 
 ## Meadow grass: thinned and sized by _grass_at (tall clumps along the edges, a thinner, shorter open meadow, mown
 ## lawns, parks and verges); pitches stay bare.
