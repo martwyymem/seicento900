@@ -1923,12 +1923,20 @@ func _plan_button(i: int) -> Button:
 	right.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(right)
 	b.pressed.connect(func() -> void:
+		var had_focus := b.has_focus()
 		strategy_choice = i
 		custom_stints = []
 		for child in strategy_list.get_children():
+			strategy_list.remove_child(child)
 			child.queue_free()
+		var target: Button = null
 		for k in strategy_options.size():
-			strategy_list.add_child(_plan_button(k))
+			var nb := _plan_button(k)
+			strategy_list.add_child(nb)
+			if k == i:
+				target = nb
+		if had_focus and target != null:
+			target.grab_focus()
 		_render_custom_rows()
 	)
 	return b

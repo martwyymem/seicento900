@@ -415,7 +415,6 @@ func _hud(errors: Array[String], tree: SceneTree) -> void:
 	tree.root.add_child(host)
 	var hud := OpenWorldHud.new()
 	host.add_child(hud)
-	hud.size = Vector2(1600, 900)
 	await tree.process_frame
 	await tree.process_frame
 	var map := TownMap.load_map(OpenWorld.MAP_KEY)

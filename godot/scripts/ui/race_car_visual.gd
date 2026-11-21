@@ -1066,6 +1066,8 @@ static func _lamp_centre(mesh: Mesh, surface: int) -> Vector2:
 ## Keeps the player's near-bumper dipped apron light and ground beam pool in step with nightfall (and hides both if a
 ## probe explicitly switched off the parent's open-world SpotLight3D beams).
 func _sync_headlight_apron(head: float) -> void:
+	if head <= 0.0 and _near_beam == null and _beam_pool == null:
+		return # daytime and never lit: no children scan, no resource lookup every frame
 	var has_spot := false
 	var any_spot_on := false
 	for c in get_children():

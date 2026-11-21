@@ -546,6 +546,23 @@ func _skin_changed() -> void:
 		_rim_cyan.light_color = neon
 	if is_instance_valid(_rim_hot):
 		_rim_hot.light_color = hot
+	var is_ps1 := CmrStyle.skin == "ps1"
+	if is_instance_valid(_title_lbl):
+		_title_lbl.add_theme_font_override("font", HudLayout.italic_font(900))
+		_title_lbl.add_theme_color_override("font_outline_color", Color(neon, 0.40))
+		_title_lbl.add_theme_constant_override("outline_size", 0 if is_ps1 else 6)
+	if is_instance_valid(_name):
+		_name.add_theme_font_override("font", HudLayout.italic_font(900))
+		_name.add_theme_color_override("font_outline_color", Color(neon, 0.32))
+		_name.add_theme_constant_override("outline_size", 0 if is_ps1 else 5)
+	if is_instance_valid(_hint):
+		_hint.add_theme_font_override("font", HudLayout.italic_font(800))
+		_hint.add_theme_color_override("font_color", HudLayout.neon_boost())
+	if is_instance_valid(_paint_name):
+		_paint_name.add_theme_font_override("font", HudLayout.italic_font(900))
+	if is_instance_valid(_keys):
+		_keys.add_theme_font_override("font", HudLayout.italic_font(700))
+		_keys.add_theme_color_override("font_color", neon.lightened(0.32))
 	if is_instance_valid(_rows):
 		for k in _rows.get_child_count():
 			_style_row(_rows.get_child(k) as Button, k == car_index, not CarCatalog.unlocked(cars[k], fans))

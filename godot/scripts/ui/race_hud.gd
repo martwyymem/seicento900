@@ -1013,6 +1013,8 @@ func _fit_font(f: Font, s: String, size: int, width: float) -> String:
 		while out.length() > 1 and f.get_string_size(out + "…", HORIZONTAL_ALIGNMENT_LEFT, -1, size).x > width:
 			out = out.left(-1)
 		out += "…"
+	if _fitted.size() >= 512:
+		_fitted.clear()
 	_fitted[key] = out
 	return out
 
