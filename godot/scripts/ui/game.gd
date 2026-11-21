@@ -277,6 +277,8 @@ var preset_picker: MenuSelector
 var preset_note: Label
 var graphics_shadows := true
 var codriver_voice := true ## Options → Co-driver voice: the pace notes are read aloud
+var control_hints := false ## Options → Control hints: the key line along the bottom of the race and free-roam HUDs (H still opens the guide)
+var control_hints_toggle: CheckButton
 var graphics_ui_scale := 1 ## index into UI_SCALES
 var ui_scale_picker: MenuSelector
 var hud_motion_picker: MenuSelector
@@ -344,6 +346,7 @@ var crew_picker: MenuSelector
 var ai_learning_picker: MenuSelector
 var bot_physics_picker: MenuSelector
 var player_name_edit: LineEdit
+var _field_before := "" ## the text a name or number field had when Enter opened it (Esc puts it back)
 var player_number_picker: SpinBox
 var player_color_picker: ColorPickerButton
 var player_stripes_toggle: CheckButton
@@ -1046,7 +1049,7 @@ func _build_setup() -> void:
 	player_name_edit.text = "You"
 	player_name_edit.placeholder_text = "Driver name"
 	player_name_edit.custom_minimum_size.y = 40
-	player_name_edit.tooltip_text = "Type your name; ↑ ↓ leave the field"
+	player_name_edit.tooltip_text = "Enter to type your name, Enter again to keep it (Esc puts the old one back)"
 	name_col.add_child(player_name_edit)
 	player_number_picker = _spin(profile_row, "CAR NO.", 1, 99, 9)
 	var paint_col := VBoxContainer.new()
@@ -1377,6 +1380,8 @@ func _collect_focusable(node: Node, out: Array[Control]) -> void:
 func _focus_setup_item(items: Array[Control], index: int) -> void:
 	_setup_focus_at = clampi(index, 0, items.size() - 1)
 	items[_setup_focus_at].grab_focus()
+	if items[_setup_focus_at] is LineEdit:
+		(items[_setup_focus_at] as LineEdit).unedit() # (grab_focus starts typing: Enter does that here)
 	_reveal_setting.call_deferred(items[_setup_focus_at])
 
 ## Scroll the whole row of a focused setting into view (follow_focus alone shows just the control, so a
@@ -1519,17 +1524,44 @@ func _input(event: InputEvent) -> void:
 	if page == "home" or (page == "setup" and not setup_panel.visible):
 		return
 	var owner := get_viewport().gui_get_focus_owner()
-	var typing := owner == player_name_edit
 	var key: Key = event.keycode if event is InputEventKey else KEY_NONE
 	var pad: JoyButton = event.button_index if event is InputEventJoypadButton else JOY_BUTTON_INVALID
 	var echo: bool = event.is_echo()
-	if key == KEY_ESCAPE or pad == JOY_BUTTON_B or (key == KEY_BACKSPACE and not typing and page != "setup"):
+	# the driver name and the number boxes: Enter starts typing and Enter (or Esc, which puts the old text back)
+	# finishes; while typing every other key is the field's, so Backspace deletes instead of leaving the page
+	var field := owner as LineEdit
+	if field != null and page in ["setup", "advanced", "car", "strategy"]:
+		var spin := field.get_parent() as SpinBox
+		if field.is_editing():
+			if key in [KEY_ENTER, KEY_KP_ENTER, KEY_ESCAPE] or pad in [JOY_BUTTON_A, JOY_BUTTON_B]:
+				if not echo:
+					if key == KEY_ESCAPE or pad == JOY_BUTTON_B:
+						field.text = _field_before
+					if spin:
+						spin.apply()
+					field.unedit()
+				get_viewport().set_input_as_handled()
+			return
+		if key in [KEY_ENTER, KEY_KP_ENTER]:
+			if not echo:
+				_field_before = field.text
+				field.edit()
+				if spin:
+					field.select_all()
+				else:
+					field.caret_column = field.text.length()
+			get_viewport().set_input_as_handled()
+			return
+		if key in [KEY_BACKSPACE, KEY_DELETE]:
+			get_viewport().set_input_as_handled() # not typing: Delete does nothing here (and never backs out)
+			return
+	if key == KEY_ESCAPE or pad == JOY_BUTTON_B or (key == KEY_BACKSPACE and page != "setup"):
 		if not echo:
 			_show_home()
-	elif page in MENU_PAGE_IDS and ((key in [KEY_Q, KEY_PAGEUP] and not typing) or pad == JOY_BUTTON_LEFT_SHOULDER):
+	elif page in MENU_PAGE_IDS and (key in [KEY_Q, KEY_PAGEUP] or pad == JOY_BUTTON_LEFT_SHOULDER):
 		if not echo:
 			_step_menu_page(-1)
-	elif page in MENU_PAGE_IDS and ((key in [KEY_E, KEY_PAGEDOWN] and not typing) or pad == JOY_BUTTON_RIGHT_SHOULDER):
+	elif page in MENU_PAGE_IDS and (key in [KEY_E, KEY_PAGEDOWN] or pad == JOY_BUTTON_RIGHT_SHOULDER):
 		if not echo:
 			_step_menu_page(1)
 	elif pad == JOY_BUTTON_START and page in MENU_PAGE_IDS:
@@ -1562,8 +1594,6 @@ func _input(event: InputEvent) -> void:
 			[KEY_END, _]: dy = items.size()
 			[_, JOY_BUTTON_A]: pass
 			_: return
-		if typing and (dx != 0 or key in [KEY_HOME, KEY_END]):
-			return # the caret's keys while the name is typed
 		if at < 0:
 			if page != "options":
 				_focus_setup_item(items, _setup_focus_at) # nothing picked yet (or it went away): the first press picks
@@ -3397,8 +3427,13 @@ func _build_options_page() -> void:
 	retro_picker.item_selected.connect(_on_retro_selected)
 	hud_motion_picker = _option_field(retro_row, "HUD MOTION", HudMotion.MODE_NAMES)
 	hud_motion_picker.item_selected.connect(_on_hud_motion_selected)
-	_grid_spacers(retro_row, 1)
-	var retro_note := _label("Pick a look from a classic racing game (F1 cycles in a race). HUD motion sways the HUD with car g-forces.", 14, MUTED)
+	var hints_column := VBoxContainer.new()
+	hints_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	retro_row.add_child(hints_column)
+	_field_label(hints_column, "CONTROL HINTS")
+	control_hints_toggle = _check_field(hints_column, "Show the key line", control_hints)
+	control_hints_toggle.toggled.connect(_on_control_hints_toggled)
+	var retro_note := _label("Pick a look from a classic racing game (F1 cycles in a race). HUD motion sways the HUD with car g-forces. The key line lists the controls along the bottom of the screen; H opens the full guide in a race either way.", 14, MUTED)
 	retro_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	column.add_child(retro_note)
 	_menu_rule(column)
@@ -3591,6 +3626,14 @@ func _restyle_neon_fonts(node: Node, is_ps1: bool) -> void:
 						sf.skew = Vector2.ZERO
 	for child in node.get_children():
 		_restyle_neon_fonts(child, is_ps1)
+
+func _on_control_hints_toggled(enabled: bool) -> void:
+	control_hints = enabled
+	if is_instance_valid(hud):
+		hud.set_hints(enabled)
+	if open_world != null:
+		open_world.hud.set_hints(enabled)
+	_save_graphics_settings()
 
 func _on_codriver_voice_toggled(enabled: bool) -> void:
 	codriver_voice = enabled
@@ -3862,6 +3905,7 @@ func _load_graphics_settings() -> void:
 			hud_width_picker.select(HudLayout.hud_width)
 		AudioSettings.load_from(config)
 		codriver_voice = bool(config.get_value("audio", "co_driver_voice", true))
+		control_hints = bool(config.get_value("graphics", "control_hints", false))
 		graphics_retro_mode = clampi(int(config.get_value("graphics", "retro_mode", 0)), 0, RetroPipeline.MODE_NAMES.size() - 1)
 		HudMotion.load_from(config)
 		if is_instance_valid(hud_motion_picker):
@@ -3955,6 +3999,7 @@ func _save_graphics_settings() -> void:
 	HudLayout.save_to(config)
 	AudioSettings.save_to(config)
 	config.set_value("audio", "co_driver_voice", codriver_voice)
+	config.set_value("graphics", "control_hints", control_hints)
 	config.set_value("graphics", "retro_mode", graphics_retro_mode)
 	HudMotion.save_to(config)
 	config.save(SaveData.path("graphics.cfg"))
@@ -4782,6 +4827,7 @@ func _set_up_race() -> void:
 	pause_dim.hide()
 	get_viewport().gui_release_focus()
 	hud.voice_on = codriver_voice
+	hud.hints_on = control_hints
 	hud.start(race, world_view, audio)
 	hud.records = lap_records
 	status_label.text = ""
@@ -5396,6 +5442,7 @@ func _enter_open_world(spawn) -> void:
 		"ssao": graphics_ssao,
 		"reflections": graphics_reflections,
 		"render_size": _render_resolution,
+		"hints": control_hints,
 	})
 
 ## Pays a campaign result's fans into the open-world progress (live if the world is loaded, else the save) and
@@ -6043,6 +6090,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if not race:
 		if not down:
 			return
+		var typing_in := get_viewport().gui_get_focus_owner() as LineEdit
+		if typing_in != null and typing_in.is_editing():
+			return # Backspace in a text field the field did not need (nothing left to delete) must not leave the page
 		if active_menu_page == "home":
 			match event.keycode:
 				KEY_LEFT, KEY_A, KEY_UP, KEY_W:

@@ -35,7 +35,10 @@ const STAND_FILL := 0.7 ## share of its best rectangle a straight stand's outlin
 const TREE_BAND := [70.0, 90.0, 110.0, 140.0] ## trees one by one this far beyond the run-off, per quality
 const TREE_CELL := [8.0, 7.0, 6.2, 5.5] ## one tree per cell of this size in a wood
 const TREE_CAP := [9000, 16000, 26000, 40000]
-const TREE_VISIBLE := [700.0, 1000.0, 1000.0, 0.0] ## how far the single trees are drawn (0 always); past 1 km they barely show but cost a fifth of the GPU frame at Monza
+const TREE_VISIBLE := [700.0, 1000.0, 1000.0, 1600.0] ## how far the single trees are drawn; past 1 km they barely show but cost a fifth of the GPU frame at Monza (Ultra drew every tile: 1000 on the Nordschleife)
+const BUILDING_VISIBLE := 2600.0 ## building tiles past this are lost in the haze (a 27 km circuit has 600 of them)
+const CANOPY_VISIBLE := 4500.0 ## the wood's outline, the far backdrop: drawn further than the buildings
+const BLOCKAGE_VISIBLE := 500.0 ## the barriers across side roads
 
 ## Wall and roof colours of the buildings in each country.
 const PALETTES := {
@@ -677,6 +680,8 @@ func _build_canopy(root: Node3D, inner: float) -> void:
 		var inst := MeshInstance3D.new()
 		inst.mesh = mesh
 		inst.material_override = mat
+		inst.visibility_range_end = CANOPY_VISIBLE
+		inst.visibility_range_end_margin = 300.0
 		canopy.add_child(inst)
 
 ## Two outward-facing (CW) triangles closing one open canopy rim edge from tops down to bases.
@@ -781,6 +786,8 @@ func _build_buildings(root: Node3D) -> void:
 		var inst := MeshInstance3D.new()
 		inst.mesh = st.commit()
 		inst.material_override = mat
+		inst.visibility_range_end = BUILDING_VISIBLE # (no fade: this far out the haze hides the switch)
+		inst.visibility_range_end_margin = 200.0
 		node.add_child(inst)
 
 func _add_building(st: SurfaceTool, ring: Array[Vector2], height: float, kind: int, wall: Color, roof: Color, seed: float) -> void:
@@ -1738,6 +1745,17 @@ func _build_road_blockages(root: Node3D) -> void:
 	sign_mesh.size = Vector2(0.48, 0.48)
 	sign_mesh.material = sign_mat
 
+	# every barrier is baked into its CHUNK tile, one surface per material: 189 barriers on the Nordschleife were
+	# 2800 mesh instances (a draw call each, times the shadow splits)
+	var board_mat := StandardMaterial3D.new()
+	board_mat.albedo_texture = stripe_tex
+	board_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	board_mat.roughness = 0.35
+	var mats: Array[Material] = [board_mat, foot_mat, steel_mat, post_mat, reflector_mat, sign_mat]
+	for m: PrimitiveMesh in [post_mesh, marker_mesh, ring_mesh]:
+		(m as CylinderMesh).radial_segments = 10
+		(m as CylinderMesh).rings = 1
+	var tiles := {} # chunk -> [SurfaceTool per material]
 	for i in blockages.size():
 		var entry: Array = blockages[i]
 		if entry.size() < 4:
@@ -1746,73 +1764,53 @@ func _build_road_blockages(root: Node3D) -> void:
 		var y: float = float(entry[1])
 		var angle: float = float(entry[2])
 		var width: float = float(entry[3])
-
-		var pos_y := ground_height(x, y)
-		var b_node := Node3D.new()
-		b_node.name = "Blockage_%d" % i
-		b_node.position = Vector3(x - c.x, pos_y, y - c.y)
-		b_node.rotation.y = -angle
-		blockages_root.add_child(b_node)
-
-		var b_mat := StandardMaterial3D.new()
-		b_mat.albedo_texture = stripe_tex
-		b_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-		b_mat.uv1_scale = Vector3(maxf(1.0, width / 1.0), 1.0, 1.0)
-		b_mat.roughness = 0.35
-
-		var upper_board := MeshInstance3D.new()
-		var upper_mesh := BoxMesh.new()
-		upper_mesh.size = Vector3(width, 0.32, 0.05)
-		upper_mesh.material = b_mat
-		upper_board.mesh = upper_mesh
-		upper_board.position = Vector3(0.0, 0.72, 0.0)
-		b_node.add_child(upper_board)
-
-		var lower_board := MeshInstance3D.new()
-		var lower_mesh := BoxMesh.new()
-		lower_mesh.size = Vector3(width, 0.22, 0.05)
-		lower_mesh.material = b_mat
-		lower_board.mesh = lower_mesh
-		lower_board.position = Vector3(0.0, 0.32, 0.0)
-		b_node.add_child(lower_board)
-
+		var key := _chunk(x, y)
+		if not tiles.has(key):
+			var sts: Array[SurfaceTool] = []
+			for m in mats:
+				var st := SurfaceTool.new()
+				st.begin(Mesh.PRIMITIVE_TRIANGLES)
+				sts.append(st)
+			tiles[key] = sts
+		var sts: Array[SurfaceTool] = tiles[key]
+		var at := Transform3D(Basis(Vector3.UP, -angle), Vector3(x - c.x, ground_height(x, y), y - c.y))
+		var put := func(slot: int, mesh: Mesh, local: Vector3) -> void:
+			sts[slot].append_from(mesh, 0, at * Transform3D(Basis.IDENTITY, local))
+		# the stripes repeat once a metre along the board (the UVs stretched as uv1_scale did)
+		for board: Vector2 in [Vector2(0.32, 0.72), Vector2(0.22, 0.32)]:
+			var box := BoxMesh.new()
+			box.size = Vector3(width, board.x, 0.05)
+			var arrays := box.get_mesh_arrays()
+			var uv: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+			for k in uv.size():
+				uv[k].x *= maxf(1.0, width)
+			arrays[Mesh.ARRAY_TEX_UV] = uv
+			var am := ArrayMesh.new()
+			am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+			put.call(0, am, Vector3(0.0, board.y, 0.0))
 		var span_half := width * 0.42
-		for sgn: float in [-1.0, 1.0]:
-			var foot := MeshInstance3D.new()
-			foot.mesh = foot_mesh
-			foot.position = Vector3(span_half * sgn, 0.11, 0.0)
-			b_node.add_child(foot)
-
-			var post := MeshInstance3D.new()
-			post.mesh = post_mesh
-			post.position = Vector3(span_half * sgn, 0.525, 0.0)
-			b_node.add_child(post)
-
+		var legs: Array[float] = [-span_half, span_half]
 		if width > 5.2:
-			var mid_foot := MeshInstance3D.new()
-			mid_foot.mesh = foot_mesh
-			mid_foot.position = Vector3(0.0, 0.11, 0.0)
-			b_node.add_child(mid_foot)
-
-			var mid_post := MeshInstance3D.new()
-			mid_post.mesh = post_mesh
-			mid_post.position = Vector3(0.0, 0.525, 0.0)
-			b_node.add_child(mid_post)
-
+			legs.append(0.0)
+		for lx in legs:
+			put.call(1, foot_mesh, Vector3(lx, 0.11, 0.0))
+			put.call(2, post_mesh, Vector3(lx, 0.525, 0.0))
 		for sgn: float in [-1.0, 1.0]:
 			var marker_x: float = (width * 0.5 + 0.36) * sgn
-			var marker := MeshInstance3D.new()
-			marker.mesh = marker_mesh
-			marker.position = Vector3(marker_x, 0.475, 0.0)
-			b_node.add_child(marker)
-
+			put.call(3, marker_mesh, Vector3(marker_x, 0.475, 0.0))
 			for ry: float in [0.55, 0.75]:
-				var ring := MeshInstance3D.new()
-				ring.mesh = ring_mesh
-				ring.position = Vector3(marker_x, ry, 0.0)
-				b_node.add_child(ring)
-
-		var sign_inst := MeshInstance3D.new()
-		sign_inst.mesh = sign_mesh
-		sign_inst.position = Vector3(0.0, 0.72, 0.035)
-		b_node.add_child(sign_inst)
+				put.call(4, ring_mesh, Vector3(marker_x, ry, 0.0))
+		put.call(5, sign_mesh, Vector3(0.0, 0.72, 0.035))
+	for key in tiles:
+		var am := ArrayMesh.new()
+		var sts: Array[SurfaceTool] = tiles[key]
+		for k in sts.size():
+			sts[k].commit(am)
+			am.surface_set_material(am.get_surface_count() - 1, mats[k])
+		var inst := MeshInstance3D.new()
+		inst.name = "Blockages_%d_%d" % [key.x, key.y]
+		inst.mesh = am
+		inst.visibility_range_end = BLOCKAGE_VISIBLE
+		inst.visibility_range_end_margin = 60.0
+		inst.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+		blockages_root.add_child(inst)

@@ -52,6 +52,7 @@ const SUITES := [
 	"res://tests/test_map_nav.gd",
 	"res://tests/test_poi.gd",
 	"res://tests/test_gamepad_menus.gd",
+	"res://tests/test_name_field.gd",
 	"res://tests/test_model_contract.gd",
 	"res://tests/test_handbrake.gd",
 	"res://tests/test_fan_levels.gd",

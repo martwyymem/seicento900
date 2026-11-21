@@ -341,6 +341,7 @@ func _build() -> void:
 	help_label.offset_top = -28
 	help_label.offset_bottom = -8
 	help_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	help_label.visible = false # Options → Control hints (set_hints)
 	safe_frame.add_child(help_label)
 	resized.connect(_layout)
 	_build_big_map()
@@ -409,6 +410,7 @@ func _build_pause() -> void:
 	pause_panel.offset_top = -260
 	pause_panel.offset_bottom = 260
 	pause_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+	pause_panel.resized.connect(_fit_pause_skew)
 	add_child(pause_panel)
 	pause_col = VBoxContainer.new()
 	pause_col.add_theme_constant_override("separation", 8)
@@ -417,6 +419,19 @@ func _build_pause() -> void:
 	pause_col.add_child(pause_title)
 	set_pause_page("PAUSED", PAUSE_ITEMS)
 	pause_panel.hide()
+
+## The plate is sheared (skew), so its corners lean in by skew * half its height: pads the sides by that much so the
+## top and bottom buttons (and their focus frames) stay inside the slanted box on pages of any length.
+func _fit_pause_skew() -> void:
+	var sb := pause_panel.get_theme_stylebox("panel") as StyleBoxFlat
+	if sb == null:
+		return
+	var pad := 24.0 + absf(sb.skew.x) * pause_panel.size.y * 0.5 + 6.0
+	if absf(sb.content_margin_left - pad) > 0.5:
+		sb.content_margin_left = pad
+		sb.content_margin_right = pad
+		pause_panel.offset_left = -206.0 - pad
+		pause_panel.offset_right = 206.0 + pad
 
 ## Fills the pause panel with one page of buttons: [[action, text, (disabled)]]. The main page is PAUSE_ITEMS; the
 ## MODIFIERS page lists CarMods with "mod:<id>" actions and a "mods_back".
@@ -614,7 +629,7 @@ func _layout() -> void:
 	var help_h := _line_h(help_label)
 	help_label.offset_bottom = -8.0
 	help_label.offset_top = -8.0 - help_h
-	street_label.offset_bottom = help_label.offset_top - 6.0
+	street_label.offset_bottom = (help_label.offset_top - 6.0) if help_label.visible else -12.0
 	street_label.offset_top = street_label.offset_bottom - _line_h(street_label)
 	var sf := street_label.get_theme_font("font")
 	var sw := minf(maxf(0.0, low * 2.0 - 28.0), sf.get_string_size(street_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, street_label.get_theme_font_size("font_size")).x + street_label.get_theme_constant("outline_size"))
@@ -915,6 +930,7 @@ func _skin_changed() -> void:
 			sb.bg_color = Color(CmrStyle.PLATE, 0.88)
 			sb.skew = Vector2(0.0 if CmrStyle.skin == "ps1" else -0.09, 0.0)
 			sb.shadow_size = 0 if CmrStyle.skin == "ps1" else 12
+	_fit_pause_skew()
 	if is_instance_valid(stats_plate):
 		stats_plate.add_theme_stylebox_override("panel", _stats_plate_box())
 	if is_instance_valid(live_plate):
@@ -1031,6 +1047,12 @@ func set_car_label(hyper: bool, unlocked: bool, car_name := "") -> void: # car_n
 	for b in pause_buttons:
 		if b.text.begins_with("CAR:"):
 			b.text = ("CAR: " + car_name.to_upper()) if car_name != "" else "CAR: HYPERCAR SEICENTO" if hyper else ("CAR: SEICENTO" if unlocked else "CAR: SEICENTO  (HYPERCAR AT LEVEL 10)")
+
+## Options → Control hints: the key line along the bottom of the screen.
+func set_hints(on: bool) -> void:
+	if help_label.visible != on:
+		help_label.visible = on
+		_layout()
 
 func show_pause(on: bool) -> void:
 	if on and not pause_panel.visible:

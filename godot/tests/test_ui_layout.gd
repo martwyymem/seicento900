@@ -109,6 +109,7 @@ func _check_race_hud(errors: Array[String], tree: SceneTree) -> void:
 		var tag := _tag(canvas, combo[1])
 		var host := _host(tree, canvas)
 		var hud := RaceHud.new()
+		hud.hints_on = true # the key line is off by default (Options → Control hints): lay it out too
 		host.add_child(hud)
 		hud.start(race, null, null)
 		race.phase = "racing"
@@ -178,6 +179,7 @@ func _check_overtake_calls(errors: Array[String], tree: SceneTree) -> void:
 	var race := Race.new(rs)
 	var host := _host(tree, Vector2(1600, 900))
 	var hud := RaceHud.new()
+	hud.hints_on = true # the key line is off by default (Options → Control hints): lay it out too
 	host.add_child(hud)
 	hud.start(race, null, null)
 	race.phase = "racing"
@@ -237,6 +239,7 @@ func _check_solo_huds(errors: Array[String], tree: SceneTree) -> void:
 			var safe := HudLayout.safe_rect(canvas)
 			var host := _host(tree, canvas)
 			var hud := RaceHud.new()
+			hud.hints_on = true # the key line is off by default (Options → Control hints): lay it out too
 			host.add_child(hud)
 			hud.start(race, null, null)
 			race.phase = "racing"
@@ -274,6 +277,7 @@ func _check_solo_huds(errors: Array[String], tree: SceneTree) -> void:
 func _check_skins(errors: Array[String], tree: SceneTree) -> void:
 	var host := _host(tree, Vector2(1600, 900))
 	var hud := RaceHud.new()
+	hud.hints_on = true # the key line is off by default (Options → Control hints): lay it out too
 	host.add_child(hud)
 	var ow := OpenWorldHud.new()
 	host.add_child(ow)
@@ -318,6 +322,7 @@ func _check_open_world_hud(errors: Array[String], tree: SceneTree) -> void:
 		var host := _host(tree, canvas)
 		var hud := OpenWorldHud.new()
 		host.add_child(hud)
+		hud.set_hints(true) # off by default (Options → Control hints): lay the key line out too
 		hud.set_stats(123456, 210, 1480, 18.5)
 		hud.set_chain(4321, "DRIFT · NEAR MISS · AIR")
 		for k in 4:
@@ -356,6 +361,7 @@ func _check_open_world_hud(errors: Array[String], tree: SceneTree) -> void:
 func _check_shared_speedo(errors: Array[String], tree: SceneTree) -> void:
 	var host := _host(tree, Vector2(1600, 900))
 	var rhud := RaceHud.new()
+	rhud.hints_on = true
 	host.add_child(rhud)
 	var ow := OpenWorldHud.new()
 	host.add_child(ow)
@@ -448,6 +454,7 @@ func _check_shared_speedo(errors: Array[String], tree: SceneTree) -> void:
 		var h2 := _host(tree, canvas)
 		var hud := OpenWorldHud.new()
 		h2.add_child(hud)
+		hud.set_hints(true) # off by default (Options → Control hints): lay the key line out too
 		hud.set_street("Ulica Księdza Józefa Stanisława Kaczmarczyka")
 		hud.set_nitro(0.5, false)
 		hud.show_event("LIVE", "S1 Sprint", "Flat out down the S1 carriageway. ".repeat(6), "ENTER  ▸  START", CmrStyle.ORANGE)

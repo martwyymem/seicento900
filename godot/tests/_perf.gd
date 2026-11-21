@@ -1,5 +1,5 @@
 ## Frame-cost benchmark for the race world: CPU time per frame (main thread) and GPU time, measured with vsync off.
-## Env: W, H (window size), OLD (1 = pre-optimisation MSAA/SSIL/sky settings), VSYNC (1 keeps it on), MAXFPS, TRACK, HOUR, RAIN, RT (0 off, 1 on), QUALITY (0-3), FSR (Viewport.Scaling3DMode), SCALE, FRAMES.
+## Env: OPP (opponents), ONEMAKE (1 = all rivals drive the player's car), W, H (window size), OLD (1 = pre-optimisation MSAA/SSIL/sky settings), VSYNC (1 keeps it on), MAXFPS, TRACK, HOUR, RAIN, RT (0 off, 1 on), QUALITY (0-3), FSR (Viewport.Scaling3DMode), SCALE, FRAMES.
 ##   godot --path godot -s tests/_perf.gd
 extends SceneTree
 
@@ -26,7 +26,8 @@ func _initialize() -> void:
 		world.world_environment.sky.process_mode = Sky.PROCESS_MODE_REALTIME
 	var rs := RaceSettings.new()
 	rs.track = key
-	rs.opponents = 15
+	rs.opponents = int(env.call("OPP")) if env.call("OPP") != "" else 15
+	world.one_make = env.call("ONEMAKE") == "1"
 	rs.start_hour = float(env.call("HOUR")) if env.call("HOUR") != "" else 14.0
 	var race := Race.new(rs)
 	world.set_race(race)
@@ -52,8 +53,10 @@ func _initialize() -> void:
 	times.sort()
 	cpu.sort()
 	gpu.sort()
-	print("RESULT frame %.2f ms  process %.2f ms  render-cpu %.2f ms  gpu %.2f ms  (draw calls %d)" % [
+	print("RESULT frame %.2f ms  process %.2f ms  render-cpu %.2f ms  gpu %.2f ms  (draw calls %d, objects %d, primitives %d)" % [
 		times[times.size() / 2], cpu[cpu.size() / 2],
 		RenderingServer.viewport_get_measured_render_time_cpu(root.get_viewport_rid()), gpu[gpu.size() / 2],
-		int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME))])
+		int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
+		int(Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)),
+		int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME))])
 	quit()

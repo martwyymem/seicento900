@@ -47,6 +47,7 @@ func _brake_alert(errors: Array[String], tree: SceneTree) -> void:
 	host.size = Vector2(1600, 900)
 	tree.root.add_child(host)
 	var hud := RaceHud.new()
+	hud.hints_on = true # the key line is off by default (Options → Control hints): lay it out too
 	host.add_child(hud)
 	hud.start(race, null, null)
 	await tree.process_frame
@@ -122,6 +123,7 @@ func _check(errors: Array[String], tree: SceneTree, race: Race, state: String, s
 	host.size = canvas
 	tree.root.add_child(host)
 	var hud := RaceHud.new()
+	hud.hints_on = true # the key line is off by default (Options → Control hints): lay it out too
 	host.add_child(hud)
 	hud.text_audit = []
 	hud.start(race, null, null)

@@ -120,6 +120,7 @@ var _last_lit := -1
 var _wrong_way_beep_t := 0.0
 var _finished_beep := false
 var _help_label: Label
+var hints_on := false ## the key line along the bottom (Options → Control hints); H opens the full guide regardless
 var voice_on := true ## the co-driver reads the notes aloud (Options → Co-driver voice)
 var _split_lap := -1 ## the lap the split marks below belong to
 var _split_prev_s := 0.0
@@ -312,7 +313,7 @@ func start(race_: Race, world_: Node3D, audio_: RaceAudio) -> void:
 	_last_lit = -1
 	_wrong_way_beep_t = 0.0
 	_finished_beep = false
-	help.visible = true
+	help.visible = hints_on
 	_help_full = false
 	if _help_label:
 		_help_label.text = QUICK_HELP
@@ -324,6 +325,14 @@ func start(race_: Race, world_: Node3D, audio_: RaceAudio) -> void:
 	_apply_motion()
 	show()
 	update(0.0)
+
+## Options → Control hints, mid-race: shows or hides the key line (an open full guide stays until H closes it).
+func set_hints(on: bool) -> void:
+	hints_on = on
+	if not _help_full:
+		help.visible = on
+		_help_key = ""
+		_fit_help()
 
 func toggle_help() -> void:
 	if not help.visible:

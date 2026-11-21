@@ -209,6 +209,7 @@ func open(spawn = "", opts := {}) -> void:
 		viewport.scaling_3d_scale = src.scaling_3d_scale
 	audio = opts.get("audio", audio)
 	render_size = opts.get("render_size", render_size)
+	hud.set_hints(bool(opts.get("hints", false)))
 	show()
 	active = true
 	paused = false
