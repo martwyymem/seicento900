@@ -102,7 +102,8 @@ func _shape(map: TownMap, live: LiveEvents, ev: Dictionary, home: Vector2, error
 	if String(ev.kind) != want_kind:
 		errors.append("live %s runs as '%s' (should be '%s')" % [mk, ev.kind, want_kind])
 	var rv: Vector2i = LiveEvents.RIVALS[mk]
-	if int(ev.rivals) < rv.x or int(ev.rivals) > rv.y:
+	var lo := 2 if mk == "drag" else rv.x # (a drag on a narrower street lines up three abreast: StreetRivals.drag_rivals_fit)
+	if int(ev.rivals) < lo or int(ev.rivals) > rv.y:
 		errors.append("live %s has %d rivals" % [mk, int(ev.rivals)])
 	var cps: PackedVector2Array = ev.cps
 	var length := float(ev.length)
@@ -124,7 +125,8 @@ func _shape(map: TownMap, live: LiveEvents, ev: Dictionary, home: Vector2, error
 		"drag":
 			if not float(length) in LiveEvents.DRAG_LENGTHS and absf(length - 402.0) > 2.0 and absf(length - 1000.0) > 2.0:
 				errors.append("drag is %.0f m long" % length)
-			if p.distance_to(ev.goal) < length * 0.97 or String(ev.grid) != "drag" or int(ev.rivals) != 3:
+			var narrow := StreetRivals.drag_half(LiveEvents.route_profile(map, ev.path, 20.0).half, 1 << 20)
+			if p.distance_to(ev.goal) < length * 0.97 or String(ev.grid) != "drag" or int(ev.rivals) != mini(3, StreetRivals.drag_rivals_fit(narrow)):
 				errors.append("drag is not a straight four-abreast line (%.0f m chord of %.0f, grid '%s')" % [p.distance_to(ev.goal), length, ev.grid])
 			for h in (LiveEvents.route_profile(map, ev.path, 20.0).half as PackedFloat32Array):
 				if h < LiveEvents.DRAG_HALF:
@@ -181,7 +183,7 @@ func _weather_targets(map: TownMap, by_kind: Dictionary, errors: Array[String]) 
 	var snow_mu := float(MapMissions.weather_state("snow").mu)
 	# 1. drag_time follows pace_time's grip ratio, not a flat multiplier
 	var ratios_402 := {}
-	for car in ["stock", "golf4", "logan", "v50", "hypercar"]:
+	for car in ["stock", "golf4", "logan", "v50", "i20", "sandero", "focus", "zafira", "hypercar"]:
 		var d402 := LiveEvents.drag_time(car, 402.0)
 		var d402_1 := LiveEvents.drag_time(car, 402.0, 1.0)
 		var w402 := LiveEvents.drag_time(car, 402.0, wet_mu)

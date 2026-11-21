@@ -10,6 +10,7 @@ func run() -> Array:
 	var errors: Array[String] = []
 	_states(errors)
 	_shaders(errors)
+	_road_glitter_regression(errors)
 	var map := TownMap.load_map(OpenWorld.MAP_KEY)
 	if map == null:
 		errors.append("data/world/%s.json did not load" % OpenWorld.MAP_KEY)
@@ -44,6 +45,74 @@ func _shaders(errors: Array[String]) -> void:
 					errors.append("%s uniform '%s' defaults to %s, not 0" % [label, u, str(def_v)])
 	if surroundings_s.BUILDING_SHADER != TownBuilder.BUILDING_SHADER or surroundings_s.FOLIAGE_SHADER != TownBuilder.FOLIAGE_SHADER or race_world_s.FOLIAGE_SHADER != TownBuilder.FOLIAGE_SHADER:
 		errors.append("race and open-world building/foliage shaders diverged")
+
+## Regression test for wet-road glitter behind cars (TASKS.md): road.gdshader and town_road.gdshader load cleanly,
+## declare the weather uniforms defaulting to 0, quench dry aggregate sparkle when wet, and flatten micro_n under the
+## wet film so specular micro-facets do not glitter behind cars.
+func _road_glitter_regression(errors: Array[String]) -> void:
+	var road_sh: Shader = load("res://shaders/road.gdshader")
+	if road_sh == null or road_sh.code.is_empty():
+		errors.append("road.gdshader failed to load or has empty shader code")
+		return
+	var road_uniforms := {}
+	for info in road_sh.get_shader_uniform_list():
+		road_uniforms[String(info.get("name", ""))] = true
+	for u in ["wet", "rain", "snow", "night", "detail"]:
+		if not road_uniforms.has(u):
+			errors.append("road.gdshader does not declare uniform '%s'" % u)
+		else:
+			var def_v = RenderingServer.shader_get_parameter_default(road_sh.get_rid(), u)
+			if def_v != null and absf(float(def_v)) > 1e-6:
+				errors.append("road.gdshader uniform '%s' defaults to %s, not 0" % [u, str(def_v)])
+	var road_mat := ShaderMaterial.new()
+	road_mat.shader = road_sh
+	road_mat.set_shader_parameter("wet", 1.0)
+	road_mat.set_shader_parameter("rain", 0.7)
+	road_mat.set_shader_parameter("detail", 1.0)
+	if absf(float(road_mat.get_shader_parameter("wet")) - 1.0) > 1e-6:
+		errors.append("road.gdshader ShaderMaterial did not retain wet parameter")
+	# Check executable (non-comment) lines in road.gdshader for wet-film micro_n flattening and sparkle suppression
+	var has_micro_n_flatten := false
+	var has_spark_quench := false
+	for raw_line in road_sh.code.split("\n"):
+		var line := raw_line.split("//")[0].strip_edges()
+		if line.is_empty():
+			continue
+		if line.find("micro_n") >= 0 and line.find("nmap.xy") >= 0 and line.find("puddle") >= 0 and line.find("smoothstep(") >= 0 and line.find(", w)") >= 0:
+			has_micro_n_flatten = true
+		if line.find("spark") >= 0 and line.find("1.0 - w") >= 0:
+			has_spark_quench = true
+	if not has_micro_n_flatten:
+		errors.append("road.gdshader is missing wet-film micro_n flattening (smoothstep(..., w) + puddle attenuation on nmap.xy)")
+	if not has_spark_quench:
+		errors.append("road.gdshader is missing wet-road aggregate sparkle quenching (1.0 - w)")
+	# town_road.gdshader: weather uniforms and wet-film normal flattening
+	var town_sh: Shader = TownBuilder.ROAD_SHADER
+	if town_sh == null or town_sh.code.is_empty():
+		errors.append("town_road.gdshader failed to load or has empty shader code")
+		return
+	var town_uniforms := {}
+	for info in town_sh.get_shader_uniform_list():
+		town_uniforms[String(info.get("name", ""))] = true
+	for u in ["wet", "rain", "snow", "night"]:
+		if not town_uniforms.has(u):
+			errors.append("town_road.gdshader does not declare uniform '%s'" % u)
+		else:
+			var def_v = RenderingServer.shader_get_parameter_default(town_sh.get_rid(), u)
+			if def_v != null and absf(float(def_v)) > 1e-6:
+				errors.append("town_road.gdshader uniform '%s' defaults to %s, not 0" % [u, str(def_v)])
+	var town_flatten := false
+	var town_spark := false
+	for raw_line in town_sh.code.split("\n"):
+		var line := raw_line.split("//")[0].strip_edges()
+		if line.is_empty():
+			continue
+		if line.find("micro_n") >= 0 and line.find("flat_k") >= 0:
+			town_flatten = true
+		if line.find("spark") >= 0 and line.find("1.0 - w") >= 0:
+			town_spark = true
+	if not town_flatten or not town_spark:
+		errors.append("town_road.gdshader lost wet-film micro_n flattening or sparkle quenching (flatten=%s spark=%s)" % [town_flatten, town_spark])
 
 ## The weather modes as the races set them up, and their grip against a dry road.
 func _states(errors: Array[String]) -> void:
@@ -204,6 +273,25 @@ func _world(map: TownMap, errors: Array[String]) -> void:
 		errors.append("dry weather left weather particles emitting")
 	if float(ow.sky_mat.get_shader_parameter("overcast")) > 1e-5 or absf(ow.sun.light_energy - clear_sun) > 1e-5:
 		errors.append("dry weather did not restore clear sky and sun")
+	# WorldWeather hail state drives OpenWorld.set_weather, town_road wet shader, hail particles, overcast sky and grip
+	var hail_wx := WorldWeather.new(1, 12.0)
+	hail_wx.force("hail", 2.0, 0.9)
+	hail_wx.advance(0.3)
+	var hail_st := hail_wx.state()
+	ow.set_weather(hail_st)
+	if ow.weather != "hail" or ow.hail < 0.8 or absf(ow.drive.mu - float(hail_st.mu)) > 1e-6 or ow.drive.mu >= 0.72:
+		errors.append("OpenWorld.set_weather did not apply WorldWeather hail state: mode=%s hail=%.2f mu=%.3f" % [ow.weather, ow.hail, ow.drive.mu])
+	if float(road_mat.get_shader_parameter("wet")) < 0.35:
+		errors.append("WorldWeather hail did not wet town_road.gdshader: wet=%.3f" % float(road_mat.get_shader_parameter("wet")))
+	if ow.weather_fx and (not ow.weather_fx.hail.emitting or ow.weather_fx.snow.emitting or ow.weather_fx.fog.emitting):
+		errors.append("WorldWeather hail did not emit hail particles cleanly (hail=%s snow=%s fog=%s)" % [ow.weather_fx.hail.emitting, ow.weather_fx.snow.emitting, ow.weather_fx.fog.emitting])
+	if float(ow.sky_mat.get_shader_parameter("overcast")) < 0.4 or not (ow.sun.light_energy < clear_sun):
+		errors.append("WorldWeather hail did not make the sky overcast and dim the sun")
+	if WorldWeather.word(ow.weather_state()) != "HAIL":
+		errors.append("OpenWorld weather_state during hail did not format as HAIL: %s" % WorldWeather.word(ow.weather_state()))
+	ow.set_weather(MapMissions.weather_state("dry"))
+	if ow.weather_fx and ow.weather_fx.any_emitting():
+		errors.append("dry weather after hail left weather particles emitting")
 	ow.set_weather(MapMissions.weather_state("wet"))
 	if float(ground_mat.get_shader_parameter("wet")) < 0.8 or float(road_mat.get_shader_parameter("rain")) <= 0.0 or float(ground_mat.get_shader_parameter("snow")) != 0.0 or float(building_mat.get_shader_parameter("wet")) < 0.8 or float(foliage_mat.get_shader_parameter("wet")) < 0.8 or float(foliage_mat.get_shader_parameter("rain")) <= 0.0 or float(building_mat.get_shader_parameter("snow")) != 0.0 or float(foliage_mat.get_shader_parameter("snow")) != 0.0 or (landmark_mat != null and (float(landmark_mat.get_shader_parameter("wet")) < 0.8 or float(landmark_mat.get_shader_parameter("rain")) <= 0.0 or float(landmark_mat.get_shader_parameter("snow")) != 0.0)):
 		errors.append("wet weather did not update wet_materials (including building, foliage and landmark)")

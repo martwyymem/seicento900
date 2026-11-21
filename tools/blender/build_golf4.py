@@ -60,32 +60,52 @@ def bl(x, s, z):
 
 
 # ---------------------------------------------------------------- body profile curves (metres)
-# Plan, elevation and section lines for the Typ 1J: a short, high, blunt nose, a high shoulder, a raked windscreen, a roof
-# arched highest over the B-pillar, the broad forward-raked C-pillar, and a hatch glass at ~47 deg over an upright tailgate.
-W = Curve([(0.0, 0.70), (0.03, 0.755), (0.08, 0.795), (0.15, 0.825), (0.30, 0.850), (0.55, 0.864), (0.85, 0.868),
+# Plan, elevation and section lines for the Typ 1J: a protruding front bumper shelf, a slightly raked grille and headlamp
+# face, a gently sloping V-creased bonnet, a high shoulder, a raked windscreen, a roof arched highest over the B-pillar,
+# the broad forward-raked C-pillar, and a hatch glass at ~47 deg over an upright tailgate.
+W = Curve([(0.0, 0.64), (0.03, 0.720), (0.08, 0.775), (0.15, 0.818), (0.30, 0.850), (0.55, 0.864), (0.85, 0.868),
 	(1.3, 0.8675), (2.2, 0.8675), (3.1, 0.866), (3.6, 0.862), (3.9, 0.848), (4.02, 0.825), (4.09, 0.785),
 	(4.13, 0.725), (LENGTH, 0.64)])
-ZM = Curve([(0.0, 0.46), (0.3, 0.56), (1.0, 0.68), (1.4, 0.70), (3.3, 0.71), (3.8, 0.66), (LENGTH, 0.52)])  # the widest line, under the shoulder
-WSH = Curve([(0.0, 0.64), (0.05, 0.70), (0.12, 0.74), (0.25, 0.765), (0.5, 0.788), (0.85, 0.80), (1.2, 0.806),
+ZM = Curve([(0.0, 0.44), (0.12, 0.49), (0.35, 0.56), (1.0, 0.68), (1.4, 0.70), (3.3, 0.71), (3.8, 0.66), (LENGTH, 0.52)])  # the widest line, under the shoulder
+WSH = Curve([(0.0, 0.58), (0.05, 0.665), (0.12, 0.725), (0.25, 0.762), (0.5, 0.788), (0.85, 0.80), (1.2, 0.806),
 	(1.6, 0.808), (2.2, 0.808), (3.0, 0.803), (3.5, 0.797), (3.9, 0.785), (4.02, 0.765), (4.08, 0.735),
 	(4.12, 0.69), (LENGTH, 0.61)])
-ZSH = Curve([(0.0, 0.775), (0.02, 0.80), (0.05, 0.82), (0.10, 0.833), (0.3, 0.848), (0.6, 0.865), (0.9, 0.884),
-	(1.1, 0.903), (S_COWL, 0.92), (1.35, 0.945), (1.7, 0.975), (2.2, 0.985), (3.0, 0.997), (3.6, 1.008), (3.9, 1.008),
+ZSH = Curve([(0.0, 0.560), (0.04, 0.590), (0.08, 0.665), (0.14, 0.742), (0.24, 0.790), (0.45, 0.830), (0.75, 0.868),
+	(1.05, 0.900), (S_COWL, 0.92), (1.35, 0.945), (1.7, 0.975), (2.2, 0.985), (3.0, 0.997), (3.6, 1.008), (3.9, 1.008),
 	(4.0, 0.99), (4.06, 0.965), (4.10, 0.925), (4.125, 0.86), (4.14, 0.78), (LENGTH, 0.64)])
-ZT = Curve([(0.0, 0.80), (0.02, 0.83), (0.05, 0.85), (0.10, 0.862), (0.3, 0.876), (0.6, 0.894), (0.9, 0.915),
-	(1.1, 0.937), (S_COWL, 0.952), (1.4, 1.065), (1.6, 1.18), (1.8, 1.29), (S_WS_TOP, 1.40), (2.08, 1.427),
+ZT = Curve([(0.0, 0.580), (0.04, 0.612), (0.08, 0.695), (0.14, 0.772), (0.24, 0.822), (0.45, 0.862), (0.75, 0.900),
+	(1.05, 0.934), (S_COWL, 0.952), (1.4, 1.065), (1.6, 1.18), (1.8, 1.29), (S_WS_TOP, 1.40), (2.08, 1.427),
 	(2.2, 1.4375), (2.5, 1.435), (2.8, 1.427), (3.1, 1.415), (3.4, 1.401), (3.58, 1.39), (S_RG0, 1.385), (3.76, 1.30),
 	(3.85, 1.205), (3.94, 1.105), (S_RG1, 1.005), (4.07, 0.975), (4.11, 0.935), (4.133, 0.87), (4.144, 0.78),
 	(LENGTH, 0.64)])
-ZB = Curve([(0.0, 0.285), (0.06, 0.235), (0.25, 0.215), (0.5, 0.21), (1.0, 0.21), (2.5, 0.205), (3.5, 0.215),
+ZB = Curve([(0.0, 0.255), (0.06, 0.225), (0.25, 0.212), (0.5, 0.21), (1.0, 0.21), (2.5, 0.205), (3.5, 0.215),
 	(4.0, 0.25), (LENGTH, 0.30)])
-WR = Curve([(0.0, 0.58), (0.05, 0.63), (0.12, 0.66), (0.3, 0.69), (0.7, 0.725), (S_COWL, 0.735), (1.5, 0.695),
+WR = Curve([(0.0, 0.52), (0.05, 0.60), (0.12, 0.65), (0.3, 0.69), (0.7, 0.725), (S_COWL, 0.735), (1.5, 0.695),
 	(S_WS_TOP, 0.645), (2.4, 0.632), (3.0, 0.625), (3.3, 0.62), (S_RG0, 0.615), (3.85, 0.655), (S_RG1, 0.70),
 	(4.08, 0.69), (4.12, 0.66), (LENGTH, 0.56)])
 DR = Curve([(0.0, 0.015), (0.2, 0.04), (S_COWL, 0.05), (S_WS_TOP, 0.05), (3.6, 0.05), (S_RG1, 0.04), (LENGTH, 0.015)])
 
 SEG_ROWS = [3, 2, 5, 5, 1, 4, 2, 8]
 SEG_AB, SEG_BC, SEG_CD, SEG_DE, SEG_EF, SEG_FG, SEG_GH, SEG_HI = range(8)
+
+
+def bonnet_crease_t(s):
+	"""Parameter t along H->I for the Golf IV's V-shaped bonnet creases: starts at the grille's upper outer corners
+	(|x| ~ 0.275 at s = 0.12) and sweeps outward to the base of the A-pillars (|x| ~ 0.62 at s = S_SCUTTLE)."""
+	f = min(1.0, max(0.0, (s - 0.12) / (S_SCUTTLE - 0.12)))
+	xc = lerp(0.275, 0.620, f)
+	return min(0.66, max(0.16, 1.0 - xc / max(0.30, WR(s))))
+
+
+def bonnet_crease_dz(s, sub):
+	"""Subtle raised V-panel on the Mk4 Golf bonnet between the two character creases."""
+	if s >= S_COWL:
+		return 0.0
+	env = smoothstep(0.10, 0.20, s) * (1.0 - smoothstep(S_SCUTTLE - 0.04, S_COWL, s))
+	if env <= 0.0:
+		return 0.0
+	prof = (0.0, 0.0, -0.0015, 0.0045, 0.0095, 0.0080, 0.0068, 0.0068)
+	return prof[sub] * env
 
 
 def zbottom(s):
@@ -138,8 +158,18 @@ def hi_params(s):
 	elif S_RG0 < s < S_RG1:
 		te += glass_corner(s, S_RG0, S_RG1, 0.06, 0.14)
 	fr = 0.035
-	rest = [te + fr + (1.0 - te - fr) * k / 6.0 for k in range(1, 7)]
-	return [0.0, te, te + fr] + rest
+	base = te + fr
+	uniform = [base + (1.0 - base) * k / 6.0 for k in range(1, 7)]
+	if s < S_COWL:
+		tc = bonnet_crease_t(s)
+		foot = max(base + 0.025, tc - 0.045)
+		in_b = tc + 0.028
+		creased = [foot, tc - 0.020, tc, in_b, (in_b + 1.0) * 0.5, 1.0]
+		w = 1.0 - smoothstep(S_SCUTTLE, S_COWL, s)
+		rest = [lerp(u, c, w) for u, c in zip(uniform, creased)]
+	else:
+		rest = uniform
+	return [0.0, te, base] + rest
 
 
 def section(s):
@@ -155,7 +185,10 @@ def section(s):
 			n = SEG_ROWS[seg]
 			ts = [j / n for j in range(1, n + 1)]
 		for sub, t in enumerate(ts):
-			pts.append(cr(p0, p1, p2, p3, t) if t < 1.0 else p2.copy())
+			p = cr(p0, p1, p2, p3, t) if t < 1.0 else p2.copy()
+			if seg == SEG_HI:
+				p.y += bonnet_crease_dz(s, sub)
+			pts.append(p)
 			seg_of_band.append((seg, sub))
 	return pts, seg_of_band
 
@@ -225,10 +258,12 @@ MATERIALS = {
 	"Grille": ((0.01, 0.01, 0.01), 0.7, 0.0, {}),
 	"Chrome": ((0.85, 0.86, 0.88), 0.12, 1.0, {}),
 	"Exhaust": ((0.75, 0.76, 0.78), 0.16, 0.95, {}),
-	"Headlight": ((0.42, 0.43, 0.44), 0.04, 0.85, {"emit": ((1.0, 0.95, 0.84), 0.2)}),
+	"Headlight": ((0.30, 0.31, 0.32), 0.10, 0.9, {"emit": ((1.0, 0.95, 0.84), 0.2)}),
 	"Indicator": ((1.0, 0.42, 0.04), 0.1, 0.0, {"emit": ((1.0, 0.35, 0.02), 0.7)}),
 	"Taillight": ((0.42, 0.01, 0.015), 0.08, 0.0, {"emit": ((1.0, 0.05, 0.03), 0.15)}),
 	"LampClear": ((0.85, 0.80, 0.80), 0.08, 0.0, {}),
+	"LampBezel": ((0.18, 0.19, 0.20), 0.24, 0.82, {}),
+	"Fog": ((0.70, 0.72, 0.74), 0.08, 0.6, {"emit": ((1.0, 0.95, 0.84), 0.1)}),
 	"Plate": ((0.94, 0.93, 0.89), 0.45, 0.0, {}),
 	"Seat": ((0.03, 0.03, 0.035), 0.9, 0.0, {}),
 	"Fabric": ((0.10, 0.10, 0.105), 0.95, 0.0, {}),
@@ -400,79 +435,201 @@ def top_proj(u, v):
 
 
 # ---------------------------------------------------------------- lamps, grille, bumper plastics
+def dense(pts, step=0.03):
+	out = []
+	for i, a in enumerate(pts):
+		b = pts[(i + 1) % len(pts)]
+		n = max(1, int(math.hypot(b[0] - a[0], b[1] - a[1]) / step))
+		out += [(lerp(a[0], b[0], k / n), lerp(a[1], b[1], k / n)) for k in range(n)]
+	return out
+
+
+def inset(poly, d):
+	cu = sum(p[0] for p in poly) / len(poly)
+	cv = sum(p[1] for p in poly) / len(poly)
+	out = []
+	for u, v in poly:
+		l = math.hypot(u - cu, v - cv) or 1.0
+		out.append((u + (cu - u) / l * d, v + (cv - v) / l * d))
+	return out
+
+
 def reflector(mb, pj, proj, u, v, r):
-	"""A headlamp reflector bowl: lit with the lamp (Headlight), a thin chrome rim and a small clear bulb; no dark cup, which
-	read as a pupil at night."""
-	loc, n = pj.hit(*proj(u, v))
+	"""A headlamp reflector bowl with depth, seated cleanly in front of the sloped bezel."""
+	loc, n_surf = pj.hit(*proj(u, v))
+	n = (n_surf * 2.2 + Vector((0.0, 1.0, 0.0))).normalized()
 	helper = Vector((1, 0, 0)) if abs(n.x) < 0.9 else Vector((0, 1, 0))
 	bx = n.cross(helper).normalized()
-	basis = Matrix((bx, n.cross(bx), n)).transposed()
-	mb.ring(loc + n * 0.0095, r * 0.93, r, "Chrome", normal=n, segs=28)
-	mb.disc(loc + n * 0.009, r * 0.94, "Headlight", normal=n, segs=28)
-	mb.blob(loc + n * 0.0098, (r * 0.22, r * 0.22, r * 0.18), "LampClear", e=0.9, basis=basis, nu=6, nv=12)
+	by = n.cross(bx)
+	tilt = n_surf.cross(n).length
+	base = loc + n_surf * (0.0125 + r * tilt + 0.0015)
+	segs = 28
+	prof = [(r, 0.0115), (r * 0.95, 0.0092), (r * 0.80, 0.0058), (r * 0.60, 0.0030), (r * 0.38, 0.0014), (r * 0.26, 0.0006)]
+	rows = [[base + n * d + (bx * math.cos(2 * math.pi * k / segs) + by * math.sin(2 * math.pi * k / segs)) * rr
+		for k in range(segs)] for rr, d in prof]
+	mb.grid(rows[:2], "Chrome", closed=True, out=n)
+	mb.grid(rows[1:], "Headlight", closed=True, out=n)
+	mb.disc(base + n * 0.0006, r * 0.26, "Headlight", normal=n, segs=segs)
+	mb.ring(base + n * 0.0118, r * 0.94, r * 1.10, "Chrome", normal=n, segs=segs)
 
 
-FB_AXIS = 1.0  # the nose's cylinder axis (station)
-RB_AXIS = 3.15
+def patch_uv(mb, pj, proj, u0, u1, v0_fn, v1_fn, off_fn, mat, nu=22, nv=8, bulge=0.0, skirt_fn=0.0):
+	"""A regular (nu+1) x (nv+1) projected patch over u in [u0, u1] and v in [v0_fn(u), v1_fn(u)], with optional dome
+	bulge and perimeter skirt oriented outward from each boundary edge."""
+	pts, nors = [], []
+	for i in range(nu + 1):
+		tu = i / nu
+		u = lerp(u0, u1, tu)
+		va, vb = v0_fn(u), v1_fn(u)
+		row, nrow = [], []
+		for j in range(nv + 1):
+			tv = j / nv
+			v = lerp(va, vb, tv)
+			loc, nor = pj.hit(*proj(u, v))
+			o = off_fn(u, v) if callable(off_fn) else off_fn
+			if bulge:
+				b = bulge(u, v) if callable(bulge) else bulge
+				o += b * math.sin(math.pi * tu) * math.sin(math.pi * tv)
+			row.append(loc + nor * o)
+			nrow.append(nor)
+		pts.append(row)
+		nors.append(nrow)
+	ids = [[mb.vert(p) for p in row] for row in pts]
+	for i in range(nu):
+		for j in range(nv):
+			ref = nors[i][j] + nors[i + 1][j] + nors[i + 1][j + 1] + nors[i][j + 1]
+			mb.face([ids[i][j], ids[i + 1][j], ids[i + 1][j + 1], ids[i][j + 1]], mat, ref)
+	if skirt_fn:
+		perim = ([(i, 0, i, 1) for i in range(nu)]
+			+ [(nu, j, nu - 1, j) for j in range(nv)]
+			+ [(i, nv, i, nv - 1) for i in range(nu, 0, -1)]
+			+ [(0, j, 1, j) for j in range(nv, 0, -1)])
+		low = []
+		for i, j, _, _ in perim:
+			tu = i / nu
+			u = lerp(u0, u1, tu)
+			v = lerp(v0_fn(u), v1_fn(u), j / nv)
+			sk = skirt_fn(u, v) if callable(skirt_fn) else skirt_fn
+			low.append(mb.vert(pts[i][j] - nors[i][j] * sk))
+		for k in range(len(perim)):
+			k2 = (k + 1) % len(perim)
+			i1, j1, ii1, jj1 = perim[k]
+			i2, j2, ii2, jj2 = perim[k2]
+			out_dir = (pts[i1][j1] - pts[ii1][jj1]) + (pts[i2][j2] - pts[ii2][jj2])
+			mb.face([ids[i1][j1], low[k], low[k2], ids[i2][j2]], mat, out_dir)
 
-# the one-piece headlamp (x across the car, z height, seen from the front): a swept shape, shallow at the grille and tall
-# at the wing, the amber indicator at its outer end. The tail-lamp cluster likewise, seen from behind.
-HEADLAMP = [(0.29, 0.66), (0.29, 0.765), (0.30, 0.783), (0.40, 0.79), (0.55, 0.789), (0.66, 0.78), (0.72, 0.765),
-	(0.752, 0.742), (0.768, 0.705), (0.765, 0.665), (0.745, 0.638), (0.70, 0.622), (0.55, 0.618), (0.36, 0.618), (0.315, 0.628),
-	(0.295, 0.642)]
-HEAD_AMBER = [(0.69, 0.705), (0.745, 0.705), (0.758, 0.68), (0.748, 0.652), (0.72, 0.636), (0.69, 0.636)]
+
+def wrap_limit(pj, proj, sc, front, v, gap=0.004):
+	def ok(u):
+		o, d = proj(u, v)
+		loc, nor, _, _ = pj.tree.ray_cast(o, d)
+		if loc is None or nor.dot(d) > 0 or loc.x < 0.05:
+			return False
+		s = Y0 - loc.y
+		if (s > sc) if front else (s < sc):
+			return False
+		return math.hypot(s - sc, loc.z - TYRE_R) > ARCH_R + gap
+	lo, hi = 40.0, 150.0
+	assert ok(lo)
+	for _ in range(28):
+		mid = (lo + hi) / 2
+		if ok(mid):
+			lo = mid
+		else:
+			hi = mid
+	return lo
+
+
+def wrap_band(pj, mb, proj, sc, front, vs, off, mat, reach=1.0, n=96):
+	lim = [wrap_limit(pj, proj, sc, front, v) * reach for v in vs]
+	ts = sorted(set([round(math.copysign(1.0 - (1.0 - k / n) ** 1.6, 1), 5) for k in range(n + 1)] +
+		[round(-math.copysign(1.0 - (1.0 - k / n) ** 1.6, 1), 5) for k in range(n + 1)]))
+	pts, nors = [], []
+	for t in ts:
+		taper = 1.0 - 0.8 * smoothstep(0.82, 1.0, abs(t))
+		row, nrow = [], []
+		for v, um in zip(vs, lim):
+			loc, nor = pj.hit(*proj(t * um, v))
+			row.append(loc + nor * off(v) * taper)
+			nrow.append(nor)
+		pts.append(row)
+		nors.append(nrow)
+	ids = [[mb.vert(p) for p in row] for row in pts]
+	for i in range(len(ts) - 1):
+		for j in range(len(vs) - 1):
+			ref = nors[i][j] + nors[i + 1][j] + nors[i + 1][j + 1] + nors[i][j + 1]
+			mb.face([ids[i][j], ids[i + 1][j], ids[i + 1][j + 1], ids[i][j + 1]], mat, ref)
+	for i, k in ((0, 1), (len(ts) - 1, len(ts) - 2)):
+		inner = [pts[i][j] - nors[i][j] * 0.006 for j in range(len(vs))]
+		ref = pts[i][len(vs) // 2] - pts[k][len(vs) // 2]
+		mb.poly(pts[i] + list(reversed(inner)), mat, ref)
+	return pts
+
+
+FB_AXIS = 0.55  # the nose's cylinder axis (station)
+HL_AXIS = 0.72  # headlamp wrap axis: sweeps smoothly from beside the slatted grille round the corner into the front wing
+RB_AXIS = LENGTH - 0.55
+
+# Typ 1J Golf IV one-piece wraparound headlamp (cyl_proj around HL_AXIS: u is degrees from straight ahead, v is height z):
+# upright rounded inner edge beside the grille at 23 deg, broad oblong clear-lens body across the front face, wrapping
+# smoothly round the front corner to a clean rounded outer corner at 69 deg ahead of the front wheel arch.
+HL_U0, HL_U1 = 23.0, 69.0
+HL_TOP = Curve([(23.0, 0.728), (25.0, 0.736), (34.0, 0.742), (46.0, 0.748), (57.0, 0.750), (63.5, 0.744), (67.5, 0.730),
+	(69.0, 0.714)])
+HL_BOT = Curve([(23.0, 0.606), (25.0, 0.600), (35.0, 0.602), (47.0, 0.610), (57.0, 0.626), (63.5, 0.652), (67.5, 0.682),
+	(69.0, 0.698)])
+
 TAILLAMP = [(0.37, 0.75), (0.37, 0.935), (0.385, 0.945), (0.62, 0.945), (0.70, 0.935), (0.745, 0.905), (0.765, 0.86),
 	(0.765, 0.79), (0.75, 0.76), (0.72, 0.745), (0.40, 0.742)]
 
 
 def build_plastics(pj, mb):
-	"""Black plastics on the body-coloured bumpers: the lower intake with its fog lamps, the chin spoiler and the
-	grille; shut lines where bumper meets wing and tailgate."""
+	"""Black plastics on the body-coloured bumpers: wrapped lower chin valance, wide three-bay lower intake with fog
+	lamps, wrapped protective rubbing strips matching the doors, and the Typ 1J slatted grille with central roundel."""
 	fp = cyl_proj(FB_AXIS, False)
-	# front chin spoiler and lower intake band
-	rows = [(0.215, -0.004), (0.222, 0.010), (0.240, 0.018), (0.325, 0.018), (0.334, 0.008), (0.338, -0.002)]
-	us = spread(-40.0, 40.0, 1.0)
-	pj.band(mb, us, [r[0] for r in rows], lambda u, v: profile(v, rows),
-		lambda u, v: "Bumper", fp, caps=True)
-	rows = [(0.338, -0.002), (0.345, 0.011), (0.372, 0.014), (0.446, 0.014), (0.452, 0.006), (0.456, -0.002)]
-	pj.band(mb, spread(-38.0, 38.0, 1.0), [r[0] for r in rows], lambda u, v: profile(v, rows),
-		lambda u, v: "Grille" if abs(u) < 34.0 else "Bumper", fp, caps=True)
-	# intake bars
-	for z in (0.375, 0.402, 0.429):
-		pj.strip(mb, -0.34, 0.34, z, z + 0.007, 24, 1, front_proj, "Bumper", offset=0.020)
-	# fog lamps in round recesses at the ends of the intake
+	# Wrapped lower black chin spoiler / valance all the way round to the front arches
+	chin_rows = [(0.215, -0.002), (0.224, 0.009), (0.242, 0.013), (0.296, 0.012), (0.306, 0.006), (0.312, -0.001)]
+	vs = sorted(set([r[0] for r in chin_rows] + spread(0.245, 0.295, 0.02)))
+	wrap_band(pj, mb, fp, FRONT_AXLE_S, True, vs, lambda v, rows=chin_rows: profile(v, rows), "Bumper", reach=0.95)
+	# Wrapped black protective rubbing strip on the upper bumper above the plate (aligned with the side door rub strips)
+	rub_rows = [(0.506, -0.001), (0.511, 0.006), (0.519, 0.010), (0.533, 0.010), (0.541, 0.006), (0.546, -0.001)]
+	wrap_band(pj, mb, fp, FRONT_AXLE_S, True, [r[0] for r in rub_rows], lambda v, rows=rub_rows: profile(v, rows),
+		"Trim", reach=0.95)
+	# Wide lower black intake across the lower bumper below the number plate
+	intake = [(-0.56, 0.390), (0.56, 0.390), (0.585, 0.365), (0.565, 0.312), (-0.565, 0.312), (-0.585, 0.365)]
+	pj.star(mb, dense(intake, 0.04), front_proj, "Trim", offset=0.0030, rings=1, samples=2, skirt=0.004)
+	pj.star(mb, dense(inset(intake, 0.009), 0.04), front_proj, "Grille", offset=0.0048, rings=1, samples=2, skirt=0.0)
+	for z in (0.332, 0.354, 0.374):
+		pj.strip(mb, -0.55, 0.55, z, z + 0.006, 32, 1, front_proj, "Trim", offset=0.0072)
+	# Round fog lamps set into the outer ends of the lower intake
 	for side in (1, -1):
-		cx = side * 0.52
-		pj.star(mb, ellipse(cx, 0.395, 0.064, 0.064, 18), front_proj, "Trim", offset=0.018, rings=1, samples=1, skirt=0.01)
-		pj.star(mb, ellipse(cx, 0.395, 0.052, 0.052, 18), front_proj, "Headlight", offset=0.022, bulge=0.004, rings=2,
-			samples=1, skirt=0.0)
-		pj.star(mb, ellipse(cx, 0.395, 0.056, 0.056, 18), front_proj, "LampGlass", offset=0.030, bulge=0.004, rings=2,
-			samples=1, skirt=0.0)
-	# the main grille in the nose, a black mesh in a chrome-edged opening, with the roundel above it
-	# the Typ 1J's shallow grille fills the gap between the headlamps under the bonnet lip, the roundel in its middle
-	pj.star(mb, rounded_rect(-0.284, 0.284, 0.628, 0.776, 0.014), front_proj, "Trim", offset=0.0035, rings=1, samples=2,
-		skirt=0.004)
-	pj.star(mb, rounded_rect(-0.274, 0.274, 0.636, 0.768, 0.010), front_proj, "Grille", offset=0.006, rings=1, samples=2,
-		skirt=0.0)
-	for z in (0.654, 0.678, 0.702, 0.726, 0.750):
-		pj.strip(mb, -0.272, 0.272, z, z + 0.006, 1, 1, front_proj, "Trim", offset=0.0085)
-	pj.star(mb, ellipse(0.0, 0.702, 0.056, 0.056, 28), front_proj, "Chrome", offset=0.0105, rings=2, samples=1, skirt=0.003)
-	pj.star(mb, ellipse(0.0, 0.702, 0.048, 0.048, 28), front_proj, "BadgeBlue", offset=0.0125, rings=2, samples=1, skirt=0.0)
-	# front number plate on the bumper, over the top of the lower intake: a European plate 520 x 110 mm
-	pj.star(mb, rounded_rect(-0.264, 0.264, 0.392, 0.5087, 0.006), front_proj, "Trim", offset=0.0205, rings=1, samples=2, skirt=0.01)
-	pj.star(mb, rounded_rect(-0.2559, 0.2559, 0.398, 0.5027, 0.004), front_proj, "Plate", offset=0.0235, rings=1, samples=2,
+		hp = lambda u, v, side=side: front_proj(side * u, v)
+		pj.star(mb, ellipse(0.495, 0.352, 0.040, 0.040, 20), hp, "Trim", offset=0.0075, rings=1, samples=1, skirt=0.004)
+		pj.star(mb, ellipse(0.495, 0.352, 0.034, 0.034, 20), hp, "Chrome", offset=0.0092, rings=2, samples=1, skirt=0.0)
+		pj.star(mb, ellipse(0.495, 0.352, 0.028, 0.028, 20), hp, "Fog", offset=0.0110, bulge=0.003, rings=2, samples=1, skirt=0.0)
+	# Main slatted grille filling the gap between the headlamps under the bonnet lip, with central VW-style roundel
+	grille = [(-0.264, 0.732), (0.264, 0.732), (0.274, 0.606), (-0.274, 0.606)]
+	pj.star(mb, dense(grille, 0.03), front_proj, "Trim", offset=0.0030, rings=1, samples=2, skirt=0.004)
+	pj.star(mb, dense(inset(grille, 0.009), 0.03), front_proj, "Grille", offset=0.0048, rings=1, samples=2, skirt=0.0)
+	for z in (0.630, 0.658, 0.686, 0.712):
+		pj.strip(mb, -0.262, 0.262, z, z + 0.008, 20, 1, front_proj, "Trim", offset=0.0075)
+	pj.star(mb, ellipse(0.0, 0.676, 0.056, 0.056, 28), front_proj, "Gasket", offset=0.0082, rings=2, samples=1, skirt=0.003)
+	pj.star(mb, ellipse(0.0, 0.676, 0.051, 0.051, 28), front_proj, "Chrome", offset=0.0102, rings=2, samples=1, skirt=0.002)
+	pj.star(mb, ellipse(0.0, 0.676, 0.043, 0.043, 28), front_proj, "BadgeBlue", offset=0.0120, rings=2, samples=1, skirt=0.0)
+	# Front number plate on the body-coloured bumper beam between the rub strip and lower intake: 512 x 105 mm
+	pj.star(mb, rounded_rect(-0.264, 0.264, 0.392, 0.5087, 0.006), front_proj, "Trim", offset=0.0060, rings=1, samples=2, skirt=0.006)
+	pj.star(mb, rounded_rect(-0.2559, 0.2559, 0.398, 0.5027, 0.004), front_proj, "Plate", offset=0.0090, rings=1, samples=2,
 		skirt=0.0)  # car_plate.gdshader maps the atlas from these numbers (CarCatalog GOLF4_VISUAL plate_y)
-	# the bonnet's leading shut line, over the headlamps and grille, joining the wing-top cut lines
-	pj.band(mb, spread(-64.0, 64.0, 2.0), [0.797, 0.803], lambda u, v: 0.0014 * (1.0 - smoothstep(60.0, 64.0, abs(u))),
-		lambda u, v: "Gasket", fp)
-	# shut line where the bumper meets the wings and bonnet
-	pj.band(mb, spread(-64.0, 64.0, 1.0), [0.575, 0.581], lambda u, v: 0.0024 * (1.0 - smoothstep(60.0, 64.0, abs(u))),
-		lambda u, v: "Gasket", fp)
-	# rear: the bumper's lower black apron with the plate in its recess, and a lamp-to-bumper shut line
+	# Bonnet leading shut line cleanly above the grille and headlamps
+	pj.strip(mb, -0.275, 0.275, 0.746, 0.751, 24, 1, front_proj, "Gasket", offset=0.0012)
+	# Rear: wrapped lower black apron, matching rear bumper rubbing strip, and a lamp-to-bumper shut line
 	rp = cyl_proj(RB_AXIS, True)
-	rows = [(0.262, -0.004), (0.272, 0.010), (0.292, 0.018), (0.398, 0.018), (0.408, 0.008), (0.414, -0.002)]
-	pj.band(mb, spread(-40.0, 40.0, 1.0), [r[0] for r in rows], lambda u, v: profile(v, rows), lambda u, v: "Bumper", rp,
-		caps=True)
+	rows = [(0.262, -0.002), (0.272, 0.008), (0.292, 0.013), (0.392, 0.013), (0.404, 0.007), (0.410, -0.001)]
+	vs = sorted(set([r[0] for r in rows] + spread(0.30, 0.39, 0.02)))
+	wrap_band(pj, mb, rp, REAR_AXLE_S, False, vs, lambda v, rows=rows: profile(v, rows), "Bumper", reach=0.92)
+	rrub_rows = [(0.506, -0.001), (0.511, 0.006), (0.519, 0.010), (0.533, 0.010), (0.541, 0.006), (0.546, -0.001)]
+	wrap_band(pj, mb, rp, REAR_AXLE_S, False, [r[0] for r in rrub_rows], lambda v, rows=rrub_rows: profile(v, rows),
+		"Trim", reach=0.95)
 	pj.band(mb, spread(-64.0, 64.0, 1.0), [0.588, 0.594], lambda u, v: 0.0024 * (1.0 - smoothstep(60.0, 64.0, abs(u))),
 		lambda u, v: "Gasket", rp)
 
@@ -488,20 +645,48 @@ def build_details(body):
 	pj = pj_body
 
 	for side in (1, -1):
-		# headlamp: gasket frame, reflector bowl, amber indicator, main-beam reflectors, clear lens
-		hp = lambda u, v, side=side: front_proj(side * u, v)
-		pj.star(mb, HEADLAMP, hp, "Gasket", offset=0.003, rings=5, samples=3, skirt=0.0)
-		cu = sum(p[0] for p in HEADLAMP) / len(HEADLAMP)
-		cv = sum(p[1] for p in HEADLAMP) / len(HEADLAMP)
-		pj.star(mb, [(lerp(u, cu, 0.05), lerp(v, cv, 0.12)) for u, v in HEADLAMP], hp, "Headlight", offset=0.006, bulge=0.002,
-			rings=7, samples=3, skirt=0.0)
-		pj.star(mb, [(lerp(u, 0.70, 0.1), lerp(v, 0.69, 0.12)) for u, v in HEAD_AMBER], hp, "Indicator", offset=0.0105,
-			rings=4, samples=3, skirt=0.0)
-		# the twin round reflectors (dipped outboard, main inboard) that make the Typ 1J's face
-		for ru, rv, rr in ((0.385, 0.704, 0.054), (0.565, 0.706, 0.062)):
-			reflector(mb, pj, hp, ru, rv, rr)
-		pj.star(mb, [(lerp(u, cu, 0.03), lerp(v, cv, 0.06)) for u, v in HEADLAMP], hp, "LampGlass", offset=0.0135, bulge=0.009,
-			rings=7, samples=3, skirt=0.0)
+		# Headlamp: wrapped cylindrically around HL_AXIS so the Mk4 clear-lens housing hugs the front corner cleanly
+		hl_cyl = cyl_proj(HL_AXIS, False)
+		hp = lambda u, v, side=side, hl_cyl=hl_cyl: hl_cyl(side * u, v)
+		wing_fade = lambda u: 1.0 - smoothstep(46.0, 67.0, u)
+
+		def hl_inset(du_in, du_out, dv):
+			u0, u1 = HL_U0 + du_in, HL_U1 - du_out
+			def bot(u):
+				b, t = HL_BOT(u), HL_TOP(u)
+				return min(b + dv, (b + t) * 0.5 - 0.002)
+			def top(u):
+				b, t = HL_BOT(u), HL_TOP(u)
+				return max(t - dv, (b + t) * 0.5 + 0.002)
+			return u0, u1, bot, top
+
+		patch_uv(mb, pj, hp, HL_U0, HL_U1, HL_BOT, HL_TOP,
+			lambda u, v: lerp(0.003, 0.010, wing_fade(u)), "Gasket", nu=24, nv=8,
+			skirt_fn=lambda u, v: lerp(0.006, 0.013, wing_fade(u)))
+		bu0, bu1, bbot, btop = hl_inset(0.8, 1.0, 0.005)
+		patch_uv(mb, pj, hp, bu0, bu1, bbot, btop,
+			lambda u, v: lerp(0.0045, 0.0115, wing_fade(u)), "LampBezel", nu=24, nv=8)
+		# Outer-corner amber indicator nestled cleanly inside the rounded wraparound corner
+		iu0, iu1 = 55.5, 66.5
+		def ind_span(u):
+			t = min(1.0, max(0.0, (u - iu0) / (iu1 - iu0)))
+			w = math.sin(math.pi * t) ** 0.45
+			b, tp_ = HL_BOT(u), HL_TOP(u)
+			mid = lerp(b, tp_, 0.45)
+			half = max(0.002, (tp_ - b) * 0.28 * w)
+			return mid - half, mid + half
+		patch_uv(mb, pj, hp, iu0, iu1,
+			lambda u: ind_span(u)[0],
+			lambda u: ind_span(u)[1],
+			lambda u, v: lerp(0.0065, 0.015, wing_fade(u)), "Indicator", nu=10, nv=5, bulge=0.0020)
+		# Twin round chrome-rimmed reflector bowls (inboard main beam + larger outboard dipped beam)
+		reflector(mb, pj, hp, 30.2, 0.672, 0.050)
+		reflector(mb, pj, hp, 45.2, 0.678, 0.057)
+		gu0, gu1, gbot, gtop = hl_inset(0.4, 0.5, 0.0025)
+		patch_uv(mb, pj, hp, gu0, gu1, gbot, gtop,
+			lambda u, v: lerp(0.0095, 0.036, wing_fade(u)), "LampGlass", nu=24, nv=8,
+			bulge=lambda u, v: lerp(0.002, 0.010, wing_fade(u)),
+			skirt_fn=lambda u, v: lerp(0.007, 0.025, wing_fade(u)))
 
 		# tail-lamp cluster
 		tp = lambda u, v, side=side: rear_proj(side * u, v)
@@ -743,7 +928,7 @@ def build_abarth(pj):
 def build_marlboro(pj):
 	mb = MB()
 	pj.star(mb, [(0.26, -0.50), (0.26, 0.50), (1.02, 0.50), (0.62, 0.0), (1.02, -0.50)], top_proj, "MarlboroRed",
-		offset=0.005, rings=8, samples=14, skirt=0.0)
+		offset=0.0075, rings=14, samples=16, skirt=0.0)
 	for side in (1, -1):
 		sp = side_proj(side)
 		pj.star(mb, [(1.40, 0.62), (1.40, 0.88), (2.80, 0.88), (2.40, 0.75), (2.80, 0.62)], sp, "MarlboroRed",

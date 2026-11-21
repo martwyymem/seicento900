@@ -68,6 +68,22 @@ const BEATS := {
 		["halina", "Volvo V50, the 2.4 five-cylinder. A hundred and seventy horses: our chase car, because nothing else kept up."],
 		["mirek", "Five cylinders. Listen to it. Heavy, though: brake before you think you need to."],
 	],
+	"car_i20": [
+		["zbyszek", "A Hyundai i20 1.4, fresh off the Bielsko forecourt! A hundred horses, five doors, and air conditioning that actually blows cold!"],
+		["mirek", "Light, tidy and revvy. Keeps its feet on the tarmac better than Basia's car, too."],
+	],
+	"car_sandero": [
+		["ola", "A Dacia Sandero 1.6! Like the Logan, only without the spare bedroom stuck on the back."],
+		["mirek", "Sturdy, simple, eighty-seven horses. Doesn't care about potholes or kerbs. Good honest Silesian transport."],
+	],
+	"car_focus": [
+		["halina", "2015 Ford Focus 1.5 EcoBoost. A hundred and fifty horses, six gears, and a chassis that actually talks to you."],
+		["mirek", "Turbocharged, grips like a leech, stops on a coin. Just mind the speed limit past the school."],
+	],
+	"car_zafira": [
+		["zbyszek", "An Opel Zafira B! Seven seats! You can fit the whole pit crew, the spare tyres, and half a bakery in the back!"],
+		["mirek", "A hundred and forty horses in a family bus. Tall in the corners, mind — don't tip it on its ear."],
+	],
 
 	# ---------------------------------------------------------------- Act I
 	"stage_1_brief": [["mirek", "Top three in Wilamowice and Zbyszek lets you into the series. Don't bend my car."]],
@@ -228,7 +244,7 @@ const BEATS := {
 		["kamil", "Fancy seeing you here. A quarter mile, Brzeszcze. Can grandma's car count that far?"],
 	],
 	"drag_quarter_won": [
-		["ola", "Kamil says his clutch slipped. Kamil's clutch slips a lot."],
+		["ola", "Kamil says his clutch slipped. Kamil's clutch slips a lot. And the night shift tossed you the keys to their Sandero!"],
 		["mirek", "I know where you were last night. ...So what did you run?"],
 	],
 	"drag_quarter_miss": [
@@ -241,7 +257,7 @@ const BEATS := {
 		["ola", "Up one carriageway, round, back down the other. The slipstream is free speed: steal it."],
 	],
 	"sprint_s1_won": [
-		["zbyszek", "A FLYING SEICENTO! The road people loved it! They still want the krówki."],
+		["zbyszek", "A FLYING SEICENTO! The Bielsko dealer loved it so much they handed over the keys to their Hyundai i20!"],
 		["mirek", "Flat out for nine kilometres and the temperature needle never moved. Good car. Good driver."],
 	],
 	"sprint_s1_miss": [
@@ -254,7 +270,7 @@ const BEATS := {
 		["mirek", "Put my car in a fence at Babudy and you walk home. It's a long walk."],
 	],
 	"drift_babudy_won": [
-		["ola", "The bench gave you a standing ovation. Well, two of them stood. One was asleep."],
+		["ola", "The bench gave you a standing ovation — and the keys to their Opel Zafira! Well, two of them stood. One was asleep."],
 		["mirek", "...I saw it. It was beautiful. Don't do it again."],
 	],
 	"drift_babudy_miss": [
@@ -267,7 +283,7 @@ const BEATS := {
 		["kamil", "Mud. In my car. I bought seat covers for this. Plastic ones."],
 	],
 	"offroad_kolonia_won": [
-		["mirek", "I'll be washing gravel out of the sills till Christmas. Worth it."],
+		["mirek", "I'll be washing gravel out of the sills till Christmas. Worth it — and a Ford Focus in the yard for the trouble."],
 		["kamil", "My seat covers worked. Nothing else did."],
 	],
 	"offroad_kolonia_miss": [

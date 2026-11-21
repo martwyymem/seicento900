@@ -25,8 +25,8 @@ const MISSIONS := [
 		"title": "Ćwierć Mili na S1",
 		"track": "s1_sprint", "finish_distance": 402.0, "laps": 1, "opponents": 3, "difficulty": "easy",
 		"weather": "dry", "start_hour": 21.5, "target": 1, "at": 150.0,
-		"trophy": "S1 Quarter-Mile Plate", "reward_car": "",
-		"desc": "Word in the Fest car park is that the night shift races on the S1 when the lorries have gone. Four Seicentos two abreast on the northbound carriageway, the lights at the Wola junction, a quarter mile to the gantry.",
+		"trophy": "S1 Quarter-Mile Plate", "reward_car": "sandero",
+		"desc": "Word in the Fest car park is that the night shift races on the S1 when the lorries have gone. Four Seicentos two abreast on the northbound carriageway, the lights at the Wola junction, a quarter mile to the gantry. Win it and the night shift's Dacia Sandero 1.6 is yours.",
 		"tip": "A Seicento has nothing to spare: wait for the green, keep it straight, and with the manual box change up a little before the limiter: the automatic gets there first otherwise.",
 	},
 	{
@@ -34,8 +34,8 @@ const MISSIONS := [
 		"title": "S1 Sprint",
 		"track": "s1_sprint", "laps": 1, "opponents": 7, "difficulty": "easy",
 		"weather": "dry", "start_hour": 11.0, "target": 3, "at": 0.0,
-		"trophy": "Expressway Sprint Cup", "reward_car": "",
-		"desc": "One flat-out run of the S1 closed between the Wola and Brzeszcze junctions: up one carriageway, over the dumbbell bridge and back down the other, 9.6 km with eight cars and no second chances.",
+		"trophy": "Expressway Sprint Cup", "reward_car": "i20",
+		"desc": "One flat-out run of the S1 closed between the Wola and Brzeszcze junctions: up one carriageway, over the dumbbell bridge and back down the other, 9.6 km with eight cars and no second chances. A podium wins the Fest sponsor's Hyundai i20 1.4.",
 		"tip": "The turn-rounds at each end are the only real corners: brake early there, then tuck into a slipstream and hold it all the way.",
 	},
 	{
@@ -43,8 +43,8 @@ const MISSIONS := [
 		"title": "Drift w Babudach",
 		"track": "babudy_gora", "laps": 1, "opponents": 0, "difficulty": "easy", "finish_distance": 2600.0,
 		"weather": "dry", "start_hour": 17.5, "tiers": [300, 1200, 3000], "at": 0.0,
-		"trophy": "Babudy Sideways Shield", "reward_car": "",
-		"desc": "The lads from Góra want to see it sideways. 2.6 km of the lanes from Babudy towards Góra, gravel and tarmac, judged on angle and speed. Link the slides and the score multiplies; touch a fence or leave the road and the combo is gone.",
+		"trophy": "Babudy Sideways Shield", "reward_car": "zafira",
+		"desc": "The lads from Góra want to see it sideways. 2.6 km of the lanes from Babudy towards Góra, gravel and tarmac, judged on angle and speed. Link the slides and the score multiplies; touch a fence or leave the road and the combo is gone. Impress the bench and they hand over the keys to their Opel Zafira B 1.8.",
 		"tip": "Flick the handbrake (Space) as you turn in, catch it on the throttle, and let the next bend take the slide over before the combo banks.",
 	},
 	{
@@ -52,8 +52,8 @@ const MISSIONS := [
 		"title": "Kolonia Stawowa Off-Road",
 		"track": "kolonia_stawowa", "laps": 1, "opponents": 5, "difficulty": "easy",
 		"weather": "dry", "start_hour": 13.5, "target": 3, "at": 0.0,
-		"trophy": "Fishpond Mud Cup", "reward_car": "",
-		"desc": "Six cars wheel to wheel on the dykes and forest tracks between the Kolonia Stawowa fishponds: 6 km of gravel and dirt, a hairpin on ul. Oświęcimska and the Bronisław bridge.",
+		"trophy": "Fishpond Mud Cup", "reward_car": "focus",
+		"desc": "Six cars wheel to wheel on the dykes and forest tracks between the Kolonia Stawowa fishponds: 6 km of gravel and dirt, a hairpin on ul. Oświęcimska and the Bronisław bridge. Finish on the podium and take home the sponsor's Ford Focus 1.5 EcoBoost.",
 		"tip": "Loose roads punish a late brake twice: slow down early, turn in gently and let the car settle before you get back on the power.",
 	},
 	{

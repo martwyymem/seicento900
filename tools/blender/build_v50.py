@@ -101,6 +101,28 @@ SEG_ROWS = [3, 2, 5, 5, 1, 4, 2, 8]
 SEG_AB, SEG_BC, SEG_CD, SEG_DE, SEG_EF, SEG_FG, SEG_GH, SEG_HI = range(8)
 
 
+def bonnet_crease_t(s):
+	"""Parameter t along H->I for the Volvo V50's V-shaped bonnet crease: starts at the grille's upper outer corners
+	(|x| ~ 0.265 at s = 0.08) and sweeps outward to the base of the A-pillars (|x| ~ 0.615 at s = S_SCUTTLE)."""
+	f = min(1.0, max(0.0, (s - 0.08) / (S_SCUTTLE - 0.08)))
+	xc = lerp(0.265, 0.615, f)
+	return min(0.66, max(0.16, 1.0 - xc / max(0.30, WR(s))))
+
+
+def bonnet_crease_dz(s, sub):
+	"""Raised V-crease profile on the bonnet (SEG_HI): a crisp ridge along sub == 4 (t = tc) with a tight outer step
+	(sub 2..4) down onto the wings and a gently raised central V-panel (sub 5..7) between the two creases."""
+	if s >= S_COWL:
+		return 0.0
+	env = smoothstep(0.015, 0.10, s) * (1.0 - smoothstep(S_SCUTTLE - 0.04, S_COWL, s))
+	if env <= 0.0:
+		return 0.0
+	# sub corresponds to hi_params(s)[1:] indices 0..7 (p[1]..p[8]):
+	# 0: te, 1: te+fr, 2: crease foot, 3: outer bevel, 4: ridge crest, 5: inner bevel, 6..7: centre V-panel
+	prof = (0.0, 0.0, -0.0020, 0.0065, 0.0138, 0.0112, 0.0092, 0.0092)
+	return prof[sub] * env
+
+
 def zbottom(s):
 	z = ZB(s)
 	for sc in (FRONT_AXLE_S, REAR_AXLE_S):
@@ -151,8 +173,18 @@ def hi_params(s):
 	elif S_RG0 < s < S_RG1:
 		te += glass_corner(s, S_RG0, S_RG1, 0.06, 0.14)
 	fr = 0.035
-	rest = [te + fr + (1.0 - te - fr) * k / 6.0 for k in range(1, 7)]
-	return [0.0, te, te + fr] + rest
+	base = te + fr
+	uniform = [base + (1.0 - base) * k / 6.0 for k in range(1, 7)]
+	if s < S_COWL:
+		tc = bonnet_crease_t(s)
+		foot = max(base + 0.025, tc - 0.045)
+		in_b = tc + 0.028
+		creased = [foot, tc - 0.020, tc, in_b, (in_b + 1.0) * 0.5, 1.0]
+		w = 1.0 - smoothstep(S_SCUTTLE, S_COWL, s)
+		rest = [lerp(u, c, w) for u, c in zip(uniform, creased)]
+	else:
+		rest = uniform
+	return [0.0, te, base] + rest
 
 
 def section(s):
@@ -168,7 +200,10 @@ def section(s):
 			n = SEG_ROWS[seg]
 			ts = [j / n for j in range(1, n + 1)]
 		for sub, t in enumerate(ts):
-			pts.append(cr(p0, p1, p2, p3, t) if t < 1.0 else p2.copy())
+			p = cr(p0, p1, p2, p3, t) if t < 1.0 else p2.copy()
+			if seg == SEG_HI:
+				p.y += bonnet_crease_dz(s, sub)
+			pts.append(p)
 			seg_of_band.append((seg, sub))
 	return pts, seg_of_band
 
@@ -469,18 +504,117 @@ def reflector(mb, pj, proj, u, v, r):
 
 
 FB_AXIS = 0.55  # the nose's cylinder axis (station): rays at 76 deg reach the flank just ahead of the front arch
+HL_AXIS = 0.78  # headlamp wrap axis: rays from 23 to 87 deg sweep smoothly from beside the grille back over the front wheel arch
 RB_AXIS = LENGTH - 0.55
 
-# the headlamp (x across the car, z height, seen from the front): a long lamp swept back into the wing, its inner end
-# square beside the grille, the top edge under the bonnet's shut line, the lower edge rising outwards to a point high in
-# the wing. The tail lamp, seen from behind: tall, on the body's rear corner, wide at the bumper and narrowing up the
-# D-pillar beside the rear screen to its top at the spoiler.
-HEADLAMP = [(0.322, 0.650), (0.322, 0.780), (0.334, 0.798), (0.42, 0.804), (0.55, 0.809), (0.66, 0.815), (0.74, 0.821),
-	(0.785, 0.824), (0.810, 0.814), (0.816, 0.790), (0.808, 0.762), (0.787, 0.736), (0.747, 0.711), (0.68, 0.690),
-	(0.58, 0.672), (0.46, 0.658), (0.36, 0.650)]
-HEAD_AMBER = [(0.752, 0.738), (0.752, 0.770), (0.778, 0.790), (0.797, 0.790), (0.801, 0.772), (0.792, 0.752), (0.772, 0.740)]
-TAIL_OUT = [(0.570, 0.705), (0.570, 0.95), (0.585, 1.05), (0.610, 1.13), (0.632, 1.20), (0.648, 1.25), (0.670, 1.27),
-	(0.695, 1.255), (0.712, 1.20), (0.738, 1.12), (0.772, 1.04), (0.800, 0.95), (0.815, 0.86), (0.812, 0.76), (0.80, 0.705)]
+# Headlamp (cyl_proj around HL_AXIS: u is degrees from straight ahead, v is height z): starts square beside the grille
+# at 23 deg, sweeps back past the front edge of the wheel arch (~73 deg) to a sleek tapered corner in the front wing at
+# 85.5 deg (real 2004-2007 P1 V50 wrap).
+HL_U0, HL_U1 = 23.0, 85.5
+HL_TOP = Curve([(23.0, 0.790), (24.5, 0.798), (30.0, 0.804), (42.0, 0.812), (54.0, 0.824), (66.0, 0.839), (75.0, 0.851),
+	(81.5, 0.857), (84.0, 0.856), (85.5, 0.850)])
+HL_BOT = Curve([(23.0, 0.658), (24.5, 0.650), (34.0, 0.657), (44.0, 0.672), (54.0, 0.696), (64.0, 0.730), (73.0, 0.770),
+	(79.5, 0.806), (83.5, 0.832), (85.5, 0.842)])
+
+# Tail lamp (cyl_proj around RB_AXIS: u is degrees from straight behind, v is height z): tall D-pillar lamp wide at the
+# bumper and wrapping cleanly around the rear corner onto the wing, then stepping inward above the shoulder beside the
+# rear screen to its rounded top at the spoiler.
+TL_Z0, TL_Z1 = 0.705, 1.270
+TL_IN = Curve([(0.705, 46.2), (0.860, 46.6), (0.950, 47.0), (1.040, 50.0), (1.130, 53.6), (1.200, 56.6), (1.250, 58.6),
+	(1.265, 59.4), (1.270, 59.9)])
+TL_OUT = Curve([(0.705, 64.2), (0.760, 65.2), (0.860, 65.5), (0.948, 65.0), (0.985, 63.7), (1.035, 62.6), (1.110, 62.2),
+	(1.190, 62.0), (1.245, 61.5), (1.265, 60.9), (1.270, 60.5)])
+
+
+def patch_uv(mb, pj, proj, u0, u1, v0_fn, v1_fn, off_fn, mat, nu=20, nv=8, bulge=0.0, skirt_fn=0.0):
+	"""A regular (nu+1) x (nv+1) projected patch over u in [u0, u1] and v in [v0_fn(u), v1_fn(u)], with optional dome
+	bulge and perimeter skirt oriented outward from each boundary edge."""
+	pts, nors = [], []
+	for i in range(nu + 1):
+		tu = i / nu
+		u = lerp(u0, u1, tu)
+		va, vb = v0_fn(u), v1_fn(u)
+		row, nrow = [], []
+		for j in range(nv + 1):
+			tv = j / nv
+			v = lerp(va, vb, tv)
+			loc, nor = pj.hit(*proj(u, v))
+			o = off_fn(u, v) if callable(off_fn) else off_fn
+			if bulge:
+				b = bulge(u, v) if callable(bulge) else bulge
+				o += b * math.sin(math.pi * tu) * math.sin(math.pi * tv)
+			row.append(loc + nor * o)
+			nrow.append(nor)
+		pts.append(row)
+		nors.append(nrow)
+	ids = [[mb.vert(p) for p in row] for row in pts]
+	for i in range(nu):
+		for j in range(nv):
+			ref = nors[i][j] + nors[i + 1][j] + nors[i + 1][j + 1] + nors[i][j + 1]
+			mb.face([ids[i][j], ids[i + 1][j], ids[i + 1][j + 1], ids[i][j + 1]], mat, ref)
+	if skirt_fn:
+		perim = ([(i, 0, i, 1) for i in range(nu)]
+			+ [(nu, j, nu - 1, j) for j in range(nv)]
+			+ [(i, nv, i, nv - 1) for i in range(nu, 0, -1)]
+			+ [(0, j, 1, j) for j in range(nv, 0, -1)])
+		low = []
+		for i, j, _, _ in perim:
+			tu = i / nu
+			u = lerp(u0, u1, tu)
+			v = lerp(v0_fn(u), v1_fn(u), j / nv)
+			sk = skirt_fn(u, v) if callable(skirt_fn) else skirt_fn
+			low.append(mb.vert(pts[i][j] - nors[i][j] * sk))
+		for k in range(len(perim)):
+			k2 = (k + 1) % len(perim)
+			i1, j1, ii1, jj1 = perim[k]
+			i2, j2, ii2, jj2 = perim[k2]
+			out_dir = (pts[i1][j1] - pts[ii1][jj1]) + (pts[i2][j2] - pts[ii2][jj2])
+			mb.face([ids[i1][j1], low[k], low[k2], ids[i2][j2]], mat, out_dir)
+
+
+def patch_vu(mb, pj, proj, v0, v1, u0_fn, u1_fn, off_fn, mat, nu=14, nv=10, bulge=0.0, skirt_fn=0.0):
+	"""A regular (nv+1) x (nu+1) projected patch over v in [v0, v1] and u in [u0_fn(v), u1_fn(v)], so horizontal bands
+	(tail lamp red/amber/clear sections) have exact, parallel rows around curved corners."""
+	pts, nors = [], []
+	for j in range(nv + 1):
+		tv = j / nv
+		v = lerp(v0, v1, tv)
+		ua, ub = u0_fn(v), u1_fn(v)
+		row, nrow = [], []
+		for i in range(nu + 1):
+			tu = i / nu
+			u = lerp(ua, ub, tu)
+			loc, nor = pj.hit(*proj(u, v))
+			o = off_fn(u, v) if callable(off_fn) else off_fn
+			if bulge:
+				b = bulge(u, v) if callable(bulge) else bulge
+				o += b * math.sin(math.pi * tu) * math.sin(math.pi * tv)
+			row.append(loc + nor * o)
+			nrow.append(nor)
+		pts.append(row)
+		nors.append(nrow)
+	ids = [[mb.vert(p) for p in row] for row in pts]
+	for j in range(nv):
+		for i in range(nu):
+			ref = nors[j][i] + nors[j][i + 1] + nors[j + 1][i + 1] + nors[j + 1][i]
+			mb.face([ids[j][i], ids[j][i + 1], ids[j + 1][i + 1], ids[j + 1][i]], mat, ref)
+	if skirt_fn:
+		perim = ([(i, 0, i, 1) for i in range(nu)]
+			+ [(nu, j, nu - 1, j) for j in range(nv)]
+			+ [(i, nv, i, nv - 1) for i in range(nu, 0, -1)]
+			+ [(0, j, 1, j) for j in range(nv, 0, -1)])
+		low = []
+		for i, j, _, _ in perim:
+			v = lerp(v0, v1, j / nv)
+			u = lerp(u0_fn(v), u1_fn(v), i / nu)
+			sk = skirt_fn(u, v) if callable(skirt_fn) else skirt_fn
+			low.append(mb.vert(pts[j][i] - nors[j][i] * sk))
+		for k in range(len(perim)):
+			k2 = (k + 1) % len(perim)
+			i1, j1, ii1, jj1 = perim[k]
+			i2, j2, ii2, jj2 = perim[k2]
+			out_dir = (pts[j1][i1] - pts[jj1][ii1]) + (pts[j2][i2] - pts[jj2][ii2])
+			mb.face([ids[j1][i1], low[k], low[k2], ids[j2][i2]], mat, out_dir)
 
 
 def dense(pts, step=0.03):
@@ -491,29 +625,6 @@ def dense(pts, step=0.03):
 		n = max(1, int(math.hypot(b[0] - a[0], b[1] - a[1]) / step))
 		out += [(lerp(a[0], b[0], k / n), lerp(a[1], b[1], k / n)) for k in range(n)]
 	return out
-
-
-def clip_band(poly, z0, z1):
-	"""The part of an outline between two heights (Sutherland-Hodgman against z >= z0 and z <= z1)."""
-	def clip(pts, keep, cut):
-		out = []
-		for i, a in enumerate(pts):
-			b = pts[(i + 1) % len(pts)]
-			ka, kb = keep(a), keep(b)
-			if ka:
-				out.append(a)
-			if ka != kb:
-				t = (cut - a[1]) / (b[1] - a[1])
-				out.append((lerp(a[0], b[0], t), cut))
-		return out
-	pts = clip(poly, lambda p: p[1] >= z0, z0)
-	return clip(pts, lambda p: p[1] <= z1, z1)
-
-
-def shrink(poly, k):
-	cu = sum(p[0] for p in poly) / len(poly)
-	cv = sum(p[1] for p in poly) / len(poly)
-	return [(lerp(u, cu, k), lerp(v, cv, k * 0.6)) for u, v in poly]
 
 
 def inset(poly, d):
@@ -527,11 +638,6 @@ def inset(poly, d):
 	return out
 
 
-TAIL_OUT = dense(TAIL_OUT, 0.02)
-TAIL_RED = inset(clip_band(TAIL_OUT, 0.952, 2.0), 0.007)  # the red lamp up the pillar ...
-TAIL_LOW = inset(clip_band(TAIL_OUT, 0.705, 0.858), 0.007)  # ... and the red foot over the bumper
-TAIL_AMBER = inset(clip_band(TAIL_OUT, 0.908, 0.946), 0.007)  # the indicator and the reversing lamp between them
-TAIL_CLEAR = inset(clip_band(TAIL_OUT, 0.864, 0.902), 0.007)
 # the iron mark's diagonal bar across the grille, from its top corner on the viewer's left to the bottom on the right
 IRON_BAR = [(0.262, 0.780), (0.262, 0.757), (-0.236, 0.610), (-0.236, 0.633)]
 GRILLE = [(-0.262, 0.797), (0.262, 0.797), (0.270, 0.782), (0.258, 0.660), (0.236, 0.610), (-0.236, 0.610), (-0.258, 0.660),
@@ -649,30 +755,78 @@ def build_details(body):
 	pj = pj_body
 
 	for side in (1, -1):
-		# headlamp: a black housing standing proud of the shell, the bezel, amber indicator in the outer point, a big
-		# projector bowl inboard and the main-beam reflector beside it, the clear domed cover
-		hp = lambda u, v, side=side: front_proj(side * u, v)
-		pj.star(mb, dense(HEADLAMP, 0.03), hp, "Gasket", offset=0.012, rings=5, samples=3, skirt=0.012)
-		pj.star(mb, dense(shrink(HEADLAMP, 0.05), 0.03), hp, "LampBezel", offset=0.0135, bulge=0.0, rings=7, samples=3, skirt=0.0)
-		pj.star(mb, HEAD_AMBER, hp, "Indicator", offset=0.018, bulge=0.003, rings=5, samples=4, skirt=0.0)
-		reflector(mb, pj, hp, 0.410, 0.729, 0.058)
-		reflector(mb, pj, hp, 0.565, 0.743, 0.052)
-		pj.strip(mb, 0.484, 0.492, 0.672, 0.800, 1, 8, hp, "Chrome", offset=0.026)
-		pj.star(mb, dense(shrink(HEADLAMP, 0.03), 0.03), hp, "LampGlass", offset=0.034, bulge=0.010, rings=7, samples=3, skirt=0.020)
+		# headlamp: cylindrical wrap around HL_AXIS so it sweeps smoothly from beside the grille back into the front
+		# wing past the front edge of the wheel arch, tapering flush as it wraps onto the side.
+		hl_cyl = cyl_proj(HL_AXIS, False)
+		hp = lambda u, v, side=side, hl_cyl=hl_cyl: hl_cyl(side * u, v)
+		wing_fade = lambda u: 1.0 - smoothstep(46.0, 82.0, u)
 
-		# tail lamp: gasket, the red upper part with the reflector behind it, amber indicator and the clear reversing lamp
-		# at the foot, then the lenses
-		tp = lambda u, v, side=side: rear_proj(side * u, v)
-		pj.star(mb, TAIL_OUT, tp, "Gasket", offset=0.004, rings=5, samples=2, skirt=0.004)
-		for poly in (TAIL_RED, TAIL_LOW):
-			pj.star(mb, poly, tp, "Taillight", offset=0.010, rings=5, samples=2, skirt=0.0)
-			pj.star(mb, shrink(poly, 0.25), tp, "TailBulb", offset=0.0115, rings=4, samples=2, skirt=0.0)
-			pj.star(mb, poly, tp, "TailGlass", offset=0.015, bulge=0.002, rings=5, samples=2, skirt=0.005)
-		pj.star(mb, TAIL_AMBER, tp, "Indicator", offset=0.0125, rings=5, samples=3, skirt=0.0)
-		pj.star(mb, TAIL_CLEAR, tp, "LampClear", offset=0.0125, rings=5, samples=3, skirt=0.0)
-		pj.star(mb, inset(clip_band(TAIL_OUT, 0.862, 0.948), 0.007), tp, "LampGlass", offset=0.0165, rings=5, samples=3, skirt=0.004)
+		def hl_inset(du_in, du_out, dv):
+			u0, u1 = HL_U0 + du_in, HL_U1 - du_out
+			def bot(u):
+				b, t = HL_BOT(u), HL_TOP(u)
+				return min(b + dv, (b + t) * 0.5 - 0.002)
+			def top(u):
+				b, t = HL_BOT(u), HL_TOP(u)
+				return max(t - dv, (b + t) * 0.5 + 0.002)
+			return u0, u1, bot, top
+
+		patch_uv(mb, pj, hp, HL_U0, HL_U1, HL_BOT, HL_TOP,
+			lambda u, v: lerp(0.003, 0.012, wing_fade(u)), "Gasket", nu=24, nv=8,
+			skirt_fn=lambda u, v: lerp(0.006, 0.015, wing_fade(u)))
+		bu0, bu1, bbot, btop = hl_inset(0.8, 1.0, 0.005)
+		patch_uv(mb, pj, hp, bu0, bu1, bbot, btop,
+			lambda u, v: lerp(0.0045, 0.0135, wing_fade(u)), "LampBezel", nu=24, nv=8)
+		# compact amber corner side-marker / indicator nestled in the swept wing tip, framed by dark bezel on all sides
+		iu0, iu1 = 65.0, 81.5
+		def ind_span(u):
+			t = min(1.0, max(0.0, (u - iu0) / (iu1 - iu0)))
+			w = math.sin(math.pi * t) ** 0.45
+			b, tp_ = HL_BOT(u), HL_TOP(u)
+			mid = lerp(b, tp_, 0.42)
+			half = max(0.002, (tp_ - b) * 0.24 * w)
+			return mid - half, mid + half
+		patch_uv(mb, pj, hp, iu0, iu1,
+			lambda u: ind_span(u)[0],
+			lambda u: ind_span(u)[1],
+			lambda u, v: lerp(0.0065, 0.017, wing_fade(u)), "Indicator", nu=10, nv=5, bulge=0.0018)
+		# the twin round reflectors inboard and outboard, with the vertical chrome divider between them
+		reflector(mb, pj, hp, 29.0, 0.728, 0.056)
+		reflector(mb, pj, hp, 39.2, 0.740, 0.052)
+		pj.strip(mb, 33.8, 34.5, 0.670, 0.798, 1, 8, hp, "Chrome", offset=0.026)
+		gu0, gu1, gbot, gtop = hl_inset(0.4, 0.5, 0.0025)
+		patch_uv(mb, pj, hp, gu0, gu1, gbot, gtop,
+			lambda u, v: lerp(0.0095, 0.034, wing_fade(u)), "LampGlass", nu=24, nv=8,
+			bulge=lambda u, v: lerp(0.002, 0.010, wing_fade(u)),
+			skirt_fn=lambda u, v: lerp(0.007, 0.022, wing_fade(u)))
+
+		# tail lamp: cylindrical corner wrap around RB_AXIS on regular (u, z) grids so every layer hugs the rear corner
+		# identically — crisp horizontal red/amber/clear bands with no corner chord sag or dark gasket bleed-through.
+		tl_cyl = cyl_proj(RB_AXIS, True)
+		tp = lambda u, v, side=side, tl_cyl=tl_cyl: tl_cyl(side * u, v)
+
+		def tl_u(du_in, du_out):
+			def u0(z):
+				a, b = TL_IN(z), TL_OUT(z)
+				return min(a + du_in, (a + b) * 0.5 - 0.15)
+			def u1(z):
+				a, b = TL_IN(z), TL_OUT(z)
+				return max(b - du_out, (a + b) * 0.5 + 0.15)
+			return u0, u1
+
+		patch_vu(mb, pj, tp, TL_Z0, TL_Z1, TL_IN, TL_OUT, 0.004, "Gasket", nu=14, nv=22, skirt_fn=0.008)
+		lu0, lu1 = tl_u(0.55, 0.60)
+		bu0, bu1 = tl_u(2.2, 2.4)
+		for z0, z1, nv in ((0.951, 1.264, 12), (0.711, 0.859, 6)):
+			patch_vu(mb, pj, tp, z0, z1, lu0, lu1, 0.0095, "Taillight", nu=14, nv=nv)
+			patch_vu(mb, pj, tp, z0 + 0.018, z1 - 0.018, bu0, bu1, 0.0112, "TailBulb", nu=10, nv=max(3, nv - 2))
+			patch_vu(mb, pj, tp, z0, z1, lu0, lu1, 0.0150, "TailGlass", nu=14, nv=nv, bulge=0.0022, skirt_fn=0.011)
+		patch_vu(mb, pj, tp, 0.907, 0.947, lu0, lu1, 0.0115, "Indicator", nu=14, nv=4)
+		patch_vu(mb, pj, tp, 0.863, 0.903, lu0, lu1, 0.0115, "LampClear", nu=14, nv=4)
+		patch_vu(mb, pj, tp, 0.861, 0.949, lu0, lu1, 0.0155, "LampGlass", nu=14, nv=6, bulge=0.0020, skirt_fn=0.0115)
 		# the rear reflector in the black valance
-		pj.star(mb, rounded_rect(0.56, 0.70, 0.352, 0.372, 0.008), tp, "Taillight", offset=0.013, rings=1, samples=2, skirt=0.0)
+		rp_flat = lambda u, v, side=side: rear_proj(side * u, v)
+		pj.star(mb, rounded_rect(0.56, 0.70, 0.352, 0.372, 0.008), rp_flat, "Taillight", offset=0.013, rings=1, samples=2, skirt=0.0)
 
 		pj = pj_all
 		sp = side_proj(side)
@@ -891,7 +1045,7 @@ def build_abarth(pj):
 def build_marlboro(pj):
 	mb = MB()
 	pj.star(mb, [(0.30, -0.50), (0.30, 0.50), (1.10, 0.50), (0.68, 0.0), (1.10, -0.50)], top_proj, "MarlboroRed",
-		offset=0.005, rings=8, samples=14, skirt=0.0)
+		offset=0.0065, rings=12, samples=14, skirt=0.0)
 	for side in (1, -1):
 		sp = side_proj(side)
 		pj.star(mb, [(1.52, 0.60), (1.52, 0.86), (3.00, 0.86), (2.58, 0.73), (3.00, 0.60)], sp, "MarlboroRed",

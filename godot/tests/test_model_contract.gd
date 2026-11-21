@@ -14,6 +14,14 @@ const CONTRACT := {
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
 	"res://models/v50.glb": {"objects": ["Body", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
+	"res://models/i20.glb": {"objects": ["Body", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
+		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
+	"res://models/sandero.glb": {"objects": ["Body", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
+		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
+	"res://models/focus.glb": {"objects": ["Body", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
+		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
+	"res://models/zafira.glb": {"objects": ["Body", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
+		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
 	"res://models/town.glb": {"objects": ["Headframe", "ChurchSpire", "Streetlamp", "TrafficLight", "BusShelter", "LevelCrossing",
 		"FestivalStage", "FestivalArch", "Tent", "FlagPole", "CarHatch", "CarSedan", "CarVan", "Maluch"], "materials": ["Paint", "Lamp", "Banner"]},
 	"res://models/roadside.glb": {"objects": ["BushCluster"], "materials": []},
@@ -35,6 +43,22 @@ const SIZES := {
 	},
 	"res://models/v50.glb": { # a V50 estate: 4,515 x 1,770 (mirrors out: ~2.0) x 1,452 mm over the rails; the wheel is a 205/55 R16 (632 mm)
 		"Body": [Vector3(1.85, 1.3, 4.47), Vector3(2.08, 1.47, 4.56)],
+		"Wheel": [Vector3(0.19, 0.62, 0.62), Vector3(0.26, 0.65, 0.65)],
+	},
+	"res://models/i20.glb": { # a Hyundai i20 PB 5-door: 3,940 x 1,710 (mirrors out: ~1.91) x 1,490 mm; the wheel is a 185/60 R15 (603 mm)
+		"Body": [Vector3(1.75, 1.2, 3.89), Vector3(1.98, 1.50, 3.99)],
+		"Wheel": [Vector3(0.17, 0.59, 0.59), Vector3(0.23, 0.62, 0.62)],
+	},
+	"res://models/sandero.glb": { # Dacia Sandero Mk1 5-door: 4,020 x 1,746 (mirrors out: ~1.95) x 1,534 mm; 185/65 R15 (620 mm)
+		"Body": [Vector3(1.80, 1.25, 3.97), Vector3(2.05, 1.55, 4.07)],
+		"Wheel": [Vector3(0.17, 0.60, 0.60), Vector3(0.24, 0.64, 0.64)],
+	},
+	"res://models/focus.glb": { # Ford Focus Mk3.5 5-door: 4,358 x 1,823 (mirrors out: ~2.01) x 1,484 mm; 215/55 R16 (642 mm)
+		"Body": [Vector3(1.90, 1.35, 4.31), Vector3(2.12, 1.52, 4.41)],
+		"Wheel": [Vector3(0.20, 0.62, 0.62), Vector3(0.26, 0.66, 0.66)],
+	},
+	"res://models/zafira.glb": { # Opel Zafira B MPV: 4,467 x 1,801 (mirrors out: ~2.02) x 1,635 mm; 205/55 R16 (632 mm)
+		"Body": [Vector3(1.88, 1.40, 4.42), Vector3(2.12, 1.65, 4.52)],
 		"Wheel": [Vector3(0.19, 0.62, 0.62), Vector3(0.26, 0.65, 0.65)],
 	},
 	"res://models/town.glb": {

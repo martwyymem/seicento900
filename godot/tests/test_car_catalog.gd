@@ -25,6 +25,14 @@ func run() -> Array:
 	await _races("logan")
 	_v50()
 	await _races("v50")
+	_i20()
+	await _races("i20")
+	_sandero()
+	await _races("sandero")
+	_focus()
+	await _races("focus")
+	_zafira()
+	await _races("zafira")
 	_settings()
 	completed = true
 	return errors
@@ -305,6 +313,148 @@ func _v50() -> void:
 	var cg := Strategy.new(CarCatalog.model("logan"), Tyres.new()).calibrate(track)
 	check(not is_same(cl, cg) and cl.T0 < cg.T0 - 0.5 and cl.T0 > 30.0, "the V50 is not faster than the Logan on the calibration (T0 %.2f / %.2f)" % [cl.T0, cg.T0])
 	check(not is_same(track.profile_for(lm), track.profile_for(CarCatalog.model("logan"))), "the V50 has no rail profile of its own")
+
+## The Hyundai i20 1.4: the real car's band, the model at the spec's size, wheels at its axles, decals on its body, its own
+## calibration and rail profile.
+func _i20() -> void:
+	var m: Dictionary = PROBE.measure(I20.model())
+	print("    i20: %.1f s 0-100, %.0f km/h, %.1f m from 100, %.2f g, %.0f kg" % [m.t100, m.top, m.brake, m.lat_g, m.mass])
+	check(m.t100 > 11.0 and m.t100 < 12.2, "the i20's 0-100 is %.2f s (real 11.6)" % m.t100)
+	check(m.top > 175.0 and m.top < 185.0, "the i20's top speed is %.0f km/h (real 180)" % m.top)
+	check(m.brake > 35.0 and m.brake < 42.0, "the i20 stops from 100 km/h in %.1f m (real ~38.5)" % m.brake)
+	check(m.lat_g > 0.80 and m.lat_g < 0.90, "the i20 holds %.2f g on the skidpad (real ~0.85)" % m.lat_g)
+	check(not I20.spec().awd and m.mass > 1080.0 and m.mass < 1200.0, "the i20 is front-wheel drive at ~1.14 t (%.0f kg)" % m.mass)
+	var g := CarCatalog.spec("i20")
+	var scene := ResourceLoader.load(CarCatalog.visual("i20").model, "", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene
+	check(scene != null, "i20.glb does not load")
+	if scene:
+		var root := scene.instantiate()
+		var body := root.find_child("Body", true, false) as MeshInstance3D
+		if body:
+			var size := body.mesh.get_aabb().size
+			check(absf(size.z - g.length) < 0.05, "the i20's Body is %.3f m long, the spec says %.3f" % [size.z, g.length])
+			var top := body.mesh.get_aabb().end.y
+			check(top > 1.47 and top < 1.51, "the i20's roof is %.3f m high (1.490 expected)" % top)
+			check(size.x > g.width and size.x < g.width + 0.25, "the i20's Body is %.3f m wide (mirrors out; spec %.3f)" % [size.x, g.width])
+		var wheel := root.find_child("Wheel", true, false) as MeshInstance3D
+		if wheel:
+			var d := wheel.mesh.get_aabb().size.y
+			check(absf(d * 0.5 - CarCatalog.visual("i20").wheel_radius) < 0.004, "the i20's wheel radius is %.4f m, the visual says %.4f" % [d * 0.5, CarCatalog.visual("i20").wheel_radius])
+		root.free()
+	var parent := Node3D.new()
+	Engine.get_main_loop().root.add_child(parent)
+	var car: Node3D = VISUAL.new()
+	car.car_key = "i20"
+	car.car_number = 12
+	parent.add_child(car)
+	var fl: Vector3 = car._wheel_spots[0]
+	var rr: Vector3 = car._wheel_spots[3]
+	check(car.wheels.size() == 4 and absf(fl.z + 1.2625) < 1e-3 and absf(rr.z - 1.2625) < 1e-3 and absf(fl.y - 0.3015) < 1e-4, "the i20's wheels are not at its axles (%s %s)" % [fl, rr])
+	var tri := (VISUAL._shared_resources("i20").shell as Mesh).generate_triangle_mesh()
+	for n in ["DoorDecalL", "DoorDecalR", "Sunstrip", "HoodDecal", "SillDecalL", "SillDecalR"]:
+		var d := car.body_pivot.get_node_or_null(n) as MeshInstance3D
+		check(d != null and d.mesh != null, "the i20 visual lacks decal %s" % n)
+		if d == null:
+			continue
+		var normal := d.transform.basis.z.normalized()
+		var hit := tri.intersect_ray(d.position + normal * 0.3, -normal)
+		check(not hit.is_empty() and absf(((d.position - (hit.position as Vector3)).dot(normal)) - 0.006) < 0.004, "the i20's %s does not sit on the body" % n)
+	parent.free()
+	var track := Race.get_track("gp")
+	var im := CarCatalog.model("i20")
+	var ci := Strategy.new(im, Tyres.new()).calibrate(track)
+	var cg := Strategy.new(CarCatalog.model("golf4"), Tyres.new()).calibrate(track)
+	check(not is_same(ci, cg) and ci.T0 < cg.T0 - 0.3 and ci.T0 > 30.0, "the i20 is not faster than the Golf on the calibration (T0 %.2f / %.2f)" % [ci.T0, cg.T0])
+	check(not is_same(track.profile_for(im), track.profile_for(CarCatalog.model("golf4"))), "the i20 has no rail profile of its own")
+
+## The Dacia Sandero 1.6: real car's band, model at spec's size, wheels at axles, decals on body, own calibration and profile.
+func _sandero() -> void:
+	var m: Dictionary = PROBE.measure(Sandero.model())
+	print("    sandero: %.1f s 0-100, %.0f km/h, %.1f m from 100, %.2f g, %.0f kg" % [m.t100, m.top, m.brake, m.lat_g, m.mass])
+	check(m.t100 > 11.0 and m.t100 < 12.2, "the Sandero's 0-100 is %.2f s (real 11.5)" % m.t100)
+	check(m.top > 169.0 and m.top < 179.0, "the Sandero's top speed is %.0f km/h (real 174)" % m.top)
+	check(m.brake > 35.0 and m.brake < 43.0, "the Sandero stops from 100 km/h in %.1f m (real ~39)" % m.brake)
+	check(m.lat_g > 0.79 and m.lat_g < 0.90, "the Sandero holds %.2f g on the skidpad (real ~0.84)" % m.lat_g)
+	check(not Sandero.spec().awd and m.mass > 1060.0 and m.mass < 1200.0, "the Sandero is front-wheel drive at ~1.13 t (%.0f kg)" % m.mass)
+	_check_car_model("sandero", 1.51, 1.56, 1.294, 0.310, 14)
+	var track := Race.get_track("gp")
+	var sm := CarCatalog.model("sandero")
+	var cs := Strategy.new(sm, Tyres.new()).calibrate(track)
+	var cl := Strategy.new(CarCatalog.model("logan"), Tyres.new()).calibrate(track)
+	check(not is_same(cs, cl) and cs.T0 < cl.T0 - 0.3 and cs.T0 > 30.0, "the Sandero 1.6 is not faster than the Logan 1.4 (T0 %.2f / %.2f)" % [cs.T0, cl.T0])
+	check(not is_same(track.profile_for(sm), track.profile_for(CarCatalog.model("logan"))), "the Sandero has no rail profile of its own")
+
+## The Ford Focus 1.5 EcoBoost (2015): real car's band, model at spec's size, wheels at axles, decals on body, own calibration and profile.
+func _focus() -> void:
+	var m: Dictionary = PROBE.measure(Focus.model())
+	print("    focus: %.1f s 0-100, %.0f km/h, %.1f m from 100, %.2f g, %.0f kg" % [m.t100, m.top, m.brake, m.lat_g, m.mass])
+	check(m.t100 > 8.4 and m.t100 < 9.4, "the Focus's 0-100 is %.2f s (real 8.9)" % m.t100)
+	check(m.top > 205.0 and m.top < 215.0, "the Focus's top speed is %.0f km/h (real 210)" % m.top)
+	check(m.brake > 34.0 and m.brake < 41.0, "the Focus stops from 100 km/h in %.1f m (real ~37)" % m.brake)
+	check(m.lat_g > 0.84 and m.lat_g < 0.94, "the Focus holds %.2f g on the skidpad (real ~0.88)" % m.lat_g)
+	check(not Focus.spec().awd and m.mass > 1300.0 and m.mass < 1450.0, "the Focus is front-wheel drive at ~1.37 t (%.0f kg)" % m.mass)
+	_check_car_model("focus", 1.46, 1.51, 1.324, 0.321, 15)
+	var track := Race.get_track("gp")
+	var fm := CarCatalog.model("focus")
+	var cf := Strategy.new(fm, Tyres.new()).calibrate(track)
+	var ci := Strategy.new(CarCatalog.model("i20"), Tyres.new()).calibrate(track)
+	check(not is_same(cf, ci) and cf.T0 < ci.T0 - 1.0 and cf.T0 > 30.0, "the Focus is not faster than the i20 on the calibration (T0 %.2f / %.2f)" % [cf.T0, ci.T0])
+	check(not is_same(track.profile_for(fm), track.profile_for(CarCatalog.model("i20"))), "the Focus has no rail profile of its own")
+
+## The Opel Zafira B 1.8 (2005): real car's band, model at spec's size, wheels at axles, decals on body, own calibration and profile.
+func _zafira() -> void:
+	var m: Dictionary = PROBE.measure(Zafira.model())
+	print("    zafira: %.1f s 0-100, %.0f km/h, %.1f m from 100, %.2f g, %.0f kg" % [m.t100, m.top, m.brake, m.lat_g, m.mass])
+	check(m.t100 > 10.9 and m.t100 < 12.1, "the Zafira's 0-100 is %.2f s (real 11.5)" % m.t100)
+	check(m.top > 192.0 and m.top < 202.0, "the Zafira's top speed is %.0f km/h (real 197)" % m.top)
+	check(m.brake > 35.0 and m.brake < 42.0, "the Zafira stops from 100 km/h in %.1f m (real ~38)" % m.brake)
+	check(m.lat_g > 0.78 and m.lat_g < 0.89, "the Zafira holds %.2f g on the skidpad (real ~0.83)" % m.lat_g)
+	check(not Zafira.spec().awd and m.mass > 1420.0 and m.mass < 1560.0, "the Zafira is front-wheel drive at ~1.49 t (%.0f kg)" % m.mass)
+	_check_car_model("zafira", 1.61, 1.66, 1.3515, 0.3160, 16)
+	var track := Race.get_track("gp")
+	var zm := CarCatalog.model("zafira")
+	var cz := Strategy.new(zm, Tyres.new()).calibrate(track)
+	var cl := Strategy.new(CarCatalog.model("logan"), Tyres.new()).calibrate(track)
+	check(not is_same(cz, cl) and cz.T0 < cl.T0 - 0.3 and cz.T0 > 30.0, "the Zafira is not faster than the Logan on the calibration (T0 %.2f / %.2f)" % [cz.T0, cl.T0])
+	check(not is_same(track.profile_for(zm), track.profile_for(CarCatalog.model("logan"))), "the Zafira has no rail profile of its own")
+
+func _check_car_model(key: String, roof_lo: float, roof_hi: float, half_wb: float, wr: float, num: int) -> void:
+	var g := CarCatalog.spec(key)
+	var scene := ResourceLoader.load(CarCatalog.visual(key).model, "", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene
+	check(scene != null, "%s.glb does not load" % key)
+	if scene:
+		var root := scene.instantiate()
+		var body := root.find_child("Body", true, false) as MeshInstance3D
+		if body:
+			var size := body.mesh.get_aabb().size
+			check(absf(size.z - g.length) < 0.05, "%s Body is %.3f m long, spec says %.3f" % [key, size.z, g.length])
+			var top := body.mesh.get_aabb().end.y
+			check(top > roof_lo and top < roof_hi, "%s roof is %.3f m high (expected %.2f-%.2f)" % [key, top, roof_lo, roof_hi])
+			check(size.x > g.width and size.x < g.width + 0.25, "%s Body is %.3f m wide (mirrors out; spec %.3f)" % [key, size.x, g.width])
+		var wheel := root.find_child("Wheel", true, false) as MeshInstance3D
+		if wheel:
+			var d := wheel.mesh.get_aabb().size.y
+			check(absf(d * 0.5 - CarCatalog.visual(key).wheel_radius) < 0.004, "%s wheel radius is %.4f m, visual says %.4f" % [key, d * 0.5, CarCatalog.visual(key).wheel_radius])
+		root.free()
+	var parent := Node3D.new()
+	Engine.get_main_loop().root.add_child(parent)
+	var car: Node3D = VISUAL.new()
+	car.car_key = key
+	car.car_number = num
+	parent.add_child(car)
+	var fl: Vector3 = car._wheel_spots[0]
+	var rr: Vector3 = car._wheel_spots[3]
+	check(car.wheels.size() == 4 and absf(fl.z + half_wb) < 1e-3 and absf(rr.z - half_wb) < 1e-3 and absf(fl.y - wr) < 1e-4, "%s wheels are not at its axles (%s %s)" % [key, fl, rr])
+	var tri := (VISUAL._shared_resources(key).shell as Mesh).generate_triangle_mesh()
+	for n in ["DoorDecalL", "DoorDecalR", "Sunstrip", "HoodDecal", "SillDecalL", "SillDecalR"]:
+		var d := car.body_pivot.get_node_or_null(n) as MeshInstance3D
+		check(d != null and d.mesh != null, "%s visual lacks decal %s" % [key, n])
+		if d == null:
+			continue
+		var normal := d.transform.basis.z.normalized()
+		var hit := tri.intersect_ray(d.position + normal * 0.3, -normal)
+		check(not hit.is_empty() and absf(((d.position - (hit.position as Vector3)).dot(normal)) - 0.006) < 0.004, "%s %s does not sit on the body" % [key, n])
+	parent.free()
 
 func _settings() -> void:
 	var st := RaceSettings.new()

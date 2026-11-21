@@ -13,7 +13,7 @@ var map: TownMap
 
 func _initialize() -> void:
 	map = TownMap.load_map(OpenWorld.MAP_KEY)
-	var cars := ["stock", "golf4", "logan", "v50", "hypercar"]
+	var cars := ["stock", "golf4", "logan", "v50", "i20", "sandero", "focus", "zafira", "hypercar"]
 	var wet_mu := float(MapMissions.weather_state("wet").mu)
 
 	var dq := MapMissions.event(Missions.index_of("drag_quarter"))

@@ -29,6 +29,8 @@ func _initialize() -> void:
 	var car := OS.get_environment("CAR") if CarCatalog.is_key(OS.get_environment("CAR")) else "stock"
 	FanLevels.dev_unlock = true # every catalogue car fits, whatever this machine's saves have opened
 	await ow.open("industrial_sprint", {"quality": 3})
+	ow.progress.weather_dynamic = false # cover stills are always dry golden-hour shots, never rained out by the cycle
+	ow.set_weather(MapMissions.weather_state("dry"))
 	ow.progress.car_class = CarCatalog.index_of(car)
 	ow._fit_car()
 	ow.apply_graphics(3)

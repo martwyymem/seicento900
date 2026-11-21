@@ -1,14 +1,14 @@
-## Every car the player can drive: the Fiat Seicento ("stock"), the Hypercar Seicento ("hypercar") and the cars won in the
-## campaign (the Golf IV, "golf4", first, then the Dacia Logan and the Volvo V50; Hyundai i20, Dacia Sandero, Ford Focus and Opel Zafira follow the
-## recipe in AGENTS.md). One entry per car: display name, spec factory, GLB path, how the model is dressed (wheel and decal
-## placement, plate, lamp points), and how it is unlocked. RaceSettings.car_class and WorldProgress.car_class (an index into
+## Every car the player can drive: the Fiat Seicento ("stock"), the Hypercar Seicento ("hypercar") and the seven cars won
+## in the campaign (Golf IV, Dacia Logan, Volvo V50, Hyundai i20, Dacia Sandero, Ford Focus and Opel Zafira B). One entry
+## per car: display name, spec factory, GLB path, how the model is dressed (wheel and decal placement, plate, lamp points),
+## and how it is unlocked. RaceSettings.car_class and WorldProgress.car_class (an index into
 ## KEYS: keep the order, saved settings store it) name a car by its key. Add a car here, in RaceSettings' car_class enum and in
 ## KEYS; the CAR pickers, RaceCarVisual and the strategist follow.
 class_name CarCatalog
 extends RefCounted
 
 ## Index = the saved picker/open-world number: "stock" 0 and "hypercar" 1 as before, then cars in the order they were added.
-const KEYS: Array[String] = ["stock", "hypercar", "golf4", "logan", "v50"]
+const KEYS: Array[String] = ["stock", "hypercar", "golf4", "logan", "v50", "i20", "sandero", "focus", "zafira"]
 
 ## How a model is fitted by RaceCarVisual. Positions are in the visual's frame: -Z forward, +X right, +Y up, origin on the
 ## ground midway between the axles. `decals` (stock only) are measured points {surface, normal, up}; `decal_aims` are rays
@@ -91,6 +91,95 @@ const V50_VISUAL := {
 	},
 }
 
+const I20_VISUAL := {
+	"model": "res://models/i20.glb", "wheel_radius": 0.3015, "wheelbase": 2.525, "half_track_front": 0.7525, "half_track_rear": 0.7515,
+	"roof_number": Vector3(0.0, 1.494, 0.45), "brake_light": Vector3(0.0, 1.00, 2.08), "tailpipe": Vector3(0.36, 0.254, 1.897),
+	"fx_axle": Vector3(0.0, 0.03, 1.2625), "contact": Vector2(2.05, 4.30),
+	# the plates' bottom edges (front hexagonal grille bar, rear bumper recess) and a top limit (build_i20.py)
+	"plate_y": Vector3(0.425, 0.440, 0.65),
+	# the Golf's deeper red lens: the i20's high stacked tail lamps flank the rear glass
+	"tail_lamp": {"tint": Color(0.70, 0.01, 0.015), "alpha_off": 0.86, "alpha_lit": 0.93, "glow_gain": 0.6, "sheen": 0.3,
+		"reflect": 0.3, "albedo": Color("#5a0404"), "energy": 0.9},
+	# the nose is 2.0475 m ahead of the origin and the cowl at 0.9675 m, 0.962 m up
+	"bumper_cam": Vector2(2.08, 0.46), "bonnet_cam": Vector2(0.96, 1.15),
+	"chase_back": 0.32, ## the tail is 1.8925 m behind the origin (the Seicento's 1.58)
+	# the front door, the top of the windscreen, the bonnet and the sill under the B-pillar
+	"decal_aims": {
+		"DoorDecalL": {"from": Vector3(-1.5, 0.72, -0.43), "dir": Vector3(1, 0, 0), "up": Vector3.UP},
+		"DoorDecalR": {"from": Vector3(1.5, 0.72, -0.43), "dir": Vector3(-1, 0, 0), "up": Vector3.UP},
+		"Sunstrip": {"from": Vector3(0.001, 1.90, -0.54), "dir": Vector3(0.0, -0.88, 0.47), "up": Vector3(0.0, 0.47, 0.88)},
+		"HoodDecal": {"from": Vector3(0.0, 1.4, -1.45), "dir": Vector3(0, -1, 0), "up": Vector3.FORWARD},
+		"SillDecalL": {"from": Vector3(-1.5, 0.38, 0.0), "dir": Vector3(1, 0, 0), "up": Vector3.UP},
+		"SillDecalR": {"from": Vector3(1.5, 0.38, 0.0), "dir": Vector3(-1, 0, 0), "up": Vector3.UP},
+	},
+}
+
+const SANDERO_VISUAL := {
+	"model": "res://models/sandero.glb", "wheel_radius": 0.310, "wheelbase": 2.588, "half_track_front": 0.740, "half_track_rear": 0.7345,
+	"roof_number": Vector3(0.0, 1.538, 0.45), "brake_light": Vector3(0.0, 0.96, 2.10), "tailpipe": Vector3(0.38, 0.270, 1.917),
+	"fx_axle": Vector3(0.0, 0.03, 1.294), "contact": Vector2(2.08, 4.38),
+	# the plates' bottom edges (front bumper beam, tailgate recess) and a top limit (build_sandero.py)
+	"plate_y": Vector3(0.435, 0.615, 0.80),
+	# deeper red lens for the tall vertical-wedge tail lamps flanking the rear window
+	"tail_lamp": {"tint": Color(0.70, 0.01, 0.015), "alpha_off": 0.86, "alpha_lit": 0.93, "glow_gain": 0.6, "sheen": 0.3,
+		"reflect": 0.3, "albedo": Color("#5a0404"), "energy": 0.9},
+	# nose is 2.109 m ahead of origin and cowl at 0.979 m, 0.988 m up
+	"bumper_cam": Vector2(2.14, 0.47), "bonnet_cam": Vector2(0.97, 1.18),
+	"chase_back": 0.34, ## tail is 1.911 m behind the origin (the Seicento's 1.58)
+	"decal_aims": {
+		"DoorDecalL": {"from": Vector3(-1.5, 0.72, -0.42), "dir": Vector3(1, 0, 0), "up": Vector3.UP},
+		"DoorDecalR": {"from": Vector3(1.5, 0.72, -0.42), "dir": Vector3(-1, 0, 0), "up": Vector3.UP},
+		"Sunstrip": {"from": Vector3(0.001, 1.95, -0.56), "dir": Vector3(0.0, -0.88, 0.47), "up": Vector3(0.0, 0.47, 0.88)},
+		"HoodDecal": {"from": Vector3(0.0, 1.45, -1.48), "dir": Vector3(0, -1, 0), "up": Vector3.FORWARD},
+		"SillDecalL": {"from": Vector3(-1.5, 0.40, 0.0), "dir": Vector3(1, 0, 0), "up": Vector3.UP},
+		"SillDecalR": {"from": Vector3(1.5, 0.40, 0.0), "dir": Vector3(-1, 0, 0), "up": Vector3.UP},
+	},
+}
+
+const FOCUS_VISUAL := {
+	"model": "res://models/focus.glb", "wheel_radius": 0.321, "wheelbase": 2.648, "half_track_front": 0.772, "half_track_rear": 0.767,
+	"roof_number": Vector3(0.0, 1.488, 0.40), "brake_light": Vector3(0.0, 0.90, 2.30), "tailpipe": Vector3(0.40, 0.248, 2.138),
+	"fx_axle": Vector3(0.0, 0.03, 1.324), "contact": Vector2(2.15, 4.70),
+	# the plates' bottom edges (front hexagonal grille plinth, rear tailgate) and a top limit (build_focus.py)
+	"plate_y": Vector3(0.382, 0.625, 0.80),
+	# deep red tail-lamp lens shader matching Golf4/V50/i20
+	"tail_lamp": {"tint": Color(0.70, 0.01, 0.015), "alpha_off": 0.86, "alpha_lit": 0.93, "glow_gain": 0.6, "sheen": 0.3,
+		"reflect": 0.3, "albedo": Color("#5a0404"), "energy": 0.9},
+	# nose is 2.244 m ahead of the origin and the cowl at 0.914 m, 0.962 m up
+	"bumper_cam": Vector2(2.27, 0.46), "bonnet_cam": Vector2(0.91, 1.15),
+	"chase_back": 0.54, ## tail is 2.114 m behind the origin (the Seicento's 1.58)
+	"decal_aims": {
+		"DoorDecalL": {"from": Vector3(-1.5, 0.70, -0.38), "dir": Vector3(1, 0, 0), "up": Vector3.UP},
+		"DoorDecalR": {"from": Vector3(1.5, 0.70, -0.38), "dir": Vector3(-1, 0, 0), "up": Vector3.UP},
+		"Sunstrip": {"from": Vector3(0.001, 1.90, -0.45), "dir": Vector3(0.0, -0.88, 0.47), "up": Vector3(0.0, 0.47, 0.88)},
+		"HoodDecal": {"from": Vector3(0.0, 1.4, -1.52), "dir": Vector3(0, -1, 0), "up": Vector3.FORWARD},
+		"SillDecalL": {"from": Vector3(-1.5, 0.36, 0.0), "dir": Vector3(1, 0, 0), "up": Vector3.UP},
+		"SillDecalR": {"from": Vector3(1.5, 0.36, 0.0), "dir": Vector3(-1, 0, 0), "up": Vector3.UP},
+	},
+}
+
+const ZAFIRA_VISUAL := {
+	"model": "res://models/zafira.glb", "wheel_radius": 0.3160, "wheelbase": 2.703, "half_track_front": 0.744, "half_track_rear": 0.755,
+	"roof_number": Vector3(0.0, 1.620, 0.50), "brake_light": Vector3(0.0, 1.00, 2.42), "tailpipe": Vector3(0.40, 0.264, 2.231),
+	"fx_axle": Vector3(0.0, 0.03, 1.3515), "contact": Vector2(2.15, 4.80),
+	# front bumper beam plate (0.440) and tailgate recess plate (0.695), 512 x 105 mm (build_zafira.py)
+	"plate_y": Vector3(0.440, 0.695, 0.90),
+	# deeper red lens for the tall vertical wrap-around tail lamps
+	"tail_lamp": {"tint": Color(0.70, 0.01, 0.015), "alpha_off": 0.86, "alpha_lit": 0.93, "glow_gain": 0.6, "sheen": 0.3,
+		"reflect": 0.3, "albedo": Color("#5a0404"), "energy": 0.9},
+	# nose is 2.2415 m ahead of origin; cowl is at 1.1015 m ahead, 1.058 m high
+	"bumper_cam": Vector2(2.27, 0.50), "bonnet_cam": Vector2(1.08, 1.24),
+	"chase_back": 0.66, ## tail is 2.2255 m behind origin (vs Seicento's 1.58)
+	"decal_aims": {
+		"DoorDecalL": {"from": Vector3(-1.5, 0.72, -0.38), "dir": Vector3(1, 0, 0), "up": Vector3.UP},
+		"DoorDecalR": {"from": Vector3(1.5, 0.72, -0.38), "dir": Vector3(-1, 0, 0), "up": Vector3.UP},
+		"Sunstrip": {"from": Vector3(0.001, 2.00, -0.58), "dir": Vector3(0.0, -0.88, 0.47), "up": Vector3(0.0, 0.47, 0.88)},
+		"HoodDecal": {"from": Vector3(0.001, 1.5, -1.60), "dir": Vector3(0, -1, 0), "up": Vector3.FORWARD},
+		"SillDecalL": {"from": Vector3(-1.5, 0.38, 0.0), "dir": Vector3(1, 0, 0), "up": Vector3.UP},
+		"SillDecalR": {"from": Vector3(1.5, 0.38, 0.0), "dir": Vector3(-1, 0, 0), "up": Vector3.UP},
+	},
+}
+
 static func is_key(key: String) -> bool:
 	return key in KEYS
 
@@ -110,6 +199,14 @@ static func display_name(key: String) -> String:
 			return "Dacia Logan 1.4"
 		"v50":
 			return "Volvo V50 2.4i"
+		"i20":
+			return "Hyundai i20 1.4"
+		"sandero":
+			return "Dacia Sandero 1.6"
+		"focus":
+			return "Ford Focus 1.5"
+		"zafira":
+			return "Opel Zafira B 1.8"
 	return "Seicento 900"
 
 ## The car's physics spec (a fresh duplicate for every car but the stock one's shared resource).
@@ -123,6 +220,14 @@ static func spec(key: String) -> CarSpec:
 			return Logan.spec()
 		"v50":
 			return V50.spec()
+		"i20":
+			return I20.spec()
+		"sandero":
+			return Sandero.spec()
+		"focus":
+			return Focus.spec()
+		"zafira":
+			return Zafira.spec()
 	return load("res://data/seicento.tres")
 
 static func model(key: String) -> CarModel:
@@ -137,6 +242,14 @@ static func visual(key: String) -> Dictionary:
 			return LOGAN_VISUAL
 		"v50":
 			return V50_VISUAL
+		"i20":
+			return I20_VISUAL
+		"sandero":
+			return SANDERO_VISUAL
+		"focus":
+			return FOCUS_VISUAL
+		"zafira":
+			return ZAFIRA_VISUAL
 	return STOCK_VISUAL
 
 ## The race number, paint and stripes a car always wears (the hypercar is AF Corse's yellow no. 83), or {} for the player's own.
@@ -202,9 +315,28 @@ const PALETTES := {
 		["Barents Blue", "#24344f"], ["Magic Blue", "#2f4f78"], ["Passion Red", "#9c1a22"], ["Willow Green", "#5d6f5c"],
 		["Sandstone Beige", "#b9ad94"],
 	],
+	"i20": [ # Hyundai i20 PB 2008-2012
+		["Crystal White", "#f0f1ee"], ["Sleek Silver", "#b4b9be"], ["Dark Grey", "#55595e"], ["Black Diamond", "#151619"],
+		["Spark Blue", "#25589c"], ["Blueberry Blue", "#1c3358"], ["Berry Red", "#a81824"], ["Electric Red", "#cc1b22"],
+		["Champagne Silver", "#c4baaa"],
+	],
+	"sandero": [ # Dacia Sandero I 2008-2012
+		["Glacier White", "#eef0ee"], ["Platine Silver", "#a8acaf"], ["Comète Grey", "#686c71"], ["Pearl Black", "#16171a"],
+		["Passion Red", "#b81820"], ["Mineral Blue", "#3a5c82"], ["Mahogany Brown", "#5a3426"], ["Marina Blue", "#1f3e6e"],
+	],
+	"focus": [ # Ford Focus Mk3.5 2015
+		["Frozen White", "#f0f2f0"], ["Moondust Silver", "#b6bcc0"], ["Magnetic Grey", "#4f5459"], ["Shadow Black", "#141518"],
+		["Deep Impact Blue", "#183c7a"], ["Race Red", "#c4161c"], ["Candy Red", "#8e121e"], ["Tangerine Scream", "#e89c10"],
+		["Tectonic Silver", "#a59f93"],
+	],
+	"zafira": [ # Opel Zafira B 2005-2011
+		["Casablanca White", "#eff1ee"], ["Star Silver", "#b7bcc1"], ["Moonland Grey", "#6f7479"], ["Black Sapphire", "#14161a"],
+		["Ultra Blue", "#1c5ca8"], ["Metro Blue", "#4e6273"], ["Power Red", "#b8171e"], ["Pannacotta", "#c2b7a3"],
+		["Royal Blue", "#1b2d59"],
+	],
 }
 ## Measured with tests/_car_probe.gd (and test_hypercar.gd): [0-100 km/h s, top km/h], for the garage's bars.
-const FIGURES := {"stock": [20.4, 137.0], "hypercar": [3.0, 346.0], "golf4": [13.9, 171.0], "logan": [13.3, 162.0], "v50": [8.3, 211.0]}
+const FIGURES := {"stock": [20.4, 137.0], "hypercar": [3.0, 346.0], "golf4": [13.9, 171.0], "logan": [13.3, 162.0], "v50": [8.3, 211.0], "i20": [11.6, 180.0], "sandero": [11.6, 174.0], "focus": [8.8, 210.0], "zafira": [11.4, 197.0]}
 const PAINT_SAVE := "garage.cfg" ## the paint last picked for each car (SaveData)
 
 ## The car's factory paints: [{name, color}], the stock Seicento's for an unknown key.

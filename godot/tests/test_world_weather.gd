@@ -9,6 +9,7 @@ var completed := false
 func run() -> Array:
 	var errors: Array[String] = []
 	_model(errors)
+	_hail(errors)
 	_grip(errors)
 	var map := TownMap.load_map(OpenWorld.MAP_KEY)
 	if map == null:
@@ -27,6 +28,15 @@ static func _rain_peak(w: WorldWeather, from: float, to: float, level := 0.9) ->
 		t += 0.05
 	return -1.0
 
+## The first game hour in [from, to] at which the seed's hail is at least `level`, or -1.
+static func _hail_peak(w: WorldWeather, from: float, to: float, level := 0.5) -> float:
+	var t := from
+	while t < to:
+		if float(w.target(t).hail) >= level:
+			return t
+		t += 0.05
+	return -1.0
+
 func _model(errors: Array[String]) -> void:
 	# deterministic in the seed: the same plan, a different one for another seed
 	var a := WorldWeather.new(12345, 0.0)
@@ -38,7 +48,7 @@ func _model(errors: Array[String]) -> void:
 		var ta := a.target(t)
 		var tb := b.target(t)
 		var tc := c.target(t)
-		if ta.rain != tb.rain or ta.fog != tb.fog or ta.snow != tb.snow:
+		if ta.rain != tb.rain or ta.fog != tb.fog or ta.snow != tb.snow or ta.hail != tb.hail:
 			errors.append("two weathers of one seed differ at hour %.2f" % t)
 			break
 		if absf(float(ta.rain) - float(tc.rain)) > 0.01:
@@ -113,11 +123,11 @@ func _model(errors: Array[String]) -> void:
 				snows += 1
 	if snows < 10:
 		errors.append("snow switched on gave only %d snowfalls in %d days" % [snows, days])
-	# continuous in time: rain, fog, wetness and grip never jump (the ramps are minutes of game time)
+	# continuous in time: rain, fog, hail, wetness and grip never jump (the ramps are minutes of game time)
 	for seed_v in [3, 99, 777, 2024]:
 		var w := WorldWeather.new(seed_v, 0.0)
 		var prev: Dictionary = w.state()
-		var worst := {"rain": 0.0, "fog": 0.0, "wet": 0.0, "mu": 0.0}
+		var worst := {"rain": 0.0, "fog": 0.0, "hail": 0.0, "wet": 0.0, "mu": 0.0}
 		var step := 0.004
 		var n := int(24.0 * 6.0 / step)
 		for _i in n:
@@ -126,9 +136,121 @@ func _model(errors: Array[String]) -> void:
 			for k in worst:
 				worst[k] = maxf(worst[k], absf(float(cur[k]) - float(prev[k])))
 			prev = cur
-		# a step of 0.004 h: a full shower's ramp is 5 per hour, wetness rises at 1 / 0.45 per hour
-		if worst.rain > 0.03 or worst.fog > 0.01 or worst.wet > 0.012 or worst.mu > 0.01:
+		# a step of 0.004 h: shower ramp 7.5/h (0.03), hail ramp 12.5/h (0.05), wetness 1/0.45/h (0.009)
+		if worst.rain > 0.03 or worst.fog > 0.01 or worst.hail > 0.055 or worst.wet > 0.012 or worst.mu > 0.025:
 			errors.append("seed %d is not continuous: biggest steps %s" % [seed_v, worst])
+
+## Free-roam hail squalls: rare (~5 % of days), brief (0.35-0.75 h), deterministic, avoiding dawn fog, wetting the
+## road, cutting grip, driving mode/word ("hail"/"HAIL") and force("hail").
+func _hail(errors: Array[String]) -> void:
+	var days := 1000
+	var w := WorldWeather.new(2024, 0.0)
+	var snowy := WorldWeather.new(2024, 0.0, true)
+	var hail_count := 0
+	var hail_min := 99.0
+	var hail_max := 0.0
+	var level_min := 99.0
+	var level_max := 0.0
+	var fog_overlap := 0
+	var snow_mismatch := false
+	for d in days:
+		var evs := w.events_for(d)
+		var sevs := snowy.events_for(d)
+		var fogs: Array = []
+		var hails: Array = []
+		for ev in evs:
+			if String(ev.kind) == "fog":
+				fogs.append(ev)
+			elif String(ev.kind) == "hail":
+				hails.append(ev)
+				hail_count += 1
+				var dur := float(ev.end) - float(ev.start)
+				hail_min = minf(hail_min, dur)
+				hail_max = maxf(hail_max, dur)
+				level_min = minf(level_min, float(ev.level))
+				level_max = maxf(level_max, float(ev.level))
+		for h in hails:
+			for f in fogs:
+				if float(h.start) < float(f.end) + WorldWeather.FOG_RAMP and float(h.end) > float(f.start) - WorldWeather.FOG_RAMP:
+					fog_overlap += 1
+		var shails: Array = []
+		for ev in sevs:
+			if String(ev.kind) == "hail":
+				shails.append(ev)
+		if shails.size() != hails.size():
+			snow_mismatch = true
+	if hail_count < 25 or hail_count > 85:
+		errors.append("%d hail squalls in %d days (wanted ~5 %%: 25-85)" % [hail_count, days])
+	if hail_count > 0:
+		if hail_min < WorldWeather.HAIL_HOURS.x - 1e-4 or hail_max > WorldWeather.HAIL_HOURS.y + 1e-4:
+			errors.append("hail duration %.3f-%.3f h outside [%.2f, %.2f]" % [hail_min, hail_max, WorldWeather.HAIL_HOURS.x, WorldWeather.HAIL_HOURS.y])
+		if level_min < WorldWeather.HAIL_LEVEL.x - 1e-4 or level_max > WorldWeather.HAIL_LEVEL.y + 1e-4:
+			errors.append("hail level %.3f-%.3f outside [%.2f, %.2f]" % [level_min, level_max, WorldWeather.HAIL_LEVEL.x, WorldWeather.HAIL_LEVEL.y])
+	if fog_overlap > 0:
+		errors.append("%d hail squalls overlapped dawn fog" % fog_overlap)
+	if snow_mismatch:
+		errors.append("enabling snow changed the hail schedule")
+	# determinism across stepping vs reload/settle, continuity across a squall, road wetting, mode and word
+	var peak := _hail_peak(w, 24.0, 24.0 * 200.0)
+	if peak < 0.0:
+		errors.append("no hail squall found in 200 days of seed 2024")
+		return
+	var stepped := WorldWeather.new(2024, peak - 0.5)
+	var prev_st := stepped.state()
+	var max_dhail := 0.0
+	var max_dmu := 0.0
+	var saw_hail_mode := false
+	var saw_hail_word := false
+	var peak_wet := 0.0
+	var min_mu := 1.0
+	var step := 0.004
+	for _i in int(1.0 / step):
+		stepped.advance(step)
+		var cur_st := stepped.state()
+		max_dhail = maxf(max_dhail, absf(float(cur_st.hail) - float(prev_st.hail)))
+		max_dmu = maxf(max_dmu, absf(float(cur_st.mu) - float(prev_st.mu)))
+		if String(cur_st.mode) == "hail":
+			saw_hail_mode = true
+		if WorldWeather.word(cur_st) == "HAIL":
+			saw_hail_word = true
+		peak_wet = maxf(peak_wet, float(cur_st.wet))
+		min_mu = minf(min_mu, float(cur_st.mu))
+		prev_st = cur_st
+	var settled := WorldWeather.new(2024, stepped.clock)
+	if absf(stepped.hail - settled.hail) > 1e-6 or absf(stepped.wet - settled.wet) > 0.02 or absf(float(stepped.state().mu) - float(settled.state().mu)) > 0.01:
+		errors.append("stepping across hail gave hail=%.3f wet=%.3f mu=%.3f, settling there gave %.3f / %.3f / %.3f" % [stepped.hail, stepped.wet, float(stepped.state().mu), settled.hail, settled.wet, float(settled.state().mu)])
+	if max_dhail > 0.055 or max_dmu > 0.025:
+		errors.append("hail squall was not continuous: dhail=%.4f dmu=%.4f" % [max_dhail, max_dmu])
+	if not saw_hail_mode or not saw_hail_word:
+		errors.append("hail squall did not report mode='hail' and word='HAIL' (mode=%s word=%s)" % [saw_hail_mode, saw_hail_word])
+	if peak_wet < 0.25:
+		errors.append("hail squall barely wetted the road: peak wet %.3f" % peak_wet)
+	if not (min_mu < 0.78):
+		errors.append("hail squall did not drop grip enough: min mu %.3f" % min_mu)
+	# force("hail", hours, level) and priority (snow > hail > rain)
+	var fw := WorldWeather.new(1, 12.0)
+	fw.force("hail", 1.5, 0.9)
+	fw.advance(0.2)
+	var fst := fw.state()
+	if fw.hail < 0.85 or String(fst.mode) != "hail" or WorldWeather.word(fst) != "HAIL":
+		errors.append("force('hail') did not reach hail state: hail=%.3f mode=%s word=%s" % [fw.hail, fst.mode, WorldWeather.word(fst)])
+	if fw.wet < 0.1 or float(fst.mu) > 0.72:
+		errors.append("force('hail') did not wet the road and cut grip: wet=%.3f mu=%.3f" % [fw.wet, float(fst.mu)])
+	# priority: hail beats rain, snow beats hail
+	var p_hr := WorldWeather.new(1, 12.0)
+	p_hr.forced.append({"kind": "rain", "start": 11.5, "end": 14.0, "level": 0.8})
+	p_hr.forced.append({"kind": "hail", "start": 11.5, "end": 14.0, "level": 0.7})
+	p_hr.advance(0.1)
+	if String(p_hr.state().mode) != "hail" or WorldWeather.word(p_hr.state()) != "HAIL":
+		errors.append("hail did not take priority over rain: mode=%s word=%s" % [p_hr.state().mode, WorldWeather.word(p_hr.state())])
+	p_hr.forced.append({"kind": "snow", "start": 11.5, "end": 14.0, "level": 0.6})
+	p_hr.advance(0.1)
+	if String(p_hr.state().mode) != "snow" or WorldWeather.word(p_hr.state()) != "SNOW":
+		errors.append("snow did not take priority over hail: mode=%s word=%s" % [p_hr.state().mode, WorldWeather.word(p_hr.state())])
+	fw.force("clear")
+	fw.advance(0.05)
+	if fw.hail > 0.05:
+		errors.append("force('clear') did not clear forced hail: %.3f" % fw.hail)
 
 ## The grip against the wetness, as Race.grip with road tyres.
 func _grip(errors: Array[String]) -> void:
@@ -150,6 +272,21 @@ func _grip(errors: Array[String]) -> void:
 	var snow := MapMissions.weather_state("snow")
 	if absf(w.grip(float(snow.wet), float(snow.snow), 0.0) - float(snow.mu)) > 1e-6:
 		errors.append("grip in a mission's snow is %.4f, the mission's %.4f" % [w.grip(float(snow.wet), float(snow.snow), 0.0), snow.mu])
+	var hail := MapMissions.weather_state("hail")
+	if absf(w.grip(float(hail.wet), 0.0, 0.0, float(hail.hail)) - float(hail.mu)) > 1e-6:
+		errors.append("grip in a mission's hail is %.4f, the mission's %.4f" % [w.grip(float(hail.wet), 0.0, 0.0, float(hail.hail)), hail.mu])
+	if float(hail.mu) < 0.50 or float(hail.mu) > 0.62:
+		errors.append("wet+hail grip %.4f outside expected ~0.55-0.60 band" % float(hail.mu))
+	if absf(w.grip(0.5, 0.2, 0.3) - w.grip(0.5, 0.2, 0.3, 0.0)) > 1e-9:
+		errors.append("3-arg grip() does not match 4-arg grip(..., 0.0)")
+	var last_h := 1.0
+	for i in 11:
+		var gh := w.grip(0.0, 0.0, 0.0, float(i) / 10.0)
+		if gh > last_h + 1e-9:
+			errors.append("grip rose from %.4f to %.4f as hail intensified" % [last_h, gh])
+		last_h = gh
+	if absf(last_h - (1.0 - WorldWeather.HAIL_GRIP)) > 1e-6:
+		errors.append("full dry hail grip is %.4f, expected %.4f" % [last_h, 1.0 - WorldWeather.HAIL_GRIP])
 	# through a shower the wetness lags the rain and dries slowly; the grip follows the wetness
 	var s := WorldWeather.new(777, 30.0)
 	var peak := _rain_peak(s, 24.0, 24.0 * 40.0)
@@ -167,7 +304,7 @@ func _grip(errors: Array[String]) -> void:
 		t = run.clock
 		var st: Dictionary = run.state()
 		mu_min = minf(mu_min, float(st.mu))
-		if absf(float(st.mu) - run.grip(run.wet, run.snow, run.fog)) > 1e-9:
+		if absf(float(st.mu) - run.grip(run.wet, run.snow, run.fog, run.hail)) > 1e-9:
 			consistent = false
 		if rain_end < 0.0 and t > peak and run.rain < 0.05:
 			rain_end = t
@@ -240,7 +377,7 @@ func _world(map: TownMap, errors: Array[String]) -> void:
 		max_rain = maxf(max_rain, float(cur.rain))
 		max_wet = maxf(max_wet, float(cur.wet))
 		min_mu = minf(min_mu, float(cur.mu))
-		if absf(float(cur.mu) - ow.wx.grip(float(cur.wet), float(cur.snow), float(cur.fog))) > 1e-9 or absf(ow.drive.mu - float(cur.mu)) > 1e-9:
+		if absf(float(cur.mu) - ow.wx.grip(float(cur.wet), float(cur.snow), float(cur.fog), float(cur.hail))) > 1e-9 or absf(ow.drive.mu - float(cur.mu)) > 1e-9:
 			mu_wet_ok = false
 		prev = cur
 	if max_rain < 0.85 or max_wet < 0.6:
@@ -263,6 +400,15 @@ func _world(map: TownMap, errors: Array[String]) -> void:
 			rainy = true
 	if not rainy:
 		errors.append("forced rain gave no RAIN on the clock (%s)" % WorldWeather.word(ow.weather_state()))
+	ow.wx.force("hail", 2.0, 0.9)
+	var haily := false
+	for _i in 60:
+		ow.hour = fposmod(ow.hour + 0.01, 24.0)
+		ow._update_weather()
+		if ow.weather == "hail" and WorldWeather.word(ow.weather_state()) == "HAIL" and ow.drive.mu < 0.75:
+			haily = true
+	if not haily:
+		errors.append("forced hail did not put HAIL on the open world: mode=%s word=%s mu=%.3f" % [ow.weather, WorldWeather.word(ow.weather_state()), ow.drive.mu])
 	ow.wx.force("clear")
 	# a mission's weather wins while it runs, and free roam's resumes after
 	ow.wx.force("rain", 6.0)

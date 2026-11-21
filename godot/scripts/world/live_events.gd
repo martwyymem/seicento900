@@ -56,8 +56,8 @@ const CP_SPACING := 420.0 ## m between a route's checkpoints
 const TIME_OUT := 1.8 ## a drift run fails once it takes this many times three reference runs
 const FANS_PER_KM := 1200.0 ## a clear at the target place, medium field, per km (at least 1.5 km's worth)
 const DRAG_LENGTHS := [402.0, 402.0, 1000.0]
-const DRAG_HALF := 3.1 ## m: a drag's road must be at least this wide either side of its line all the way: four abreast
-## 2 m apart (StreetRivals.drag_lane) keeps every car's centre on the tarmac
+const DRAG_HALF := 3.1 ## m: a drag's road must be at least this wide either side of its line all the way: three abreast
+## (StreetRivals.drag_rivals_fit; four where the road is 3.7 m either side) with every car's body on the tarmac
 const START_STRAIGHT := 60.0 ## m after the line over which a route may turn at most ...
 const START_TURN := 1.7 ## ... this many rad (a corner, not a U-turn or a zig-zag: the grid stands there)
 const DRAG_TURN := 0.4 ## rad: the most a drag's road may bend over its length
@@ -74,14 +74,18 @@ const DRIFT_PER_KM := [115.0, 460.0, 1150.0]
 ## Measured with tests/_car_probe.gd and tests/_pace_probe.gd (2026-11-21): Seicento 137 km/h, 0.96 g (anchor);
 ## Golf IV 171 km/h, 0.86 g, 100-0 in 39.3 m; Logan 162 km/h, 0.84 g, 100-0 in 39.1 m; hypercar 346 km/h;
 ## V50 2.4i 211 km/h, 0.86 g, 100-0 in 36.5 m (S1 drags 15.95 s / 30.25 s; bot/pace 1.47 town, 1.31 S1 sprint, between the
-## Golf's and the hypercar's).
+## Golf's and the hypercar's); i20 1.4 180 km/h, 0.86 g, 100-0 in 38.6 m (S1 drags 17.94 s / 34.07 s; bot/pace 1.46 town,
+## 1.26 S1 sprint, between the Golf's and the V50's); Sandero 1.6 174 km/h, 0.84 g, 100-0 in 39.3 m (S1 drags 17.91 s /
+## 34.33 s; bot/pace 1.45 town, 1.26 S1 sprint); Focus 1.5 210 km/h, 0.89 g, 100-0 in 37.7 m (S1 drags 16.18 s / 30.74 s;
+## bot/pace 1.48 town, 1.32 S1 sprint); Zafira B 1.8 197 km/h, 0.83 g, 100-0 in 38.5 m (S1 drags 17.95 s / 35.70 s;
+## bot/pace 1.46 town, 1.29 S1 sprint).
 ## Acceleration is fitted to each car's measured S1 drag and sprint runs against the Seicento anchor; grip and braking
 ## are the town tarmac's share of the probe's figures.
-const PACE := {"stock": [38.0, 2.4, 8.4, 7.4], "golf4": [47.5, 2.7, 7.6, 6.9], "logan": [45.0, 2.9, 7.4, 6.9], "v50": [58.5, 3.4, 7.6, 7.4], "hypercar": [96.0, 9.0, 13.5, 10.7]}
+const PACE := {"stock": [38.0, 2.4, 8.4, 7.4], "golf4": [47.5, 2.7, 7.6, 6.9], "logan": [45.0, 2.9, 7.4, 6.9], "v50": [58.5, 3.4, 7.6, 7.4], "i20": [50.0, 3.0, 7.5, 7.1], "sandero": [48.3, 3.0, 7.4, 6.9], "focus": [58.3, 3.5, 7.9, 7.2], "zafira": [54.7, 2.8, 7.3, 7.1], "hypercar": [96.0, 9.0, 13.5, 10.7]}
 ## The car's own standing start on the map's S1 (the drag_kilometre mission's line), full throttle with the automatic
 ## box (FreeCar), measured with tests/_pace_probe.gd (2026-11-21): seconds over 402 m and 1000 m. A drag field
 ## (StreetRivals) is calibrated against these (scaled by grip_k via pace_time when wet).
-const DRAG_TIMES := {"stock": [21.0, 40.6], "golf4": [19.1, 36.5], "logan": [18.8, 35.9], "v50": [16.0, 30.3], "hypercar": [9.9, 18.0]}
+const DRAG_TIMES := {"stock": [21.0, 40.6], "golf4": [19.1, 36.5], "logan": [18.8, 35.9], "v50": [16.0, 30.3], "i20": [17.9, 34.1], "sandero": [17.9, 34.3], "focus": [16.2, 30.7], "zafira": [18.0, 35.7], "hypercar": [9.9, 18.0]}
 const TOWN_GRIP := 0.9 ## Physics.SURF_GRIP of the map's asphalt, which PACE was measured on
 
 var map: TownMap
@@ -272,12 +276,17 @@ func _make_drag(start: Dictionary) -> Dictionary:
 		if (start.pos as Vector2).distance_to(path[path.size() - 1]) < want * 0.97 or turning(path) > DRAG_TURN:
 			continue
 		var wide := true
+		var narrow := INF
 		for h in (route_profile(map, path, 20.0).half as PackedFloat32Array):
+			narrow = minf(narrow, h)
 			if h < DRAG_HALF:
 				wide = false
 				break
 		if wide:
-			return _make("drag", path, PackedVector2Array([path[path.size() - 1]]), _street(start))
+			var ev := _make("drag", path, PackedVector2Array([path[path.size() - 1]]), _street(start))
+			# three abreast where four would hang over the kerbs (StreetRivals.drag_rivals_fit)
+			ev.rivals = mini(int(ev.rivals), StreetRivals.drag_rivals_fit(narrow))
+			return ev
 	return {}
 
 ## A drift: 500..1100 m along the road it starts on, properly twisty.

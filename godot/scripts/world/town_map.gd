@@ -1626,6 +1626,8 @@ static func doubled_fences(walls: Array) -> Dictionary:
 ## OSM barriers and plot boundaries that run into a lane (along a service road, across a bend) are cut there, drawn
 ## (TownBuilder._fence_records) and solid alike, so the car meets no fence on its lane (_invisible_wall_probe.gd).
 func fence_pieces(a: Vector2, b: Vector2) -> Array:
+	if not _road_near_segment(a, b, 1.5 + 0.01):
+		return [[a, b]] # (no street within reach of any sample: the samples below would all miss)
 	var ln := a.distance_to(b)
 	var n := maxi(2, int(ceil(ln / 0.5)) + 1)
 	var cut := false
@@ -1659,6 +1661,26 @@ func fence_pieces(a: Vector2, b: Vector2) -> Array:
 				out.append([a.lerp(b, t0), a.lerp(b, t1)])
 			start = -1
 	return out
+
+## Whether any street segment indexed in the cells segment a-b crosses comes within its half width plus `reach` of a-b
+## (road_at looks for streets only in a point's own cell, and only that far out): false means road_at(.., reach) finds
+## no street anywhere along a-b.
+func _road_near_segment(a: Vector2, b: Vector2, reach: float) -> bool:
+	var lo := a.min(b) - Vector2(0.01, 0.01)
+	var hi := a.max(b) + Vector2(0.01, 0.01)
+	for cx in range(int(floor(lo.x / CELL)), int(floor(hi.x / CELL)) + 1):
+		for cy in range(int(floor(lo.y / CELL)), int(floor(hi.y / CELL)) + 1):
+			var ck := _cell_key(cx, cy)
+			if not _seg_cells.has(ck):
+				continue
+			for sid in _seg_cells[ck]:
+				var ri := _seg_road[sid]
+				var pts := road_pts[ri]
+				var i := _seg_i[sid]
+				var c := Geometry2D.get_closest_points_between_segments(a, b, pts[i], pts[i + 1])
+				if c[0].distance_to(c[1]) <= road_w[ri] * 0.5 + reach:
+					return true
+	return false
 
 func add_post(p: Vector2, radius: float) -> void:
 	var ck := _cell_key(int(floor(p.x / BCELL)), int(floor(p.y / BCELL)))

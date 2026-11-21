@@ -124,15 +124,39 @@ func _saves(errors: Array[String]) -> void:
 		errors.append("save: kilometre car reward %s, cars %s" % [km_first.reward_car, prog.get("cars", [])])
 	if not CarCatalog.unlocked("v50") or not CarCatalog.unlock_hint("v50").contains("Kilometr na S1"):
 		errors.append("save: v50 not unlocked after the kilometre, or hint '%s'" % CarCatalog.unlock_hint("v50"))
+	# the S1 Sprint awards the Hyundai i20, the fourth car
+	var s1_first := Missions.record(Missions.index_of("sprint_s1"), {"pos": 3, "success": true})
+	prog = Campaign.load_progress()
+	if String(s1_first.reward_car) != "i20" or prog.get("cars", []) != ["golf4", "logan", "v50", "i20"]:
+		errors.append("save: S1 sprint car reward %s, cars %s" % [s1_first.reward_car, prog.get("cars", [])])
+	if not CarCatalog.unlocked("i20") or not CarCatalog.unlock_hint("i20").contains("S1 Sprint"):
+		errors.append("save: i20 not unlocked after the S1 sprint, or hint '%s'" % CarCatalog.unlock_hint("i20"))
+	# the quarter-mile drag awards the Dacia Sandero, the fifth car
+	var dq_first := Missions.record(Missions.index_of("drag_quarter"), {"pos": 1, "success": true})
+	prog = Campaign.load_progress()
+	if String(dq_first.reward_car) != "sandero" or prog.get("cars", []) != ["golf4", "logan", "v50", "i20", "sandero"]:
+		errors.append("save: quarter-mile car reward %s, cars %s" % [dq_first.reward_car, prog.get("cars", [])])
+	if not CarCatalog.unlocked("sandero") or not CarCatalog.unlock_hint("sandero").contains("Ćwierć Mili"):
+		errors.append("save: sandero not unlocked after quarter-mile, or hint '%s'" % CarCatalog.unlock_hint("sandero"))
+	# Kolonia Stawowa off-road awards the Ford Focus, the sixth car
+	var off_first := Missions.record(Missions.index_of("offroad_kolonia"), {"pos": 3, "success": true})
+	prog = Campaign.load_progress()
+	if String(off_first.reward_car) != "focus" or prog.get("cars", []) != ["golf4", "logan", "v50", "i20", "sandero", "focus"]:
+		errors.append("save: off-road car reward %s, cars %s" % [off_first.reward_car, prog.get("cars", [])])
+	if not CarCatalog.unlocked("focus") or not CarCatalog.unlock_hint("focus").contains("Kolonia Stawowa"):
+		errors.append("save: focus not unlocked after Kolonia Stawowa, or hint '%s'" % CarCatalog.unlock_hint("focus"))
 	if Campaign.STAGES[4].trophy in prog.get("trophies", []) or int(prog.get("unlocked", 0)) != 1:
 		errors.append("save: a mission touched the stage chain: %s" % prog)
-	# a drift keeps its best score and tier, and never eases
+	# a drift keeps its best score and tier, never eases, and awards the Opel Zafira B on first clear
 	var drift := Missions.index_of("drift_babudy")
-	Missions.record(drift, {"pos": 3, "score": 900, "tier": 1, "success": true})
+	var dr_first := Missions.record(drift, {"pos": 3, "score": 900, "tier": 1, "success": true})
 	Missions.record(drift, {"pos": 999, "score": 100, "tier": 0, "success": false})
-	p = Missions.progress(Campaign.load_progress(), drift)
+	prog = Campaign.load_progress()
+	p = Missions.progress(prog, drift)
 	if int(p.get("best", 0)) != 900 or int(p.get("tier", 0)) != 1 or int(Campaign.get_stage(drift).eased) != 0:
 		errors.append("save: drift progress %s" % p)
+	if String(dr_first.reward_car) != "zafira" or not CarCatalog.unlocked("zafira") or not CarCatalog.unlock_hint("zafira").contains("Drift w Babudach"):
+		errors.append("save: zafira reward %s, unlocked %s, hint '%s'" % [dr_first.reward_car, CarCatalog.unlocked("zafira"), CarCatalog.unlock_hint("zafira")])
 	# RESET CAMPAIGN wipes the missions with the rest
 	Campaign.reset_progress()
 	prog = Campaign.load_progress()

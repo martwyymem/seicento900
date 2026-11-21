@@ -1,17 +1,20 @@
 ## The open world's free-roam weather (Forza Horizon style): mostly dry, now and then a shower, a rare fog at dawn,
-## snow only when switched on. A pure function of a seed and the game clock, so a reload that keeps the seed and the
-## clock continues the same weather. Times are game hours (OpenWorld.DAY_RATE turns a real second into 1/80 of one).
+## an occasional brief hail squall, snow only when switched on. A pure function of a seed and the game clock, so a
+## reload that keeps the seed and the clock continues the same weather. Times are game hours (OpenWorld.DAY_RATE turns
+## a real second into 1/80 of one).
 ##
 ## The day's plan (`events_for`): 45 % of days have no shower, 35 % one, 20 % two; a shower starts at any hour, lasts
 ## 1-3 h and peaks at 0.4-1.0 rain; a day has a 7 % chance of a dawn fog (starts 3:30-5:30, 2-3.5 h) that never
-## overlaps a shower. Rain and fog ramp in and out (RAIN_RAMP 12 game minutes, FOG_RAMP 30). The road's wetness lags the
-## rain (reaches full in about WET_RISE_HOURS under a full shower) and dries slowly (WET_DRY_HOURS from fully wet), and
-## the car's grip follows the wetness as Race.grip does with road tyres (`grip`).
+## overlaps a shower; a day has a 5 % chance of a brief hail squall (0.35-0.75 h, level 0.5-1.0) that avoids dawn fog.
+## Rain, fog and hail ramp in and out (RAIN_RAMP 12 game minutes, FOG_RAMP 30, HAIL_RAMP ~7). The road's wetness lags
+## the precipitation (reaches full in about WET_RISE_HOURS under full rain or hail) and dries slowly (WET_DRY_HOURS
+## from fully wet), and the car's grip follows the wetness, snow, hail and fog as Race.grip does with road tyres (`grip`).
 class_name WorldWeather
 extends RefCounted
 
 const RAIN_RAMP := 0.2 ## game hours a shower takes to build up and to die away
 const FOG_RAMP := 0.5
+const HAIL_RAMP := 0.12 ## game hours a hail squall takes to build up and to die away
 const WET_RISE_HOURS := 0.45 ## game hours for the road to wet fully under full rain
 const WET_DRY_HOURS := 2.5 ## game hours for a fully wet road to dry
 const SHOWER_CHANCE := [0.45, 0.80] ## cumulative: below the first no shower in a day, below the second one, else two
@@ -22,10 +25,14 @@ const FOG_START := Vector2(3.5, 5.5)
 const FOG_HOURS := Vector2(2.0, 3.5)
 const SNOW_DAY_CHANCE := 0.15 ## per day, when snow is switched on
 const SNOW_HOURS := Vector2(3.0, 6.0)
+const HAIL_DAY_CHANCE := 0.05 ## per day, rare brief hail squall
+const HAIL_HOURS := Vector2(0.35, 0.75)
+const HAIL_LEVEL := Vector2(0.5, 1.0)
 const SETTLE_HOURS := 8.0 ## `settle` replays this long before the clock to find how wet the road is
 const SUBSTEP := 0.05 ## game hours: the longest step the wetness is integrated in
 const JUMP_HOURS := 0.25 ## an advance longer than this (skipping the time of day) re-settles instead of integrating
 const FOG_GRIP := 0.06 ## grip lost in full fog (Race.grip's 0.94)
+const HAIL_GRIP := 0.36 ## grip lost in full hail (Race.grip's 1 - 0.36 * hail)
 
 var seed_value := 1
 var snow_enabled := false
@@ -34,6 +41,7 @@ var rain := 0.0
 var wet := 0.0
 var fog := 0.0
 var snow := 0.0
+var hail := 0.0
 var forced: Array = [] ## dev overrides ({kind, start, end, level}); never saved
 var _days := {} ## day -> its events
 var _tyres := Tyres.new()
@@ -45,8 +53,8 @@ func _init(seed_: int = 1, clock_: float = 0.0, snow_on := false) -> void:
 
 # ------------------------------------------------------------------------------------------ the plan
 
-## A day's events, {kind: "rain"|"fog"|"snow", start, end, level} in absolute game hours (a shower may run past the
-## day's end). Deterministic in the seed and the day.
+## A day's events, {kind: "rain"|"fog"|"snow"|"hail", start, end, level} in absolute game hours (a shower may run past
+## the day's end). Deterministic in the seed and the day.
 func events_for(day: int) -> Array:
 	if _days.has(day):
 		return _days[day]
@@ -70,6 +78,20 @@ func events_for(day: int) -> Array:
 		if rng.next() < SNOW_DAY_CHANCE:
 			var ss := base + rng.next() * 24.0
 			out.append({"kind": "snow", "start": ss, "end": ss + lerpf(SNOW_HOURS.x, SNOW_HOURS.y, rng.next()), "level": lerpf(0.5, 1.0, rng.next())})
+	# stream 4 keeps existing rain (1), fog (2) and snow (3) schedules bit-identical
+	rng = _rng(day, 4)
+	var hu := rng.next()
+	var hs := base + rng.next() * 24.0
+	var hl := lerpf(HAIL_HOURS.x, HAIL_HOURS.y, rng.next())
+	var hlevel := lerpf(HAIL_LEVEL.x, HAIL_LEVEL.y, rng.next())
+	if hu < HAIL_DAY_CHANCE:
+		var he := hs + hl
+		var clear := true
+		for ev in out:
+			if String(ev.kind) == "fog" and hs < float(ev.end) + FOG_RAMP and he > float(ev.start) - FOG_RAMP:
+				clear = false
+		if clear:
+			out.append({"kind": "hail", "start": hs, "end": he, "level": hlevel})
 	_days[day] = out
 	return out
 
@@ -94,11 +116,12 @@ func _showers(day: int) -> Array:
 static func _ramp(t: float, ev: Dictionary, ramp: float) -> float:
 	return float(ev.level) * SimUtil.smooth01((t - float(ev.start)) / ramp) * SimUtil.smooth01((float(ev.end) - t) / ramp)
 
-## What the plan asks for at game hour `t`: {rain, fog, snow}, each 0..1 and continuous in `t`.
+## What the plan asks for at game hour `t`: {rain, fog, snow, hail}, each 0..1 and continuous in `t`.
 func target(t: float) -> Dictionary:
 	var r := 0.0
 	var f := 0.0
 	var s := 0.0
+	var h := 0.0
 	var day := int(floorf(t / 24.0))
 	var evs: Array = []
 	if day > 0:
@@ -110,7 +133,8 @@ func target(t: float) -> Dictionary:
 			"rain": r = maxf(r, _ramp(t, ev, RAIN_RAMP))
 			"fog": f = maxf(f, _ramp(t, ev, FOG_RAMP))
 			"snow": s = maxf(s, _ramp(t, ev, RAIN_RAMP))
-	return {"rain": r, "fog": f, "snow": s}
+			"hail": h = maxf(h, _ramp(t, ev, HAIL_RAMP))
+	return {"rain": r, "fog": f, "snow": s, "hail": h}
 
 # ------------------------------------------------------------------------------------------ the state
 
@@ -123,6 +147,7 @@ func settle(c: float) -> void:
 	wet = 0.0
 	fog = 0.0
 	snow = 0.0
+	hail = 0.0
 	_apply_target(from)
 	while clock < c - 1e-9:
 		_integrate(minf(SUBSTEP, c - clock))
@@ -145,11 +170,12 @@ func _apply_target(t: float) -> void:
 	rain = tg.rain
 	fog = tg.fog
 	snow = tg.snow
+	hail = tg.hail
 
 func _integrate(dh: float) -> void:
 	clock += dh
 	_apply_target(clock)
-	var precip := maxf(rain, snow * 0.7)
+	var precip := maxf(maxf(rain, hail), snow * 0.7)
 	var goal := minf(1.0, precip * 1.2)
 	var floor_wet := 0.15 * fog
 	if precip > 0.05 and goal > wet:
@@ -158,10 +184,11 @@ func _integrate(dh: float) -> void:
 		wet = maxf(maxf(floor_wet, goal if precip > 0.05 else 0.0), wet - dh / WET_DRY_HOURS)
 
 ## The car's grip against a dry road: Race.grip with road tyres (the better of the medium and the wet compound at that
-## wetness against a dry medium), less the snow and, in a smooth way, the fog.
-func grip(wet_: float, snow_: float, fog_: float) -> float:
+## wetness against a dry medium), less the snow, hail and, in a smooth way, the fog.
+func grip(wet_: float, snow_: float, fog_: float, hail_: float = 0.0) -> float:
 	var g := maxf(_tyres.compound_grip("M", wet_), _tyres.compound_grip("W", wet_)) / _tyres.compound_grip("M", 0.0)
 	g *= 1.0 - snow_ * 0.42
+	g *= 1.0 - hail_ * HAIL_GRIP
 	g *= 1.0 - FOG_GRIP * fog_
 	return minf(g, 1.0)
 
@@ -170,13 +197,15 @@ func state() -> Dictionary:
 	var mode := "dry"
 	if snow > 0.05:
 		mode = "snow"
+	elif hail > 0.05:
+		mode = "hail"
 	elif rain > 0.05 or wet > 0.15:
 		mode = "wet"
 	elif fog > 0.05:
 		mode = "mist" # (a mission's "fog" mode adds a fixed amount of wisps; free roam's follow the level alone)
-	return {"mode": mode, "wet": wet, "rain": rain, "snow": snow, "hail": 0.0, "fog": fog, "mu": grip(wet, snow, fog)}
+	return {"mode": mode, "wet": wet, "rain": rain, "snow": snow, "hail": hail, "fog": fog, "mu": grip(wet, snow, fog, hail)}
 
-## A dev override: `kind` ("rain", "fog", "snow") from now for `hours`; "clear" drops the overrides.
+## A dev override: `kind` ("rain", "fog", "snow", "hail") from now for `hours`; "clear" drops the overrides.
 func force(kind: String, hours := 2.0, level := 1.0) -> void:
 	forced.clear()
 	if kind == "clear":

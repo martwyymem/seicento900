@@ -64,7 +64,7 @@ extends Resource
 @export var player_number := 9
 @export var player_color := Color("#b3121d")
 @export var stripes := true
-@export_enum("stock", "hypercar", "golf4", "logan", "v50") var car_class := "stock" ## a CarCatalog key: the whole field drives that car ("hypercar" once the top fan level has opened it, "golf4" and "logan" once the campaign has awarded them)
+@export_enum("stock", "hypercar", "golf4", "logan", "v50", "i20", "sandero", "focus", "zafira") var car_class := "stock" ## a CarCatalog key: the whole field drives that car ("hypercar" once the top fan level has opened it, campaign cars once their missions have awarded them)
 @export var finish := 0 ## 0 gloss, 1 metallic, 2 Martini Racing, 3 Abarth, 4 Marlboro
 @export_enum("auto", "manual") var gearbox := "auto"
 @export_enum("full", "abs", "off") var assists := "full"

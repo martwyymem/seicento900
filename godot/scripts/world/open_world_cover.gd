@@ -33,6 +33,26 @@ const SHOTS := {
 		["v50_2.jpg", "ul. Bór · Brzeszcze-Bór"],
 		["v50_3.jpg", "S1 · dusk towards Wilamowice"],
 	],
+	"i20": [
+		["i20_1.jpg", "KWK Brzeszcze · the shaft at sundown"],
+		["i20_2.jpg", "ul. Bór · Brzeszcze-Bór"],
+		["i20_3.jpg", "S1 · dusk towards Wilamowice"],
+	],
+	"sandero": [
+		["sandero_1.jpg", "KWK Brzeszcze · the shaft at sundown"],
+		["sandero_2.jpg", "ul. Bór · Brzeszcze-Bór"],
+		["sandero_3.jpg", "S1 · dusk towards Wilamowice"],
+	],
+	"focus": [
+		["focus_1.jpg", "KWK Brzeszcze · the shaft at sundown"],
+		["focus_2.jpg", "ul. Bór · Brzeszcze-Bór"],
+		["focus_3.jpg", "S1 · dusk towards Wilamowice"],
+	],
+	"zafira": [
+		["zafira_1.jpg", "KWK Brzeszcze · the shaft at sundown"],
+		["zafira_2.jpg", "ul. Bór · Brzeszcze-Bór"],
+		["zafira_3.jpg", "S1 · dusk towards Wilamowice"],
+	],
 }
 const DIR := "res://textures/loading/"
 const ACCENT := Color("#ff4fa3") ## the festival pink of the open-world HUD's highlights
