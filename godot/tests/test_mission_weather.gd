@@ -22,11 +22,13 @@ func run() -> Array:
 func _shaders(errors: Array[String]) -> void:
 	var surroundings_s: GDScript = preload("res://scripts/ui/surroundings.gd")
 	var race_world_s: GDScript = preload("res://scripts/ui/race_world.gd")
+	var prop_detail_s: GDScript = preload("res://scripts/ui/prop_detail.gd")
 	for pair in [
 		[TownBuilder.BUILDING_SHADER, "building.gdshader"],
 		[TownBuilder.FOLIAGE_SHADER, "foliage.gdshader"],
 		[surroundings_s.CANOPY_SHADER, "canopy.gdshader"],
 		[race_world_s.FACADE_SHADER, "facade.gdshader"],
+		[prop_detail_s.SHADER, "prop_detail.gdshader"],
 	]:
 		var sh: Shader = pair[0]
 		var label: String = pair[1]
@@ -54,6 +56,9 @@ func _states(errors: Array[String]) -> void:
 	var wet := MapMissions.weather_state("wet")
 	if wet.wet < 0.8 or wet.rain <= 0.0 or not (float(wet.mu) < float(fog.mu)):
 		errors.append("wet weather is not wetter and slipperier than fog: %s" % [wet])
+	var rain := MapMissions.weather_state("rain")
+	if absf(float(rain.rain) - float(wet.rain)) > 1e-6 or absf(float(rain.wet) - float(wet.wet)) > 1e-6 or absf(float(rain.mu) - float(wet.mu)) > 1e-6:
+		errors.append("rain alias does not match wet weather state: %s vs %s" % [rain, wet])
 	if not (float(MapMissions.weather_state("snow").mu) < float(wet.mu)):
 		errors.append("snow grips no worse than rain")
 	var rally := MapMissions.event(Missions.index_of("rally_bor"))
@@ -83,6 +88,23 @@ func _world(map: TownMap, errors: Array[String]) -> void:
 	ow.route_mesh = MeshInstance3D.new()
 	ow.world.add_child(ow.route_mesh)
 	ow.builder = TownBuilder.new(map, ow.world)
+	var prop_detail_s: GDScript = preload("res://scripts/ui/prop_detail.gd")
+	var landmark_mat: ShaderMaterial = null
+	for lm_name in ["DworzecBrzeszcze", "KosciolUrbana", "KosciolMarcina"]:
+		if ow.builder.models.has(lm_name):
+			var lm_mesh := ow.builder.models[lm_name][0] as Mesh
+			if lm_mesh:
+				for si in lm_mesh.get_surface_count():
+					var sm := lm_mesh.surface_get_material(si) as ShaderMaterial
+					if sm and sm.shader == prop_detail_s.SHADER:
+						landmark_mat = sm
+						break
+		if landmark_mat != null:
+			break
+	if landmark_mat == null:
+		errors.append("no prop_detail ShaderMaterial found on a Brzeszcze landmark mesh")
+	elif not ow.builder.wet_materials.has(landmark_mat):
+		errors.append("landmark prop_detail material is not registered in TownBuilder.wet_materials")
 	var ground_mat := ow.builder._surface_material(TownBuilder.GROUND_SHADER, "grass")
 	var road_mat := ow.builder._surface_material(TownBuilder.ROAD_SHADER, "asphalt")
 	var building_mat := ShaderMaterial.new()
@@ -100,6 +122,15 @@ func _world(map: TownMap, errors: Array[String]) -> void:
 	ow.hour = 13.0
 	ow._apply_time()
 	var clear_fog := ow.env.fog_density
+	var clear_sun := ow.sun.light_energy
+	var clear_shadow := ow.sun.shadow_opacity
+	var clear_top := Color(ow.sky_mat.get_shader_parameter("top_color"))
+	if ow.weather_fx == null:
+		errors.append("open world did not create weather_fx")
+	elif ow.weather_fx.any_emitting():
+		errors.append("weather particles emit in dry free roam")
+	if float(ow.sky_mat.get_shader_parameter("overcast")) > 1e-5:
+		errors.append("sky is overcast in dry free roam: %.3f" % float(ow.sky_mat.get_shader_parameter("overcast")))
 	var ri := Missions.index_of("rally_bor")
 	if not ow._begin_mission(ri):
 		errors.append("Rajd Borów did not start on the map")
@@ -115,6 +146,8 @@ func _world(map: TownMap, errors: Array[String]) -> void:
 		errors.append("the clock did not move to the rally's hour")
 	if not (ow.env.fog_density > 0.015 and ow.env.fog_density > clear_fog * 10.0):
 		errors.append("the fog density in the rally is %.5f (free roam %.5f)" % [ow.env.fog_density, clear_fog])
+	if ow.weather_fx and (not ow.weather_fx.fog.emitting or ow.weather_fx.rain.emitting or ow.weather_fx.snow.emitting):
+		errors.append("rally fog did not emit fog wisps alone (fog=%s rain=%s snow=%s)" % [ow.weather_fx.fog.emitting, ow.weather_fx.rain.emitting, ow.weather_fx.snow.emitting])
 	# the crews' stage times are run on the fog's grip: their fastest is past the band's quickest on the foggy reference
 	var ev: Dictionary = ow.live.run.ev
 	var st0: Dictionary = ev.stages[0]
@@ -136,13 +169,44 @@ func _world(map: TownMap, errors: Array[String]) -> void:
 	if absf(ow.hour - 13.0) > 0.01 or absf(ow.env.fog_density - clear_fog) > 1e-7:
 		errors.append("abandoning the rally left its hour or fog: %.2f h, density %.5f" % [ow.hour, ow.env.fog_density])
 	# whatever the map had before is what comes back (a wet street here), and a dry mission runs dry;
-	# wet_materials (terrain, embankments, buildings, foliage as well as the streets) get wet, rain and snow
+	# wet_materials (terrain, embankments, buildings, foliage, props/landmarks as well as the streets) get wet, rain and snow
 	ow.set_weather(MapMissions.weather_state("snow"))
-	if float(ground_mat.get_shader_parameter("snow")) < 0.8 or float(road_mat.get_shader_parameter("snow")) < 0.8 or float(building_mat.get_shader_parameter("snow")) < 0.8 or float(foliage_mat.get_shader_parameter("snow")) < 0.8:
-		errors.append("snow weather did not reach ground, road, building and foliage materials in wet_materials")
+	if float(ground_mat.get_shader_parameter("snow")) < 0.8 or float(road_mat.get_shader_parameter("snow")) < 0.8 or float(building_mat.get_shader_parameter("snow")) < 0.8 or float(foliage_mat.get_shader_parameter("snow")) < 0.8 or (landmark_mat != null and float(landmark_mat.get_shader_parameter("snow")) < 0.8):
+		errors.append("snow weather did not reach ground, road, building, foliage and landmark materials in wet_materials")
+	if ow.weather_fx and (not ow.weather_fx.snow.emitting or ow.weather_fx.rain.emitting or ow.weather_fx.fog.emitting):
+		errors.append("snow weather did not emit snow particles alone")
+	if float(ow.sky_mat.get_shader_parameter("overcast")) < 0.5 or not (ow.sun.light_energy < clear_sun) or not (ow.sun.shadow_opacity < clear_shadow):
+		errors.append("snow weather did not turn the sky overcast and dim the sun (overcast=%.2f sun=%.2f/%.2f)" % [float(ow.sky_mat.get_shader_parameter("overcast")), ow.sun.light_energy, clear_sun])
+	# falling rain + overcast sky + quality scaling + camera following; then dry turns everything off
+	ow.set_weather(MapMissions.weather_state("rain"))
+	if ow.weather_fx:
+		if not (ow.weather_fx.rain.emitting and ow.weather_fx.rain_splash.emitting and ow.weather_fx.rain_mist.emitting):
+			errors.append("rain weather did not emit rain, splash and mist particles")
+		if ow.weather_fx.snow.emitting or ow.weather_fx.hail.emitting or ow.weather_fx.fog.emitting:
+			errors.append("rain weather emitted non-rain particles")
+		var before_rain := ow.weather_fx.rain.global_position
+		ow.camera.global_position += Vector3(25.0, 0.0, -15.0)
+		ow.weather_fx.place(ow.camera)
+		if ow.weather_fx.rain.global_position.distance_to(before_rain) < 20.0:
+			errors.append("rain particles did not follow the camera")
+		ow.apply_graphics(0)
+		if ow.weather_fx.rain.amount != WeatherParticles.RAIN_AMOUNT[0]:
+			errors.append("Low preset did not scale rain amount to %d (got %d)" % [WeatherParticles.RAIN_AMOUNT[0], ow.weather_fx.rain.amount])
+		ow.apply_graphics(2)
+		if ow.weather_fx.rain.amount != WeatherParticles.RAIN_AMOUNT[2]:
+			errors.append("High preset did not restore rain amount to %d (got %d)" % [WeatherParticles.RAIN_AMOUNT[2], ow.weather_fx.rain.amount])
+	var rain_overcast := float(ow.sky_mat.get_shader_parameter("overcast"))
+	var rain_top := Color(ow.sky_mat.get_shader_parameter("top_color"))
+	if rain_overcast < 0.5 or not (ow.sun.light_energy < clear_sun) or not (ow.sun.shadow_opacity < clear_shadow) or not (rain_top.s < clear_top.s):
+		errors.append("rain weather did not make the sky overcast (overcast=%.2f sun=%.2f/%.2f top_sat=%.2f/%.2f)" % [rain_overcast, ow.sun.light_energy, clear_sun, rain_top.s, clear_top.s])
+	ow.set_weather(MapMissions.weather_state("dry"))
+	if ow.weather_fx and ow.weather_fx.any_emitting():
+		errors.append("dry weather left weather particles emitting")
+	if float(ow.sky_mat.get_shader_parameter("overcast")) > 1e-5 or absf(ow.sun.light_energy - clear_sun) > 1e-5:
+		errors.append("dry weather did not restore clear sky and sun")
 	ow.set_weather(MapMissions.weather_state("wet"))
-	if float(ground_mat.get_shader_parameter("wet")) < 0.8 or float(road_mat.get_shader_parameter("rain")) <= 0.0 or float(ground_mat.get_shader_parameter("snow")) != 0.0 or float(building_mat.get_shader_parameter("wet")) < 0.8 or float(foliage_mat.get_shader_parameter("wet")) < 0.8 or float(foliage_mat.get_shader_parameter("rain")) <= 0.0 or float(building_mat.get_shader_parameter("snow")) != 0.0 or float(foliage_mat.get_shader_parameter("snow")) != 0.0:
-		errors.append("wet weather did not update wet_materials (including building and foliage)")
+	if float(ground_mat.get_shader_parameter("wet")) < 0.8 or float(road_mat.get_shader_parameter("rain")) <= 0.0 or float(ground_mat.get_shader_parameter("snow")) != 0.0 or float(building_mat.get_shader_parameter("wet")) < 0.8 or float(foliage_mat.get_shader_parameter("wet")) < 0.8 or float(foliage_mat.get_shader_parameter("rain")) <= 0.0 or float(building_mat.get_shader_parameter("snow")) != 0.0 or float(foliage_mat.get_shader_parameter("snow")) != 0.0 or (landmark_mat != null and (float(landmark_mat.get_shader_parameter("wet")) < 0.8 or float(landmark_mat.get_shader_parameter("rain")) <= 0.0 or float(landmark_mat.get_shader_parameter("snow")) != 0.0)):
+		errors.append("wet weather did not update wet_materials (including building, foliage and landmark)")
 	var di := Missions.index_of("drag_quarter")
 	if ow._begin_mission(di):
 		if ow.weather != "dry" or ow.wet != 0.0 or ow.drive.mu != 1.0:
@@ -153,5 +217,11 @@ func _world(map: TownMap, errors: Array[String]) -> void:
 			errors.append("the drag's end did not put the wet streets back: %s wet %.2f" % [ow.weather, ow.wet])
 	else:
 		errors.append("the drag mission did not start on the map")
+	# clear night: night dew damps the road, not landmark props
+	ow.set_weather(MapMissions.weather_state("dry"))
+	ow.hour = 23.0
+	ow._apply_time()
+	if landmark_mat != null and float(landmark_mat.get_shader_parameter("wet")) > 0.001:
+		errors.append("clear night damped landmark prop material: wet=%.3f" % float(landmark_mat.get_shader_parameter("wet")))
 	ow.queue_free()
 	await tree.process_frame

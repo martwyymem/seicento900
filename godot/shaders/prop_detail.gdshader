@@ -15,14 +15,21 @@ uniform bool use_vertex_color = true;
 uniform int kind = 0; // 1 concrete, 2 wood, 3 steel, 4 stone, 5 brick, 6 tiles, 7 rubber, 8 paint/plaster, 9 straw, 10 copper
 uniform float amount : hint_range(0.0, 2.0) = 1.0;
 uniform float bump_strength : hint_range(0.0, 2.0) = 0.6;
+uniform float wet : hint_range(0.0, 1.0) = 0.0;
+uniform float rain : hint_range(0.0, 1.0) = 0.0;
+uniform float snow : hint_range(0.0, 1.0) = 0.0;
 
 varying vec3 obj_pos;
 varying vec3 obj_normal;
+varying vec3 world_pos;
+varying vec3 world_normal;
 varying vec3 v_tint;
 
 void vertex() {
 	obj_pos = VERTEX;
 	obj_normal = NORMAL;
+	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	world_normal = normalize(MODEL_NORMAL_MATRIX * NORMAL);
 	v_tint = use_vertex_color ? COLOR.rgb : vec3(1.0);
 }
 
@@ -178,10 +185,35 @@ void fragment() {
 		h = g2;
 	}
 
+	float spec = 0.4;
+	float w_eff = clamp(max(wet, rain * 0.75), 0.0, 1.0);
+	vec3 wn = normalize(world_normal);
+	float up = clamp(wn.y, 0.0, 1.0);
+	if (w_eff > 0.001) {
+		// upward and windward faces soak more
+		float wind_face = smoothstep(-0.2, 0.8, dot(wn.xz, normalize(vec2(0.75, 0.65))));
+		float exposed = mix(0.45 + 0.55 * wind_face, 1.0, smoothstep(0.1, 0.5, up));
+		float w_surf = clamp(w_eff * exposed, 0.0, 1.0);
+		col *= mix(1.0, 0.68, w_surf);
+		float wet_rough = mix(max(rough * 0.48, 0.32), min(rough, 0.24), smoothstep(0.2, 0.6, up));
+		rough = mix(rough, wet_rough, w_surf);
+		spec = mix(spec, 0.5, w_surf);
+	}
+	if (snow > 0.001) {
+		float sn = n2(world_pos.xz * 0.23 + world_pos.y * 0.17);
+		float snow_cover = clamp(snow * smoothstep(0.28, 0.68, up + (sn - 0.5) * 0.34), 0.0, 1.0);
+		vec3 snow_col = vec3(0.90, 0.93, 0.98) * (0.91 + 0.15 * sn);
+		col = mix(col, snow_col, snow_cover * 0.92);
+		rough = mix(rough, 0.85, snow_cover);
+		metal *= 1.0 - snow_cover;
+		spec = mix(spec, 0.25, snow_cover);
+		h *= 1.0 - snow_cover * 0.8;
+	}
+
 	ALBEDO = clamp(col, vec3(0.0), vec3(1.0));
 	ROUGHNESS = rough;
 	METALLIC = metal;
-	SPECULAR = 0.4;
+	SPECULAR = spec;
 
 	// screen-space bump from the height above (Mikkelsen)
 	h *= mid_fade;

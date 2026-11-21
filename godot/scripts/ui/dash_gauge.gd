@@ -17,6 +17,7 @@ var slipstream := false
 var nitro := -1.0 ## 0..1 when the Nitrous modifier is on; negative hides the bar
 var nitro_burning := false
 var reserve_nitro := false ## keeps NITRO_BAND clear under the sweep so toggling nitro never shifts it
+var tilt_skew := Vector2.ZERO ## subtle 2.5D cockpit shear driven by HudMotion (exact zero at rest)
 
 ## Optional audit hook: func(canvas: Control, font: Font, at: Vector2, s: String, align: int, width: float, size: int)
 var audit_fn: Callable = Callable()
@@ -56,6 +57,17 @@ func set_state(kmh: int, gear: String, frac: float, red: bool, slip := false, n2
 	nitro_burning = burning
 	if key != _state_key:
 		_state_key = key
+		queue_redraw()
+
+## Updates the subtle 2.5D perspective shear driven by HudMotion; zero at rest leaves draw identical.
+func set_tilt(skew: Vector2) -> void:
+	if skew.is_zero_approx():
+		if tilt_skew != Vector2.ZERO:
+			tilt_skew = Vector2.ZERO
+			queue_redraw()
+		return
+	if absf(skew.x - tilt_skew.x) > 0.0008 or absf(skew.y - tilt_skew.y) > 0.0008:
+		tilt_skew = skew
 		queue_redraw()
 
 ## Called by CmrStyle.restyle() and the parent HUD on a retro-skin switch.
@@ -100,6 +112,10 @@ func _draw() -> void:
 	var H := size.y
 	if W < 1.0 or H < 1.0:
 		return
+	if tilt_skew != Vector2.ZERO:
+		var c := Vector2(W * 0.5, H * 0.5)
+		var xf := Transform2D(Vector2(1.0, tilt_skew.y), Vector2(tilt_skew.x, 1.0), Vector2.ZERO)
+		draw_set_transform_matrix(Transform2D(0.0, c) * xf * Transform2D(0.0, -c))
 	var sweep_h := _sweep_height()
 	if _mesh_size != size or _mesh_nitro != reserve_nitro:
 		_build_mesh(W, sweep_h)

@@ -24,6 +24,7 @@ const KINDS := {
 
 static var _noise: NoiseTexture2D
 static var _cache := {} ## source material -> ShaderMaterial
+static var _materials: Array[ShaderMaterial] = [] ## all created prop_detail ShaderMaterials (for weather registration)
 
 static func grain() -> NoiseTexture2D:
 	if _noise == null:
@@ -76,4 +77,24 @@ static func _upgraded(m: StandardMaterial3D) -> ShaderMaterial:
 	sm.set_shader_parameter("use_vertex_color", m.vertex_color_use_as_albedo)
 	sm.set_shader_parameter("kind", kind)
 	_cache[m] = sm
+	_materials.append(sm)
 	return sm
+
+## Appends every prop_detail ShaderMaterial used by meshes under `root` to `target` without duplicates.
+static func collect(root: Node, target: Array[ShaderMaterial]) -> void:
+	if root == null:
+		return
+	for mi in root.find_children("*", "MeshInstance3D", true, false):
+		var mesh := (mi as MeshInstance3D).mesh
+		if mesh == null:
+			continue
+		for i in mesh.get_surface_count():
+			var sm := mesh.surface_get_material(i) as ShaderMaterial
+			if sm != null and sm.shader == SHADER and not target.has(sm):
+				target.append(sm)
+
+## Appends every prop_detail ShaderMaterial created so far to `target` without duplicates.
+static func register_all(target: Array[ShaderMaterial]) -> void:
+	for sm in _materials:
+		if not target.has(sm):
+			target.append(sm)

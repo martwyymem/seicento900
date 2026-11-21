@@ -7,8 +7,10 @@ extends RefCounted
 
 var completed := false
 
-## canvas sizes: 16:9, 16:10, 4:3, 21:9, then 16:9 and 4:3 at the 1.15 and 1.3 interface sizes
-const CANVASES: Array[Vector2] = [Vector2(1600, 900), Vector2(1600, 1000), Vector2(1600, 1200), Vector2(2133, 900),
+## canvas sizes: 16:9, 16:10, 4:3 (1600×1200 & 1440×1080), 21:9 (2100×900, 2133×900 & 2520×1080),
+## then 16:9 and 4:3 at the 1.15 and 1.3 interface sizes
+const CANVASES: Array[Vector2] = [Vector2(1600, 900), Vector2(1600, 1000), Vector2(1600, 1200), Vector2(1440, 1080),
+	Vector2(2100, 900), Vector2(2133, 900), Vector2(2520, 1080),
 	Vector2(1391, 783), Vector2(1231, 692), Vector2(1231, 923)]
 const LONG_SMALL := "An out lap to warm the tyres, then 2 timed laps — the fastest sets your grid slot · Brzęczyszczykiewicz"
 
@@ -416,7 +418,7 @@ static func _text_rect(l: Label, canvas: Vector2) -> Rect2:
 func _check_menus(errors: Array[String], tree: SceneTree) -> void:
 	var game = load("res://ui/game.tscn").instantiate()
 	tree.root.add_child(game)
-	for canvas: Vector2 in [Vector2(1600, 900), Vector2(1600, 1200), Vector2(2133, 900), Vector2(1231, 692)]:
+	for canvas: Vector2 in [Vector2(1600, 900), Vector2(1600, 1200), Vector2(1440, 1080), Vector2(2100, 900), Vector2(2133, 900), Vector2(2520, 1080), Vector2(1231, 692)]:
 		game.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 		game.size = canvas
 		await _settle(tree)
@@ -495,6 +497,15 @@ func _check_menus(errors: Array[String], tree: SceneTree) -> void:
 		if button_bottom > scroll.size.y + 1.0 and button.global_position.y - top + button.size.y - room <= scroll.size.y:
 			errors.append("%s: ENTER STAGE should be in view with the title when both fit" % tag)
 		game.is_campaign_mode = false
+		# the Options page stays inside the canvas at every aspect (including 21:9 2520x1080 and 4:3 1440x1080)
+		game._show_options_page()
+		await _settle(tree, 3)
+		var screen := Rect2(Vector2.ZERO, canvas).grow(1.0)
+		for p in [game.options_panel, game.menu_prompt]:
+			if is_instance_valid(p) and (p as Control).visible:
+				var r := Rect2((p as Control).global_position, (p as Control).size)
+				if not screen.encloses(r):
+					errors.append("%s: options %s %s runs off the canvas" % [tag, p.name, r])
 	game.queue_free() # (free() fails here: the coroutine runs inside the frame signal)
 	await tree.process_frame
 

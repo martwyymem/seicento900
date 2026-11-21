@@ -145,12 +145,12 @@ static func event(index: int) -> Dictionary:
 	ev.heading = (path[mini(3, path.size() - 1)] - path[0]).angle()
 	return ev
 
-## A weather mode ("dry", "wet", "snow", "hail", "fog", "variable") as the open world drives it, set up as a race's
-## Race.Weather starts it: {mode, wet, rain, snow, fog (0..1), mu: the grip against a dry road}. mu is Race.grip with
-## road tyres: the better of the medium and the wet compound at that wetness against a dry medium, times the snow,
-## hail and fog factors (fog 0.88, wet 0.82, snow 0.54, dry and variable, which starts dry, 1).
+## A weather mode ("dry", "wet"/"rain", "snow", "hail", "fog", "variable") as the open world drives it, set up as a
+## race's Race.Weather starts it: {mode, wet, rain, snow, hail, fog (0..1), mu: the grip against a dry road}. mu is
+## Race.grip with road tyres: the better of the medium and the wet compound at that wetness against a dry medium,
+## times the snow, hail and fog factors (fog 0.88, wet 0.82, snow 0.54, dry and variable, which starts dry, 1).
 static func weather_state(mode: String) -> Dictionary:
-	var w := Race.Weather.new(mode, 600.0, SimUtil.Rng.new(1))
+	var w := Race.Weather.new("wet" if mode == "rain" else mode, 600.0, SimUtil.Rng.new(1))
 	var ty := Tyres.new()
 	var g := maxf(ty.compound_grip("M", w.wet), ty.compound_grip("W", w.wet)) / ty.compound_grip("M", 0.0)
 	if w.snow > 0.1:
@@ -159,7 +159,7 @@ static func weather_state(mode: String) -> Dictionary:
 		g *= 1.0 - w.hail * 0.36
 	if w.fog > 0.1:
 		g *= 0.94
-	return {"mode": mode, "wet": w.wet, "rain": w.rain, "snow": w.snow, "fog": w.fog, "mu": minf(g, 1.0)}
+	return {"mode": mode, "wet": w.wet, "rain": w.rain, "snow": w.snow, "hail": w.hail, "fog": w.fog, "mu": minf(g, 1.0)}
 
 ## The rally crews' stage times: [[t stage 0, t stage 1, ...] per rival]. `grips`: each stage's surface grip
 ## (LiveEvents.grip_of), so a gravel stage's reference is as slow as the gravel makes the player.

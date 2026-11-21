@@ -277,6 +277,7 @@ var graphics_shadows := true
 var codriver_voice := true ## Options → Co-driver voice: the pace notes are read aloud
 var graphics_ui_scale := 1 ## index into UI_SCALES
 var ui_scale_picker: MenuSelector
+var hud_motion_picker: MenuSelector
 var menu_tab_buttons: Dictionary = {}
 var menu_tab_dividers: Dictionary = {}
 var menu_tab_index := 1
@@ -3172,8 +3173,10 @@ func _build_options_page() -> void:
 	column.add_child(retro_row)
 	retro_picker = _option_field(retro_row, "RETRO STYLE", RetroPipeline.MODE_NAMES)
 	retro_picker.item_selected.connect(_on_retro_selected)
-	_grid_spacers(retro_row, 2)
-	var retro_note := _label("Pick a look from a classic racing game. F1 cycles styles in a race.", 14, MUTED)
+	hud_motion_picker = _option_field(retro_row, "HUD MOTION", HudMotion.MODE_NAMES)
+	hud_motion_picker.item_selected.connect(_on_hud_motion_selected)
+	_grid_spacers(retro_row, 1)
+	var retro_note := _label("Pick a look from a classic racing game (F1 cycles in a race). HUD motion sways the HUD with car g-forces.", 14, MUTED)
 	retro_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	column.add_child(retro_note)
 	_menu_rule(column)
@@ -3277,8 +3280,20 @@ func _build_options_page() -> void:
 	shadows_toggle.button_pressed = graphics_shadows
 	reflections_picker.select(graphics_reflections)
 	retro_picker.select(graphics_retro_mode)
+	hud_motion_picker.select(HudMotion.mode)
 	_show_preset_state()
 	_apply_upscaling()
+
+func _on_hud_motion_selected(index: int) -> void:
+	HudMotion.mode = clampi(index, 0, HudMotion.MODE_NAMES.size() - 1)
+	if HudMotion.mode == HudMotion.MODE_OFF:
+		if is_instance_valid(hud):
+			hud._motion.reset()
+			hud._apply_motion()
+		if open_world != null and is_instance_valid(open_world.hud):
+			open_world.hud._motion.reset()
+			open_world.hud._apply_motion()
+	_save_graphics_settings()
 
 func _on_retro_selected(index: int) -> void:
 	graphics_retro_mode = index
@@ -3548,6 +3563,9 @@ func _load_graphics_settings() -> void:
 		AudioSettings.load_from(config)
 		codriver_voice = bool(config.get_value("audio", "co_driver_voice", true))
 		graphics_retro_mode = clampi(int(config.get_value("graphics", "retro_mode", 0)), 0, RetroPipeline.MODE_NAMES.size() - 1)
+		HudMotion.load_from(config)
+		if is_instance_valid(hud_motion_picker):
+			hud_motion_picker.select(HudMotion.mode)
 		if retro_pipeline:
 			retro_pipeline.set_mode(graphics_retro_mode)
 		CmrStyle.apply_skin(CmrStyle.skin_for_mode(graphics_retro_mode)) # before the pages are built
@@ -3636,6 +3654,7 @@ func _save_graphics_settings() -> void:
 	AudioSettings.save_to(config)
 	config.set_value("audio", "co_driver_voice", codriver_voice)
 	config.set_value("graphics", "retro_mode", graphics_retro_mode)
+	HudMotion.save_to(config)
 	config.save(SaveData.path("graphics.cfg"))
 
 func _layout_home_strip() -> void:

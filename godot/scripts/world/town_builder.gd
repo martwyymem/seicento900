@@ -9,6 +9,7 @@ extends RefCounted
 const WORLD := preload("res://scripts/ui/race_world.gd")
 const SURROUNDINGS := preload("res://scripts/ui/surroundings.gd")
 const WORLD_ASSETS := preload("res://scripts/ui/world_assets.gd")
+const PROP_DETAIL := preload("res://scripts/ui/prop_detail.gd")
 const GROUND_SHADER := preload("res://shaders/ground.gdshader")
 const ROAD_SHADER := preload("res://shaders/town_road.gdshader")
 const PAVEMENT_SHADER := preload("res://shaders/pavement.gdshader")
@@ -83,6 +84,7 @@ func _load_models() -> void:
 		var scene: Node = WORLD_ASSETS._load_model(path)
 		if scene == null:
 			continue
+		PROP_DETAIL.collect(scene, wet_materials)
 		for mi in scene.find_children("*", "MeshInstance3D", true, false):
 			var m := mi as MeshInstance3D
 			if m.mesh:

@@ -81,14 +81,34 @@ func _volumes(errors: Array[String]) -> void:
 	AudioSettings.set_level("master", 50)
 	AudioSettings.set_level("voice", 50)
 	var carfx := AudioServer.get_bus_index("CarFx")
-	if not AudioServer.is_bus_mute(carfx) or not AudioSettings.effects_silent():
-		errors.append("Effects at 0% should mute the player's car effects (and the World bus, through WorldAudio)")
-	if absf(AudioServer.get_bus_volume_db(AudioServer.get_bus_index("Engine")) - linear_to_db(0.4)) > 0.001:
-		errors.append("Engine at 40% should be linear_to_db(0.4)")
+	var world_bus := AudioServer.get_bus_index("World")
+	var engine_bus := AudioServer.get_bus_index("Engine")
+	var master_bus := AudioServer.get_bus_index("Master")
+	if not AudioServer.is_bus_mute(carfx) or not AudioServer.is_bus_mute(world_bus) or not AudioSettings.effects_silent():
+		errors.append("Effects at 0% should mute both CarFx and World buses")
+	if AudioServer.get_bus_volume_db(carfx) > -79.0 or AudioServer.get_bus_volume_db(world_bus) > -79.0:
+		errors.append("Effects at 0% should drop CarFx and World buses to silent dB")
+	if absf(AudioServer.get_bus_volume_db(engine_bus) - linear_to_db(0.4)) > 0.001 or AudioServer.is_bus_mute(engine_bus):
+		errors.append("Engine at 40% should be linear_to_db(0.4) and unmuted")
+	if absf(AudioServer.get_bus_volume_db(master_bus) - linear_to_db(0.5)) > 0.001 or AudioServer.is_bus_mute(master_bus):
+		errors.append("Master at 50% should be linear_to_db(0.5) and unmuted")
 	if AudioServer.get_bus_volume_db(AudioServer.get_bus_index("Car")) != 0.0:
 		errors.append("the Car bus belongs to WorldAudio's camera mix: the options shouldn't touch it")
 	if AudioSettings.voice_volume(80) != 20:
 		errors.append("voice 50%% under master 50%% should speak at a quarter: %d" % AudioSettings.voice_volume(80))
+	AudioSettings.set_level("master", 0)
+	AudioSettings.set_level("engine", 0)
+	if not AudioServer.is_bus_mute(master_bus) or AudioServer.get_bus_volume_db(master_bus) > -79.0:
+		errors.append("Master at 0% should mute the Master bus")
+	if not AudioServer.is_bus_mute(engine_bus) or AudioServer.get_bus_volume_db(engine_bus) > -79.0:
+		errors.append("Engine at 0% should mute the Engine bus")
+	if AudioSettings.voice_volume(CoDriver.VOLUME) != 0:
+		errors.append("Master at 0% should silence co-driver voice too")
+	AudioSettings.set_level("master", 80)
+	AudioSettings.set_level("engine", 60)
+	AudioSettings.set_level("effects", 70)
+	if AudioServer.is_bus_mute(master_bus) or AudioServer.is_bus_mute(engine_bus) or AudioServer.is_bus_mute(carfx) or AudioServer.is_bus_mute(world_bus):
+		errors.append("raising volumes above 0% should unmute every bus")
 	AudioSettings.set_level("voice", 0)
 	if AudioSettings.voice_volume(CoDriver.VOLUME) != 0:
 		errors.append("voice at 0% should be silent")
@@ -152,22 +172,48 @@ func _game_options(errors: Array[String]) -> void:
 			or game.resolution_picker.get_item_text(1) != "Native (desktop)":
 		errors.append("the resolution picker should list Auto, Native and the window's size")
 
-	# save, scramble, load
+	# save, scramble, load (including via the Options UI volume pickers and mute at 0%)
+	var picker_targets := {"master": 7, "engine": 3, "effects": 0, "voice": 9} # 70%, 30%, Off, 90%
+	for key in picker_targets:
+		var picker: MenuSelector = game.audio_pickers[key]
+		picker.select(picker_targets[key])
+		picker.item_selected.emit(picker_targets[key])
+	if absf(AudioServer.get_bus_volume_db(AudioServer.get_bus_index("Master")) - linear_to_db(0.7)) > 0.001 \
+			or AudioServer.is_bus_mute(AudioServer.get_bus_index("Master")):
+		errors.append("Options Master picker at 70% should set Master bus to linear_to_db(0.7), unmuted")
+	if absf(AudioServer.get_bus_volume_db(AudioServer.get_bus_index("Engine")) - linear_to_db(0.3)) > 0.001 \
+			or AudioServer.is_bus_mute(AudioServer.get_bus_index("Engine")):
+		errors.append("Options Engine picker at 30% should set Engine bus to linear_to_db(0.3), unmuted")
+	if not AudioServer.is_bus_mute(AudioServer.get_bus_index("CarFx")) \
+			or not AudioServer.is_bus_mute(AudioServer.get_bus_index("World")):
+		errors.append("Options Effects picker at Off should mute both CarFx and World buses")
 	game.graphics_resolution = Vector2i(1280, 720)
 	game.graphics_aspect = 3
-	AudioSettings.levels = {"master": 70, "engine": 30, "effects": 0, "voice": 90}
 	game._save_graphics_settings()
 	game.graphics_resolution = Vector2i(-1, -1)
 	game.graphics_aspect = 0
 	AudioSettings.levels = {"master": 100, "engine": 100, "effects": 100, "voice": 100}
+	AudioSettings.apply()
 	game._load_graphics_settings()
+	# Fresh instance loads the saved graphics.cfg into its Options UI pickers and AudioServer buses
+	var reloaded = load("res://ui/game.tscn").instantiate()
+	root.add_child(reloaded)
 	_restore_cfg(cfg_path, backup) # at once: other suites and agents share the sandbox and would load 21:9 from it
 	if game.graphics_resolution != Vector2i(1280, 720) or game.graphics_aspect != 3:
 		errors.append("resolution and aspect should load back: %s, %d" % [game.graphics_resolution, game.graphics_aspect])
 	if AudioSettings.levels != {"master": 70, "engine": 30, "effects": 0, "voice": 90}:
 		errors.append("the volumes should load back: %s" % [AudioSettings.levels])
-	if absf(AudioServer.get_bus_volume_db(0) - linear_to_db(0.7)) > 0.001:
-		errors.append("loading should apply the volumes to the buses")
+	if absf(AudioServer.get_bus_volume_db(AudioServer.get_bus_index("Master")) - linear_to_db(0.7)) > 0.001:
+		errors.append("loading should apply Master volume to the Master bus")
+	if absf(AudioServer.get_bus_volume_db(AudioServer.get_bus_index("Engine")) - linear_to_db(0.3)) > 0.001:
+		errors.append("loading should apply Engine volume to the Engine bus")
+	if not AudioServer.is_bus_mute(AudioServer.get_bus_index("CarFx")) or not AudioServer.is_bus_mute(AudioServer.get_bus_index("World")):
+		errors.append("loading Effects=0% should keep CarFx and World buses muted")
+	for key in picker_targets:
+		var rp: MenuSelector = reloaded.audio_pickers[key]
+		if rp.selected != picker_targets[key]:
+			errors.append("reloaded Options %s picker should show %d, got %d" % [key, picker_targets[key], rp.selected])
+	reloaded.free()
 
 	# graphics presets: picking one sets what it covers, changing one of those by hand reads as Custom
 	game._on_preset_selected(0)
@@ -223,9 +269,25 @@ func _game_options(errors: Array[String]) -> void:
 		if win.content_scale_size != want[i][0] or win.content_scale_aspect != want[i][1]:
 			errors.append("aspect %s should set a %s canvas (mode %d), got %s (mode %d)" % [game.ASPECTS[i].name, want[i][0], want[i][1], win.content_scale_size, win.content_scale_aspect])
 		var visible: Rect2 = game.get_viewport().get_visible_rect()
-		for panel in [game.options_panel, game.setup_panel, game.hud]:
+		for panel in [game.menu_home, game.menu_header, game.options_panel, game.setup_panel, game.advanced_panel,
+				game.car_panel, game.strategy_panel, game.repair_panel, game.repair_details, game.menu_prompt, game.hud]:
 			if is_instance_valid(panel) and not visible.grow(1.0).encloses(panel.get_global_rect()):
 				errors.append("at %s %s %s leaves the canvas %s" % [game.ASPECTS[i].name, panel.name, panel.get_global_rect(), visible])
+	# 21:9 (2520x1080) and 4:3 (1440x1080) window shapes: letterbox canvas matches exact ratio and panels stay inside
+	for pair in [[3, Vector2i(2520, 1080), 21.0 / 9.0], [4, Vector2i(1440, 1080), 4.0 / 3.0]]:
+		var aspect_i: int = pair[0]
+		var win_sz: Vector2i = pair[1]
+		var ratio: float = pair[2]
+		game.graphics_aspect = aspect_i
+		game._apply_aspect()
+		var cs := win.content_scale_size
+		if absf(float(cs.x) / float(cs.y) - ratio) > 0.005:
+			errors.append("aspect %s canvas %s does not match window %s ratio %.3f" % [game.ASPECTS[aspect_i].name, cs, win_sz, ratio])
+		if win.content_scale_aspect != Window.CONTENT_SCALE_ASPECT_KEEP:
+			errors.append("aspect %s should keep aspect (letterbox/pillarbox bars), got mode %d" % [game.ASPECTS[aspect_i].name, win.content_scale_aspect])
+		var fit_r: Vector2i = game._render_resolution(win_sz)
+		if fit_r.x > win_sz.x or fit_r.y > win_sz.y or absf(float(fit_r.x) / float(fit_r.y) - ratio) > 0.02:
+			errors.append("render resolution for %s window should preserve ratio, got %s" % [win_sz, fit_r])
 	game.graphics_aspect = 0
 	game._apply_aspect()
 	game.free()

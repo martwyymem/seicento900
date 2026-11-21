@@ -77,6 +77,10 @@ var banner_small: Label
 var feed: Control
 var pitwall: Control
 var dash: DashGauge
+var corners_group: Control ## g-force sway container for corner panels (tower, clock, minimap, feed, pitwall)
+var dash_group: Control ## g-force sway container for the speedometer cluster (moves most)
+var _corner_panels: Array[Control] = []
+var _motion := HudMotion.new()
 var minimap: Control
 var minimap_base: Control ## the map's backdrop, line and flags under minimap's dots, redrawn only when they change
 var tags: Control
@@ -177,11 +181,13 @@ func _ready() -> void:
 
 	tags = _canvas(_draw_tags)
 	tags.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	tower = _canvas(_draw_tower)
+	corners_group = _motion_group("CornersGroup")
+	dash_group = _motion_group("DashGroup")
+	tower = _canvas(_draw_tower, corners_group)
 	tower.position = Vector2(14, 14)
 	tower.size = Vector2(TOWER_W, 40)
 	pacenote = _canvas(_draw_pacenote)
-	modepanel = _canvas(_draw_mode_panel)
+	modepanel = _canvas(_draw_mode_panel, corners_group)
 	modepanel.position = Vector2(14, 14)
 	modepanel.size = Vector2(MODE_W, 520)
 	deltabar = _canvas(_draw_delta_bar)
@@ -190,7 +196,7 @@ func _ready() -> void:
 	splitbox = _canvas(_draw_splits)
 	_place(splitbox, 1.0, 0.0, 1.0, 0.0, -14 - CLOCK_W - 20 - 250, 32, -14 - CLOCK_W - 20 - 12, 90)
 	_place(pacenote, 0.5, 0.0, 0.5, 0.0, -150, 14, 150, 146)
-	clock = _canvas(_draw_clock)
+	clock = _canvas(_draw_clock, corners_group)
 	_place(clock, 1.0, 0.0, 1.0, 0.0, -14 - CLOCK_W - 20, 14, -14, 222)
 	lights = _canvas(_draw_lights)
 	lights.self_modulate.a = 0.0 # no HUD start lights
@@ -198,19 +204,21 @@ func _ready() -> void:
 	flagbar = _canvas(_draw_flag)
 	_place(flagbar, 0.5, 0.0, 0.5, 0.0, -210, 150, 210, 204)
 	_place(lights, 0.0, 0.0, 1.0, 0.0, 0, 140, 0, 212)
-	minimap_base = _canvas(_draw_minimap_base)
+	minimap_base = _canvas(_draw_minimap_base, corners_group)
 	_place(minimap_base, 1.0, 0.0, 1.0, 0.0, -14 - MAP_S, 224, -14, 224 + MAP_S)
 	minimap_base.clip_contents = true # rivers and lakes run off the map; keep them inside its box
-	minimap = _canvas(_draw_minimap)
+	minimap = _canvas(_draw_minimap, corners_group)
 	_place(minimap, 1.0, 0.0, 1.0, 0.0, -14 - MAP_S, 224, -14, 224 + MAP_S)
-	feed = _canvas(_draw_feed)
+	feed = _canvas(_draw_feed, corners_group)
 	_place(feed, 1.0, 0.0, 1.0, 0.0, -14 - FEED_W, 428, -14, 700)
-	pitwall = _canvas(_draw_pitwall)
+	pitwall = _canvas(_draw_pitwall, corners_group)
 	_place(pitwall, 0.0, 1.0, 0.0, 1.0, 14, -214, 14 + PITWALL_W, -14)
+	_corner_panels = [tower, modepanel, clock, minimap_base, minimap, feed, pitwall]
 	dash = DashGauge.new()
 	dash.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	dash.audit_fn = _audit_text
-	add_child(dash)
+	dash_group.add_child(dash)
+	move_child(dash_group, -1) # drawn over the panels before it, as the dash was before it moved into a group
 	_place(dash, 1.0, 1.0, 1.0, 1.0, -360, -190, -14, -14)
 
 	_overtake_control = _canvas(_draw_overtake)
@@ -295,6 +303,8 @@ func start(race_: Race, world_: Node3D, audio_: RaceAudio) -> void:
 	_flag = {}
 	_feed_h = 0.0
 	_help_key = ""
+	_motion.reset()
+	_apply_motion()
 	show()
 	update(0.0)
 
@@ -425,6 +435,7 @@ func update(dt: float) -> void:
 				audio.beep(880.0, 2)
 	statusbar.queue_redraw()
 	_layout()
+	_update_motion(dt)
 	tags.queue_redraw()
 	_refresh_t -= dt
 	if _refresh_t > 0.0:
@@ -689,13 +700,49 @@ func _skin_changed() -> void:
 	for c in get_children():
 		if c is CanvasItem:
 			(c as CanvasItem).queue_redraw()
+	for c in _corner_panels:
+		c.queue_redraw()
 
 # ---------------- helpers ----------------
-func _canvas(fn: Callable) -> Control:
+func _motion_group(group_name: String) -> Control:
+	var g := Control.new()
+	g.name = group_name
+	g.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	g.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(g)
+	return g
+
+func _update_motion(dt: float) -> void:
+	var p: RaceCar = race.player if race else null
+	if p == null or race.phase == "countdown" or race.phase == "finished":
+		_motion.step_accel(0.0, 0.0, dt, size.y)
+	elif p.phys != null and p.control == "free":
+		_motion.sync_kinematics(p.speed, p.heading, Vector2(p.x, p.y))
+		_motion.step_accel(p.phys.ay_f, p.phys.ax_f, dt, size.y)
+	else:
+		_motion.step_kinematics(p.speed, p.heading, Vector2(p.x, p.y), dt, size.y)
+	_apply_motion()
+
+func _apply_motion() -> void:
+	if dash_group:
+		dash_group.position = _motion.dash_offset
+	if dash:
+		dash.pivot_offset = dash.size * 0.5
+		dash.rotation = _motion.dash_rot
+		dash.scale = _motion.dash_scale
+		dash.set_tilt(_motion.dash_skew)
+	if corners_group:
+		corners_group.position = _motion.corner_offset
+	var crot := _motion.corner_rot
+	for c in _corner_panels:
+		c.pivot_offset = c.size * 0.5
+		c.rotation = crot
+
+func _canvas(fn: Callable, parent: Control = null) -> Control:
 	var c := Control.new()
 	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	c.draw.connect(fn)
-	add_child(c)
+	(parent if parent != null else self).add_child(c)
 	return c
 
 static func _place(c: Control, al: float, at: float, ar: float, ab: float, ol: float, ot: float, orr: float, ob: float) -> void:

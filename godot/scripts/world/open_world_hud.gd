@@ -38,6 +38,10 @@ var minimap: ColorRect
 var minimap_mat: ShaderMaterial
 var overlay: Control
 var speedo: DashGauge
+var corners_group: Control ## g-force sway container for corner panels (satnav, stats, timing list, event card)
+var speedo_group: Control ## g-force sway container for the speedometer cluster (moves most)
+var _corner_panels: Array[Control] = []
+var _motion := HudMotion.new()
 var big_map: ColorRect
 var big_map_mat: ShaderMaterial
 var big_overlay: Control
@@ -125,7 +129,17 @@ func _label(text: String, size: int, color: Color, weight := 700) -> Label:
 	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return l
 
+func _motion_group(group_name: String) -> Control:
+	var g := Control.new()
+	g.name = group_name
+	g.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	g.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(g)
+	return g
+
 func _build() -> void:
+	speedo_group = _motion_group("SpeedoGroup") # first: stats, tower and the event card draw over the speedometer, as before
+	corners_group = _motion_group("CornersGroup")
 	# satnav disc, bottom left
 	minimap = ColorRect.new()
 	minimap_mat = ShaderMaterial.new()
@@ -138,7 +152,7 @@ func _build() -> void:
 	minimap.offset_top = -28 - MINIMAP_S
 	minimap.offset_bottom = -28
 	minimap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(minimap)
+	corners_group.add_child(minimap)
 	overlay = Control.new()
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -156,14 +170,14 @@ func _build() -> void:
 	speedo.offset_top = -(SPEEDO_BOTTOM + SPEEDO_H)
 	speedo.offset_bottom = -SPEEDO_BOTTOM
 	speedo.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(speedo)
+	speedo_group.add_child(speedo)
 	_sync_speedo()
 	# stats, top left
 	var stats := VBoxContainer.new()
 	stats_box = stats
 	stats.position = Vector2(30, 24)
 	stats.add_theme_constant_override("separation", 0)
-	add_child(stats)
+	corners_group.add_child(stats)
 	var brand := _label("SEICENTO FEST · BRZESZCZE", 15, ORANGE, 800)
 	stats.add_child(brand)
 	fans_label = _label("0 FANS", 30, Color.WHITE, 900)
@@ -249,7 +263,7 @@ func _build() -> void:
 	tower.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	tower.draw.connect(_draw_tower)
 	tower.visible = false
-	add_child(tower)
+	corners_group.add_child(tower)
 	# event card, right
 	card = PanelContainer.new()
 	card.add_theme_stylebox_override("panel", _card_box())
@@ -259,7 +273,8 @@ func _build() -> void:
 	card.offset_right = -EDGE
 	card.offset_top = 150
 	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(card)
+	corners_group.add_child(card)
+	_corner_panels = [minimap, stats_box, tower, card]
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 6)
 	card.add_child(col)
@@ -409,7 +424,7 @@ func set_nitro(level: float, burning: bool) -> void:
 		nitro_burning = burning
 		_sync_speedo()
 
-func update_drive(kmh: float, g: int, r: float, r_max: float, pos: Vector2, heading: float, dt: float) -> void:
+func update_drive(kmh: float, g: int, r: float, r_max: float, pos: Vector2, heading: float, dt: float, vz := 0.0) -> void:
 	_clock += dt
 	speed = kmh
 	gear = g
@@ -436,6 +451,30 @@ func update_drive(kmh: float, g: int, r: float, r_max: float, pos: Vector2, head
 		_area_t -= dt
 		area_label.modulate.a = clampf(minf(_area_t, 3.2 - _area_t) * 2.0, 0.0, 1.0)
 	_fit_card()
+	_update_motion(kmh, pos, heading, dt, vz)
+
+func _update_motion(kmh: float, pos: Vector2, heading: float, dt: float, vz: float) -> void:
+	if map_open or (pause_panel != null and pause_panel.visible):
+		_motion.sync_kinematics(kmh / 3.6, heading, pos, vz)
+		_motion.step_accel(0.0, 0.0, dt, size.y)
+	else:
+		_motion.step_kinematics(kmh / 3.6, heading, pos, dt, size.y, vz)
+	_apply_motion()
+
+func _apply_motion() -> void:
+	if speedo_group:
+		speedo_group.position = _motion.dash_offset
+	if speedo:
+		speedo.pivot_offset = speedo.size * 0.5
+		speedo.rotation = _motion.dash_rot
+		speedo.scale = _motion.dash_scale
+		speedo.set_tilt(_motion.dash_skew)
+	if corners_group:
+		corners_group.position = _motion.corner_offset
+	var crot := _motion.corner_rot
+	for c in _corner_panels:
+		c.pivot_offset = c.size * 0.5
+		c.rotation = crot
 
 func set_stats(fans: int, roads_found: int, roads_total: int, hour: float) -> void:
 	fans_label.text = "%s FANS" % _thousands(fans)

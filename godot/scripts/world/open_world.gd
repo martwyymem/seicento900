@@ -65,6 +65,7 @@ var env: Environment
 var sky_mat: ShaderMaterial
 var car_visual: Node3D
 var surface_fx: SurfaceFeedback ## dust, kick-up, tyre smoke and the gravel/grass/wind loops
+var weather_fx: WeatherParticles ## falling rain, splashes, mist, snow, hail and fog wisps round the camera
 var golden := 0.0 ## 0..1, how deep in the golden hour the sun is (low, warm, long shadows, sunlit haze)
 var _volumetric := false ## the preset affords volumetric fog: sun shafts in the golden hour (Ultra)
 var headlights: Array[SpotLight3D] = []
@@ -100,8 +101,9 @@ var night := 0.0
 ## sets its weather for the run (set_weather); after dark the streets get a little dew of their own (NIGHT_DAMP)
 var wet := 0.0
 var weather := "dry" ## the weather mode on the map (a mission's while it runs, MapMissions.weather_state)
-var rain := 0.0 ## 0..1 the road shaders' rain rings (no falling rain is drawn in the open world)
-var snow := 0.0 ## 0..1 snow on the streets (road shaders)
+var rain := 0.0 ## 0..1 falling rain and the road shaders' rain rings
+var snow := 0.0 ## 0..1 falling snow and snow on the streets (road shaders)
+var hail := 0.0 ## 0..1 falling hail
 var fog := 0.0 ## 0..1 fog: the haze thickens to a race's fog (FOG_DENSITY), the sky greys, the sun dims
 const FOG_DENSITY := 0.02 ## a race's fog (race_world.gd)
 const NIGHT_DAMP := 0.3
@@ -411,6 +413,8 @@ func apply_graphics(level: int, ssao := true, reflections_mode := -1) -> void:
 	_volumetric = bool(p.get("volumetric_fog", false))
 	if car_visual:
 		car_visual.fx_quality = quality
+	if weather_fx:
+		weather_fx.set_quality(quality)
 	if sky_mat:
 		_apply_time()
 	_apply_vegetation_quality()
@@ -473,6 +477,7 @@ func _build_environment() -> void:
 	camera.fov = 72.0
 	world.add_child(camera)
 	camera.make_current()
+	weather_fx = WeatherParticles.new(world, quality)
 
 ## Sun, sky, fog and lights for the hour: Brzeszcze in early summer, sunrise ~4:45, sunset ~20:45.
 func _apply_time() -> void:
@@ -489,9 +494,10 @@ func _apply_time() -> void:
 	var az := deg_to_rad(lerpf(50.0, 310.0, day_frac))
 	var dir := Vector3(sin(az) * cos(elev), sin(elev), -cos(az) * cos(elev)).normalized()
 	var day := clampf(elev / deg_to_rad(12.0) + 0.15, 0.0, 1.0)
+	var overcast := WeatherParticles.overcast_amount(wet, rain, snow, hail)
 	# the golden hour: from about 25 degrees down the sun turns gold, deepest a few degrees over the horizon
 	var elev_deg := rad_to_deg(elev)
-	golden = (1.0 - smoothstep(4.0, 25.0, elev_deg)) * smoothstep(-3.0, 1.5, elev_deg)
+	golden = (1.0 - smoothstep(4.0, 25.0, elev_deg)) * smoothstep(-3.0, 1.5, elev_deg) * (1.0 - overcast)
 	night = 1.0 - day
 	var sun_dir := dir if elev > -0.02 else Vector3(-dir.x, absf(dir.y) + 0.5, -dir.z).normalized() # moonlight
 	sun.basis = Basis.looking_at(-sun_dir, Vector3.UP)
@@ -504,31 +510,40 @@ func _apply_time() -> void:
 	# midday: the sun up a little and the fill down, so faces turned from the sun drop to about a quarter of the lit
 	# ones; the fill's sky share cools those shadows
 	var midday := smoothstep(22.0, 32.0, elev_deg) # 0 through the golden hour and the night, which keep their look
-	sun.light_energy = lerpf(0.2, 2.0, day) * lerpf(1.0, 1.05, golden) * (1.0 + 0.12 * midday)
-	sun.shadow_opacity = lerpf(0.6, 1.0, day)
+	sun.light_energy = lerpf(0.2, 2.0, day) * lerpf(1.0, 1.05, golden) * (1.0 + 0.12 * midday) * (1.0 - overcast * 0.62)
+	sun.shadow_opacity = lerpf(0.6, 1.0, day) * (1.0 - overcast * 0.45)
 	sky_mat.set_shader_parameter("sun_dir", dir)
 	sky_mat.set_shader_parameter("moon_dir", Vector3(-dir.x, 0.6, -dir.z).normalized())
 	sky_mat.set_shader_parameter("night", night)
+	sky_mat.set_shader_parameter("overcast", overcast)
 	sky_mat.set_shader_parameter("star_amount", clampf(night * 1.4 - 0.3, 0.0, 1.0) * 0.12) # under the night exposure and glow
-	# a deep blue night sky (not black), a richer blue overhead by day
+	# a deep blue night sky (not black), a richer blue overhead by day, greyed under rain or snow (as race_world)
 	# (the golden sky stays a clean blue overhead: a pink horizon blended into it went lavender through ACES)
-	sky_mat.set_shader_parameter("top_color", Color(0.035, 0.065, 0.2).lerp(Color(0.13, 0.33, 0.72).lerp(Color(0.16, 0.4, 0.7), golden), day))
-	sky_mat.set_shader_parameter("horizon_color", Color(0.06, 0.1, 0.22).lerp(Color(0.6, 0.73, 0.88).lerp(Color(0.98, 0.78, 0.5), golden * 0.8), day))
+	var top := Color(0.035, 0.065, 0.2).lerp(Color(0.13, 0.33, 0.72).lerp(Color(0.16, 0.4, 0.7), golden), day) \
+		.lerp(WORLD.SKY_TOP_OVERCAST, overcast * 0.72 * day)
+	var horizon := Color(0.06, 0.1, 0.22).lerp(Color(0.6, 0.73, 0.88).lerp(Color(0.98, 0.78, 0.5), golden * 0.8), day) \
+		.lerp(WORLD.HORIZON_OVERCAST, overcast * 0.7 * day)
+	sky_mat.set_shader_parameter("top_color", top)
+	sky_mat.set_shader_parameter("horizon_color", horizon)
 	sky_mat.set_shader_parameter("glow_color", Color(1.0, 0.48, 0.2))
 	sky_mat.set_shader_parameter("glow_amount", golden)
 	sky_mat.set_shader_parameter("sun_color", day_col.lerp(gold_col, golden))
 	sky_mat.set_shader_parameter("sky_energy", lerpf(0.8, 1.0, day))
 	# the town's sodium glow low on the night horizon, lighting the cloud bellies from below
-	sky_mat.set_shader_parameter("city_glow", Color(0.5, 0.3, 0.16) * 0.22 * night)
-	sky_mat.set_shader_parameter("cloud_lit", Color(0.13, 0.15, 0.24).lerp(Color(1, 1, 1).lerp(Color(1.0, 0.68, 0.46), golden), day))
-	sky_mat.set_shader_parameter("cloud_shade", Color(0.05, 0.06, 0.11).lerp(Color(0.55, 0.6, 0.7).lerp(Color(0.62, 0.5, 0.6), golden), day))
-	sky_mat.set_shader_parameter("halo_amount", 0.15 * day + 0.65 * golden)
-	# sunlit haze: thicker and gold towards the sun, so the distance glows behind the trees
-	env.fog_light_color = Color(0.03, 0.05, 0.11).lerp(Color(0.66, 0.75, 0.87).lerp(Color(0.97, 0.64, 0.4), golden), day)
+	sky_mat.set_shader_parameter("city_glow", Color(0.5, 0.3, 0.16) * 0.22 * night * (1.0 - overcast * 0.5))
+	sky_mat.set_shader_parameter("cloud_lit", Color(0.13, 0.15, 0.24).lerp(Color(1, 1, 1).lerp(Color(1.0, 0.68, 0.46), golden), day) \
+		.lerp(WORLD.HORIZON_OVERCAST, overcast * 0.5 * day))
+	sky_mat.set_shader_parameter("cloud_shade", Color(0.05, 0.06, 0.11).lerp(Color(0.55, 0.6, 0.7).lerp(Color(0.62, 0.5, 0.6), golden), day) \
+		.lerp(WORLD.SKY_TOP_OVERCAST.darkened(0.2), overcast * day))
+	sky_mat.set_shader_parameter("halo_amount", (0.15 * day + 0.65 * golden) * (1.0 - overcast))
+	# sunlit haze: thicker and gold towards the sun, so the distance glows behind the trees; greyer and thicker in rain/snow
+	env.fog_light_color = Color(0.03, 0.05, 0.11).lerp(Color(0.66, 0.75, 0.87).lerp(Color(0.97, 0.64, 0.4), golden), day) \
+		.lerp(WORLD.FOG_RAIN * lerpf(0.04, 1.0, day), overcast * 0.6)
 	env.fog_sun_scatter = 0.6 * golden
 	# plus a daytime haze, so the far blocks and trees fall back into a paler blue and the near ones stand out
-	env.fog_density = 0.00028 * lerpf(1.0, 2.4, golden) * lerpf(1.0, 1.6, night) + 0.00045 * midday
-	env.fog_aerial_perspective = lerpf(0.6, 0.85, midday)
+	env.fog_density = 0.00028 * lerpf(1.0, 2.4, golden) * lerpf(1.0, 1.6, night) + 0.00045 * midday \
+		+ 0.00045 * overcast + 0.0024 * maxf(rain, maxf(snow * 0.75, hail))
+	env.fog_aerial_perspective = lerpf(0.6, 0.85, midday) * (1.0 - overcast * 0.6)
 	# a mission's fog: the haze thickens to a race's fog, grey and lit by the dimmed sun, and hides the sky's horizon
 	env.fog_sky_affect = 0.85 * fog
 	if fog > 0.0:
@@ -540,12 +555,16 @@ func _apply_time() -> void:
 		env.fog_sun_scatter *= 1.0 - fog
 		sun.light_energy *= lerpf(1.0, 0.55, fog)
 		sun.shadow_opacity *= lerpf(1.0, 0.6, fog)
-	# the fill: a cool sky blue by day (the shadow colour), lavender at the golden hour, a dim moonlit blue at night
-	env.ambient_light_energy = lerpf(0.95, 0.48, day) * lerpf(1.0, 0.75, golden) * (1.0 - 0.25 * midday)
+	# the fill: a cool sky blue by day (the shadow colour), lavender at the golden hour, neutral grey under cloud, a dim moonlit blue at night
+	env.ambient_light_energy = lerpf(0.95, 0.48, day) * lerpf(1.0, 0.75, golden) * (1.0 - 0.25 * midday) * (1.0 - overcast * 0.2)
 	env.ambient_light_color = Color(0.34, 0.42, 0.72).lerp(Color(0.78, 0.8, 0.86).lerp(Color(0.66, 0.66, 0.88), golden * 0.7), day) \
-		.lerp(Color(0.66, 0.76, 0.95), 0.5 * midday)
+		.lerp(Color(0.66, 0.76, 0.95), 0.5 * midday).lerp(WORLD.FILL_OVERCAST, overcast * day)
 	env.ambient_light_sky_contribution = lerpf(0.25, 0.6, day) * lerpf(1.0, 0.6, golden) # the pink sky would wash the shadows out
 	SceneMood.by_hour(env, day, golden, night, 1.06) # ACES already deepens the colour
+	env.glow_bloom += 0.03 * night * clampf(rain * 1.5, 0.0, 1.0)
+	if weather_fx:
+		weather_fx.update(rain, snow, hail, fog, weather == "fog", quality)
+		weather_fx.place(camera)
 	# contact shadows also darken sunlit ground a little by day: under the car, at wall feet, kerbs and fences
 	env.ssao_light_affect = lerpf(0.12, 0.3, midday)
 	env.ssao_intensity = lerpf(2.2, 2.8, midday)
@@ -1186,15 +1205,16 @@ func _begin_mission(index: int) -> bool:
 
 ## The map's weather now, in MapMissions.weather_state's form (mu is the driven car's weather grip).
 func weather_state() -> Dictionary:
-	return {"mode": weather, "wet": wet, "rain": rain, "snow": snow, "fog": fog, "mu": drive.mu if drive else 1.0}
+	return {"mode": weather, "wet": wet, "rain": rain, "snow": snow, "hail": hail, "fog": fog, "mu": drive.mu if drive else 1.0}
 
 ## Puts a weather (MapMissions.weather_state, or one weather_state() saved) on the map: the road shaders' wet, rain
-## and snow, the fog, and the car's grip (FreeCar.mu, as a race's Race.grip). The look follows at the next _apply_time.
+## and snow, the falling weather particles, overcast sky and fog, and the car's grip (FreeCar.mu, as a race's Race.grip).
 func set_weather(st: Dictionary) -> void:
 	weather = String(st.get("mode", "dry"))
 	wet = float(st.get("wet", 0.0))
 	rain = float(st.get("rain", 0.0))
 	snow = float(st.get("snow", 0.0))
+	hail = float(st.get("hail", 0.0))
 	fog = float(st.get("fog", 0.0))
 	if drive:
 		drive.mu = float(st.get("mu", 1.0))
@@ -1971,7 +1991,7 @@ func _process(delta: float) -> void:
 		_update_camera(delta)
 		if surface_fx:
 			surface_fx.silence(car_visual)
-		hud.update_drive(drive.speed_kmh(), _gear_shown(), drive.car.rpm, drive.model.spec.limiter, Vector2(drive.car.x, drive.car.y), drive.car.heading, delta)
+		hud.update_drive(drive.speed_kmh(), _gear_shown(), drive.car.rpm, drive.model.spec.limiter, Vector2(drive.car.x, drive.car.y), drive.car.heading, delta, drive.vz)
 		return
 	nitro_on = false
 	_read_input(delta)
@@ -2037,7 +2057,7 @@ func _process(delta: float) -> void:
 	if _save_t <= 0.0:
 		_save_t = 15.0
 		_save()
-	hud.update_drive(drive.speed_kmh(), _gear_shown(), drive.car.rpm, drive.model.spec.limiter, Vector2(drive.car.x, drive.car.y), drive.car.heading, delta)
+	hud.update_drive(drive.speed_kmh(), _gear_shown(), drive.car.rpm, drive.model.spec.limiter, Vector2(drive.car.x, drive.car.y), drive.car.heading, delta, drive.vz)
 	hud.set_stats(progress.fans, progress.roads.size(), map.road_pts.size(), hour)
 	if audio:
 		audio.update_car(drive.car, true, null)
@@ -2113,6 +2133,8 @@ func _update_camera(delta: float) -> void:
 			camera.position = spot
 			camera.look_at((p + view * 3.5 * cos(look.pitch) + Vector3.UP * 1.05).lerp(p + Vector3.UP * 0.8, at_car), Vector3.UP)
 			camera.fov = lerpf(camera.fov, 70.0 + clampf(kmh, 0.0, 140.0) * 0.1, 1.0 - exp(-delta * 3.0))
+	if weather_fx:
+		weather_fx.place(camera)
 
 # ================================================================================================ input
 
