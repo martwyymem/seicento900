@@ -240,6 +240,7 @@ var _crowd_material_track: Track
 ## Racing line assist
 var racing_line_node: MeshInstance3D
 var show_racing_line := true
+var _racing_line_key := "" ## which car's speeds the racing line was painted from ("" = the stock reference)
 
 ## Night headlight beams and the per-frame nearest-car ranking that assigns them (reused, no allocation)
 var beams: Array[SpotLight3D] = []
@@ -381,6 +382,7 @@ func set_track(value: Track) -> void:
 	_skid_instance = null
 	_atmos_key = Vector3(-1.0, -1.0, -1.0) # the new materials pick up the current weather
 
+	_racing_line_key = "" # _build_track paints it from the stock reference
 	_build_track()
 	_reset_skids()
 	position_overview()
@@ -399,6 +401,7 @@ func set_race(value: Race) -> void:
 		old.queue_free()
 	visuals.clear()
 	_reset_skids()
+	_repaint_racing_line(value)
 
 	var player_key := value.s.car_class if CarCatalog.is_key(value.s.car_class) else "stock"
 	var mix_rivals := not one_make and player_key != "hypercar"
@@ -3067,7 +3070,34 @@ func _sweep_box(st: SurfaceTool, s0: float, s1: float, d0: float, d1: float, y_r
 			_quad(st, ring[0], ring[1], ring[2], ring[3])
 		prev = ring
 
-func _build_racing_line() -> void:
+## The speeds the racing line's braking zones are read from for the player's car in race r: the stock
+## Seicento's reference lap (track.cal) unless the player drives another car, then that car's own reference
+## lap (Track.cal_alt, by spec) or, before it is calibrated, its grip-limit profile (Track.profile_for).
+## Empty means the stock colours.
+static func racing_line_speeds(t: Track, r: Race) -> PackedFloat64Array:
+	if r == null or r.player == null or r.player.model == null:
+		return PackedFloat64Array()
+	var cm: CarModel = r.player.model
+	if cm.spec.resource_name == "": # the stock Seicento
+		return PackedFloat64Array()
+	var cal: Dictionary = t.cal_alt.get(cm.spec.get_instance_id(), {})
+	if cal.has("vs") and (cal.vs as PackedFloat64Array).size() == t.n:
+		return cal.vs
+	return t.profile_for(cm)
+
+## Rebuilds the racing line for the player's car when it is not the stock Seicento (a hypercar brakes far
+## later and harder: the stock reference painted its braking zones metres before the corner, too late to use).
+func _repaint_racing_line(r: Race) -> void:
+	var vs := racing_line_speeds(track, r)
+	var key := str(vs.size()) + ":" + str(r.player.model.spec.get_instance_id()) if not vs.is_empty() else ""
+	if key == _racing_line_key:
+		return
+	_racing_line_key = key
+	if is_instance_valid(racing_line_node):
+		racing_line_node.queue_free()
+	_build_racing_line(vs)
+
+func _build_racing_line(car_vs := PackedFloat64Array()) -> void:
 	var verts := PackedVector3Array()
 	var colors := PackedColorArray()
 	var indices := PackedInt32Array()
@@ -3079,7 +3109,11 @@ func _build_racing_line() -> void:
 	var n: int = track.n
 	var win := maxi(2, int(round(6.0 / track.step)))
 	var d_s := _smooth_loop(track.RLD, win)
-	var vs: PackedFloat64Array = track.cal.get("vs", track.PROF)
+	var vs: PackedFloat64Array = car_vs if car_vs.size() == track.n else track.cal.get("vs", track.PROF)
+	# the amber "held at the limit" test compares against the grip profile of the same car
+	var prof: PackedFloat64Array = track.PROF
+	if car_vs.size() == track.n and race and race.player and race.player.model:
+		prof = track.profile_for(race.player.model)
 	var y_s := PackedFloat64Array()
 	y_s.resize(n)
 	var brake := PackedFloat64Array()
@@ -3091,7 +3125,7 @@ func _build_racing_line() -> void:
 		var j := (i + 1) % n
 		var decel := (vs[i] * vs[i] - vs[j] * vs[j]) / (2.0 * maxf(track.RDS[i], 0.01))
 		brake[i] = clampf(decel / (0.35 * 9.81), 0.0, 1.0)
-		held[i] = 1.0 if vs[j] >= track.PROF[j] - 0.05 else 0.0
+		held[i] = 1.0 if vs[j] >= prof[j] - 0.05 else 0.0
 	y_s = _smooth_loop(y_s, win)
 	brake = _smooth_loop(brake, win)
 	held = _smooth_loop(held, win * 2)

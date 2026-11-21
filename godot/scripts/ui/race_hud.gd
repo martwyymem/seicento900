@@ -145,7 +145,11 @@ var _map_points := PackedVector2Array()
 var _map_start := PackedVector2Array()
 var _map_scale := 1.0
 var _map_origin := Vector2.ZERO
-var _map_key := "" ## what minimap_base last drew (track, size, flags)
+var _map_follow := false ## true on long circuits: zoomed heading-up view centred ahead of the player car
+var _map_world_pts := PackedVector2Array() ## track centreline in world metres for follow mode
+var _map_world_start := PackedVector2Array() ## start line endpoints in world metres for follow mode
+var _map_zoom := MapMarker.RACE_ZOOM_MIN ## smoothed visible span (m across) in follow mode
+var _map_key := "" ## what minimap_base last drew (track, size, flags, and player pose in follow mode)
 var _map_waters: Array[PackedVector2Array] = []
 var _map_buildings: Array[PackedVector2Array] = []
 ## the waters and buildings above as one triangle batch (_build_map): one polygon draw each was 600-11,700 canvas
@@ -229,6 +233,7 @@ func _ready() -> void:
 	minimap_base.clip_contents = true # rivers and lakes run off the map; keep them inside its box
 	minimap = _canvas(_draw_minimap, corners_group)
 	_place(minimap, 1.0, 0.0, 1.0, 0.0, -14 - MAP_S, 224, -14, 224 + MAP_S)
+	minimap.clip_contents = true
 	feed = _canvas(_draw_feed, corners_group)
 	_place(feed, 1.0, 0.0, 1.0, 0.0, -14 - FEED_W, 428, -14, 700)
 	pitwall = _canvas(_draw_pitwall, corners_group)
@@ -408,6 +413,10 @@ func update(dt: float) -> void:
 		_note_key = note_key
 		pacenote.queue_redraw()
 	flagbar.queue_redraw()
+	if _map_follow and race.player:
+		var spd := maxf(absf(race.player.speed), race.player.v if race.player.control == "rail" else 0.0)
+		var target_zoom := MapMarker.race_zoom_span(spd)
+		_map_zoom = target_zoom if dt <= 0.0 else lerpf(_map_zoom, target_zoom, minf(1.0, dt * 4.0))
 	if _minimap_key() != _map_key:
 		minimap_base.queue_redraw()
 	minimap.queue_redraw()
@@ -1359,6 +1368,35 @@ func _draw_clock() -> void:
 ## The co-driver's calls, as CMR 2.0 shows them: an orange box per note called and not yet driven, its
 ## black arrow drawn for the grade (a gentle bend for flat, an elbow for square, a U for a hairpin, a hump
 ## for a crest) with a red "!" for a caution; the call written underneath, or the corner's name between notes.
+## Evaluates the upcoming corner countdown and braking cue for the player car from PaceNotes.brake_cue
+## (using the active car's speed profile and braking decel), with Race.brake_assist as a short-range fallback.
+func _live_brake_state(live: Array) -> Dictionary:
+	var p := race.player
+	if p == null or race.phase != "racing" or p.finished or p.dnf or p.mode != "race":
+		return {"countdown": 0, "brake_alert": false}
+	var tr := race.track
+	var spd := maxf(absf(p.speed), p.v if p.control == "rail" else 0.0)
+	var mu := race.tyres.tyre_grip(p.tyre, race.weather.wet) if (race.tyres and race.weather) else 1.0
+	var countdown := 0
+	var cue_brake := false
+	for i in live.size():
+		var nt: Dictionary = live[i]
+		var ahead := tr.wrap_s(float(nt.s) - p.s)
+		if ahead > tr.L * 0.5:
+			ahead = 0.0
+		var v_corner := INF
+		if int(nt.dir) != 0:
+			v_corner = tr.sample(tr.PROF, float(nt.apex)) * sqrt(maxf(0.2, mu)) if not tr.PROF.is_empty() \
+				else PaceNotes.corner_speed(float(nt.radius), race.brake_k, race.brake_aero, mu)
+		var decel := PaceNotes.brake_decel(spd, v_corner, race.brake_k, race.brake_aero, mu)
+		var cue := PaceNotes.brake_cue(ahead, spd, v_corner, decel)
+		if i == 0:
+			countdown = int(cue.countdown)
+		if bool(cue.brake):
+			cue_brake = true
+	var assist_brake: bool = race.brake_assist(p) > 0.08 and spd > 13.0 and p.brake < 0.25
+	return {"countdown": countdown, "brake_alert": cue_brake or assist_brake}
+
 func _draw_pacenote() -> void:
 	if not race:
 		return
@@ -1368,29 +1406,31 @@ func _draw_pacenote() -> void:
 	var cyan := HudLayout.neon_primary()
 	var it_bold := HudLayout.italic_font(900, -0.14)
 	var live: Array = co_driver.current() if co_driver else []
+	var bstate := _live_brake_state(live)
+	var brake_alert: bool = bool(bstate.brake_alert)
+	var pulse := int(_clock * 8.0) % 2 == 0
 	var caption := ""
 	if not live.is_empty():
-		_draw_note_box(Rect2(cx - S * 0.5, 0, S, S), live[0], 1.0)
+		var box_col := YELLOW.lerp(RED, 0.85 if pulse else 0.45) if brake_alert else YELLOW
+		_draw_note_box(Rect2(cx - S * 0.5, 0, S, S), live[0], 1.0, box_col)
 		if live.size() > 1:
 			# the next one already called, smaller beside it
 			var s2 := S * 0.62
 			_draw_note_box(Rect2(cx + S * 0.5 + 8.0 * s, 0, s2, s2), live[1], 0.85)
-		caption = PaceNotes.label(live[0])
+		caption = PaceNotes.hud_label(live[0], int(bstate.countdown))
 	if caption != "":
 		var cfs := maxi(10, roundi(14.0 * s))
 		caption = _fit_font(it_bold, caption, cfs, pacenote.size.x - 28.0 * s)
 		var tw := minf(pacenote.size.x, it_bold.get_string_size(caption, HORIZONTAL_ALIGNMENT_LEFT, -1, cfs).x + 28.0 * s)
 		var r := Rect2(cx - tw * 0.5, S + 7.0 * s, tw, 23.0 * s)
-		_tri_rect(r.grow(2.5 * s), Color(cyan, 0.22))
+		var accent := RED if brake_alert else cyan
+		_tri_rect(r.grow(2.5 * s), Color(accent, 0.36 if (brake_alert and pulse) else 0.22))
 		_tri_rect(r, HudLayout.glass_plate(0.88))
-		_tri_frame(r, Color(cyan, 0.72), 1.5)
+		_tri_frame(r, Color(accent, 0.92 if brake_alert else 0.72), 1.5)
 		_q(Vector2(r.position.x, r.position.y + r.size.y * 0.74), caption, cfs, Color.WHITE, it_bold, HORIZONTAL_ALIGNMENT_CENTER, tw)
 
-	# Gran Turismo 4 / neon style dynamic corner BRAKE alert
-	var p := race.player
-	var brake_need: float = race.brake_assist(p) if (race.phase == "racing" and not p.finished) else 0.0
-	if brake_need > 0.08 and p.speed > 13.0 and p.brake < 0.25:
-		var pulse := int(_clock * 8.0) % 2 == 0
+	# Dynamic corner BRAKE alert (pulses when at or past braking point and faster than corner speed)
+	if brake_alert:
 		var bw := 142.0 * s
 		var bh := 25.0 * s
 		var br := Rect2(cx - bw * 0.5, S + 34.0 * s, bw, bh)
@@ -1403,26 +1443,31 @@ func _draw_pacenote() -> void:
 	_q_flush(pacenote)
 
 ## What the pace note shows: it redraws only when this changes (the notes come and go a few times a lap).
+## Keeps brake_alert at index -2 and flash_state at -1 (checked by test_hud_skins.gd).
 func _pacenote_key() -> Array:
 	if not race:
 		return []
-	var live: Array = co_driver.live if co_driver else []
-	var p := race.player
-	var brake_alert: bool = p != null and race.phase == "racing" and not p.finished and race.brake_assist(p) > 0.08 and p.speed > 13.0 and p.brake < 0.25
+	var live_idx: Array = co_driver.live if co_driver else []
+	var live: Array = co_driver.current() if co_driver else []
+	var bstate := _live_brake_state(live)
+	var brake_alert: bool = bool(bstate.brake_alert)
+	var countdown: int = int(bstate.countdown)
 	var flash_state := int(_clock * 8.0) % 2 if brake_alert else 0
+	var p := race.player
 	var sec_name := race.track.sector_name(p.s) if (race.track and p) else ""
-	if live.is_empty():
+	if live_idx.is_empty():
 		return [race.get_instance_id(), sec_name, brake_alert, flash_state]
-	return [race.get_instance_id(), live[0], live[1] if live.size() > 1 else -1, brake_alert, flash_state]
+	return [race.get_instance_id(), live_idx[0], live_idx[1] if live_idx.size() > 1 else -1, countdown, brake_alert, flash_state]
 
 ## How far each grade's arrow turns (degrees) and the radius of its bend (share of the box).
 const NOTE_ARROW := {"flat": [22.0, 0.9], "fast": [38.0, 0.6], "easy": [58.0, 0.42], "medium": [80.0, 0.3],
 	"tight": [110.0, 0.2], "square": [90.0, 0.06], "hairpin": [180.0, 0.17]}
 
-## One pace-note box: the arrow for the note's grade and direction inside an orange square, into the
-## triangle list.
-func _draw_note_box(box: Rect2, note: Dictionary, alpha: float) -> void:
-	_tri_rect(box, Color(YELLOW, alpha))
+## One pace-note box: the arrow for the note's grade and direction inside an orange square (shifting to red
+## when braking is due), into the triangle list.
+func _draw_note_box(box: Rect2, note: Dictionary, alpha: float, fill_col := Color(-1, -1, -1)) -> void:
+	var bg := YELLOW if fill_col.r < 0.0 else fill_col
+	_tri_rect(box, Color(bg, alpha))
 	_tri_frame(box, Color(0, 0, 0, 0.9 * alpha), 3.0 if box.size.x > 60.0 else 2.0)
 	var ink := Color(0, 0, 0, alpha)
 	var S := box.size.x
@@ -1899,19 +1944,31 @@ func _build_map() -> void:
 	_map_track = tr
 	_map_size = minimap.size
 	var b := tr.bounds
+	var span := maxf(b[2] - b[0], b[3] - b[1])
+	_map_follow = MapMarker.race_use_follow(tr.L, span)
+	_map_zoom = MapMarker.RACE_ZOOM_MIN
 	var pad := 12.0
-	_map_scale = minf((_map_size.x - 2.0 * pad) / (b[2] - b[0]), (_map_size.y - 2.0 * pad) / (b[3] - b[1]))
+	_map_scale = minf((_map_size.x - 2.0 * pad) / maxf(1.0, b[2] - b[0]), (_map_size.y - 2.0 * pad) / maxf(1.0, b[3] - b[1]))
 	_map_origin = Vector2((_map_size.x - (b[2] - b[0]) * _map_scale) * 0.5 - b[0] * _map_scale,
 		(_map_size.y - (b[3] - b[1]) * _map_scale) * 0.5 - b[1] * _map_scale)
 	_map_points = PackedVector2Array()
-	var stride := maxi(1, tr.n / 320)
-	for i in range(0, tr.n, stride):
-		_map_points.append(Vector2(tr.X[i], tr.Y[i]) * _map_scale + _map_origin)
-	_map_points.append(_map_points[0])
+	_map_world_pts = PackedVector2Array()
+	if _map_follow:
+		# ~10 m world spacing keeps zoomed curves smooth while staying cheap to cull each frame
+		var wstride := maxi(1, int(roundf(10.0 / maxf(tr.step, 0.5))))
+		for i in range(0, tr.n, wstride):
+			_map_world_pts.append(Vector2(tr.X[i], tr.Y[i]))
+		_map_world_pts.append(_map_world_pts[0])
+	else:
+		var stride := maxi(1, tr.n / 320)
+		for i in range(0, tr.n, stride):
+			_map_points.append(Vector2(tr.X[i], tr.Y[i]) * _map_scale + _map_origin)
+		_map_points.append(_map_points[0])
 	var p0 := tr.pos(0.0, 0.0)
 	var n0 := tr.pos(0.0, tr.half * 3.0)
 	var a := Vector2(p0[0], p0[1])
 	var n := Vector2(n0[0], n0[1])
+	_map_world_start = PackedVector2Array([2.0 * a - n, n])
 	_map_start = PackedVector2Array([(2.0 * a - n) * _map_scale + _map_origin, n * _map_scale + _map_origin])
 	_map_waters.clear()
 	_map_buildings.clear()
@@ -1927,14 +1984,16 @@ func _build_map() -> void:
 				for w in env_json.get("water", []):
 					var pts := PackedVector2Array()
 					for k in range(0, w.size() - 1, 2):
-						pts.append(Vector2(w[k], w[k + 1]) * _map_scale + _map_origin)
+						var v := Vector2(w[k], w[k + 1])
+						pts.append(v if _map_follow else v * _map_scale + _map_origin)
 					if pts.size() >= 3:
 						_map_waters.append(pts)
 						fills.append([pts, Color(0.14, 0.42, 0.72, 0.45), false])
 				for b_entry in env_json.get("buildings", []):
 					var pts := PackedVector2Array()
 					for k in range(3, b_entry.size() - 1, 2):
-						pts.append(Vector2(b_entry[k], b_entry[k + 1]) * _map_scale + _map_origin)
+						var v := Vector2(b_entry[k], b_entry[k + 1])
+						pts.append(v if _map_follow else v * _map_scale + _map_origin)
 					if pts.size() >= 3:
 						fills.append([pts, Color(0.42, 0.50, 0.62, 0.24), true])
 	for f in fills:
@@ -1953,7 +2012,15 @@ func _map_fill(pts: PackedVector2Array, col: Color, building: bool) -> void:
 	for i in tris:
 		_map_fill_indices.append(base + i)
 
-## What minimap_base shows: the circuit, the map's size and the flags along it.
+## Current heading-up transform for follow mode (world metres -> minimap pixels).
+func _map_follow_xform(sz: Vector2) -> Transform2D:
+	var p := race.player
+	var cpos := Vector2(p.x, p.y) if p else Vector2.ZERO
+	var h := p.heading if p else 0.0
+	return MapMarker.mini_xform(cpos, h, _map_zoom * 0.5, sz, MapMarker.RACE_CAR_Y_FRAC)
+
+## What minimap_base shows: the circuit, the map's size, the flags along it, and (in follow mode) the
+## player's quantized pose so the base stays cached when stationary and tracks smoothly when moving.
 func _minimap_key() -> String:
 	if not race:
 		return ""
@@ -1961,36 +2028,60 @@ func _minimap_key() -> String:
 	var rc := race.rc
 	if rc:
 		key += ":%s:%d" % [rc.flag, hash(rc.yellow)]
+	if _map_follow and race.player:
+		var p := race.player
+		key += ":%d:%d:%d:%d" % [roundi(p.x), roundi(p.y), roundi(p.heading * 100.0), roundi(_map_zoom * 0.5)]
 	return key
 
 ## The map's backdrop, the circuit and its flagged sectors; the cars go on minimap over it.
 func _draw_minimap_base() -> void:
 	if not race:
 		return
+	if _map_track != race.track or _map_size != minimap.size:
+		_build_map()
 	_map_key = _minimap_key()
 	var rect := Rect2(Vector2.ZERO, minimap_base.size)
 	var cyan := HudLayout.neon_primary()
 	var hot := HudLayout.neon_hot()
 	minimap_base.draw_rect(rect, HudLayout.glass_plate(0.84))
-	if _map_track != race.track or _map_size != minimap.size:
-		_build_map()
-	if not _map_fill_indices.is_empty(): # every water and building in one draw (under the circuit's strips, flushed below)
-		var base := _tri_points.size()
-		_tri_points.append_array(_map_fill_points)
-		_tri_colors.append_array(_map_fill_colors)
-		if base == 0: # (the usual case: one native copy, not a GDScript loop over ~130k indices while the HUD sways)
-			_tri_indices.append_array(_map_fill_indices)
-		else:
-			for i in _map_fill_indices:
-				_tri_indices.append(base + i)
-	# glowing neon circuit ribbon
-	_tri_strip(_map_points, 9.5, Color(cyan, 0.28), true)
-	_tri_strip(_map_points, 6.2, _shade(0.88), true)
-	_tri_strip(_map_points, 3.4, Color("#f2f9ff"), true)
-	_tri_strip(_map_start, 3.5, hot)
-	if race.rc:
-		_draw_map_flags(race.rc)
-	_tri_flush(minimap_base)
+	if _map_follow and race.player:
+		var p := race.player
+		var car_pos := Vector2(p.x, p.y)
+		var xform := _map_follow_xform(minimap_base.size)
+		if not _map_fill_indices.is_empty():
+			# Draw every water & building polygon in one GPU-transformed batch without rebuilding geometry
+			minimap_base.draw_set_transform_matrix(xform)
+			RenderingServer.canvas_item_add_triangle_array(minimap_base.get_canvas_item(), _map_fill_indices, _map_fill_points, _map_fill_colors)
+			minimap_base.draw_set_transform_matrix(Transform2D.IDENTITY)
+		var cull_r := _map_zoom * 1.15
+		var runs := _cull_world_ribbon(_map_world_pts, car_pos, cull_r, xform)
+		for run in runs:
+			_tri_strip(run, 9.5, Color(cyan, 0.28), false)
+			_tri_strip(run, 6.2, _shade(0.88), false)
+			_tri_strip(run, 3.4, Color("#f2f9ff"), false)
+		if _map_world_start.size() == 2 and _map_world_start[0].distance_to(car_pos) <= cull_r:
+			_tri_strip(PackedVector2Array([xform * _map_world_start[0], xform * _map_world_start[1]]), 3.5, hot)
+		if race.rc:
+			_draw_map_flags(race.rc, xform, car_pos, cull_r)
+		_tri_flush(minimap_base)
+	else:
+		if not _map_fill_indices.is_empty(): # every water and building in one draw (under the circuit's strips, flushed below)
+			var base := _tri_points.size()
+			_tri_points.append_array(_map_fill_points)
+			_tri_colors.append_array(_map_fill_colors)
+			if base == 0: # (the usual case: one native copy, not a GDScript loop over ~130k indices while the HUD sways)
+				_tri_indices.append_array(_map_fill_indices)
+			else:
+				for i in _map_fill_indices:
+					_tri_indices.append(base + i)
+		# glowing neon circuit ribbon
+		_tri_strip(_map_points, 9.5, Color(cyan, 0.28), true)
+		_tri_strip(_map_points, 6.2, _shade(0.88), true)
+		_tri_strip(_map_points, 3.4, Color("#f2f9ff"), true)
+		_tri_strip(_map_start, 3.5, hot)
+		if race.rc:
+			_draw_map_flags(race.rc)
+		_tri_flush(minimap_base)
 	# thick glowing neon radar border + bright corner accents
 	minimap_base.draw_rect(rect.grow(-2.5), Color(cyan, 0.28), false, 6.0)
 	minimap_base.draw_rect(rect.grow(-1.5), cyan, false, 2.5)
@@ -2001,6 +2092,34 @@ func _draw_minimap_base() -> void:
 		minimap_base.draw_line(p0, p0 + Vector2(dx, 0), hot, 3.0)
 		minimap_base.draw_line(p0, p0 + Vector2(0, dy), hot, 3.0)
 
+## Splits a world-space closed track polyline into contiguous visible runs within `cull_r` of `centre`,
+## projecting only the visible vertices through `xform` (plus 1 point of overlap each side so clips stay clean).
+static func _cull_world_ribbon(world_pts: PackedVector2Array, centre: Vector2, cull_r: float, xform: Transform2D) -> Array[PackedVector2Array]:
+	var out: Array[PackedVector2Array] = []
+	var n := world_pts.size()
+	if n < 2:
+		return out
+	var run := PackedVector2Array()
+	var in_run := false
+	for i in n:
+		var q := world_pts[i]
+		var vis := absf(q.x - centre.x) <= cull_r and absf(q.y - centre.y) <= cull_r
+		if vis:
+			if not in_run:
+				if i > 0:
+					run.append(xform * world_pts[i - 1])
+				in_run = true
+			run.append(xform * q)
+		elif in_run:
+			run.append(xform * q)
+			if run.size() >= 2:
+				out.append(run)
+			run = PackedVector2Array()
+			in_run = false
+	if in_run and run.size() >= 2:
+		out.append(run)
+	return out
+
 func _draw_minimap() -> void:
 	if not race:
 		return
@@ -2010,41 +2129,47 @@ func _draw_minimap() -> void:
 	var p := race.player
 	var cyan := HudLayout.neon_primary()
 	var boost := HudLayout.neon_boost()
+	var xform := _map_follow_xform(minimap.size) if (_map_follow and p != null) else Transform2D.IDENTITY
+	var box := Rect2(Vector2.ZERO, minimap.size).grow(12.0)
 	# all the dots, then all their rims: two batched draws instead of two per car
 	var dots: Array = [] ## [centre, colour]
 	for car in race.cars:
-		if car.stranded and not car.recovered:
-			var wp := Vector2(car.x, car.y) * _map_scale + _map_origin
-			minimap.draw_line(wp - Vector2(3.5, 3.5), wp + Vector2(3.5, 3.5), RED, 2.0, true)
-			minimap.draw_line(wp + Vector2(-3.5, 3.5), wp + Vector2(3.5, -3.5), RED, 2.0, true)
+		var sp := (xform * Vector2(car.x, car.y)) if _map_follow else (Vector2(car.x, car.y) * _map_scale + _map_origin)
+		if car.stranded and not car.recovered and (not _map_follow or box.has_point(sp)):
+			minimap.draw_line(sp - Vector2(3.5, 3.5), sp + Vector2(3.5, 3.5), RED, 2.0, true)
+			minimap.draw_line(sp + Vector2(-3.5, 3.5), sp + Vector2(3.5, -3.5), RED, 2.0, true)
 		if car.dnf or car == p:
 			continue
-		dots.append([Vector2(car.x, car.y) * _map_scale + _map_origin, car.color])
+		if _map_follow and not box.has_point(sp):
+			continue
+		dots.append([sp, car.color])
 	for d in dots:
 		_round(minimap, d[0], 3.6, d[1])
 	for d in dots:
 		_round(minimap, d[0], 4.2, Color(0, 0, 0, 0.78), 3.0 / 4.2)
-	if not p.dnf:
-		var pp := Vector2(p.x, p.y) * _map_scale + _map_origin
+	if p and not p.dnf:
+		var pp := Vector2(minimap.size.x * 0.5, minimap.size.y * MapMarker.RACE_CAR_Y_FRAC) if _map_follow \
+			else (Vector2(p.x, p.y) * _map_scale + _map_origin)
 		_round(minimap, pp, 10.5, Color(cyan, 0.28))
 		_round(minimap, pp, 6.0, boost)
 		_round(minimap, pp, 7.2, Color.BLACK, 5.0 / 7.2)
-		var fwd := Vector2(cos(p.heading), sin(p.heading)).normalized()
+		var fwd := Vector2(0.0, -1.0) if _map_follow else Vector2(cos(p.heading), sin(p.heading)).normalized()
 		var tip := pp + fwd * 12.0
 		var wing1 := pp - fwd * 4.0 + Vector2(-fwd.y, fwd.x) * 5.2
 		var wing2 := pp - fwd * 4.0 - Vector2(-fwd.y, fwd.x) * 5.2
 		minimap.draw_colored_polygon(PackedVector2Array([tip, wing1, pp, wing2]), Color.WHITE)
 		minimap.draw_polyline(PackedVector2Array([wing1, tip, wing2]), cyan, 1.8, true)
 	if rc and rc.sc_state in ["out", "in"]:
-		var sp := Vector2(rc.sc.x, rc.sc.y) * _map_scale + _map_origin
-		var on := fmod(_clock, 0.5) < 0.25
-		minimap.draw_rect(Rect2(sp - Vector2(4.5, 4.5), Vector2(9, 9)), Color("#ffd21a") if on else Color.WHITE)
-		minimap.draw_rect(Rect2(sp - Vector2(4.5, 4.5), Vector2(9, 9)), Color.BLACK, false, 1.5)
+		var sp := (xform * Vector2(rc.sc.x, rc.sc.y)) if _map_follow else (Vector2(rc.sc.x, rc.sc.y) * _map_scale + _map_origin)
+		if not _map_follow or box.has_point(sp):
+			var on := fmod(_clock, 0.5) < 0.25
+			minimap.draw_rect(Rect2(sp - Vector2(4.5, 4.5), Vector2(9, 9)), Color("#ffd21a") if on else Color.WHITE)
+			minimap.draw_rect(Rect2(sp - Vector2(4.5, 4.5), Vector2(9, 9)), Color.BLACK, false, 1.5)
 
 ## Yellow marshal sectors along the minimap line (the whole lap turns red under a red flag).
-func _draw_map_flags(rc: RaceControl) -> void:
+func _draw_map_flags(rc: RaceControl, xform := Transform2D.IDENTITY, centre := Vector2.ZERO, cull_r := INF) -> void:
 	var tr := race.track
-	var step := maxf(15.0, tr.L / 320.0)
+	var step := maxf(15.0, tr.L / 320.0) if not _map_follow else 15.0
 	for k in rc.n_sec:
 		var lvl := 3 if rc.flag == "red" else rc.yellow[k]
 		if lvl == 0:
@@ -2054,7 +2179,17 @@ func _draw_map_flags(rc: RaceControl) -> void:
 		var s := k * rc.sec_len
 		while s <= (k + 1) * rc.sec_len + 0.1:
 			var q := tr.pos(s, 0.0)
-			pts.append(Vector2(q[0], q[1]) * _map_scale + _map_origin)
+			var w := Vector2(q[0], q[1])
+			if _map_follow:
+				if absf(w.x - centre.x) <= cull_r and absf(w.y - centre.y) <= cull_r:
+					pts.append(xform * w)
+				elif pts.size() >= 2:
+					_tri_strip(pts, 4.0 if lvl == 2 else 3.2, col)
+					pts = PackedVector2Array()
+				else:
+					pts.clear()
+			else:
+				pts.append(w * _map_scale + _map_origin)
 			s += step
 		if pts.size() >= 2:
 			_tri_strip(pts, 4.0 if lvl == 2 else 3.2, col)

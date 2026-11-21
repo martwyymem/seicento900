@@ -196,6 +196,8 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 	var limiter := spec.limiter
 	var brake_f := spec.brake_front
 	var brake_r := spec.brake_rear
+	var ebd := spec.brake_rear_grip
+	var abs_slip := spec.abs_slip
 	var eng_i := spec.engine_inertia
 	var wheel_i := spec.wheel_inertia
 	var eff := spec.efficiency
@@ -404,11 +406,15 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 			rho_a[i] = rho0
 			# ABS: back off a wheel's pressure when it is heading for a lock
 			var kappa := (wi * R - vli) / maxf(absf(vli), v_ref)
-			if abs_on and (brk > 0.0 or esc[i] > 0.0) and absf(vli) > 2.0 and kappa * signf(vli) < -kpk * 1.2:
+			if abs_on and (brk > 0.0 or esc[i] > 0.0) and absf(vli) > 2.0 and kappa * signf(vli) < -kpk * abs_slip:
 				abs_k[i] = maxf(0.1, abs_k[i] - h * 30.0)
 			else:
 				abs_k[i] = minf(1.0, abs_k[i] + h * 10.0)
-			var tb := (brk * (brake_f if i < 2 else brake_r) + esc[i]) * abs_k[i] + (hb * brake_r * HB_TORQUE if i >= 2 else 0.0)
+			var bt := brake_f if i < 2 else brake_r
+			if ebd > 0.0 and i >= 2:
+				# brake-by-wire: the rear wheel brakes in proportion to the grip it has (CarSpec.brake_rear_grip)
+				bt = minf(brake_r, ebd * mu[i] * fzi * R)
+			var tb := (brk * bt + esc[i]) * abs_k[i] + (hb * brake_r * HB_TORQUE if i >= 2 else 0.0)
 			var roll := drag[i] * fzi * R
 			var w0 := 1.5
 			var sgn := clampf(wi / w0, -1.0, 1.0)

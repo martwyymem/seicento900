@@ -12,6 +12,7 @@ func run() -> Array:
 	_check_rim(errors)
 	_check_big_map(errors)
 	_check_inside(errors)
+	_check_race_minimap(errors)
 	await _check_hud(errors, Engine.get_main_loop() as SceneTree)
 	await _check_disc_clamp(errors, Engine.get_main_loop() as SceneTree)
 	completed = true
@@ -100,6 +101,60 @@ func _check_inside(errors: Array[String]) -> void:
 			errors.append("%s moved further than the centre would be: %s" % [far, q])
 	if MapMarker.keep_inside(Vector2(9, 9), PackedVector2Array()) != Vector2(9, 9):
 		errors.append("no outline: the waypoint is left alone")
+
+## Race minimap zoom choice, heading-up car-below-centre projection/transform, and polyline culling.
+func _check_race_minimap(errors: Array[String]) -> void:
+	# Short circuits keep the full overview; long tracks switch to the zoomed heading-up follow view
+	for short_case in [["monaco", 3288.0, 966.0], ["monza", 5767.0, 2156.0], ["spa", 6960.0, 2053.0]]:
+		if MapMarker.race_use_follow(short_case[1], short_case[2]):
+			errors.append("short track %s should keep full minimap view" % short_case[0])
+	for long_case in [["goliath", 27000.0, 7391.0], ["nordschleife", 20688.0, 6076.0], ["lemans", 13550.0, 5354.0], ["s1_sprint", 9616.0, 3591.0]]:
+		if not MapMarker.race_use_follow(long_case[1], long_case[2]):
+			errors.append("long track %s should use zoomed follow minimap" % long_case[0])
+	# Speed-based zoom: clamped to [400, 1500] m and shows ~RACE_LOOK_SECS of road ahead in the middle range
+	var z0 := MapMarker.race_zoom_span(0.0)
+	var z_slow := MapMarker.race_zoom_span(25.0)
+	var z_mid := MapMarker.race_zoom_span(60.0)
+	var z_fast := MapMarker.race_zoom_span(92.0)
+	var z_extreme := MapMarker.race_zoom_span(250.0)
+	if absf(z0 - MapMarker.RACE_ZOOM_MIN) > 0.01 or absf(z_slow - MapMarker.RACE_ZOOM_MIN) > 0.01:
+		errors.append("low speed zoom should clamp to %.0f m, got %.1f / %.1f" % [MapMarker.RACE_ZOOM_MIN, z0, z_slow])
+	if absf(z_extreme - MapMarker.RACE_ZOOM_MAX) > 0.01:
+		errors.append("extreme speed zoom should clamp to %.0f m, got %.1f" % [MapMarker.RACE_ZOOM_MAX, z_extreme])
+	if not (z_mid > z_slow and z_fast > z_mid and z_fast < z_extreme):
+		errors.append("zoom span should grow smoothly with speed: %.1f < %.1f < %.1f < %.1f" % [z_slow, z_mid, z_fast, z_extreme])
+	var ahead_secs := (z_fast * MapMarker.RACE_CAR_Y_FRAC) / 92.0
+	if absf(ahead_secs - MapMarker.RACE_LOOK_SECS) > 0.1:
+		errors.append("at 92 m/s minimap should show %.1f s ahead, got %.2f s" % [MapMarker.RACE_LOOK_SECS, ahead_secs])
+	# Car-below-centre projection and exact affine transform equivalence
+	var sz := Vector2(214.0, 214.0)
+	var car := Vector2(1250.0, -840.0)
+	var yfrac := MapMarker.RACE_CAR_Y_FRAC
+	var radius := z_fast * 0.5
+	for h in [0.0, 0.7, PI * 0.5, -2.1, PI]:
+		var xf := MapMarker.mini_xform(car, h, radius, sz, yfrac)
+		var car_px := xf * car
+		var want_car := Vector2(sz.x * 0.5, sz.y * yfrac)
+		if not _near(car_px, want_car, 0.02):
+			errors.append("car should sit below centre at %s (h=%.2f), got %s" % [want_car, h, car_px])
+		var fwd := Vector2(cos(h), sin(h))
+		var ahead_edge := xf * (car + fwd * (z_fast * yfrac))
+		if absf(ahead_edge.y) > 0.05 or absf(ahead_edge.x - sz.x * 0.5) > 0.05:
+			errors.append("point %.0f m ahead should land at top centre (h=%.2f), got %s" % [z_fast * yfrac, h, ahead_edge])
+		for off in [Vector2(150, 0), Vector2(-80, 220), Vector2(400, -350)]:
+			var p := car + off
+			var via_fn := MapMarker.mini_xy_offset(p, car, h, radius, sz, yfrac)
+			var via_xf := xf * p
+			if not _near(via_fn, via_xf, 0.02):
+				errors.append("mini_xform mismatch at h=%.2f off=%s: %s vs %s" % [h, off, via_xf, via_fn])
+	# Ribbon culling drops far segments while keeping local points with clean overlap
+	var line := PackedVector2Array()
+	for i in 200:
+		line.append(Vector2(i * 50.0, 0.0))
+	var xf0 := MapMarker.mini_xform(Vector2(5000.0, 0.0), 0.0, 300.0, sz, yfrac)
+	var runs := RaceHud._cull_world_ribbon(line, Vector2(5000.0, 0.0), 350.0, xf0)
+	if runs.size() != 1 or runs[0].size() < 10 or runs[0].size() > 25:
+		errors.append("ribbon cull should keep only the local window, got %d run(s) sizes %s" % [runs.size(), runs.map(func(r): return r.size())])
 
 ## Changing the waypoint replaces its marker; the HUD keeps one waypoint, and every marker has a place.
 func _check_hud(errors: Array[String], tree: SceneTree) -> void:

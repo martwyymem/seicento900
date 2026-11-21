@@ -90,8 +90,25 @@ func update(muted: bool, warp: int) -> void:
 		else:
 			break
 	var speed := maxf(absf(p.speed), p.v if p.control == "rail" else 0.0)
-	var lead := clampf(speed * LEAD_TIME, LEAD_MIN, LEAD_MAX)
+	var mu := race.tyres.tyre_grip(p.tyre, race.weather.wet) if (race.tyres and race.weather) else 1.0
+	var max_reach := minf(PaceNotes.LEAD_CAP, tr.L * 0.45)
 	var m := notes.notes.size()
+	# If a tight corner further ahead already needs its braking-distance lead, pull any intermediate note in
+	# too so call order stays sequential and a flat kink never hides a heavy stop right behind it.
+	var reach := clampf(speed * LEAD_TIME, LEAD_MIN, LEAD_MAX)
+	for look in mini(m, 4):
+		var idx := (_next + look) % m
+		var nt: Dictionary = notes.notes[idx]
+		var d := tr.wrap_s(nt.s - s)
+		if d > tr.L - 30.0:
+			d -= tr.L
+		if d > max_reach:
+			break
+		var vc := _corner_speed(nt, mu)
+		var decel := PaceNotes.brake_decel(speed, vc, race.brake_k, race.brake_aero, mu)
+		var need := minf(PaceNotes.lead_distance(speed, vc, decel, LEAD_MIN, LEAD_TIME, LEAD_MAX), max_reach)
+		if d <= need:
+			reach = maxf(reach, d)
 	# call every note now within reach, and a note linked to the one just called straight after it
 	for _guard in m:
 		var note: Dictionary = notes.notes[_next]
@@ -102,13 +119,22 @@ func update(muted: bool, warp: int) -> void:
 		if live.has(_next):
 			break
 		var prev_linked: bool = not live.is_empty() and notes.notes[live[-1]].link != ""
-		if ahead > lead and not (prev_linked and ahead < lead + 120.0):
+		if ahead > reach and not (prev_linked and ahead < reach + 120.0):
 			break
 		if ahead > -10.0:
 			live.append(_next)
 			if voice_on and not muted and not p.autopilot:
 				_say(PaceNotes.spoken(note))
 		_next = (_next + 1) % m
+
+## Target cornering speed (m/s) for a note on this race's track & car (uses Track.PROF for the active car).
+func _corner_speed(note: Dictionary, mu: float) -> float:
+	if int(note.dir) == 0:
+		return INF
+	var tr := race.track
+	if tr != null and not tr.PROF.is_empty():
+		return tr.sample(tr.PROF, float(note.apex)) * sqrt(maxf(0.2, mu))
+	return PaceNotes.corner_speed(float(note.radius), race.brake_k, race.brake_aero, mu)
 
 func _say(text: String) -> void:
 	var volume := AudioSettings.voice_volume(VOLUME) # Options → Audio (speech is outside the mixer)

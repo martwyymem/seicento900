@@ -4,6 +4,10 @@
 ## each axle is locked, for braking (straight, perturbed, split-mu, on dirt, over a kerb, after a hop), lift-off, power-on
 ## and lane-change manoeuvres.
 ##   timeout 300 godot --headless --path godot -s tests/_hypercar_feel_probe.gd [-- only=hypercar]
+## With "kb" it runs only the keyboard scenarios (digital brake and steering keys, ramped as Game._update_input ramps them):
+## deceleration and stopping distance from 300 and 250 km/h, steering taps under full braking, a trail-braked 90-degree
+## bend, both on the flat rig and inside a real Race on the Goliath (tyres, gradient, the race's assists):
+##   timeout 300 godot --headless --path godot -s tests/_hypercar_feel_probe.gd -- kb [only=hypercar] [set=field:value,...]
 extends SceneTree
 
 const S := preload("res://tests/test_surfaces.gd")
@@ -185,6 +189,7 @@ class Log:
 
 var only := ""
 var brief := false
+var trace := false
 
 func _initialize() -> void:
 	await process_frame
@@ -193,6 +198,25 @@ func _initialize() -> void:
 			only = a.substr(5)
 		if a == "brief":
 			brief = true
+	trace = "trace" in OS.get_cmdline_user_args()
+	if trace:
+		var cmt := CarCatalog.model(only if only != "" else "hypercar")
+		for a in OS.get_cmdline_user_args():
+			if a.begins_with("set="):
+				for kv in a.substr(4).split(","):
+					var f := kv.split(":")
+					cmt.spec.set(f[0], float(f[1]))
+				cmt.refresh()
+		var ttap := 0.25
+		var tat := -170.0
+		for a in OS.get_cmdline_user_args():
+			if a.begins_with("tap="):
+				ttap = float(a.substr(4))
+			if a.begins_with("at="):
+				tat = float(a.substr(3))
+		_kb_brake(_kb_rig(cmt, "race", "full", 250.0 / 3.6, "goliath"), ttap, tat)
+		quit()
+		return
 	var cars := {"stock": CarCatalog.model("stock"), "golf4": CarCatalog.model("golf4"), "hypercar": CarCatalog.model("hypercar")}
 	# set=field:value,field:value tries spec figures on the hypercar without editing hypercar.gd
 	for a in OS.get_cmdline_user_args():
@@ -201,6 +225,12 @@ func _initialize() -> void:
 				var f := kv.split(":")
 				cars.hypercar.spec.set(f[0], float(f[1]))
 			cars.hypercar.refresh()
+	if "kb" in OS.get_cmdline_user_args():
+		for key in cars:
+			if only == "" or key == only:
+				_keyboard(key, cars[key])
+		quit()
+		return
 	var ids := S.surf_ids()
 	for key in cars:
 		if only != "" and key != only:
@@ -495,3 +525,243 @@ func _hop(cm: CarModel, assists: String, v: float, surf: int) -> String:
 	r.fc.vz = 2.5
 	r.car.yaw_rate = 0.05
 	return _brake_run(r, func(_t: float) -> float: return 0.0)
+
+# ---------------- keyboard scenarios ----------------
+
+## A driving rig for the keyboard runs: the flat-road Rig, or the player's car in a real Race on a real track.
+class KbRig:
+	var rig: Rig
+	var race: Race
+	var car: RaceCar
+	var steer := 0.0
+	var brake := 0.0
+	var thr := 0.0
+	var input := Race.PlayerInput.new()
+	var x0 := 0.0
+	var y0 := 0.0
+	var h0 := 0.0
+
+	## The keyboard's steering as Game._update_input ramps it: towards the key at 4.4/s under 40 km/h, 2.6/s from 120 km/h up,
+	## back to the centre (or across) at 8/s. key: -1, 0 or 1.
+	static func kb_steer(steer: float, key: float, v: float, dt: float) -> float:
+		var back := key == 0.0 or signf(key) != signf(steer)
+		var v_kmh := absf(v) * 3.6
+		var rate := 4.4 if v_kmh < 40.0 else lerpf(4.4, 2.6, clampf((v_kmh - 40.0) / 80.0, 0.0, 1.0))
+		return move_toward(steer, key, (8.0 if back else rate) * dt)
+
+	func speed() -> float:
+		return sqrt(car.vx * car.vx + car.vy * car.vy)
+
+	## Lateral offset from the starting line, and the heading against it.
+	func off_line() -> float:
+		return -(car.x - x0) * sin(h0) + (car.y - y0) * cos(h0)
+
+	func head() -> float:
+		return wrapf(car.heading - h0, -PI, PI)
+
+	func beta() -> float:
+		var ch := cos(car.heading)
+		var sh := sin(car.heading)
+		return atan2(-car.vx * sh + car.vy * ch, maxf(absf(car.vx * ch + car.vy * sh), 0.5))
+
+	## One 1/120 s frame with the keys: up/down (0/1) and the steering key (-1, 0, 1).
+	func key_step(up: float, down: float, key: float) -> void:
+		var dt := 1.0 / 120.0
+		thr = move_toward(thr, up, 6.0 * dt)
+		brake = move_toward(brake, down, 8.0 * dt)
+		steer = kb_steer(steer, key, speed(), dt)
+		if race:
+			input.throttle = thr
+			input.brake = brake
+			input.steer = steer
+			race.step(dt, input)
+		else:
+			rig.step(thr, brake, steer)
+
+## A fresh run at v on the rig (path, assists) or, with track set, on that track's longest straight in a race.
+func _kb_rig(cm: CarModel, path: String, assists: String, v: float, track := "") -> KbRig:
+	var k := KbRig.new()
+	if track == "":
+		k.rig = Rig.new(path, cm, assists, S.surf_ids().asphalt)
+		k.rig.reset(v)
+		k.car = k.rig.car
+	else:
+		var rs := RaceSettings.new()
+		rs.track = track
+		rs.laps = 3
+		rs.opponents = 0
+		rs.car_class = "hypercar" if cm.spec.resource_name == "hypercar" else "stock"
+		rs.race_control = false
+		rs.collisions = false
+		rs.assists = assists
+		k.race = Race.new(rs, {"stints": [{"c": "M", "laps": 3}]}, 7, {"car_model": cm, "tyres": Tyres.new(), "strategy": Strategy.new(cm, Tyres.new())})
+		var idle := Race.PlayerInput.new()
+		var n := 0
+		while k.race.phase != "racing" and n < 120 * 30:
+			k.race.step(1.0 / 120.0, idle)
+			n += 1
+		var p := k.race.player
+		var tr := k.race.track
+		var s0 := _straight(tr, v)
+		var pos := tr.pos(s0, tr.sample(tr.RLD, s0))
+		p.s = s0
+		p.x = pos[0]
+		p.y = pos[1]
+		p.d = tr.sample(tr.RLD, s0)
+		p.heading = tr.heading(s0)
+		p.vx = v * cos(p.heading)
+		p.vy = v * sin(p.heading)
+		p.yaw_rate = 0.0
+		p.v = v
+		p.speed = v
+		p.gear = cm.best_gear(v)
+		p.rpm = maxf(cm.spec.idle_rpm, cm.rpm_for(v, p.gear))
+		p.phys = null
+		p.rev = false
+		p.control = "free"
+		k.car = p
+	k.x0 = k.car.x
+	k.y0 = k.car.y
+	k.h0 = k.car.heading
+	return k
+
+## The start of the track's straightest stretch long enough to stop from v (the stopping distance at 1 g, and 250 m).
+func _straight(tr: Track, v: float) -> float:
+	var need := maxf(250.0, v * v / (2.0 * 9.81) + 60.0)
+	var best := 0.0
+	var best_k := INF
+	var s := 0.0
+	while s < tr.L:
+		var worst := 0.0
+		var x := 0.0
+		while x < need:
+			worst = maxf(worst, absf(tr.sample(tr.RK, s + x)))
+			x += 10.0
+		if worst < best_k:
+			best_k = worst
+			best = s
+		s += 25.0
+	return best
+
+class KbLog:
+	var dist := 0.0
+	var t := 0.0
+	var max_beta := 0.0
+	var max_head := 0.0
+	var max_off := 0.0
+	var dec := {} ## km/h mark -> g, from the speed lost over the 10 km/h round the mark
+	var _mark_t := {}
+
+	var v_start := -1.0
+	var grass := 0.0 ## s with the outer wheels past the road's edge (race runs)
+	var wall := false ## the car reached the barrier
+
+	func take(k: KbRig, dt: float) -> void:
+		var v := k.speed()
+		if v_start < 0.0:
+			v_start = v
+		t += dt
+		dist += v * dt
+		if v > 3.0:
+			max_beta = maxf(max_beta, absf(k.beta()))
+		max_head = maxf(max_head, absf(k.head()))
+		max_off = maxf(max_off, absf(k.off_line()))
+		if k.race:
+			var tr := k.race.track
+			var hw: float = k.car.model.spec.width / 2.0
+			if absf(k.car.d) > tr.half + 0.3 - hw:
+				grass += dt
+			var lim := tr.limits(k.car.s)
+			if k.car.d > lim[1] - hw - 0.1 or k.car.d < lim[0] + hw + 0.1:
+				wall = true
+		for m in [300.0, 250.0, 200.0, 150.0, 100.0, 50.0]:
+			var hi: float = (m + 5.0) / 3.6
+			var lo: float = (m - 5.0) / 3.6
+			if not _mark_t.has(m) and v <= hi and v_start > hi + 0.5:
+				_mark_t[m] = t
+			if _mark_t.has(m) and not dec.has(m) and v <= lo:
+				dec[m] = (hi - lo) / maxf(t - float(_mark_t[m]), 1e-6) / 9.81
+
+	func g_row() -> String:
+		var out := ""
+		for m in [300.0, 250.0, 200.0, 150.0, 100.0, 50.0]:
+			if dec.has(m):
+				out += " %3.0f:%4.2f" % [m, dec[m]]
+		return out
+
+## Full brake (the key held) from v to a stop; tap: the steering key held this long from tap_at (s) or, with tap_at < 0,
+## from the moment the car is down to -tap_at km/h; hold_steer: the key held to the stop.
+func _kb_brake(k: KbRig, tap := 0.0, tap_at := 0.0, hold_steer := false) -> KbLog:
+	var lg := KbLog.new()
+	var dt := 1.0 / 120.0
+	var t_on := -1.0 if tap_at < 0.0 else tap_at
+	while lg.t < 20.0:
+		if t_on < 0.0 and k.speed() * 3.6 <= -tap_at:
+			t_on = lg.t
+		var key := 0.0
+		if t_on >= 0.0 and lg.t >= t_on and (hold_steer or lg.t < t_on + tap):
+			key = 1.0
+		k.key_step(0.0, 1.0, key)
+		lg.take(k, dt)
+		if trace and int(round(lg.t / dt)) % 6 == 0:
+			var c := k.car
+			var ph: PhysState = c.phys
+			var extra := ""
+			if k.race:
+				var tr := k.race.track
+				extra = "  d %5.2f half %4.2f surf %s mu %.3f" % [c.d, tr.half, [k.race._surface_fn.call(c.x, c.y)], k.race.grip(c)]
+			print("    t %4.2f v %5.1f st %5.2f beta %6.1f head %6.1f yaw %5.2f absk %s rho %s fz %s%s" % [lg.t, k.speed() * 3.6, k.steer,
+				rad_to_deg(k.beta()), rad_to_deg(k.head()), c.yaw_rate, _fmt(ph.abs_k), _fmt(ph.rho), _fmt(ph.fz, 0), extra])
+		if k.speed() < 0.5 or k.car.rev:
+			break
+	return lg
+
+func _fmt(a: PackedFloat64Array, dec := 2) -> String:
+	var o := []
+	for x in a:
+		o.append(("%." + str(dec) + "f") % x)
+	return "[" + ",".join(o) + "]"
+
+## Trail-braking into a 90-degree right-hander from v: the brake key and the steering key go down together, the brake is
+## let go when the car is down to v_apex, the steering key is held until the car has turned 90 degrees, then the throttle.
+func _kb_trail(k: KbRig, v_apex: float) -> String:
+	var lg := KbLog.new()
+	var dt := 1.0 / 120.0
+	var braking := true
+	var turned := false
+	var t_turn := -1.0
+	while lg.t < 8.0:
+		if braking and k.speed() <= v_apex:
+			braking = false
+		if not turned and absf(k.head()) >= PI / 2.0:
+			turned = true
+			t_turn = lg.t
+		k.key_step(0.0 if braking or not turned else 1.0, 1.0 if braking else 0.0, 0.0 if turned else 1.0)
+		lg.take(k, dt)
+		if turned and lg.t > t_turn + 1.5:
+			break
+	return "turned 90 in %s  beta max %5.1f deg  end beta %5.1f deg  yaw %5.2f rad/s  end %3.0f km/h%s" % [
+		("%4.2f s" % t_turn) if t_turn > 0.0 else " never", rad_to_deg(lg.max_beta), rad_to_deg(k.beta()), k.car.yaw_rate, k.speed() * 3.6,
+		"  SPUN" if lg.max_beta > deg_to_rad(30.0) else ""]
+
+func _kb_row(lg: KbLog) -> String:
+	return "stop %6.1f m %5.2f s  beta %5.1f  head %5.1f deg  off line %5.2f m%s%s%s" % [
+		lg.dist, lg.t, rad_to_deg(lg.max_beta), rad_to_deg(lg.max_head), lg.max_off,
+		"  grass %.2f s" % lg.grass if lg.grass > 0.0 else "", "  WALL" if lg.wall else "", "  SPUN" if lg.max_beta > deg_to_rad(30.0) else ""]
+
+func _keyboard(key: String, cm: CarModel) -> void:
+	print("\n================ %s: keyboard ================" % key)
+	for where in [["race", "full", ""], ["free", "abs", ""], ["race", "full", "goliath"], ["race", "abs", "goliath"]]:
+		var tag: String = "%s/%s%s" % [where[0], where[1], (" on " + where[2]) if where[2] != "" else ""]
+		print("---- %s" % tag)
+		for kmh in [300.0, 250.0]:
+			var lg := _kb_brake(_kb_rig(cm, where[0], where[1], kmh / 3.6, where[2]))
+			print("  brake %3.0f              : %s  g%s" % [kmh, _kb_row(lg), lg.g_row()])
+		for tap in [0.1, 0.25, 0.5]:
+			print("  250, tap %.2f s at once : %s" % [tap, _kb_row(_kb_brake(_kb_rig(cm, where[0], where[1], 250.0 / 3.6, where[2]), tap, 0.0))])
+			print("  250, tap %.2f s at 170  : %s" % [tap, _kb_row(_kb_brake(_kb_rig(cm, where[0], where[1], 250.0 / 3.6, where[2]), tap, -170.0))])
+		print("  250, key held to stop  : %s" % _kb_row(_kb_brake(_kb_rig(cm, where[0], where[1], 250.0 / 3.6, where[2]), 0.0, 0.0, true)))
+		print("  250, key held from 170 : %s" % _kb_row(_kb_brake(_kb_rig(cm, where[0], where[1], 250.0 / 3.6, where[2]), 0.0, -170.0, true)))
+		if where[2] == "":
+			for va in [120.0, 90.0]:
+				print("  trail 180 into a 90, off the brake at %3.0f: %s" % [va, _kb_trail(_kb_rig(cm, where[0], where[1], 180.0 / 3.6), va / 3.6)])

@@ -10,6 +10,7 @@ func run() -> Array:
 	_notes(errors)
 	_calls(errors, "fiat") # two corners on a short lap: notes more than half a lap ahead
 	_calls(errors, "monaco")
+	_braking_cues(errors)
 	_service(errors)
 	_splits(errors)
 	_car_setup(errors)
@@ -107,6 +108,95 @@ func _unique(a: Array) -> int:
 	for x in a:
 		d[x] = true
 	return d.size()
+
+## Braking-distance lead time, distance countdown, BRAKE cue gating, and early hypercar callouts on Goliath.
+func _braking_cues(errors: Array[String]) -> void:
+	# Stock (~1 g) vs hypercar (~1.8-2.5 g at high speed) deceleration
+	var d_stock := PaceNotes.brake_decel(35.0, 15.0, 1.0, 0.0, 1.0)
+	var d_hyper := PaceNotes.brake_decel(90.0, 20.0, 1.25, 0.0016, 1.0)
+	var d_wet := PaceNotes.brake_decel(35.0, 15.0, 1.0, 0.0, 0.65)
+	if not (d_stock > 8.0 and d_stock < 11.0):
+		errors.append("stock brake_decel should be ~1 g (9 m/s²), got %.2f" % d_stock)
+	if d_hyper <= d_stock * 1.5:
+		errors.append("hypercar high-speed brake_decel (%.2f) should exceed stock (%.2f)" % [d_hyper, d_stock])
+	if d_wet >= d_stock:
+		errors.append("wet brake_decel (%.2f) should be lower than dry (%.2f)" % [d_wet, d_stock])
+	# Corner speed & braking distance
+	if not is_inf(PaceNotes.corner_speed(INF)):
+		errors.append("infinite radius should yield INF corner_speed")
+	var vc_stock := PaceNotes.corner_speed(20.0, 1.0, 0.0, 1.0)
+	var vc_hyper := PaceNotes.corner_speed(20.0, 1.25, 0.0016, 1.0)
+	if not (vc_hyper > vc_stock and vc_stock > 10.0 and vc_stock < 20.0):
+		errors.append("20 m corner speeds look wrong: stock=%.1f hyper=%.1f" % [vc_stock, vc_hyper])
+	if PaceNotes.braking_distance(15.0, 20.0, 10.0) != 0.0:
+		errors.append("already slower than corner should give 0 braking distance")
+	var bd := PaceNotes.braking_distance(70.0, 20.0, 20.0) # (4900 - 400) / 40 = 112.5 m
+	if absf(bd - 112.5) > 0.01:
+		errors.append("braking_distance(70->20 @ 20) should be 112.5 m, got %.2f" % bd)
+	# Lead distance: braking distance + 2.5 s reaction at 250 km/h (69.4 m/s) into a square corner
+	var v250 := 250.0 / 3.6
+	var lead250 := PaceNotes.lead_distance(v250, 18.0, 24.5) # ~2.5 g hypercar braking
+	var want_lead := PaceNotes.braking_distance(v250, 18.0, 24.5) + v250 * PaceNotes.BRAKE_REACTION
+	if absf(lead250 - want_lead) > 0.5 or lead250 <= CoDriver.LEAD_MAX:
+		errors.append("250 km/h square-corner lead should be %.1f m (> LEAD_MAX), got %.1f m" % [want_lead, lead250])
+	# No braking needed -> stays inside normal CoDriver.LEAD_MAX window
+	var lead_flat := PaceNotes.lead_distance(v250, 90.0, 24.5)
+	if lead_flat > CoDriver.LEAD_MAX + 0.01:
+		errors.append("flat corner needing no braking should stay <= LEAD_MAX, got %.1f m" % lead_flat)
+	# Countdown & HUD label formatting
+	for c in [[260.0, 250], [180.0, 200], [60.0, 50], [20.0, 0]]:
+		if PaceNotes.countdown_metres(c[0]) != c[1]:
+			errors.append("countdown_metres(%.0f) should be %d, got %d" % [c[0], c[1], PaceNotes.countdown_metres(c[0])])
+	var sample_note := {"dir": -1, "grade": "square", "mods": [], "link": "into", "dist": 0}
+	if PaceNotes.hud_label(sample_note, 250) != "SQUARE LEFT 250":
+		errors.append("hud_label with countdown should be 'SQUARE LEFT 250', got '%s'" % PaceNotes.hud_label(sample_note, 250))
+	if PaceNotes.hud_label(sample_note, 0) != PaceNotes.label(sample_note):
+		errors.append("hud_label at 0 m should fall back to PaceNotes.label")
+	# BRAKE cue: off far before braking point, on at/past braking point when too fast, off when already slow enough
+	var cue_early := PaceNotes.brake_cue(300.0, v250, 18.0, 24.5)
+	var cue_now := PaceNotes.brake_cue(95.0, v250, 18.0, 24.5)
+	var cue_slow := PaceNotes.brake_cue(40.0, 19.0, 18.0, 24.5)
+	if cue_early.brake:
+		errors.append("BRAKE cue should stay off 300 m before corner (brake_dist=%.0f)" % cue_early.brake_dist)
+	if not cue_now.brake or cue_now.urgency <= 0.0:
+		errors.append("BRAKE cue should light at 95 m when brake_dist=%.0f" % cue_now.brake_dist)
+	if cue_slow.brake:
+		errors.append("BRAKE cue must stay off when car is already slow enough for the corner")
+	# End-to-end CoDriver on Goliath with Hypercar: a tight corner after a fast straight is called > LEAD_MAX ahead
+	var st := RaceSettings.new()
+	st.track = "goliath"
+	st.car_class = "hypercar"
+	st.opponents = 0
+	st.race_control = false
+	var cm := CarCatalog.model("hypercar")
+	var ty := Tyres.new()
+	var race := Race.new(st, null, 11, {"car_model": cm, "tyres": ty, "strategy": Strategy.new(cm, ty)})
+	race.phase = "racing"
+	var p := race.player
+	p.mode = "race"
+	p.control = "rail"
+	p.v = 80.0 # ~288 km/h
+	var cd := CoDriver.new(race)
+	cd.voice_on = false
+	var tr := race.track
+	# Pick a square or hairpin corner with a long clear approach (>= 450 m after the previous note)
+	var target_idx := -1
+	for i in cd.notes.notes.size():
+		var nt: Dictionary = cd.notes.notes[i]
+		var prev: Dictionary = cd.notes.notes[(i - 1 + cd.notes.notes.size()) % cd.notes.notes.size()]
+		var gap := tr.wrap_s(float(nt.s) - float(prev.e))
+		if nt.grade in ["square", "hairpin"] and gap >= 450.0:
+			target_idx = i
+			break
+	if target_idx < 0:
+		errors.append("goliath: could not find a square/hairpin corner with >=450 m approach")
+	else:
+		var nt: Dictionary = cd.notes.notes[target_idx]
+		p.s = tr.wrap_s(float(nt.s) - 260.0) # 260 m before corner (> old 190 m LEAD_MAX cap)
+		cd.update(true, 1)
+		if not cd.live.has(target_idx):
+			errors.append("goliath hypercar at 288 km/h: note %d (%s) not yet called 260 m before corner" % [target_idx, PaceNotes.label(nt)])
+	race.dispose()
 
 func _service(errors: Array[String]) -> void:
 	var share := 0.0

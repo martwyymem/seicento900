@@ -70,3 +70,39 @@ static func shape_points(shape: String, c: Vector2, r: float) -> PackedVector2Ar
 		return PackedVector2Array([c + Vector2(0, -r * 1.25), c + Vector2(r * 1.25, 0), c + Vector2(0, r * 1.25), c + Vector2(-r * 1.25, 0)])
 	var h := r * 0.9
 	return PackedVector2Array([c + Vector2(-h, -h), c + Vector2(h, -h), c + Vector2(h, h), c + Vector2(-h, h)])
+
+## Race minimap: long tracks switch from the whole-circuit overview to a zoomed heading-up view centred
+## ahead of the player car (placed below centre at RACE_CAR_Y_FRAC of the box height).
+const RACE_FOLLOW_LEN := 8000.0 ## m: laps longer than this use the zoomed heading-up view
+const RACE_FOLLOW_SPAN := 2600.0 ## m: tracks wider/taller than this use the zoomed heading-up view
+const RACE_ZOOM_MIN := 400.0 ## m across at low speeds
+const RACE_ZOOM_MAX := 1500.0 ## m across at extreme speeds
+const RACE_LOOK_SECS := 7.0 ## s of road visible ahead of the car
+const RACE_CAR_Y_FRAC := 0.72 ## fraction down from the top of the minimap box where the player sits
+
+## Whether a circuit is too large to read in full on the race minimap and should use the zoomed follow view.
+static func race_use_follow(track_len: float, span: float) -> bool:
+	return track_len > RACE_FOLLOW_LEN or span > RACE_FOLLOW_SPAN
+
+## Visible span across the zoomed race minimap (metres), sized to show ~RACE_LOOK_SECS of road ahead of the car.
+static func race_zoom_span(speed_mps: float) -> float:
+	var ahead := maxf(0.0, speed_mps) * RACE_LOOK_SECS
+	return clampf(ahead / RACE_CAR_Y_FRAC, RACE_ZOOM_MIN, RACE_ZOOM_MAX)
+
+## Heading-up minimap projection with the car placed at (0.5, car_y_frac) of the box (car_y_frac > 0.5 puts
+## the car below centre so more road ahead is visible).
+static func mini_xy_offset(p: Vector2, car_pos: Vector2, heading: float, radius: float, sz: Vector2, car_y_frac := 0.5) -> Vector2:
+	return mini_xy(p, car_pos, heading, radius, sz) + Vector2(0.0, (car_y_frac - 0.5) * sz.y)
+
+## The 2D affine transform matching mini_xy_offset: xform * p == mini_xy_offset(p, car_pos, heading, radius, sz, car_y_frac).
+static func mini_xform(car_pos: Vector2, heading: float, radius: float, sz: Vector2, car_y_frac := 0.5) -> Transform2D:
+	var f := Vector2(cos(heading), sin(heading))
+	var rt := Vector2(-f.y, f.x)
+	var r := maxf(radius, 1.0)
+	var sx := sz.x * 0.5 / r
+	var sy := sz.y * 0.5 / r
+	var x_axis := Vector2(sx * rt.x, -sy * f.x)
+	var y_axis := Vector2(sx * rt.y, -sy * f.y)
+	var car_px := Vector2(sz.x * 0.5, sz.y * car_y_frac)
+	var origin := car_px - (x_axis * car_pos.x + y_axis * car_pos.y)
+	return Transform2D(x_axis, y_axis, origin)

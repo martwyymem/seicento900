@@ -26,6 +26,10 @@ const LONG_LEN := 110.0 ## m: a corner at least this long (and turning SQUARE_TU
 const CREST_K := 1.0 / 550.0 ## vertical curvature (1/m) over the top of a rise that lightens the car (0.25 g at 38 m/s)
 const CREST_WIN := 10 ## samples either side of a point the vertical curvature is measured over
 const V_TOP := 39.0 ## m/s: about a Seicento's top speed, for the caution calls
+const BRAKE_REACTION := 2.5 ## s of reaction time added before a corner's braking point for early callouts
+const LEAD_CAP := 650.0 ## m: upper bound on dynamic callout lead distance
+const BRAKE_MARGIN := 1.12 ## safety factor on braking distance when lighting the BRAKE cue
+const BRAKE_MIN_DROP := 3.5 ## m/s: ignore tiny speed trims where a lift is enough
 
 ## [{s, e, apex, dir (+1 right / -1 left, 0 crest), grade, turn (rad), radius (m), mods: [String],
 ##   caution, link ("into" | "and" | ""), dist (m, 0 = none)}] sorted by s, the start of the corner.
@@ -233,6 +237,72 @@ static func label(note: Dictionary) -> String:
 	elif note.dist > 0:
 		words.append(str(note.dist))
 	return " · ".join(words)
+
+## HUD caption with an active distance countdown to the upcoming corner (e.g. "SQUARE LEFT 250"); once inside
+## the corner (dist_to <= 0) falls back to label(note) so exit links ("INTO" / "AND") still show.
+static func hud_label(note: Dictionary, dist_to := 0) -> String:
+	if dist_to <= 0:
+		return label(note)
+	var words: Array = ["CREST" if note.dir == 0 else "%s %s" % [note.grade.to_upper(), "RIGHT" if note.dir > 0 else "LEFT"]]
+	for mod in note.mods:
+		words.append(mod.to_upper())
+	return "%s %d" % [" · ".join(words), dist_to]
+
+# ---------------- braking lead & cues ----------------
+## Effective braking deceleration (m/s²) between current speed v and corner speed v_corner, matching Race's
+## brake_k (tyre grip ratio vs stock) and brake_aero (downforce decel per (m/s)²), scaled by surface/tyre mu.
+static func brake_decel(v: float, v_corner: float, brake_k := 1.0, brake_aero := 0.0, mu := 1.0) -> float:
+	var v0 := maxf(0.0, v)
+	var v1 := maxf(0.0, v_corner)
+	var v2_avg := 0.5 * (v0 * v0 + v1 * v1)
+	return maxf(2.0, (0.92 * G * brake_k + brake_aero * v2_avg) * maxf(0.2, mu))
+
+## Steady-state cornering speed (m/s) for a bend of radius (m) from the car's grip and downforce.
+static func corner_speed(radius: float, brake_k := 1.0, brake_aero := 0.0, mu := 1.0) -> float:
+	if not is_finite(radius) or radius <= 0.0:
+		return INF
+	var k := 1.0 / radius
+	var m := maxf(0.2, mu)
+	var aero := brake_aero * m
+	if k <= aero:
+		return 120.0
+	return minf(120.0, sqrt(G * brake_k * m / (k - aero)))
+
+## Braking distance (m) to slow from v down to v_corner at constant deceleration decel (m/s²).
+static func braking_distance(v: float, v_corner: float, decel: float) -> float:
+	if v <= v_corner or decel <= 0.0 or not is_finite(v_corner):
+		return 0.0
+	return (v * v - v_corner * v_corner) / (2.0 * decel)
+
+## How far before a corner (m) the callout must appear so the driver gets `reaction` seconds before the
+## braking point. Corners that need no braking keep the normal base_min..base_max window.
+static func lead_distance(v: float, v_corner: float, decel: float, base_min := 55.0, base_time := 2.6,
+		base_max := 190.0, reaction := BRAKE_REACTION, cap := LEAD_CAP) -> float:
+	var spd := maxf(0.0, v)
+	var base := clampf(spd * base_time, base_min, base_max)
+	var d_brake := braking_distance(spd, v_corner, decel)
+	if d_brake <= 0.0:
+		return base
+	return clampf(maxf(base, d_brake + spd * reaction), base_min, cap)
+
+## Distance countdown rounded to 50 m steps for the HUD caption (0 once within 35 m of the corner).
+static func countdown_metres(dist: float) -> int:
+	if dist < 35.0:
+		return 0
+	return maxi(50, int(roundf(dist / 50.0)) * 50)
+
+## Braking-cue state for a corner `dist_to_corner` metres ahead: returns {brake, brake_dist, urgency, countdown}.
+## `brake` is true only when the car is faster than the corner allows (by BRAKE_MIN_DROP) and at or past its braking point.
+static func brake_cue(dist_to_corner: float, v: float, v_corner: float, decel: float) -> Dictionary:
+	var spd := maxf(0.0, v)
+	var d_brake := braking_distance(spd, v_corner, decel)
+	var too_fast := is_finite(v_corner) and spd > v_corner + BRAKE_MIN_DROP and d_brake > 0.0
+	var trigger := d_brake * BRAKE_MARGIN
+	var at_point := too_fast and dist_to_corner <= trigger
+	var urgency := 0.0
+	if at_point:
+		urgency = clampf((trigger - dist_to_corner) / maxf(25.0, d_brake * 0.4) + 0.25, 0.25, 1.0)
+	return {"brake": at_point, "brake_dist": d_brake, "urgency": urgency, "countdown": countdown_metres(dist_to_corner)}
 
 ## The index of the next note to start ahead of s (or the one whose corner s is still in, when inside is true).
 func next_from(s: float, inside := false) -> int:
