@@ -1246,15 +1246,8 @@ func _draw_minimap_overlay() -> void:
 				var side := Vector2(-dir.y, dir.x) * (4.2 * ms)
 				var base_c := q + dir * (7.2 * ms)
 				overlay.draw_colored_polygon(PackedVector2Array([tip, base_c + side, base_c - side]), Color.WHITE if pin else (m.color as Color))
-	# the car: glowing neon arrow at the centre pointing up
-	var c: Vector2 = plan.centre
-	overlay.draw_circle(c, 15.0 * ms, Color(cyan, 0.25))
-	var arrow := PackedVector2Array([
-		c + Vector2(0, -13.0) * ms, c + Vector2(9.5, 10.0) * ms,
-		c + Vector2(0, 4.5) * ms, c + Vector2(-9.5, 10.0) * ms,
-	])
-	overlay.draw_colored_polygon(arrow, Color.WHITE)
-	overlay.draw_polyline(arrow + PackedVector2Array([arrow[0]]), cyan, 2.0 * ms, true)
+	# the car: crisp chevron at the centre pointing up (minimap rotates heading-up)
+	_draw_car_pointer(overlay, plan.centre, -PI * 0.5, ms, false)
 	# north badge tucked strictly inside the glowing ring
 	var north_d: Dictionary = plan.north
 	var np: Vector2 = north_d.pos
@@ -1300,7 +1293,67 @@ func move_cursor(dir: Vector2) -> void:
 	_map_sync()
 	big_overlay.queue_redraw()
 
+## Draws the player's car pointer (clean Forza-style chevron) at `pos`, pointing along `heading`
+## (radians, 0 = east, -PI/2 = north/up), scaled by `s`. Shared by both the heading-up minimap
+## and the north-up full-screen map so it reads crisply over busy aerial-photo terrain and white roads.
+func _draw_car_pointer(canvas: Control, pos: Vector2, heading: float, s: float, heading_cone := false) -> void:
+	var accent := HudLayout.neon_primary()
+	var is_ps1 := CmrStyle.skin == "ps1"
+	var aa := not is_ps1
+	var f := Vector2(cos(heading), sin(heading))
+	var r := Vector2(-f.y, f.x)
+	# 1. Optional faint heading wedge ahead of the car (big map)
+	if heading_cone:
+		var cone_half := 0.44
+		var steps := 10
+		for layer in [[44.0, 0.09], [28.0, 0.13]]:
+			if is_ps1 and float(layer[0]) > 35.0:
+				continue
+			var reach := float(layer[0]) * s
+			var cone := PackedVector2Array([pos])
+			for i in steps + 1:
+				var a := heading + lerpf(-cone_half, cone_half, float(i) / float(steps))
+				cone.append(pos + Vector2(cos(a), sin(a)) * reach)
+			canvas.draw_colored_polygon(cone, Color(accent, float(layer[1])))
+	# 2. Subtle accent glow + crisp halo ring behind the pointer
+	if not is_ps1:
+		HudLayout.draw_radial_glow(canvas, pos, 22.0 * s, Color(accent, 0.36))
+	canvas.draw_arc(pos, 15.5 * s, 0.0, TAU, 36, Color(0.0, 0.0, 0.0, 0.38), 2.4 * s, aa)
+	canvas.draw_arc(pos, 15.5 * s, 0.0, TAU, 36, Color(accent, 0.72 if is_ps1 else 0.58), 1.35 * s, aa)
+	# 3. Chevron geometry (sleek swept arrowhead with rear notch)
+	var tip := pos + f * (15.0 * s)
+	var rw := pos - f * (10.0 * s) + r * (8.0 * s)
+	var notch := pos - f * (4.5 * s)
+	var lw := pos - f * (10.0 * s) - r * (8.0 * s)
+	var poly := PackedVector2Array([tip, rw, notch, lw])
+	# Close the outline at a straight-edge midpoint so the sharp nose tip gets a clean continuous join
+	var mid := tip.lerp(rw, 0.5)
+	var closed := PackedVector2Array([mid, rw, notch, lw, tip, mid])
+	# 4. Soft dark drop shadow (screen-downward so it floats cleanly over white roads & bright terrain)
+	var sh_off := Vector2(0.0, 2.4 * s)
+	var sh_poly := PackedVector2Array([tip + sh_off, rw + sh_off, notch + sh_off, lw + sh_off])
+	var sh_mid := mid + sh_off
+	var sh_closed := PackedVector2Array([sh_mid, sh_poly[1], sh_poly[2], sh_poly[3], sh_poly[0], sh_mid])
+	if is_ps1:
+		canvas.draw_colored_polygon(sh_poly, Color(0.0, 0.0, 0.0, 0.62))
+	else:
+		canvas.draw_polyline(sh_closed, Color(0.0, 0.0, 0.0, 0.22), 6.2 * s, true)
+		canvas.draw_colored_polygon(sh_poly, Color(0.0, 0.0, 0.0, 0.38))
+		canvas.draw_polyline(sh_closed, Color(0.0, 0.0, 0.0, 0.34), 3.4 * s, true)
+	# 5. Dark contrast backing + solid light two-tone arrowhead + accent tail pip + anti-aliased dark outline
+	var ink := Color(0.05, 0.06, 0.09, 0.94)
+	canvas.draw_polyline(closed, ink, 4.0 * s, aa)
+	canvas.draw_colored_polygon(poly, Color(0.98, 0.99, 1.0, 1.0))
+	canvas.draw_colored_polygon(PackedVector2Array([tip, rw, notch]), Color(0.84, 0.89, 0.94, 0.65))
+	var pip_tip := pos - f * (0.8 * s)
+	var pip_rw := pos - f * (6.2 * s) + r * (3.6 * s)
+	var pip_lw := pos - f * (6.2 * s) - r * (3.6 * s)
+	canvas.draw_colored_polygon(PackedVector2Array([pip_tip, pip_rw, notch, pip_lw]), Color(accent, 0.85))
+	canvas.draw_polyline(closed, ink, 1.8 * s, aa)
+
 func _draw_big_overlay() -> void:
+	if map == null:
+		return
 	painter.draw(self)
 
 ## One point of interest marker on `canvas` (the satnav or the big map) at `q`, `r` px across: a dark backing, the

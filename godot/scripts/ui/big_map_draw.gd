@@ -46,12 +46,7 @@ func draw(hud: OpenWorldHud) -> void:
 	_draw_districts(hud, taken)
 	_draw_markers(hud)
 	# the car, a fixed size whatever the zoom, pointing the way it faces (north is up)
-	var c := nav.xy(hud.car_pos)
-	var f := Vector2(cos(hud.car_heading), sin(hud.car_heading))
-	var r := Vector2(-f.y, f.x)
-	var arrow := PackedVector2Array([c + f * 15.0, c - f * 10.0 + r * 10.0, c - f * 4.0, c - f * 10.0 - r * 10.0])
-	cv.draw_colored_polygon(arrow, Color.WHITE)
-	cv.draw_polyline(arrow + PackedVector2Array([arrow[0]]), Color(0, 0, 0, 0.85), 1.5, true)
+	hud._draw_car_pointer(cv, nav.xy(hud.car_pos), hud.car_heading, hud._ui_s * 1.5, true)
 	if hud.cursor_on:
 		var q := nav.xy(hud.cursor)
 		cv.draw_line(q - Vector2(16, 0), q + Vector2(16, 0), Color.WHITE, 2.5)

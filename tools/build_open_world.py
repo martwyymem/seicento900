@@ -2884,60 +2884,133 @@ def land_map(out, areas, roads, rails):
     print('wrote', path, tw, 'x', th, out_meta)
 
 
-def hud_map(out):
+def hud_map(out, procedural_only=False):
     """godot/data/world/brzeszcze_map.png: the satnav picture for the minimap and the map screen, over the same
-    rectangle and resolution as the land map (LAND_RES from the terrain grid's corner)."""
-    from PIL import Image, ImageDraw
+    rectangle and resolution as the land map (LAND_RES from the terrain grid's corner). An aerial picture (the
+    GUGiK orthophoto, aerial_map.py; a procedural one from the landuse where there is no photo), graded soft and a
+    little warm, with clean white roads over it and the world beyond the playable edge dimmed."""
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFilter
+    sys.path.insert(0, HERE)
+    import aerial_map
     t = out['terrain']
     x0, y0 = t['x0'], t['y0']
     w, h = (t['nx'] - 1) * t['step'], (t['ny'] - 1) * t['step']
     ss = 2
     tw, th = int(math.ceil(w / LAND_RES)), int(math.ceil(h / LAND_RES))
-    img = Image.new('RGBA', (tw * ss, th * ss), (30, 38, 34, 255))
-    d = ImageDraw.Draw(img)
+    W, H = tw * ss, th * ss
+    res = LAND_RES / ss
 
     def px(fl):
-        return [((fl[i] - x0) / LAND_RES * ss, (fl[i + 1] - y0) / LAND_RES * ss) for i in range(0, len(fl), 2)]
+        return [((fl[i] - x0) / res, (fl[i + 1] - y0) / res) for i in range(0, len(fl), 2)]
 
-    fills = {'forest': (36, 62, 40), 'park': (44, 70, 46), 'farmland': (48, 52, 40), 'meadow': (40, 50, 40),
-             'residential': (46, 46, 52), 'industrial': (54, 50, 58), 'water': (40, 92, 140), 'cemetery': (44, 58, 46),
-             'pitch': (52, 80, 52), 'parking': (60, 60, 64), 'allotments': (46, 60, 42), 'brownfield': (64, 58, 48)}
+    if procedural_only:
+        photo, cov = np.zeros((H, W, 3), np.float32), np.zeros((H, W), np.float32)
+    else:
+        photo, cov = aerial_map.photo_mosaic(box(FETCH_MARGIN), unproj, proj, x0, y0, res, (W, H))
+    print(f'  photo covers {cov.mean() * 100:.1f}% of the map')
+    if cov.min() < 0.999:
+        fill = aerial_map.procedural(out['areas'], out['waterways'], out['buildings'], x0, y0, res, (W, H))
+        # match the fill's tone to the photo next to it, and blend over a wide seam
+        if cov.max() > 0.5:
+            sel = cov > 0.5
+            fill = fill - fill[~sel].mean(axis=0) + photo[sel].mean(axis=0) * 0.5 + fill[~sel].mean(axis=0) * 0.5 \
+                if (~sel).any() else fill
+        m = Image.fromarray((cov * 255).astype(np.uint8)).filter(ImageFilter.MinFilter(9)).filter(ImageFilter.GaussianBlur(14))
+        f = np.asarray(m, np.float32)[..., None] / 255.0
+        img = photo * f + np.clip(fill, 0, 1) * (1 - f)
+    else:
+        img = photo
+    # grade: a touch less saturated, slightly warm, shadows lifted, highlights held down so white roads read
+    lum = img @ np.array([0.299, 0.587, 0.114], np.float32)
+    img = lum[..., None] + (img - lum[..., None]) * 0.78
+    img = img * np.array([1.03, 1.0, 0.94], np.float32) + np.array([0.012, 0.008, 0.0], np.float32)
+    img = 0.05 + 0.80 * np.clip(img, 0, 1) ** 0.85
+    # water stays recognisable: tint the mapped water areas toward a deep teal blue
+    wm = Image.new('L', (W, H), 0)
+    dw = ImageDraw.Draw(wm)
     for kind, ring, holes, _ in out['areas']:
-        if kind in fills and len(ring) >= 6:
-            d.polygon(px(ring), fill=fills[kind])
+        if kind == 'water' and len(ring) >= 6:
+            dw.polygon(px(ring), fill=255)
             for hl in holes:
                 if len(hl) >= 6:
-                    d.polygon(px(hl), fill=(30, 38, 34))
+                    dw.polygon(px(hl), fill=0)
     for ww, pts in out['waterways']:
-        d.line(px(pts), fill=(40, 92, 140), width=max(1, int(ww / LAND_RES * ss)))
-    for b in out['buildings']:
-        if len(b[4]) >= 6:
-            d.polygon(px(b[4]), fill=(88, 86, 96))
-    for r in out['rail']:
-        d.line(px(r['p']), fill=(120, 110, 100), width=2)
+        dw.line(px(pts), fill=255, width=max(1, int(ww / res)))
+    wmf = np.asarray(wm.filter(ImageFilter.GaussianBlur(1.5)), np.float32)[..., None] / 255.0
+    water = np.array([0.10, 0.22, 0.30], np.float32) + (img - img.mean()) * 0.25
+    img = img * (1 - wmf * 0.7) + water * wmf * 0.7
+    # gentle relief
+    shade = aerial_map.hillshade(t, x0, y0, res, (W, H))
+    img = img * np.clip(1.0 + (shade - 1.0) * 0.5, 0.8, 1.15)[..., None]
+    pic = Image.fromarray((np.clip(img, 0, 1) * 255).astype(np.uint8), 'RGB').convert('RGBA')
+    del photo, cov, img
+    # roads: a thin dark casing, then a white/light grey line, widths by class (px at the final resolution)
     order = {'track': 0, 'service': 1, 'living_street': 2, 'pedestrian': 2, 'residential': 3, 'unclassified': 3,
              'tertiary': 4, 'tertiary_link': 4, 'secondary': 5, 'secondary_link': 5, 'primary': 6, 'motorway_link': 6,
              'motorway': 7}
-    colour = {0: (110, 100, 80), 1: (150, 150, 155), 2: (175, 175, 180), 3: (215, 215, 220), 4: (245, 225, 160),
-              5: (255, 190, 90), 6: (255, 160, 70), 7: (255, 120, 60)}
-    for r in sorted(out['roads'], key=lambda r: order.get(r['k'], 1)):
+    width = {0: 1.1, 1: 1.4, 2: 1.8, 3: 2.2, 4: 2.8, 5: 3.4, 6: 3.8, 7: 4.4}
+    colour = {0: (205, 200, 185, 150), 1: (222, 224, 226, 235), 2: (232, 234, 236, 255), 3: (244, 245, 246, 255),
+              4: (250, 250, 250, 255), 5: (255, 255, 255, 255), 6: (255, 255, 255, 255), 7: (255, 255, 255, 255)}
+    roads = sorted(out['roads'], key=lambda r: order.get(r['k'], 1))
+    casing = Image.new('L', (W, H), 0)
+    dc = ImageDraw.Draw(casing)
+    for r in roads:
         rank = order.get(r['k'], 1)
-        wpx = max(2, int(round((r['w'] + 2.0) / LAND_RES * ss)))
-        d.line(px(r['p']), fill=colour[rank], width=wpx, joint='curve')
-    # outside the playable area the satnav picture is dimmed: that is where the world ends
-    mask = Image.new('L', img.size, 0)
+        if rank == 0:
+            continue
+        dc.line(px(r['p']), fill=255, width=int(round((width[rank] + 1.4) * ss)), joint='curve')
+    mains = [r for r in out['rail'] if not r['sd']]
+    for r in mains:
+        dc.line(px(r['p']), fill=170, width=int(round(2.4 * ss)), joint='curve')
+    casing = casing.filter(ImageFilter.GaussianBlur(0.8))
+    pic = Image.composite(Image.new('RGBA', (W, H), (22, 24, 26, 255)), pic,
+                          casing.point(lambda v: int(v * 0.62)))
+    # railway: a mid-grey line with light dashes
+    d = ImageDraw.Draw(pic, 'RGBA')
+    for r in out['rail']:
+        if r['sd']:  # sidings and yards: a faint hairline, the photo shows the rest
+            d.line(px(r['p']), fill=(150, 152, 156, 120), width=max(1, int(round(0.6 * ss))), joint='curve')
+    for r in mains:
+        pts = px(r['p'])
+        d.line(pts, fill=(120, 122, 126, 255), width=int(round(1.4 * ss)), joint='curve')
+        dash, on, acc = 7.0 / res, True, 0.0
+        for (ax, ay), (bx, by) in zip(pts, pts[1:]):
+            L = math.hypot(bx - ax, by - ay)
+            s0 = 0.0
+            while s0 < L:
+                s1 = min(L, s0 + dash - acc)
+                if on:
+                    d.line([(ax + (bx - ax) * s0 / L, ay + (by - ay) * s0 / L),
+                            (ax + (bx - ax) * s1 / L, ay + (by - ay) * s1 / L)], fill=(205, 205, 205, 255),
+                           width=max(1, int(round(0.8 * ss))))
+                acc += s1 - s0
+                if acc >= dash - 1e-6:
+                    acc, on = 0.0, not on
+                s0 = s1
+    for r in roads:
+        rank = order.get(r['k'], 1)
+        d.line(px(r['p']), fill=colour[rank], width=int(round(width[rank] * ss)), joint='curve')
+    # outside the playable area the satnav picture is dimmed (and greyed): that is where the world ends
+    mask = Image.new('L', (W, H), 0)
     ImageDraw.Draw(mask).polygon(px(out['play']), fill=255)
-    dark = Image.new('RGBA', img.size, (14, 18, 16, 255))
-    img = Image.composite(img, Image.blend(img, dark, 0.62), mask)
-    d = ImageDraw.Draw(img)
-    d.line(px(out['play'] + out['play'][:2]), fill=(255, 150, 60, 255), width=3 * ss)
+    mask = mask.filter(ImageFilter.GaussianBlur(1.0))
+    grey = pic.convert('L').convert('RGBA')
+    dark = Image.blend(Image.blend(pic, grey, 0.6), Image.new('RGBA', (W, H), (10, 13, 16, 255)), 0.66)
+    pic = Image.composite(pic, dark, mask)
+    d = ImageDraw.Draw(pic, 'RGBA')
+    ring = px(out['play'] + out['play'][:2])
+    d.line(ring, fill=(0, 0, 0, 110), width=int(round(3.2 * ss)), joint='curve')
+    d.line(ring, fill=(255, 168, 64, 255), width=int(round(1.4 * ss)), joint='curve')
     for c in out['closures']:
-        d.ellipse([px([c[0], c[1]])[0][0] - 5 * ss, px([c[0], c[1]])[0][1] - 5 * ss, px([c[0], c[1]])[0][0] + 5 * ss,
-                   px([c[0], c[1]])[0][1] + 5 * ss], fill=(210, 40, 40, 255))
-    img = img.resize((tw, th), Image.LANCZOS)
+        (cx, cy), = px([c[0], c[1]])
+        rr = 2.6 * ss
+        d.ellipse([cx - rr - ss, cy - rr - ss, cx + rr + ss, cy + rr + ss], fill=(255, 255, 255, 255))
+        d.ellipse([cx - rr, cy - rr, cx + rr, cy + rr], fill=(222, 46, 40, 255))
+    img = pic.convert('RGB').resize((tw, th), Image.LANCZOS)
     path = os.path.join(OUT_DIR, KEY + '_map.png')
     img.save(path, optimize=True)
-    print('wrote', path, tw, 'x', th)
+    print('wrote', path, tw, 'x', th, os.path.getsize(path) // 1024, 'KB')
 
 
 def check(out, png):
@@ -2977,6 +3050,11 @@ def check(out, png):
 
 
 if __name__ == '__main__':
+    if '--hud-map-only' in sys.argv:
+        # redraw only the satnav picture from the baked brzeszcze.json (no OSM or elevation work)
+        hud_map(json.load(open(os.path.join(OUT_DIR, KEY + '.json'), encoding='utf-8')),
+                procedural_only='--no-photo' in sys.argv)
+        sys.exit(0)
     refetch = '--refetch' in sys.argv
     if refetch or '--fetch-only' in sys.argv:
         fetch_osm(refetch)
