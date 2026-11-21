@@ -1,5 +1,5 @@
 ## The open world's mesh cache (TownBuilder.mesh_cache_dir): a warm build of every cached step (terrain, water, streets, railway,
-## buildings, trees, fences) gives the same meshes and instances as the cold build that stored them; each step's stamp
+## buildings, trees, fences, and the street furniture's placements) gives the same meshes and instances as the cold build that stored them; each step's stamp
 ## covers what that step reads and nothing else (editing the lamps leaves the buildings valid, editing the map's roads or
 ## _wall() does not); the map snapshot reads back equal; and the loading cover's car figures are about right.
 extends RefCounted
@@ -12,7 +12,7 @@ var completed := false
 ## (one folder per process: suites running at the same time, other agents' or a parallel CI job's, share user://)
 var DIR := "user://test_open_world_cache_%d" % OS.get_process_id()
 const STEPS := ["build_terrain", "build_water", "build_roads", "build_rail", "build_buildings", "build_trees", "build_fences"]
-const TAGS := ["terrain", "water", "streets", "rail", "buildings", "trees", "fences"]
+const TAGS := ["terrain", "water", "streets", "rail", "buildings", "trees", "fences", "props"]
 const GROUPS := ["Terrain", "Water", "Streets", "Railway", "Buildings", "Trees", "Garden Fences"]
 
 func run() -> Array:
@@ -27,7 +27,7 @@ func run() -> Array:
 	_clean()
 	var cold := _build(map)
 	for tag in TAGS:
-		if not FileAccess.file_exists((cold.builder as TownBuilder)._cache_path(tag)):
+		if tag != "props" and not FileAccess.file_exists((cold.builder as TownBuilder)._cache_path(tag)):
 			errors.append("the cold build stored no %s cache" % tag)
 	if (cold.builder as TownBuilder).cache_log != ["terrain miss", "water miss", "streets miss", "rail miss", "buildings miss", "trees miss", "fences miss"]:
 		errors.append("a cold build logs %s" % [(cold.builder as TownBuilder).cache_log])
@@ -62,6 +62,7 @@ func run() -> Array:
 			(warm.builder as TownBuilder).wet_materials.size(), (warm.builder as TownBuilder).night_materials.size(), cold_materials, (cold.builder as TownBuilder).night_materials.size()])
 	if (warm.builder as TownBuilder).crossing_points != (cold.builder as TownBuilder).crossing_points:
 		errors.append("a warm build finds %d level crossings, a cold one %d" % [(warm.builder as TownBuilder).crossing_points.size(), (cold.builder as TownBuilder).crossing_points.size()])
+	_props(errors)
 	_stamps(map, cold.builder, errors)
 	# a different stamp (here the wall plan off) must not pick up these files
 	var other := TownBuilder.new(map, Node3D.new())
@@ -83,6 +84,54 @@ func run() -> Array:
 	DirAccess.remove_absolute(DIR)
 	completed = true
 	return errors
+
+## The street furniture (lamps, parked cars, shelters, signals): built on two maps of their own (it stands posts in the map,
+## which the shared one must not get) after every other step, a warm build gives the same instances, lamp heads, lamp grid and
+## collision posts as the cold one that stored them.
+func _props(errors: Array[String]) -> void:
+	var steps := STEPS + ["build_props"]
+	var maps: Array[TownMap] = []
+	var builds := []
+	for i in 2:
+		var m := TownMap.new()
+		if not m._load("brzeszcze"):
+			errors.append("the street furniture check could not load a map")
+			return
+		maps.append(m)
+		var world := Node3D.new()
+		var builder := TownBuilder.new(m, world)
+		builder.mesh_cache_dir = DIR
+		for step in steps:
+			builder.call(step)
+		builder.wait_for_stores()
+		var rows: Array = []
+		for n in world.get_node("Props").get_children():
+			rows.append(_describe(n))
+		builds.append({"world": world, "builder": builder, "rows": rows})
+	var cold: TownBuilder = builds[0].builder
+	var warm: TownBuilder = builds[1].builder
+	if cold.cache_log.slice(-1) != ["props miss"] or warm.cache_log.slice(-1) != ["props hit"]:
+		errors.append("the street furniture's cache logs %s then %s (props miss, then props hit expected)" % [cold.cache_log.slice(-1), warm.cache_log.slice(-1)])
+	if (builds[0].rows as Array).size() < 10:
+		errors.append("the cold build made %d street furniture nodes" % (builds[0].rows as Array).size())
+	elif builds[0].rows != builds[1].rows:
+		errors.append("the street furniture from the cache differs from the cold build's (%d nodes cold, %d warm, first difference at %d)" % [
+			(builds[0].rows as Array).size(), (builds[1].rows as Array).size(), _first_diff(builds[0].rows, builds[1].rows)])
+	if cold.lamp_spots.is_empty() or warm.lamp_spots != cold.lamp_spots or warm.lamp_dirs != cold.lamp_dirs or warm._lamp_cells != cold._lamp_cells:
+		errors.append("a warm build's lamps (%d heads) differ from the cold build's (%d)" % [warm.lamp_spots.size(), cold.lamp_spots.size()])
+	if warm.map._post_cells != cold.map._post_cells:
+		errors.append("a warm build's collision posts differ from the cold build's")
+	if warm._ranged.size() != cold._ranged.size():
+		errors.append("a warm build registers %d distance-ranged instances, a cold one %d" % [warm._ranged.size(), cold._ranged.size()])
+	# the placements are read from what the earlier steps built: the buildings' walls and the roads change them
+	var reached := CODE_HASH.reached(BUILDER, TownBuilder.cache_spec("props").code, MAP, ["_load"])
+	for name in ["_lamp_placements", "_parked_placements", "lamp_head", "_parked_clear", "_pavement_nudge", "_add_parked", "build_buildings", "build_roads", "_chunk_cells"]:
+		if not name in reached.own:
+			errors.append("the street furniture's fingerprint misses %s" % name)
+	if "build_vegetation" in reached.own or "build_closures" in reached.own:
+		errors.append("the street furniture's fingerprint covers steps it does not read")
+	for b in builds:
+		(b.world as Node3D).free()
 
 func _clean() -> void:
 	if DirAccess.dir_exists_absolute(DIR):

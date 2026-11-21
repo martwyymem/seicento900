@@ -33,6 +33,7 @@ func _main() -> void:
 		print("!! 50 s watchdog after load")
 		quit(2))
 	ow.hud.visible = false
+	ow.progress.weather_dynamic = false # the free-roam cycle (WorldWeather) would overwrite the weather set here every frame
 	if ow.traffic:
 		ow.traffic.clear()
 	var hour := float(_env("HOUR", "13"))

@@ -1804,7 +1804,9 @@ func _update_skills(dt: float) -> void:
 	traffic.hits.clear()
 	_crashed_frame = crashed
 	if crashed and chain_points > 0.0:
-		hud.notify("CHAIN LOST", "Crashed with %d fans in the chain" % int(chain_points * chain_mult), Color("#ff4d4d"))
+		var lost := int(chain_points * chain_mult)
+		if lost >= 1: # a chain of less than one fan ends quietly (no "0 fans" banner)
+			hud.notify("CHAIN LOST", "Crashed with %d fans in the chain" % lost, Color("#ff4d4d"))
 		chain_points = 0.0
 		_chain_events = 0
 		chain_mult = 1.0

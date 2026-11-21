@@ -146,12 +146,19 @@ static func cache_spec(tag: String) -> Dictionary:
 			return {"data": ["trees", "terrain"], "code": "_tree_records", "files": [SURROUNDINGS.TREES_PATH]}
 		"fences":
 			return {"data": ["fences", "garden_beds", "terrain", "roads"], "code": "_fence_records", "files": [TOWN_MODELS, ROADSIDE_MODELS]}
+		"props":
+			# the street furniture's placements (lamps, parked cars): they read the ground, the roads and pavements, the
+			# buildings' walls, and every post the earlier steps stood (trees, fences, landmarks), so they cover what
+			# those steps build with; the models' own transforms are baked in
+			return {"data": ["terrain", "extent", "areas", "waterways", "roads", "rail", "tunnels", "buildings", "places", "boundary",
+				"trees", "fences", "garden_beds", "lamps", "signals", "stops", "level_crossings"],
+				"code": ["build_props", "build_roads", "build_rail", "build_tunnels", "build_buildings", "build_trees", "build_fences"],
+				"models": true, "plan": true, "files": [TOWN_MODELS, LANDMARK_MODELS, ROADSIDE_MODELS, SURROUNDINGS.TREES_PATH]}
 	return {}
 
 ## Sections of the baked map that no cached step reads (the test checks that every section is in one list or the other).
-const UNCACHED_SECTIONS := ["name", "origin", "bounds", "play", "closures", "nodes", "lamps", "signals", "level_crossings",
-	"stops", "spots", "credits"]
-const CACHED_TAGS := ["terrain", "water", "streets", "rail", "buildings", "trees", "fences"]
+const UNCACHED_SECTIONS := ["name", "origin", "bounds", "play", "closures", "nodes", "spots", "credits"]
+const CACHED_TAGS := ["terrain", "water", "streets", "rail", "buildings", "trees", "fences", "props"]
 
 func _stamp(tag: String) -> String:
 	if _stamps.has(tag):
@@ -160,7 +167,7 @@ func _stamp(tag: String) -> String:
 	var parts := PackedStringArray([MESH_CACHE_VERSION, tag, map.key])
 	for section in spec.data:
 		parts.append(map.section_hash(section))
-	var code := CODE_HASH.closure(SELF_PATH, [spec.code], MAP_PATH, ["_load"])
+	var code := CODE_HASH.closure(SELF_PATH, spec.code if spec.code is Array else [spec.code], MAP_PATH, ["_load"])
 	parts.append(code)
 	parts.append(FileAccess.get_md5("res://scripts/world/mesh_batch.gd") if FileAccess.file_exists("res://scripts/world/mesh_batch.gd") else "-")
 	for f in spec.get("files", []):
@@ -2833,7 +2840,9 @@ func build_closures() -> void:
 
 func build_props() -> void:
 	var group := _group("Props")
-	_build_lamps(group)
+	var hit := _cached_props()
+	var fresh := {}
+	_build_lamps(group, hit, fresh)
 	_build_signals(group)
 	# bus shelters at the stops, back to the pavement, facing the road
 	var stop_xfs := []
@@ -2855,9 +2864,51 @@ func build_props() -> void:
 		map.add_post(q, 1.1)
 	_place_many(group, "BusShelters", _model("BusShelter", _fallback_shelter), stop_xfs, [], null, 450.0)
 	_build_level_crossings(group)
-	_build_parked_cars(group)
+	_build_parked_cars(group, hit, fresh)
+	if hit.is_empty() and mesh_cache_dir != "":
+		_store_meshes("props", [fresh])
 
-func _build_lamps(group: Node3D) -> void:
+## What the last warm run kept of the street furniture's placements (_lamp_placements, _parked_placements), {} on a miss.
+## Those are ~0.2 s of map queries; the nodes are made from the stored cells either way.
+func _cached_props() -> Dictionary:
+	var hit := _cached_meshes("props")
+	if hit.is_empty() or not hit[0] is Dictionary:
+		return {}
+	return hit[0]
+
+## The instances of a _chunk_cells() result as MultiMeshInstance3Ds named name, name1, name2... (as _place_many names them).
+func _place_cells(parent: Node3D, name: String, mesh: Mesh, cells: Array, colors: bool, mat: Material, range_end: float) -> void:
+	var nodes := _multimesh_cells(parent, mesh, cells, colors, mat, range_end)
+	for k in nodes.size():
+		nodes[k].name = name if k == 0 else "%s%d" % [name, k]
+
+func _build_lamps(group: Node3D, hit := {}, fresh := {}) -> void:
+	var mesh_xf := _model("Streetlamp", _fallback_lamp)
+	var lamp_mesh := _with_surface_material(mesh_xf[0], "Lamp", _new_lamp_material())
+	var made: Dictionary = hit
+	if not hit.has("lamps"):
+		made = _lamp_placements(mesh_xf[1])
+		fresh.merge(made)
+	lamp_spots = made.lamp_spots
+	lamp_dirs = made.lamp_dirs
+	_lamp_cells = made.lamp_grid
+	_place_cells(group, "Streetlamps", lamp_mesh, made.lamps, false, null, LAMP_RANGE)
+
+## The glowing lamp-head material the open world drives at night (made once, here).
+func _new_lamp_material() -> StandardMaterial3D:
+	lamp_material = StandardMaterial3D.new()
+	lamp_material.albedo_color = Color(0.95, 0.92, 0.82)
+	lamp_material.emission_enabled = true
+	lamp_material.emission = Color(1.0, 0.82, 0.55)
+	lamp_material.emission_energy_multiplier = 0.0
+	return lamp_material
+
+## Every streetlamp's placement: the instance cells (_chunk_cells of its transforms times the model's local one), the
+## head positions and directions the lights hang at, and the lookup grid over them.
+func _lamp_placements(local: Transform3D) -> Dictionary:
+	var spots := PackedVector3Array()
+	var dirs := PackedVector3Array()
+	var grid := {}
 	var lamps := TownMap._flat(map.raw.get("lamps", []))
 	var xfs := []
 	for p in lamps:
@@ -2873,19 +2924,15 @@ func _build_lamps(group: Node3D) -> void:
 		xfs.append(Transform3D(basis, Vector3(p.x, g, p.y)))
 		var spot := lamp_head(map, p, face, g)
 		var cell := Vector2i(floori(spot.x / LAMP_CELL), floori(spot.z / LAMP_CELL))
-		var in_cell: PackedInt32Array = _lamp_cells.get(cell, PackedInt32Array())
-		in_cell.append(lamp_spots.size())
-		_lamp_cells[cell] = in_cell
-		lamp_spots.append(spot)
-		lamp_dirs.append(Vector3(face.x, 0.0, face.y))
-	lamp_material = StandardMaterial3D.new()
-	lamp_material.albedo_color = Color(0.95, 0.92, 0.82)
-	lamp_material.emission_enabled = true
-	lamp_material.emission = Color(1.0, 0.82, 0.55)
-	lamp_material.emission_energy_multiplier = 0.0
-	var mesh_xf := _model("Streetlamp", _fallback_lamp)
-	var lamp_mesh := _with_surface_material(mesh_xf[0], "Lamp", lamp_material)
-	_place_many(group, "Streetlamps", [lamp_mesh, mesh_xf[1]], xfs, [], null, LAMP_RANGE)
+		var in_cell: PackedInt32Array = grid.get(cell, PackedInt32Array())
+		in_cell.append(spots.size())
+		grid[cell] = in_cell
+		spots.append(spot)
+		dirs.append(Vector3(face.x, 0.0, face.y))
+	var out := []
+	for xf in xfs:
+		out.append(xf * local)
+	return {"lamps": _chunk_cells(out, []), "lamp_spots": spots, "lamp_dirs": dirs, "lamp_grid": grid}
 
 ## m a lamp's light keeps from the building walls: OpenWorld hangs its pooled OmniLight3D (falling off as d^-1.8) at
 ## lamp_spots, and a head 1-2 m from a facade lit the wall 10-30x brighter than the road 8 m below, an over-bright
@@ -3103,9 +3150,38 @@ func update_signals() -> void:
 			_signal_nodes[i].set_surface_override_material(_signal_lens[k], _lens_mats[k * 2 + (1 if on[k] else 0)])
 
 ## Cars parked along the residential streets and in the car parks: mostly the cars Poles drove, all colours.
-func _build_parked_cars(group: Node3D) -> void:
+func _build_parked_cars(group: Node3D, hit := {}, fresh := {}) -> void:
+	var kinds := ["CarHatch", "CarSedan", "CarVan", "Maluch"]
+	var mesh_xf := {}
+	var local_of := {}
+	for k in kinds:
+		mesh_xf[k] = _model(k, _fallback_car.bind(k))
+		local_of[k] = mesh_xf[k][1]
+	var made: Dictionary = hit
+	if not hit.has("parked"):
+		made = _parked_placements(local_of)
+		fresh.merge(made)
+	else:
+		for v in hit.parked_posts: # the cars' collision posts, as _parked_placements stood them
+			map.add_post(Vector2(v.x, v.y), v.z)
+	var paint := StandardMaterial3D.new()
+	paint.vertex_color_use_as_albedo = true
+	paint.metallic = 0.35
+	paint.roughness = 0.28
+	paint.clearcoat_enabled = true
+	for k in kinds:
+		var mesh: Mesh = mesh_xf[k][0]
+		if models.has(k):
+			_place_cells(group, "Parked" + k, _with_surface_material(mesh, "Paint", paint), made.parked[k], true, null, 400.0)
+		else:
+			_place_cells(group, "Parked" + k, mesh, made.parked[k], true, paint, 400.0)
+
+## Where the cars park: the instance cells of each kind (_chunk_cells of its transforms times the model's local one, tinted)
+## and the collision posts each car stood (in the order it stood them; a later car keeps clear of an earlier one's).
+func _parked_placements(local_of: Dictionary) -> Dictionary:
 	var kinds := ["CarHatch", "CarSedan", "CarVan", "Maluch"]
 	var weights := [0.45, 0.3, 0.1, 0.15]
+	var posts := PackedVector3Array()
 	var lists := {}
 	for k in kinds:
 		lists[k] = [[], []]
@@ -3136,21 +3212,16 @@ func _build_parked_cars(group: Node3D) -> void:
 						var h := atan2(t.y, t.x) + (PI if sgn < 0.0 else 0.0)
 						var at := spot + side * sgn * _pavement_nudge(spot, h, side * sgn)
 						if _parked_clear(at, h): # not across another street's lanes (a bend, a junction)
-							_add_parked(lists[kinds[pick]], at, h)
+							_add_parked(lists[kinds[pick]], at, h, posts)
 				d += 9.0
 			acc += ln
-	var paint := StandardMaterial3D.new()
-	paint.vertex_color_use_as_albedo = true
-	paint.metallic = 0.35
-	paint.roughness = 0.28
-	paint.clearcoat_enabled = true
+	var cells := {}
 	for k in kinds:
-		var mesh_xf := _model(k, _fallback_car.bind(k))
-		var mesh: Mesh = mesh_xf[0]
-		if models.has(k):
-			_place_many(group, "Parked" + k, [_with_surface_material(mesh, "Paint", paint), mesh_xf[1]], lists[k][0], lists[k][1], null, 400.0)
-		else:
-			_place_many(group, "Parked" + k, mesh_xf, lists[k][0], lists[k][1], paint, 400.0)
+		var out := []
+		for xf in lists[k][0]:
+			out.append(xf * (local_of[k] as Transform3D))
+		cells[k] = _chunk_cells(out, lists[k][1])
+	return {"parked": cells, "parked_posts": posts}
 
 ## The four corners of a parked car's footprint (a sedan is about 4 m by 1.8 m).
 func _parked_corners(p: Vector2, heading: float) -> PackedVector2Array:
@@ -3189,13 +3260,15 @@ func _parked_y(p: Vector2, heading: float) -> float:
 		k = maxf(k, map.kerb_at(q.x, q.y))
 	return map.ground(p.x, p.y) + 0.02 + k
 
-func _add_parked(list: Array, p: Vector2, heading: float) -> void:
+func _add_parked(list: Array, p: Vector2, heading: float, posts: PackedVector3Array) -> void:
 	var basis := Basis(Vector3.UP, -heading - PI / 2.0)
 	list[0].append(Transform3D(basis, Vector3(p.x, _parked_y(p, heading), p.y)))
 	list[1].append(color_lin(CAR_PAINTS[int(hash2(p.x, p.y, 31.0) * 997.0) % CAR_PAINTS.size()]))
 	var f := Vector2(cos(heading), sin(heading))
-	map.add_post(p + f * 1.0, 0.85)
-	map.add_post(p - f * 1.0, 0.85)
+	for sgn: float in [1.0, -1.0]:
+		var q := p + f * sgn
+		map.add_post(q, 0.85)
+		posts.append(Vector3(q.x, q.y, 0.85))
 
 static func _pick_index(weights: Array, r: float) -> int:
 	var acc := 0.0
