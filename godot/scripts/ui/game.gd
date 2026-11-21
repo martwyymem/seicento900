@@ -72,14 +72,14 @@ const TRACK_DEFAULTS := {
 	"suzuka": {"laps": 6, "wear": 2.0},
 	"zandvoort": {"laps": 6, "wear": 2.0},
 	"fiat": {"laps": 8, "wear": 2.0},
-	"tokyo": {"laps": 2, "wear": 1.0}, # the real C1 inner loop, 14.3 km with the spiral
+	"tokyo": {"laps": 1, "wear": 1.0}, # the real C1 inner loop, 14.33 km with the spiral, ~7:50 a lap (was 2)
 	"bielsko": {"laps": 2, "wear": 2.0}, # Kamienica/Olszówka loop under Szyndzielnia, 5.05 km, ~3:25 a lap (the invented circuit had 5)
-	"krakow": {"laps": 6, "wear": 2.0},
-	"oswiecim": {"laps": 2, "wear": 2.0}, # the Soła bridges loop, 3.1 km, ~2:20 a lap (the invented circuit had 8)
-	"wilamowice": {"laps": 3, "wear": 2.0},
-	"brzeszcze": {"laps": 3, "wear": 2.0}, # Brzeszcze Kopalnia, 6.2 km (the invented 2.8 km circuit had 8)
-	"pszczyna": {"laps": 2, "wear": 2.0}, # through the castle park, 3.76 km, ~3:15 a lap (the old outside loop had 6)
-	"bor": {"laps": 7, "wear": 2.0},
+	"krakow": {"laps": 2, "wear": 2.0}, # Planty ring, 3.66 km, ~2:34 a lap (was 6)
+	"oswiecim": {"laps": 2, "wear": 2.0}, # the Soła bridges loop, 3.11 km, ~2:20 a lap (the invented circuit had 8)
+	"wilamowice": {"laps": 1, "wear": 2.0}, # Rynek / Hecznarowice loop, 7.27 km, ~5:02 a lap (was 3)
+	"brzeszcze": {"laps": 1, "wear": 2.0}, # Brzeszcze Kopalnia, 6.20 km, ~4:33 a lap (was 3; the invented 2.8 km circuit had 8)
+	"pszczyna": {"laps": 2, "wear": 2.0}, # through the castle park, 3.76 km, ~3:22 a lap (the old outside loop had 6)
+	"bor": {"laps": 2, "wear": 2.0}, # Brzeszcze-Bór forest loop, 3.30 km, ~2:27 a lap (was 7)
 	"goliath": {"laps": 1, "wear": 1.0},
 	"s1_sprint": {"laps": 1, "wear": 1.0},
 }
