@@ -771,6 +771,9 @@ func approximate_finish() -> void:
 		var r: Dictionary = runs[c]
 		r.lt = field + (r.lt - field) * r.n / (r.n + 3.0)
 	if s.knockout:
+		for c in cars:
+			if c.dnf:
+				_mark_out(c) # retired before the projection (the player, usually): out at that moment, before any projected knock-out
 		var cur_leader_lap := 0
 		for c in runs:
 			cur_leader_lap = maxi(cur_leader_lap, c.lap)

@@ -234,6 +234,65 @@ func _knockout(errors: Array[String]) -> void:
 		errors.append("knockout projection: eliminated cars should be marked DNF")
 	r_proj.dispose()
 
+	# Projected mid-way: one car already knocked out for real (lap 1), the rest of the eliminations projected.
+	var st_mid := _settings_for("fiat", 4, 4, "medium")
+	st_mid.knockout = true
+	st_mid.mission = "knockout"
+	var r_mid := Race.new(st_mid, null, 13)
+	r_mid.set_autopilot(true)
+	var guard := 0
+	while r_mid.knocked_out.is_empty() and r_mid.phase != "finished" and guard < int(900.0 / DT):
+		r_mid.step(DT, Race.PlayerInput.new())
+		guard += 1
+	if r_mid.knocked_out.size() != 1 or r_mid.phase == "finished":
+		errors.append("knockout mid-projection: setup wanted one car out and the race running, got %d out" % r_mid.knocked_out.size())
+	else:
+		var real_first: RaceCar = r_mid.knocked_out[0].car
+		r_mid.approximate_finish()
+		if r_mid.phase != "finished":
+			errors.append("knockout mid-projection: race not finished")
+		var ko: Array = r_mid.knocked_out
+		# 5 cars (4 rivals + player): out after laps 1, 2 and 3 until two are left
+		if ko.size() != 3:
+			errors.append("knockout mid-projection: want 3 cars out, got %s" % [ko.map(func(e): return "%s lap %d" % [e.car.name, e.lap])])
+		else:
+			if ko[0].car != real_first:
+				errors.append("knockout mid-projection: the real first knock-out was displaced")
+			for i in ko.size():
+				if int(ko[i].lap) != i + 1:
+					errors.append("knockout mid-projection: knock-out %d on lap %d, want %d" % [i, int(ko[i].lap), i + 1])
+				if int(r_mid.out_order.get(ko[i].car, 0)) != i + 1:
+					errors.append("knockout mid-projection: out_order of knock-out %d is %s" % [i, r_mid.out_order.get(ko[i].car, 0)])
+				var c: RaceCar = ko[i].car
+				if not c.dnf or not c.dnf_reason.begins_with("Knocked out"):
+					errors.append("knockout mid-projection: %s not marked knocked out" % c.name)
+			var rr := r_mid.results()
+			if rr.size() != 5 or not rr[0].car.finished or not rr[1].car.finished or r_mid.winner != rr[0].car:
+				errors.append("knockout mid-projection: the final two should finish, winner first")
+			elif rr[4].car != ko[0].car or rr[3].car != ko[1].car or rr[2].car != ko[2].car:
+				errors.append("knockout mid-projection: classification should reverse the knock-out order: %s" % [rr.map(func(r): return r.car.name)])
+	r_mid.dispose()
+
+	# The player retires on lap 1 (the usual reason to project): they rank below nobody who was knocked out later,
+	# and the other eliminations are still projected.
+	var r_ret := Race.new(st_mid, null, 14)
+	r_ret.set_autopilot(true)
+	guard = 0
+	while r_ret.player.lap < 1 and guard < int(900.0 / DT):
+		r_ret.step(DT, Race.PlayerInput.new())
+		guard += 1
+	r_ret.player.dnf = true
+	r_ret.player.dnf_reason = "Retired"
+	r_ret.approximate_finish()
+	if r_ret.phase != "finished" or r_ret.knocked_out.size() < 2:
+		errors.append("knockout retirement projection: finished=%s, %d knocked out" % [r_ret.phase == "finished", r_ret.knocked_out.size()])
+	var rr2 := r_ret.results()
+	if rr2.size() != 5 or not rr2[0].car.finished or not rr2[1].car.finished or rr2[2].car.finished:
+		errors.append("knockout retirement projection: want exactly two finishers: %s" % [rr2.map(func(r): return "%s %s" % [r.car.name, r.car.finished])])
+	elif int(r_ret.out_order.get(r_ret.player, 0)) != int(r_ret.out_order.get(rr2[3].car, -1)) or int(r_ret.out_order.get(rr2[4].car, 99)) > int(r_ret.out_order.get(r_ret.player, 0)):
+		errors.append("knockout retirement projection: the player (out #%s) should rank just above the cars that left before them: %s" % [r_ret.out_order.get(r_ret.player, 0), rr2.map(func(r): return "%s #%s" % [r.car.name, r_ret.out_order.get(r.car, 0)])])
+	r_ret.dispose()
+
 ## The quarter mile: four cars two abreast, every car stops the clock at 402 m from its own spot, the stock
 ## Seicento in a plausible time (0-100 km/h takes it about 17-20 s, so 402 m is 19-24 s).
 func _drag(errors: Array[String]) -> void:
