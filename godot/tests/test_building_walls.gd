@@ -15,6 +15,7 @@ func run() -> Array:
 		return errors
 	_textures(errors)
 	_step_runs(errors)
+	_passages(map, errors)
 	var raw := _overlaps(map, false, errors)
 	var fixed := _overlaps(map, true, errors)
 	# ~3100 before the baker slid each LoD2 roof onto its OSM footprint (2026-11-07): misaligned neighbours' measured
@@ -222,3 +223,95 @@ func _mesh_data(root: Node3D, errors: Array[String]) -> void:
 		errors.append("only %d pitched roof triangles checked" % steep)
 	elif bad_roof > steep / 50:
 		errors.append("%d of %d pitched roof triangles have UVs off the eave/slope axes" % [bad_roof, steep])
+
+## Building passages (tunnel=building_passage): each has an overhead bridge block in Buildings and a dark ceiling/side
+## lining in Tunnels above clear height, and a car drives through the street under it with no building contact.
+func _passages(map: TownMap, errors: Array[String]) -> void:
+	var passages: Array = map.raw.get("passages", [])
+	if passages.size() < 2:
+		errors.append("expected at least 2 baked building passages, got %d" % passages.size())
+		return
+	var root := Node3D.new()
+	var builder := TownBuilder.new(map, root)
+	builder.build_tunnels()
+	builder.build_buildings()
+	var bld_group := root.get_node_or_null("Buildings")
+	var tun_group := root.get_node_or_null("Tunnels")
+	for pi in passages.size():
+		var p: Dictionary = passages[pi]
+		var ring := TownMap._flat(p.get("ring", []))
+		if ring.size() < 3 or (p.get("sides", []) as Array).is_empty():
+			errors.append("passage %d (road %s) has an empty ring or no cut sides" % [pi, p.get("road")])
+			continue
+		var y_clear := builder._passage_clear_y(p)
+		var cen := Vector2.ZERO
+		for q in ring:
+			cen += q
+		cen /= ring.size()
+		var g := map.ground(cen.x, cen.y)
+		if y_clear - g < 2.8:
+			errors.append("passage %d (road %s) clear height %.2f m is too low" % [pi, p.get("road"), y_clear - g])
+		# verify overhead roof/bridge geometry exists in Buildings and ceiling exists in Tunnels above cen
+		var has_over := _has_tri_over(bld_group, cen, y_clear + 0.1)
+		var has_ceil := _has_tri_over(tun_group, cen, y_clear - 0.1)
+		if not has_over:
+			errors.append("passage %d (road %s) has no overhead building geometry at %s" % [pi, p.get("road"), cen])
+		if not has_ceil:
+			errors.append("passage %d (road %s) has no tunnel ceiling at %s" % [pi, p.get("road"), cen])
+		# drive through the passage street: no building face or wall may hit the car
+		var ri := -1
+		for k in map.raw.roads.size():
+			if int(map.raw.roads[k].id) == int(p.get("road", -1)):
+				ri = k
+				break
+		if ri >= 0:
+			var fc := FreeCar.new(map)
+			var pts := map.road_pts[ri]
+			for k in pts.size() - 1:
+				var a := pts[k]
+				var b := pts[k + 1]
+				var dir := (b - a).normalized()
+				for f: float in [0.25, 0.5, 0.75]:
+					var q := a.lerp(b, f)
+					fc.place(q, dir.angle())
+					for bi in map.buildings_near(q, FreeCar.HALF_L + 0.6):
+						var bf := map.building_faces(bi)
+						for m in range(0, bf.size(), 6):
+							var hit := fc._seg_contact(Vector2(bf[m], bf[m + 1]), Vector2(bf[m + 2], bf[m + 3]), 0.0, q, Vector2(bf[m + 4], bf[m + 5]), false, false)
+							if not hit.is_empty() and float(hit[1]) > 0.02:
+								errors.append("passage %d (road %d) collides with building %d at %s (depth %.2f)" % [pi, ri, bi, q, hit[1]])
+	root.free()
+
+static func _has_tri_over(group: Node, p: Vector2, min_y: float) -> bool:
+	if group == null:
+		return false
+	for mi in group.find_children("*", "MeshInstance3D", true, false):
+		var mesh := (mi as MeshInstance3D).mesh
+		if mesh == null:
+			continue
+		var arr := mesh.surface_get_arrays(0)
+		var vs: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var ix = arr[Mesh.ARRAY_INDEX]
+		var idx := PackedInt32Array(ix) if ix != null else PackedInt32Array()
+		var n := idx.size() if not idx.is_empty() else vs.size()
+		for k in range(0, n, 3):
+			var a := vs[idx[k] if not idx.is_empty() else k]
+			var b := vs[idx[k + 1] if not idx.is_empty() else k + 1]
+			var c := vs[idx[k + 2] if not idx.is_empty() else k + 2]
+			if maxf(a.y, maxf(b.y, c.y)) < min_y:
+				continue
+			var a2 := Vector2(a.x, a.z)
+			var b2 := Vector2(b.x, b.z)
+			var c2 := Vector2(c.x, c.z)
+			if p.x < minf(a2.x, minf(b2.x, c2.x)) - 0.05 or p.x > maxf(a2.x, maxf(b2.x, c2.x)) + 0.05:
+				continue
+			if p.y < minf(a2.y, minf(b2.y, c2.y)) - 0.05 or p.y > maxf(a2.y, maxf(b2.y, c2.y)) + 0.05:
+				continue
+			var den := (b2 - a2).cross(c2 - a2)
+			if absf(den) < 1e-6:
+				continue
+			var wb := (p - a2).cross(c2 - a2) / den
+			var wc := (b2 - a2).cross(p - a2) / den
+			if wb >= -1e-4 and wc >= -1e-4 and wb + wc <= 1.0001:
+				return true
+	return false

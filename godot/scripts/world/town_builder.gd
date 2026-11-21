@@ -140,7 +140,7 @@ static func cache_spec(tag: String) -> Dictionary:
 		"rail":
 			return {"data": ["rail", "tunnels", "terrain"], "code": "_rail_meshes"}
 		"buildings":
-			return {"data": ["buildings", "terrain", "places"], "code": "_building_meshes", "models": true, "plan": true,
+			return {"data": ["buildings", "passages", "terrain", "places"], "code": "_building_meshes", "models": true, "plan": true,
 				"files": [TOWN_MODELS, LANDMARK_MODELS]}
 		"trees":
 			return {"data": ["trees", "terrain"], "code": "_tree_records", "files": [SURROUNDINGS.TREES_PATH]}
@@ -150,7 +150,7 @@ static func cache_spec(tag: String) -> Dictionary:
 			# the street furniture's placements (lamps, parked cars): they read the ground, the roads and pavements, the
 			# buildings' walls, and every post the earlier steps stood (trees, fences, landmarks), so they cover what
 			# those steps build with; the models' own transforms are baked in
-			return {"data": ["terrain", "extent", "areas", "waterways", "roads", "rail", "tunnels", "buildings", "places", "boundary",
+			return {"data": ["terrain", "extent", "areas", "waterways", "roads", "rail", "tunnels", "buildings", "passages", "places", "boundary",
 				"trees", "fences", "garden_beds", "lamps", "signals", "stops", "level_crossings"],
 				"code": ["build_props", "build_roads", "build_rail", "build_tunnels", "build_buildings", "build_trees", "build_fences"],
 				"models": true, "plan": true, "files": [TOWN_MODELS, LANDMARK_MODELS, ROADSIDE_MODELS, SURROUNDINGS.TREES_PATH]}
@@ -1423,7 +1423,8 @@ func _find_level_crossings(rail_lines: Array) -> void:
 ## The underpasses (TownMap.tunnels): the street runs through the railway embankment in a lined concrete bore under the
 ## deck, with a portal (a header beam over the opening and wing walls that follow the slope down to the ground) at each end.
 func build_tunnels() -> void:
-	if map.tunnels.is_empty():
+	var passages: Array = map.raw.get("passages", [])
+	if map.tunnels.is_empty() and passages.is_empty():
 		return
 	var group := _group("Tunnels")
 	var concrete := StandardMaterial3D.new()
@@ -1513,8 +1514,113 @@ func build_tunnels() -> void:
 		light.shadow_enabled = false
 		light.position = at.call(0.0, 0.0, roof - 0.5)
 		group.add_child(light)
+	_add_passage_linings(passages, mb, lb, group, face, lining)
 	_add_mesh(group, mb.commit(), concrete, "Portals")
 	_add_mesh(group, lb.commit(), lamp_mat, "TunnelLamps", false)
+
+## Dark tunnel-style lining for building passages (tunnel=building_passage): underside ceiling at clear height, dark
+## concrete side walls covering the cut building face(s) below it, a thin portal lintel trim, and a warm ceiling light.
+## The upper building walls and roof above clear height are drawn by _building_meshes() with BUILDING_SHADER.
+func _add_passage_linings(passages: Array, mb: MeshBatch, lb: MeshBatch, group: Node3D, face: Color, lining: Color) -> void:
+	for p: Dictionary in passages:
+		var ring := TownMap._flat(p.get("ring", []))
+		if ring.size() < 3:
+			continue
+		if ring_area(ring) > 0.0:
+			ring.reverse()
+		var y_clear := _passage_clear_y(p)
+		var sides: Array = p.get("sides", [])
+		var rs: Array = p.get("rs", [])
+		# ceiling underside: follows the LoD2 roof outline when the bridge block uses LoD2 walls, else the strip ring,
+		# so the soffit meets every upper wall edge with no slit of sky
+		var ceil_polys: Array[PackedVector2Array] = []
+		if not rs.is_empty() and _lod2_cover(rs, ring) >= LOD2_MIN_COVER:
+			for f in rs:
+				if not f is Array or f.size() < 9:
+					continue
+				var pl := PackedVector2Array()
+				for j in range(0, f.size() - 2, 3):
+					var q := Vector2(float(f[j]), float(f[j + 1]))
+					if pl.is_empty() or pl[pl.size() - 1].distance_to(q) > 0.01:
+						pl.append(q)
+				if pl.size() > 2 and pl[0].distance_to(pl[pl.size() - 1]) < 0.01:
+					pl.remove_at(pl.size() - 1)
+				if pl.size() >= 3:
+					ceil_polys.append(pl)
+		if ceil_polys.is_empty():
+			ceil_polys.append(ring)
+		for pl in ceil_polys:
+			var tris := Geometry2D.triangulate_polygon(pl)
+			if tris.is_empty():
+				tris = Geometry2D.triangulate_delaunay(pl)
+			for k in range(0, tris.size(), 3):
+				var a := pl[tris[k]]
+				var b := pl[tris[k + 1]]
+				var c := pl[tris[k + 2]]
+				mb.flat_tri(Vector3(a.x, y_clear, a.y), Vector3(b.x, y_clear, b.y), Vector3(c.x, y_clear, c.y),
+					Vector3.DOWN, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, lining.darkened(0.3))
+		# dark lining along the cut side wall(s) below y_clear, 6 cm proud of the cut building face so it never z-fights
+		for s in sides:
+			var a := Vector2(float(s[0]), float(s[1]))
+			var b := Vector2(float(s[2]), float(s[3]))
+			var in_n := Vector2(float(s[4]), float(s[5])).normalized()
+			var off := in_n * 0.06
+			var pa := a + off
+			var pb := b + off
+			var ya := map.ground(pa.x, pa.y) - 0.3
+			var yb := map.ground(pb.x, pb.y) - 0.3
+			var n3 := Vector3(in_n.x, 0.0, in_n.y)
+			mb.flat_quad(Vector3(pa.x, ya, pa.y), Vector3(pb.x, yb, pb.y), Vector3(pb.x, y_clear, pb.y),
+				Vector3(pa.x, y_clear, pa.y), n3, lining)
+			# close the 6 cm end returns at a and b
+			var t := (b - a).normalized()
+			mb.flat_quad(Vector3(a.x, ya, a.y), Vector3(pa.x, ya, pa.y), Vector3(pa.x, y_clear, pa.y),
+				Vector3(a.x, y_clear, a.y), Vector3(-t.x, 0.0, -t.y), lining.darkened(0.15))
+			mb.flat_quad(Vector3(pb.x, yb, pb.y), Vector3(b.x, yb, b.y), Vector3(b.x, y_clear, b.y),
+				Vector3(pb.x, y_clear, pb.y), Vector3(t.x, 0.0, t.y), lining.darkened(0.15))
+		# subtle dark concrete lintel band along the portal openings (matching the railway underpass frames)
+		var nr := ring.size()
+		for i in nr:
+			var a := ring[i]
+			var b := ring[(i + 1) % nr]
+			if a.distance_to(b) < 0.2:
+				continue
+			var out2 := Vector2(-(b.y - a.y), b.x - a.x).normalized()
+			if _is_passage_cut_edge(a, b, out2, sides):
+				continue
+			var o := out2 * 0.03
+			var oa := a + o
+			var ob := b + o
+			mb.flat_quad(Vector3(oa.x, y_clear, oa.y), Vector3(ob.x, y_clear, ob.y),
+				Vector3(ob.x, y_clear + 0.22, ob.y), Vector3(oa.x, y_clear + 0.22, oa.y),
+				Vector3(out2.x, 0.0, out2.y), face.darkened(0.25))
+		# ceiling strip light and warm fill inside the passage
+		var cen := Vector2.ZERO
+		for q in ring:
+			cen += q
+		cen /= ring.size()
+		var rect := min_rect(ring)
+		var ax: Vector2 = rect[1] if not rect.is_empty() else Vector2.RIGHT
+		var ay := Vector2(-ax.y, ax.x)
+		var span: float = float(rect[2]) if not rect.is_empty() else 2.0
+		var ls := -maxf(span - 1.5, 0.0)
+		while ls <= maxf(span - 1.5, 0.0) + 0.01:
+			var lc := cen + ax * ls
+			var p0 := lc - ax * 0.2 - ay * 0.45
+			var p1 := lc + ax * 0.2 - ay * 0.45
+			var p2 := lc + ax * 0.2 + ay * 0.45
+			var p3 := lc - ax * 0.2 + ay * 0.45
+			lb.flat_quad(Vector3(p0.x, y_clear - 0.03, p0.y), Vector3(p1.x, y_clear - 0.03, p1.y),
+				Vector3(p2.x, y_clear - 0.03, p2.y), Vector3(p3.x, y_clear - 0.03, p3.y), Vector3.DOWN, Color.WHITE)
+			ls += 3.2
+		var light := OmniLight3D.new()
+		light.name = "PassageLight"
+		light.light_color = Color(1.0, 0.86, 0.6)
+		light.light_energy = 1.2
+		light.omni_range = maxf(span, 4.0) + 5.0
+		light.shadow_enabled = false
+		light.position = Vector3(cen.x, y_clear - 0.45, cen.y)
+		group.add_child(light)
 
 # ============================================================================================ buildings
 
@@ -2001,6 +2107,18 @@ func _building_meshes() -> Array:
 		if not batches.has(c):
 			batches[c] = MeshBatch.new(true, true)
 		_add_building(batches[c], ring, String(b[0]), float(b[1]), String(b[3]), centre, extra, bi, float(pushes.get(bi, 0.0)))
+	for p: Dictionary in map.raw.get("passages", []):
+		var ring := TownMap._flat(p.get("ring", []))
+		if ring.size() < 3:
+			continue
+		var centre := Vector2.ZERO
+		for q in ring:
+			centre += q
+		centre /= ring.size()
+		var c := _chunk_of(centre)
+		if not batches.has(c):
+			batches[c] = MeshBatch.new(true, true)
+		_add_passage(batches[c], ring, p, centre)
 	var built: Array = []
 	for c in batches:
 		built.append((batches[c] as MeshBatch).commit())
@@ -2370,6 +2488,282 @@ func _add_lod2_roof(mb: MeshBatch, faces: Array, hi: float, base: float, roof: C
 				var p0 := a.lerp(b, float(run[0]))
 				var p1 := a.lerp(b, float(run[1]))
 				_wall(mb, Vector2(p0.x, p0.z), Vector2(p1.x, p1.z), base, p0.y, p1.y, out, wall, hi, uv2_wall.x, uv2_wall.y, bi, push)
+	return true
+
+## Clear ceiling height (m above sea level) of a building passage: shared by _add_passage() (upper facade bottom) and
+## _add_passage_linings() (dark ceiling and side walls) so they meet with zero seam.
+func _passage_clear_y(p: Dictionary) -> float:
+	var ring := TownMap._flat(p.get("ring", []))
+	var road_hi := -INF
+	for q in ring:
+		road_hi = maxf(road_hi, map.ground(q.x, q.y))
+	var hi := road_hi
+	var bi := int(p.get("bi", -1))
+	if bi >= 0 and bi < map.bld_rings.size() and not map.bld_rings[bi].is_empty():
+		hi = -INF
+		for q in map.bld_rings[bi]:
+			hi = maxf(hi, map.ground(q.x, q.y))
+	var eave := hi + float(p.get("top", p.get("h", 4.0)))
+	return minf(road_hi + TownMap.ROAD_LIFT + float(p.get("clear", 4.0)), eave - 0.55)
+
+## True when edge a-b (outward normal out2) lies on a cut side wall of a passage facing back into the cut building.
+static func _is_passage_cut_edge(a: Vector2, b: Vector2, out2: Vector2, sides: Array) -> bool:
+	var mid := (a + b) * 0.5
+	for s in sides:
+		var sa := Vector2(float(s[0]), float(s[1]))
+		var sb := Vector2(float(s[2]), float(s[3]))
+		var in_n := Vector2(float(s[4]), float(s[5])).normalized()
+		if out2.dot(in_n) < -0.9 and Geometry2D.get_closest_point_to_segment(mid, sa, sb).distance_to(mid) < 0.18:
+			return true
+	return false
+
+## One exterior wall quad of an overhead passage bridge block (starts at y_lo = y_clear, above the street, so it adds
+## no ground-level collision face to _drawn_faces and no entry to wall_log). Same UV / UV2 layout as _wall().
+static func _passage_wall(mb: MeshBatch, a: Vector2, b: Vector2, y_lo: float, top_a: float, top_b: float, out: Vector3, color: Color, hi: float, seed: float, code: float) -> void:
+	var ln := a.distance_to(b)
+	if ln < 0.01 or (top_a < y_lo + 0.01 and top_b < y_lo + 0.01):
+		return
+	var ya := maxf(top_a, y_lo)
+	var yb := maxf(top_b, y_lo)
+	var level := absf(ya - yb) < 0.05
+	var uv2 := Vector2(seed + (roundf((ya - hi) * 10.0) if level else 0.0), code + 20.0 * minf(roundf(ln * 10.0), 4000.0))
+	mb.flat_quad(Vector3(a.x, y_lo, a.y), Vector3(b.x, y_lo, b.y), Vector3(b.x, yb, b.y), Vector3(a.x, ya, a.y), out, color,
+		[Vector2(0.0, y_lo - hi), Vector2(ln, y_lo - hi), Vector2(ln, yb - hi), Vector2(0.0, ya - hi)], uv2)
+
+## The building continuing above a tunnel=building_passage street: walls from clear height up to the eaves/roof and
+## the roof itself (restoring clipped LoD2 roof planes when present, else a matching pitched or flat roof). Inherits
+## the cut building's seed, palette and ground reference `hi` so facades and roof planes meet seamlessly.
+func _add_passage(mb: MeshBatch, ring: PackedVector2Array, p: Dictionary, centre: Vector2) -> void:
+	var r := ring.duplicate()
+	if ring_area(r) > 0.0:
+		r.reverse()
+	var kind := String(p.get("kind", "house"))
+	var height := float(p.get("h", 4.0))
+	var roof_shape := String(p.get("roof", "flat"))
+	var bi := int(p.get("bi", -1))
+	var seed_pos := centre
+	var hi := -INF
+	if bi >= 0 and bi < map.bld_rings.size() and not map.bld_rings[bi].is_empty():
+		var pr := map.bld_rings[bi]
+		seed_pos = Vector2.ZERO
+		for q in pr:
+			seed_pos += q
+			hi = maxf(hi, map.ground(q.x, q.y))
+		seed_pos /= pr.size()
+	else:
+		for q in r:
+			hi = maxf(hi, map.ground(q.x, q.y))
+	var seed := hash2(seed_pos.x, seed_pos.y, 13.0)
+	var pal := _palette(kind, seed, seed_pos)
+	var wall: Color = pal[0]
+	var roof: Color = pal[1]
+	if p.has("wc"):
+		wall = color_lin(String(p.wc))
+	if p.has("rc"):
+		roof = color_lin(String(p.rc))
+	var code: int = KIND_CODE.get(kind, 0)
+	var eave_height := float(p.get("top", height))
+	var eave := hi + eave_height
+	var y_clear := _passage_clear_y(p)
+	var uv2_wall := Vector2(seed, code)
+	var uv2_roof := Vector2(seed, code + 10.0)
+	var sides: Array = p.get("sides", [])
+	var roof_surfaces: Array = p.get("rs", [])
+	if not roof_surfaces.is_empty() and _lod2_cover(roof_surfaces, r) >= LOD2_MIN_COVER:
+		var mark := mb.mark()
+		if _add_passage_lod2(mb, roof_surfaces, hi, y_clear, roof, wall, uv2_roof, uv2_wall, sides):
+			return
+		mb.rollback(mark)
+	var n := r.size()
+	for i in n:
+		var a := r[i]
+		var b := r[(i + 1) % n]
+		if a.distance_to(b) < 0.01:
+			continue
+		var out2 := Vector2(-(b.y - a.y), b.x - a.x).normalized()
+		if _is_passage_cut_edge(a, b, out2, sides):
+			continue
+		_passage_wall(mb, a, b, y_clear, eave, eave, Vector3(out2.x, 0.0, out2.y), wall, hi, seed, float(code))
+	var rect := []
+	var pitched := roof_shape in ["hipped", "gabled", "pyramidal", "half_hipped", "mansard"] and height < 18.0
+	if pitched:
+		rect = min_rect(r)
+		if rect.is_empty() or absf(ring_area(r)) / maxf(float(rect[4]), 1e-3) < PITCHED_MIN_FIT or float(rect[3]) > 13.0:
+			pitched = false
+	if pitched:
+		var cen: Vector2 = rect[0]
+		var ax: Vector2 = rect[1]
+		var ay := Vector2(-ax.y, ax.x)
+		var hl: float = rect[2] + 0.45
+		var hw: float = rect[3] + 0.45
+		var pitch := 0.62 + 0.25 * hash2(seed_pos.x, seed_pos.y, 5.0)
+		if p.has("rh") and float(p.rh) > eave_height:
+			pitch = clampf((float(p.rh) - eave_height) / maxf(hw, 0.5), 0.08, 1.4)
+		var rise := hw * pitch
+		var c4 := [cen - ax * hl - ay * hw, cen + ax * hl - ay * hw, cen + ax * hl + ay * hw, cen - ax * hl + ay * hw]
+		var q := []
+		for pt in c4:
+			q.append(Vector3(pt.x, eave, pt.y))
+		var top := eave + rise
+		if roof_shape == "pyramidal" or hl - hw < 0.6:
+			var apex := Vector3(cen.x, top, cen.y)
+			for k in 4:
+				var p0: Vector3 = q[k]
+				var p1: Vector3 = q[(k + 1) % 4]
+				var nn := (p1 - p0).cross(apex - p0).normalized()
+				if nn.y < 0.0:
+					nn = -nn
+				mb.flat_tri(p0, p1, apex, nn, Vector2(0, 0), Vector2(p0.distance_to(p1), 0), Vector2(p0.distance_to(p1) * 0.5, hw), roof, uv2_roof)
+		elif roof_shape in ["hipped", "half_hipped", "mansard"]:
+			var r1 := cen - ax * (hl - hw)
+			var r2 := cen + ax * (hl - hw)
+			var R1 := Vector3(r1.x, top, r1.y)
+			var R2 := Vector3(r2.x, top, r2.y)
+			for side in [[q[0], q[1], R2, R1], [q[2], q[3], R1, R2]]:
+				var nn: Vector3 = (side[1] - side[0]).cross(side[3] - side[0]).normalized()
+				if nn.y < 0.0:
+					nn = -nn
+				var sl: float = (side[0] as Vector3).distance_to(side[1])
+				mb.flat_quad(side[0], side[1], side[2], side[3], nn, roof,
+					[Vector2(0, 0), Vector2(sl, 0), Vector2(sl - hw, hw * 1.2), Vector2(hw, hw * 1.2)], uv2_roof)
+			for tri in [[q[1], q[2], R2], [q[3], q[0], R1]]:
+				var nn: Vector3 = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalized()
+				if nn.y < 0.0:
+					nn = -nn
+				mb.flat_tri(tri[0], tri[1], tri[2], nn, Vector2(0, 0), Vector2(hw * 2.0, 0), Vector2(hw, hw * 1.2), roof, uv2_roof)
+		else:
+			var m1 := cen - ax * hl
+			var m2 := cen + ax * hl
+			var R1 := Vector3(m1.x, top, m1.y)
+			var R2 := Vector3(m2.x, top, m2.y)
+			for side in [[q[0], q[1], R2, R1], [q[2], q[3], R1, R2]]:
+				var nn: Vector3 = (side[1] - side[0]).cross(side[3] - side[0]).normalized()
+				if nn.y < 0.0:
+					nn = -nn
+				var sl: float = (side[0] as Vector3).distance_to(side[1])
+				mb.flat_quad(side[0], side[1], side[2], side[3], nn, roof,
+					[Vector2(0, 0), Vector2(sl, 0), Vector2(sl, hw * 1.2), Vector2(0, hw * 1.2)], uv2_roof)
+			for tri in [[q[3], q[0], R1], [q[1], q[2], R2]]:
+				var nn: Vector3 = Vector3((tri[1] - tri[0]).z, 0.0, -(tri[1] - tri[0]).x).normalized()
+				var mid3: Vector3 = (tri[0] + tri[1]) * 0.5
+				if nn.dot(Vector3(mid3.x - cen.x, 0.0, mid3.z - cen.y)) < 0.0:
+					nn = -nn
+				mb.flat_tri(tri[0], tri[1], tri[2], nn, Vector2(0, eave - hi), Vector2(hw * 2.0, eave - hi), Vector2(hw, eave - hi + rise), wall, uv2_wall)
+		mb.flat_quad(q[0], q[3], q[2], q[1], Vector3.DOWN, wall.darkened(0.35),
+			[Vector2.ZERO, Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)], Vector2(seed, 3.0))
+	else:
+		var tris := Geometry2D.triangulate_polygon(r)
+		var parapet := 0.6 if kind in ["flats", "industrial", "commercial", "public"] else 0.0
+		for k in range(0, tris.size(), 3):
+			var a := r[tris[k]]
+			var b := r[tris[k + 1]]
+			var cc := r[tris[k + 2]]
+			mb.flat_tri(Vector3(a.x, eave, a.y), Vector3(b.x, eave, b.y), Vector3(cc.x, eave, cc.y), Vector3.UP, a, b, cc, roof, uv2_roof)
+		if parapet > 0.0:
+			for i in n:
+				var a := r[i]
+				var b := r[(i + 1) % n]
+				var t := (b - a).normalized()
+				var inn := Vector2(t.y, -t.x)
+				var out2 := -inn
+				if _is_passage_cut_edge(a, b, out2, sides):
+					continue
+				var ai := a + inn * 0.3
+				var bj := b + inn * 0.3
+				mb.flat_quad(Vector3(ai.x, eave, ai.y), Vector3(bj.x, eave, bj.y), Vector3(bj.x, eave + parapet, bj.y),
+					Vector3(ai.x, eave + parapet, ai.y), Vector3(inn.x, 0.0, inn.y), wall.darkened(0.1),
+					[Vector2.ZERO, Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)], Vector2(seed, 3.0))
+				mb.flat_quad(Vector3(a.x, eave + parapet, a.y), Vector3(b.x, eave + parapet, b.y), Vector3(bj.x, eave + parapet, bj.y),
+					Vector3(ai.x, eave + parapet, ai.y), Vector3.UP, wall.darkened(0.2),
+					[Vector2.ZERO, Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)], Vector2(seed, 3.0))
+				mb.flat_quad(Vector3(a.x, eave, a.y), Vector3(b.x, eave, b.y), Vector3(b.x, eave + parapet, b.y),
+					Vector3(a.x, eave + parapet, a.y), Vector3(out2.x, 0.0, out2.y), wall,
+					[Vector2.ZERO, Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)], Vector2(seed, 3.0))
+
+## LoD2 roof and exterior walls above y_clear for a passage bridge block (same plane UVs and _open_runs as _add_lod2_roof).
+func _add_passage_lod2(mb: MeshBatch, faces: Array, hi: float, y_clear: float, roof: Color, wall: Color, uv2_roof: Vector2, uv2_wall: Vector2, sides: Array) -> bool:
+	var polys: Array[PackedVector3Array] = []
+	for face in faces:
+		if not face is Array or face.size() < 9:
+			continue
+		var poly := PackedVector3Array()
+		for j in range(0, face.size() - 2, 3):
+			var q := Vector3(float(face[j]), hi + float(face[j + 2]), float(face[j + 1]))
+			if poly.is_empty() or poly[poly.size() - 1].distance_to(q) > 0.01:
+				poly.append(q)
+		if poly.size() > 2 and poly[0].distance_to(poly[poly.size() - 1]) < 0.01:
+			poly.remove_at(poly.size() - 1)
+		if poly.size() >= 3:
+			polys.append(poly)
+	if polys.is_empty():
+		return false
+	var drawn := 0
+	for poly in polys:
+		var nrm := Vector3.ZERO
+		for k in poly.size():
+			var a := poly[k]
+			var b := poly[(k + 1) % poly.size()]
+			nrm += Vector3((a.y - b.y) * (a.z + b.z), (a.z - b.z) * (a.x + b.x), (a.x - b.x) * (a.y + b.y))
+		if nrm.length() < 1e-4:
+			return false
+		nrm = nrm.normalized()
+		if nrm.y < 0.0:
+			nrm = -nrm
+		var ax := Vector3.UP.cross(nrm)
+		if ax.length() < 0.05:
+			ax = Vector3.RIGHT
+		ax = ax.normalized()
+		var ay := nrm.cross(ax)
+		var flat := PackedVector2Array()
+		for q in poly:
+			flat.append(Vector2(q.dot(ax), q.dot(ay)))
+		var corner := Vector2(INF, INF)
+		for q in flat:
+			corner = corner.min(q)
+		var tris := Geometry2D.triangulate_polygon(flat)
+		if tris.is_empty():
+			tris = Geometry2D.triangulate_delaunay(flat)
+		if tris.is_empty():
+			return false
+		for j in range(0, tris.size(), 3):
+			var ia: int = tris[j]
+			var ib: int = tris[j + 1]
+			var ic: int = tris[j + 2]
+			var p0 := poly[ia]
+			var p1 := poly[ib]
+			var p2 := poly[ic]
+			if (p1 - p0).cross(p2 - p0).length() < 1e-4:
+				continue
+			mb.flat_tri(p0, p1, p2, nrm, flat[ia] - corner, flat[ib] - corner, flat[ic] - corner, roof, uv2_roof)
+			drawn += 1
+	if drawn == 0:
+		return false
+	var boxes := _plane_boxes(polys)
+	for pi in polys.size():
+		var poly := polys[pi]
+		var flat2 := PackedVector2Array()
+		for q in poly:
+			flat2.append(Vector2(q.x, q.z))
+		var wind := 1.0 if ring_area(flat2) > 0.0 else -1.0
+		for k in poly.size():
+			var a := poly[k]
+			var b := poly[(k + 1) % poly.size()]
+			var a2 := Vector2(a.x, a.z)
+			var b2 := Vector2(b.x, b.z)
+			var ln := a2.distance_to(b2)
+			if ln < 0.05:
+				continue
+			var t := (b2 - a2) / ln
+			var out2 := Vector2(t.y, -t.x) * wind
+			var out := Vector3(out2.x, 0.0, out2.y)
+			for run in _open_runs(polys, pi, a, b, out2, boxes):
+				var p0 := a.lerp(b, float(run[0]))
+				var p1 := a.lerp(b, float(run[1]))
+				var pa := Vector2(p0.x, p0.z)
+				var pb := Vector2(p1.x, p1.z)
+				if _is_passage_cut_edge(pa, pb, out2, sides):
+					continue
+				_passage_wall(mb, pa, pb, y_clear, p0.y, p1.y, out, wall, hi, uv2_wall.x, uv2_wall.y)
 	return true
 
 # ============================================================================================ trees

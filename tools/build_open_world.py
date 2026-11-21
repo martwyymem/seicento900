@@ -393,6 +393,35 @@ PASSAGE_HALF = 2.0  # m: half the clear width cut through a building for a tunne
 PASSAGE_EXTEND = 2.5  # m: the cut runs this far past the way's end nodes (they sit on, not past, the walls)
 PASSAGE_MIN_AREA = 1.5  # m2: a piece of a cut building smaller than this is dropped
 PASSAGE_MIN_THICK = 0.8  # m: so is a wall left thinner than this (twice its area over its perimeter)
+PASSAGE_CLEAR = 4.0  # m: clear height under a building spanning a tunnel=building_passage street
+PASSAGE_MIN_CLEAR = 2.8  # m: clear height floor for low structures (e.g. a 3.7 m car wash canopy)
+PASSAGE_MIN_BAND = 0.6  # m: minimum facade band kept between the passage ceiling and the eaves
+
+
+def _clip_rect(poly, u0, u1, v0, v1):
+    """Sutherland-Hodgman clip of a 2D or 3D polygon (u, v[, z]) to the axis-aligned rectangle [u0, u1] x [v0, v1]."""
+    if not poly:
+        return []
+    hasz = len(poly[0]) > 2
+    p = list(poly)
+    for fn in (lambda q: q[0] - u0, lambda q: u1 - q[0], lambda q: q[1] - v0, lambda q: v1 - q[1]):
+        if not p:
+            return []
+        out = []
+        n = len(p)
+        for i in range(n):
+            a, b = p[i], p[(i + 1) % n]
+            fa, fb = fn(a), fn(b)
+            if fa >= 0.0:
+                out.append(a)
+            if (fa >= 0.0) != (fb >= 0.0):
+                t = fa / (fa - fb)
+                if hasz:
+                    out.append((a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]), a[2] + t * (b[2] - a[2])))
+                else:
+                    out.append((a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])))
+        p = out
+    return p
 
 
 def ring_minus_rect(poly, u0, u1, v0, v1, zfn=None):
@@ -531,9 +560,10 @@ def cut_building_passages(out_roads, buildings):
     carriageway. The footprint (and each LoD2 roof face on it) loses a strip 2 * PASSAGE_HALF wide along the way, from
     PASSAGE_EXTEND before its first node to PASSAGE_EXTEND past its last (one rectangle per segment of the way), so that what is left is the building either
     side of the passage (a notch in a corner, or two blocks with a gap if the passage goes right through). The piece
-    that keeps the building's first slot is the largest; the rest are appended. Nothing in the game changes: it draws
-    and collides with the footprints as baked."""
+    that keeps the building's first slot is the largest; the rest are appended. Also returns the removed strip(s) as
+    (parent_entry_ref, passage_dict) pairs so TownBuilder can draw the building continuing overhead above clear height."""
     cuts = 0
+    passages = []
     for r in out_roads:
         if not r.get('bp'):
             continue
@@ -553,6 +583,14 @@ def cut_building_passages(out_roads, buildings):
                     s[side] = max(0.3, min(PASSAGE_HALF, PASSAGE_HALF * math.tan(math.acos(dot) / 2)))  # (never abutting)
                 else:
                     s[side] = PASSAGE_EXTEND
+        # if every point along the passage way lies on the chord between its ends (densified straight way), clip the
+        # overhead bridge block against that one rectangle so there is no internal seam across the middle of the passage
+        chord_ln = math.dist(pts[0], pts[-1])
+        if chord_ln > 1e-6 and all(dist_seg(p[0], p[1], pts[0], pts[-1]) < 0.05 for p in pts):
+            clip_segs = [[pts[0], pts[-1], (pts[-1][0] - pts[0][0]) / chord_ln,
+                          (pts[-1][1] - pts[0][1]) / chord_ln, chord_ln, PASSAGE_EXTEND, PASSAGE_EXTEND]]
+        else:
+            clip_segs = segs
         for bi in range(len(buildings)):
             b = buildings[bi]
             ring = b[4]
@@ -643,11 +681,68 @@ def cut_building_passages(out_roads, buildings):
                 cy = sum(p[1] for p in pc) / len(pc)
                 best = min(entries, key=lambda e: 0.0 if point_in_ring(cx, cy, e[0]) else poly_dist(cx, cy, e[0]))
                 best[1][6]['rs'].append([v for p in pc for v in (p[0], p[1], p[2])])
+            # record the removed passage strip(s) so TownBuilder draws the building continuing overhead above clear height
+            eave_h = float(extra.get('eh', b[1]))
+            clear_h = round(min(PASSAGE_CLEAR, max(PASSAGE_MIN_CLEAR, eave_h - PASSAGE_MIN_BAND)), 2)
+            rem_foot = [ring_pts]
+            rem_rs = [[(f[m], f[m + 1], f[m + 2]) for m in range(0, len(f) - 2, 3)] for f in extra.get('rs', [])]
+            for si, s in enumerate(clip_segs):
+                half = PASSAGE_HALF + (0.003 * si if len(clip_segs) > 1 else 0.0)
+                for pc in rem_foot:
+                    strip_uv = _clip_rect(to_uv(pc, s), -s[5], s[4] + s[6], -half, half)
+                    if len(strip_uv) < 3:
+                        continue
+                    strip = _tidy(from_uv(strip_uv, s))
+                    if len(strip) < 3 or abs(_poly_area(strip)) < PASSAGE_MIN_AREA:
+                        continue
+                    # cut side walls: strip edges lying on v = +-half that abut a remaining piece of the building
+                    sides = []
+                    for k in range(len(strip_uv)):
+                        p0, p1 = strip_uv[k], strip_uv[(k + 1) % len(strip_uv)]
+                        if math.dist(p0, p1) < 0.2:
+                            continue
+                        mv = (p0[1] + p1[1]) * 0.5
+                        if abs(p0[1] - p1[1]) < 0.05 and (abs(mv + half) < 0.05 or abs(mv - half) < 0.05):
+                            side_sgn = -1.0 if mv < 0.0 else 1.0
+                            probe = from_uv([((p0[0] + p1[0]) * 0.5, mv + side_sgn * 0.25)], s)[0]
+                            if any(point_in_ring(probe[0], probe[1], kp) for _, kp in keep):
+                                pa, pb = from_uv([p0, p1], s)
+                                nx, ny = -side_sgn * (-s[3]), -side_sgn * s[2]  # unit normal pointing into the passage
+                                sides.append([r1(pa[0]), r1(pa[1]), r1(pb[0]), r1(pb[1]), round(nx, 4), round(ny, 4)])
+                    clipped_rs = []
+                    for fp in rem_rs:
+                        c = _clip_rect(to_uv(fp, s), -s[5], s[4] + s[6], -half, half)
+                        if len(c) >= 3:
+                            cw = _tidy(from_uv(c, s), digits=2)
+                            if len(cw) >= 3 and abs(_poly_area([(p[0], p[1]) for p in cw])) >= 0.05:
+                                clipped_rs.append([v for p in cw for v in (p[0], p[1], p[2])])
+                    prec = {
+                        'bi': -1, 'road': r['id'], 'kind': b[0], 'h': b[1], 'lv': b[2], 'roof': b[3],
+                        'clear': clear_h, 'top': round(eave_h, 2),
+                        'ring': [v for p in strip for v in (r1(p[0]), r1(p[1]))],
+                        'sides': sides,
+                    }
+                    if 'rh' in extra:
+                        prec['rh'] = extra['rh']
+                    if 'wc' in extra:
+                        prec['wc'] = extra['wc']
+                    if 'rc' in extra:
+                        prec['rc'] = extra['rc']
+                    if clipped_rs:
+                        prec['rs'] = clipped_rs
+                    passages.append((entries[0][1], prec))
+                if len(clip_segs) > 1:
+                    nxt_foot = []
+                    for pc in rem_foot:
+                        uvp = to_uv(pc, s)
+                        res = ring_minus_rect(uvp, -s[5], s[4] + s[6], -half, half, None)
+                        nxt_foot += [pc] if (res is None or (len(res) == 1 and res[0] is uvp)) else [from_uv(x, s) for x in res]
+                    rem_foot = nxt_foot
             print('passage', r['id'], 'cuts building', bi, b[0], 'area %.0f m2 ->' % area0, [round(a) for a, _ in keep], 'm2')
             buildings[bi] = entries[0][1]
             buildings.extend(e[1] for e in entries[1:])
             cuts += 1
-    return cuts
+    return cuts, passages
 
 
 def _plane_of(poly):
@@ -2659,8 +2754,14 @@ def build(check_png=None):
         return out
 
     n_b = len(buildings)
-    print(cut_building_passages(out_roads, buildings), 'buildings cut for tunnel=building_passage streets:', n_b, '->', len(buildings))
+    n_cuts, passage_refs = cut_building_passages(out_roads, buildings)
+    print(n_cuts, 'buildings cut for tunnel=building_passage streets:', n_b, '->', len(buildings), f'({len(passage_refs)} passages)')
     road_hw = narrow_past_buildings(out_roads, zr, buildings)
+    bld_idx = {id(b): i for i, b in enumerate(buildings)}
+    passages = []
+    for ref, prec in passage_refs:
+        prec['bi'] = bld_idx.get(id(ref), -1)
+        passages.append(prec)
     # a street shifted off a wall may now run over a lamp placed beside it: those lamps go
     lgrid = SegGrid(20.0)
     for r in out_roads:
@@ -2705,6 +2806,7 @@ def build(check_png=None):
         'rail': rails_out,
         'tunnels': tunnels,
         'buildings': buildings,
+        'passages': passages,
         'areas': [[kind, flat_pts(ring), [flat_pts(h) for h in holes], extra] for _, _, kind, ring, holes, extra, _ in areas],
         'waterways': [[wd, flat_pts(pts)] for wd, pts in waterways],
         'trees': [v for x, y, c in trees for v in (r1(x), r1(y), c)],
