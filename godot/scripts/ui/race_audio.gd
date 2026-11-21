@@ -76,6 +76,11 @@ func _ready() -> void:
 	player.play()
 	playback = player.get_stream_playback()
 
+func _exit_tree() -> void:
+	if is_instance_valid(player):
+		player.stop()
+	playback = null
+
 func update_car(car, is_active: bool, weather = null) -> void:
 	active = is_active and car != null
 	if not active:
@@ -134,7 +139,7 @@ func _process(_delta: float) -> void:
 			playback = player.get_stream_playback()
 		return
 
-	var frames_avail: int = playback.get_frames_available()
+	var frames_avail: int = mini(playback.get_frames_available(), int(SAMPLE_RATE * 0.25))
 	if frames_avail <= 0:
 		return
 

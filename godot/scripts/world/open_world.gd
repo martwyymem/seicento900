@@ -107,6 +107,13 @@ var hail := 0.0 ## 0..1 falling hail
 var fog := 0.0 ## 0..1 fog: the haze thickens to a race's fog (FOG_DENSITY), the sky greys, the sun dims
 var wx: WorldWeather ## the free-roam weather cycle (a pure function of the saved seed and the clock); null until the world is built
 var _wx_hour := 0.0 ## the clock's hour the cycle was last brought up to
+var _sky_hour := -1.0 ## hour and overcast last pushed to sky_mat (gates Sky.PROCESS_MODE_INCREMENTAL updates)
+var _sky_overcast := -1.0
+var _ref_hour := -1.0 ## hour, overcast, night, snow and fog last seen by CarReflections (refreshes the probe on weather/time changes)
+var _ref_overcast := -1.0
+var _ref_night := -1.0
+var _ref_snow := -1.0
+var _ref_fog := -1.0
 const FOG_DENSITY := 0.02 ## a race's fog (race_world.gd)
 const NIGHT_DAMP := 0.3
 const LAMP_POOL_GLOW := 0.7 ## emission at the middle of a lamp's pool on the ground (reads on the dark tarmac)
@@ -439,6 +446,9 @@ func _build_environment() -> void:
 	sky_mat.set_shader_parameter("cloud_cover", 0.32)
 	var sky := Sky.new()
 	sky.sky_material = sky_mat
+	# REALTIME would redraw all six radiance faces and their mip chain every frame because the shader reads TIME;
+	# INCREMENTAL refreshes them when the sky's parameters change (gated in _apply_time), and the visible sky still animates
+	sky.process_mode = Sky.PROCESS_MODE_INCREMENTAL
 	sky.radiance_size = Sky.RADIANCE_SIZE_128
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
@@ -515,30 +525,45 @@ func _apply_time() -> void:
 	var midday := smoothstep(22.0, 32.0, elev_deg) # 0 through the golden hour and the night, which keep their look
 	sun.light_energy = lerpf(0.2, 2.0, day) * lerpf(1.0, 1.05, golden) * (1.0 + 0.12 * midday) * (1.0 - overcast * 0.62)
 	sun.shadow_opacity = lerpf(0.6, 1.0, day) * (1.0 - overcast * 0.45)
-	sky_mat.set_shader_parameter("sun_dir", dir)
-	sky_mat.set_shader_parameter("moon_dir", Vector3(-dir.x, 0.6, -dir.z).normalized())
-	sky_mat.set_shader_parameter("night", night)
-	sky_mat.set_shader_parameter("overcast", overcast)
-	sky_mat.set_shader_parameter("star_amount", clampf(night * 1.4 - 0.3, 0.0, 1.0) * 0.12) # under the night exposure and glow
-	# a deep blue night sky (not black), a richer blue overhead by day, greyed under rain or snow (as race_world)
-	# (the golden sky stays a clean blue overhead: a pink horizon blended into it went lavender through ACES)
-	var top := Color(0.035, 0.065, 0.2).lerp(Color(0.13, 0.33, 0.72).lerp(Color(0.16, 0.4, 0.7), golden), day) \
-		.lerp(WORLD.SKY_TOP_OVERCAST, overcast * 0.72 * day)
-	var horizon := Color(0.06, 0.1, 0.22).lerp(Color(0.6, 0.73, 0.88).lerp(Color(0.98, 0.78, 0.5), golden * 0.8), day) \
-		.lerp(WORLD.HORIZON_OVERCAST, overcast * 0.7 * day)
-	sky_mat.set_shader_parameter("top_color", top)
-	sky_mat.set_shader_parameter("horizon_color", horizon)
-	sky_mat.set_shader_parameter("glow_color", Color(1.0, 0.48, 0.2))
-	sky_mat.set_shader_parameter("glow_amount", golden)
-	sky_mat.set_shader_parameter("sun_color", day_col.lerp(gold_col, golden))
-	sky_mat.set_shader_parameter("sky_energy", lerpf(0.8, 1.0, day))
-	# the town's sodium glow low on the night horizon, lighting the cloud bellies from below
-	sky_mat.set_shader_parameter("city_glow", Color(0.5, 0.3, 0.16) * 0.22 * night * (1.0 - overcast * 0.5))
-	sky_mat.set_shader_parameter("cloud_lit", Color(0.13, 0.15, 0.24).lerp(Color(1, 1, 1).lerp(Color(1.0, 0.68, 0.46), golden), day) \
-		.lerp(WORLD.HORIZON_OVERCAST, overcast * 0.5 * day))
-	sky_mat.set_shader_parameter("cloud_shade", Color(0.05, 0.06, 0.11).lerp(Color(0.55, 0.6, 0.7).lerp(Color(0.62, 0.5, 0.6), golden), day) \
-		.lerp(WORLD.SKY_TOP_OVERCAST.darkened(0.2), overcast * day))
-	sky_mat.set_shader_parameter("halo_amount", (0.15 * day + 0.65 * golden) * (1.0 - overcast))
+	var sky_dirty := _sky_hour < 0.0 or absf(hour - _sky_hour) >= 0.005 \
+		or absf(overcast - _sky_overcast) >= 0.005 or (overcast == 0.0) != (_sky_overcast == 0.0)
+	if sky_dirty:
+		_sky_hour = hour
+		_sky_overcast = overcast
+		sky_mat.set_shader_parameter("sun_dir", dir)
+		sky_mat.set_shader_parameter("moon_dir", Vector3(-dir.x, 0.6, -dir.z).normalized())
+		sky_mat.set_shader_parameter("night", night)
+		sky_mat.set_shader_parameter("overcast", overcast)
+		sky_mat.set_shader_parameter("star_amount", clampf(night * 1.4 - 0.3, 0.0, 1.0) * 0.12) # under the night exposure and glow
+		# a deep blue night sky (not black), a richer blue overhead by day, greyed under rain or snow (as race_world)
+		# (the golden sky stays a clean blue overhead: a pink horizon blended into it went lavender through ACES)
+		var top := Color(0.035, 0.065, 0.2).lerp(Color(0.13, 0.33, 0.72).lerp(Color(0.16, 0.4, 0.7), golden), day) \
+			.lerp(WORLD.SKY_TOP_OVERCAST, overcast * 0.72 * day)
+		var horizon := Color(0.06, 0.1, 0.22).lerp(Color(0.6, 0.73, 0.88).lerp(Color(0.98, 0.78, 0.5), golden * 0.8), day) \
+			.lerp(WORLD.HORIZON_OVERCAST, overcast * 0.7 * day)
+		sky_mat.set_shader_parameter("top_color", top)
+		sky_mat.set_shader_parameter("horizon_color", horizon)
+		sky_mat.set_shader_parameter("glow_color", Color(1.0, 0.48, 0.2))
+		sky_mat.set_shader_parameter("glow_amount", golden)
+		sky_mat.set_shader_parameter("sun_color", day_col.lerp(gold_col, golden))
+		sky_mat.set_shader_parameter("sky_energy", lerpf(0.8, 1.0, day))
+		# the town's sodium glow low on the night horizon, lighting the cloud bellies from below
+		sky_mat.set_shader_parameter("city_glow", Color(0.5, 0.3, 0.16) * 0.22 * night * (1.0 - overcast * 0.5))
+		sky_mat.set_shader_parameter("cloud_lit", Color(0.13, 0.15, 0.24).lerp(Color(1, 1, 1).lerp(Color(1.0, 0.68, 0.46), golden), day) \
+			.lerp(WORLD.HORIZON_OVERCAST, overcast * 0.5 * day))
+		sky_mat.set_shader_parameter("cloud_shade", Color(0.05, 0.06, 0.11).lerp(Color(0.55, 0.6, 0.7).lerp(Color(0.62, 0.5, 0.6), golden), day) \
+			.lerp(WORLD.SKY_TOP_OVERCAST.darkened(0.2), overcast * day))
+		sky_mat.set_shader_parameter("halo_amount", (0.15 * day + 0.65 * golden) * (1.0 - overcast))
+	if reflections and (_ref_hour < 0.0 or absf(overcast - _ref_overcast) >= 0.08 \
+			or absf(night - _ref_night) >= 0.08 or absf(hour - _ref_hour) >= 0.25 \
+			or absf(snow - _ref_snow) >= 0.08 or absf(fog - _ref_fog) >= 0.08 \
+			or (overcast == 0.0) != (_ref_overcast == 0.0)):
+		_ref_hour = hour
+		_ref_overcast = overcast
+		_ref_night = night
+		_ref_snow = snow
+		_ref_fog = fog
+		reflections.refresh()
 	# sunlit haze: thicker and gold towards the sun, so the distance glows behind the trees; greyer and thicker in rain/snow
 	env.fog_light_color = Color(0.03, 0.05, 0.11).lerp(Color(0.66, 0.75, 0.87).lerp(Color(0.97, 0.64, 0.4), golden), day) \
 		.lerp(WORLD.FOG_RAIN * lerpf(0.04, 1.0, day), overcast * 0.6)

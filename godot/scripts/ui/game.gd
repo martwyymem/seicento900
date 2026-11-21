@@ -430,6 +430,8 @@ var custom_stints: Array = [] ## [{c, laps}]
 var current_plan = null ## the plan the next single race starts with, null when none is valid
 var _strategy_pending := false
 const STRATEGY_REST_MS := 300 ## how long the circuit picker rests before the strategist plans for it
+const STRATEGY_WAIT_MS := 15000 ## max wall-clock wait for an off-thread track/calibration before falling back
+const STRATEGY_WAIT_FRAMES := 900 ## max process_frame waits inside _refresh_strategy
 var _strategy_rest_msec := 0 ## Time.get_ticks_msec() before which _refresh_strategy holds off
 var _loading_settings := false
 
@@ -1731,9 +1733,21 @@ func _queue_strategy_refresh(reset_choice := true) -> void:
 	_refresh_strategy.call_deferred()
 
 func _refresh_strategy() -> void:
+	if not is_inside_tree():
+		_strategy_pending = false
+		return
 	# a run of ◂ ▸ circuit presses plans once (4-14 ms), for the circuit the selection rests on
-	while Time.get_ticks_msec() < _strategy_rest_msec:
+	var rest_t0 := Time.get_ticks_msec()
+	var rest_frames := 0
+	while Time.get_ticks_msec() < _strategy_rest_msec and rest_frames < STRATEGY_WAIT_FRAMES and Time.get_ticks_msec() - rest_t0 < STRATEGY_REST_MS + 2000:
+		if not is_inside_tree():
+			_strategy_pending = false
+			return
 		await get_tree().process_frame
+		rest_frames += 1
+	if not is_inside_tree():
+		_strategy_pending = false
+		return
 	var ckey := _picked_car()
 	var hyper := ckey != "stock" # another car keeps its own calibration (Track.cal_alt)
 	var models: Dictionary = _models_for(ckey)
@@ -1746,13 +1760,28 @@ func _refresh_strategy() -> void:
 		# calibration below, so START waits too) rather than build it here and freeze the page
 		strategy_info.text = "Loading %s…" % Track.load_def(key).display_name
 		current_plan = null
-		while track == null:
+		var wait_t0 := Time.get_ticks_msec()
+		var wait_frames := 0
+		while track == null and wait_frames < STRATEGY_WAIT_FRAMES and Time.get_ticks_msec() - wait_t0 < STRATEGY_WAIT_MS:
+			if not is_inside_tree():
+				_strategy_pending = false
+				return
 			await get_tree().process_frame
+			wait_frames += 1
+			if not is_inside_tree():
+				_strategy_pending = false
+				return
 			if key != TRACK_KEYS[track_picker.selected]:
 				_strategy_pending = false
 				_queue_strategy_refresh(false)
 				return
 			track = _menu_track(key)
+		if track == null:
+			push_warning("Game._refresh_strategy: timed out waiting for track '%s' after %d ms / %d frames; loading synchronously" % [key, Time.get_ticks_msec() - wait_t0, wait_frames])
+			track = Race.get_track(key)
+			if track == null:
+				_strategy_pending = false
+				return
 	if not hyper and track.cal.is_empty():
 		# the first plan on a circuit simulates reference laps (up to a couple of seconds)
 		strategy_info.text = "Working out lap times at %s…" % track.name
@@ -1760,12 +1789,33 @@ func _refresh_strategy() -> void:
 		for child in strategy_list.get_children():
 			child.queue_free()
 		custom_box.hide()
+		if not is_inside_tree():
+			_strategy_pending = false
+			return
 		await get_tree().process_frame
+		if not is_inside_tree():
+			_strategy_pending = false
+			return
 		await get_tree().process_frame
+		if not is_inside_tree():
+			_strategy_pending = false
+			return
 		# the prefetcher works it out off the main thread: wait for it rather than freeze the page
 		_prioritise_track_prefetch(track.key)
-		while track.cal.is_empty() and _track_prefetch_pending(track.key) and track == _menu_track(TRACK_KEYS[track_picker.selected]):
+		var cal_t0 := Time.get_ticks_msec()
+		var cal_frames := 0
+		while track.cal.is_empty() and _track_prefetch_pending(track.key) and track == _menu_track(TRACK_KEYS[track_picker.selected]) \
+				and cal_frames < STRATEGY_WAIT_FRAMES and Time.get_ticks_msec() - cal_t0 < STRATEGY_WAIT_MS:
+			if not is_inside_tree():
+				_strategy_pending = false
+				return
 			await get_tree().process_frame
+			cal_frames += 1
+		if not is_inside_tree():
+			_strategy_pending = false
+			return
+		if track.cal.is_empty() and (cal_frames >= STRATEGY_WAIT_FRAMES or Time.get_ticks_msec() - cal_t0 >= STRATEGY_WAIT_MS):
+			push_warning("Game._refresh_strategy: timed out waiting for '%s' calibration after %d ms / %d frames; calibrating synchronously" % [track.key, Time.get_ticks_msec() - cal_t0, cal_frames])
 		if track != _menu_track(TRACK_KEYS[track_picker.selected]):
 			_strategy_pending = false
 			_queue_strategy_refresh(false)
@@ -4187,8 +4237,14 @@ func _pump_track_rush() -> void:
 			return
 		WorkerThreadPool.wait_for_task_completion(_rush_task)
 		_rush_task = -1
-		_store_prefetched(_rush_key, _rush_result)
+		var res = _rush_result
 		_rush_result = null
+		if res == null:
+			push_warning("Game._pump_track_rush: worker returned null for '%s'; dropping wait" % _rush_key)
+			if _track_waiting == _rush_key:
+				_track_waiting = ""
+		else:
+			_store_prefetched(_rush_key, res)
 	if _track_waiting == "":
 		return
 	var key := _track_waiting
@@ -4225,12 +4281,24 @@ func _track_prefetch_pending(key: String) -> bool:
 		return false
 	return _prefetch_queue.has([key, "cal"]) or (_prefetch_task != -1 and _prefetch_job == [key, "cal"])
 
+const WORKER_JOIN_TIMEOUT_MS := 15000 ## max wait in _exit_tree for background track prefetch/rush tasks
+
+static func _join_worker_task(task_id: int, label: String) -> void:
+	var t0 := Time.get_ticks_msec()
+	while not WorkerThreadPool.is_task_completed(task_id):
+		if Time.get_ticks_msec() - t0 >= WORKER_JOIN_TIMEOUT_MS:
+			push_error("Game._exit_tree: timed out waiting %d ms for %s task %d" % [WORKER_JOIN_TIMEOUT_MS, label, task_id])
+			return
+		RenderingServer.force_sync()
+		OS.delay_usec(500)
+	WorkerThreadPool.wait_for_task_completion(task_id)
+
 func _exit_tree() -> void:
 	if _prefetch_task != -1:
-		WorkerThreadPool.wait_for_task_completion(_prefetch_task)
+		_join_worker_task(_prefetch_task, "prefetch")
 		_prefetch_task = -1
 	if _rush_task != -1:
-		WorkerThreadPool.wait_for_task_completion(_rush_task)
+		_join_worker_task(_rush_task, "rush")
 		_rush_task = -1
 
 func _notification(what: int) -> void:
@@ -4283,7 +4351,11 @@ func _set_up_race() -> void:
 	status_label.text = "Configuring car and optimizing race strategy..."
 	status_label.modulate = ACCENT
 	campaign_cleared = false
+	if not is_inside_tree():
+		return
 	await get_tree().process_frame
+	if not is_inside_tree():
+		return
 
 	if _strategy_pending and not is_championship_mode and not is_campaign_mode and not is_rally_mode and not is_time_trial_mode:
 		status_label.text = "The strategist is still working out the plans — try again in a moment."
@@ -4513,6 +4585,10 @@ func _open_loading_screen(settings: RaceSettings, qualifying := false) -> void:
 
 func _loading_progress(fraction: float) -> void:
 	loading_screen.set_progress(fraction)
+	if DisplayServer.get_name() == "headless" or not RenderingServer.render_loop_enabled:
+		if is_inside_tree():
+			await get_tree().process_frame
+		return
 	await RenderingServer.frame_post_draw
 
 func _show_results() -> void:
@@ -4764,6 +4840,8 @@ func _show_quali_sheet(qrace: Race, rows: Array, simulated: bool) -> void:
 func _fit_result_panel(col: Control) -> void:
 	# until the column is laid out its wrapped lines measure as if it had no width
 	for k in 5:
+		if not is_inside_tree():
+			return
 		await get_tree().process_frame
 		if not is_instance_valid(col) or not result_panel.visible:
 			return

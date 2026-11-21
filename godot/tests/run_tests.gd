@@ -80,23 +80,115 @@ const FURNITURE := preload("res://scripts/ui/trackside_furniture.gd")
 const CAR_VISUAL := preload("res://scripts/ui/race_car_visual.gd")
 const WORLD := preload("res://scripts/ui/race_world.gd")
 
+## Per-suite watchdog timeout in seconds (override with TEST_SUITE_TIMEOUT; 0 disables).
+const DEFAULT_SUITE_TIMEOUT_SEC := 300
+const HARD_WATCHDOG_GRACE_MSEC := 5000
+
+var _wd_mutex: Mutex
+var _wd_thread: Thread
+var _wd_stop := false
+var _wd_active := false
+var _wd_suite := ""
+var _wd_started_msec := 0
+var _wd_hard_msec := 0
+
+class _SuiteRun:
+	var done := false
+	var result: Variant = null
+
+	func exec(suite: Object) -> void:
+		result = await suite.run()
+		done = true
+
+func _suite_timeout_msec() -> int:
+	var env := OS.get_environment("TEST_SUITE_TIMEOUT")
+	var sec := DEFAULT_SUITE_TIMEOUT_SEC if env == "" else int(env)
+	return maxi(0, sec) * 1000
+
+func _start_watchdog(timeout_msec: int) -> void:
+	if timeout_msec <= 0:
+		return
+	_wd_mutex = Mutex.new()
+	_wd_stop = false
+	_wd_active = false
+	_wd_hard_msec = timeout_msec + HARD_WATCHDOG_GRACE_MSEC
+	_wd_thread = Thread.new()
+	_wd_thread.start(_watchdog_loop)
+
+func _set_watchdog(path: String, active: bool) -> void:
+	if _wd_mutex == null:
+		return
+	_wd_mutex.lock()
+	_wd_suite = path
+	_wd_started_msec = Time.get_ticks_msec()
+	_wd_active = active
+	_wd_mutex.unlock()
+
+func _stop_watchdog() -> void:
+	if _wd_mutex != null:
+		_wd_mutex.lock()
+		_wd_stop = true
+		_wd_active = false
+		_wd_mutex.unlock()
+	if _wd_thread != null:
+		_wd_thread.wait_to_finish()
+		_wd_thread = null
+	_wd_mutex = null
+
+func _watchdog_loop() -> void:
+	while true:
+		OS.delay_msec(250)
+		_wd_mutex.lock()
+		var stop := _wd_stop
+		var active := _wd_active
+		var suite := _wd_suite
+		var elapsed := Time.get_ticks_msec() - _wd_started_msec
+		var limit := _wd_hard_msec
+		_wd_mutex.unlock()
+		if stop:
+			return
+		if active and elapsed >= limit:
+			var msg := "FAIL %s\n    watchdog timeout after %.1f s (main thread blocked in synchronous loop or deadlock)" % [suite, elapsed / 1000.0]
+			print(msg)
+			printerr(msg)
+			OS.kill(OS.get_process_id())
+			return
+
 func _initialize() -> void:
 	# the root joins the tree only after the first frame: until then a node a suite adds to it never gets _ready
 	await process_frame
+	var timeout_msec := _suite_timeout_msec()
+	_start_watchdog(timeout_msec)
 	var failed := 0
 	for path in SUITES:
+		print("run  %s" % path)
 		var script = load(path)
 		var errors: Array = ["failed to load (compile error above)"]
 		if script and script.can_instantiate():
 			var suite = script.new()
-			var result = await suite.run() # a suite may await frames (layout settles at the end of a frame)
-			errors = result if result is Array else []
-			if not suite.get("completed"):
-				errors.append("run() aborted by a script error (see above)")
+			var started_msec := Time.get_ticks_msec()
+			_set_watchdog(path, true)
+			var runner := _SuiteRun.new()
+			runner.exec(suite)
+			var timed_out := false
+			while not runner.done:
+				if timeout_msec > 0 and Time.get_ticks_msec() - started_msec >= timeout_msec:
+					timed_out = true
+					errors = ["watchdog timeout after %.1f s (suite still awaiting frames)" % ((Time.get_ticks_msec() - started_msec) / 1000.0)]
+					for n in root.get_children():
+						n.free()
+					break
+				await process_frame
+			_set_watchdog("", false)
+			if not timed_out:
+				errors = runner.result if runner.result is Array else []
+				if not suite.get("completed"):
+					errors.append("run() aborted by a script error (see above)")
 		print("%s %s" % ["FAIL" if errors else "ok  ", path])
 		for e in errors.slice(0, 20):
 			print("    ", e)
 		failed += errors.size()
+	_stop_watchdog()
 	print("%d failure(s)" % failed)
 	await release(self)
 	quit(1 if failed else 0)

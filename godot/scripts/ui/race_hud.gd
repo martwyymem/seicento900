@@ -1825,7 +1825,9 @@ func _draw_tags() -> void:
 		var tw := _text_w(label, 11, true) + 14.0
 		var r := Rect2(sp.x - tw * 0.5, sp.y - 14.0, tw, 16.0)
 		var moved := true
-		while moved:
+		var guard := 0
+		while moved and guard < placed.size() + 2:
+			guard += 1
 			moved = false
 			for other in placed:
 				if r.intersects(other):

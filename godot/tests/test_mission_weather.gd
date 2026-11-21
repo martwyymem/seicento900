@@ -223,5 +223,35 @@ func _world(map: TownMap, errors: Array[String]) -> void:
 	ow._apply_time()
 	if landmark_mat != null and float(landmark_mat.get_shader_parameter("wet")) > 0.001:
 		errors.append("clear night damped landmark prop material: wet=%.3f" % float(landmark_mat.get_shader_parameter("wet")))
+	# sky radiance uses incremental updates, and CarReflections refreshes when weather or hour jumps (not every frame)
+	if ow.env.sky.process_mode != Sky.PROCESS_MODE_INCREMENTAL:
+		errors.append("open-world sky.process_mode is %d, expected PROCESS_MODE_INCREMENTAL" % ow.env.sky.process_mode)
+	var dummy_car := Node3D.new()
+	ow.world.add_child(dummy_car)
+	dummy_car.position = Vector3(10.0, 0.0, 20.0)
+	ow.reflections = CarReflections.new()
+	ow.world.add_child(ow.reflections)
+	ow.reflections.follow(dummy_car)
+	ow.hour = 13.0
+	ow.set_weather(MapMissions.weather_state("dry"))
+	ow.reflections._process(0.016)
+	var dry_probe_pos := ow.reflections.global_position
+	# tiny free-roam time tick does not trigger a reflection probe redraw
+	ow.hour += 0.0002
+	ow._apply_time()
+	ow.reflections._process(0.016)
+	if ow.reflections.global_position != dry_probe_pos:
+		errors.append("CarReflections redrew on a tiny dry time tick")
+	# switching to rain marks CarReflections stale so its next frame nudges/redraws the cubemap with the overcast sky
+	ow.set_weather(MapMissions.weather_state("rain"))
+	ow.reflections._process(0.016)
+	var rain_probe_pos := ow.reflections.global_position
+	if rain_probe_pos == dry_probe_pos:
+		errors.append("CarReflections did not redraw when weather switched from dry to rain")
+	# switching from rain to snow also triggers a redraw (ground/trees turn white even though overcast barely changes)
+	ow.set_weather(MapMissions.weather_state("snow"))
+	ow.reflections._process(0.016)
+	if ow.reflections.global_position == rain_probe_pos:
+		errors.append("CarReflections did not redraw when weather switched from rain to snow")
 	ow.queue_free()
 	await tree.process_frame

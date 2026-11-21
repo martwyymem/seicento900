@@ -209,7 +209,8 @@ func sky_texture(path: String, wait := false) -> Texture2D:
 		return null
 	if not WorkerThreadPool.is_task_completed(_pending[path]) and not wait:
 		return null
-	_wait_for(_pending[path])
+	if not _wait_for(_pending[path]):
+		return null
 	_pending.erase(path)
 	_mutex.lock()
 	var img: Image = _pending_images.get(path)
@@ -236,13 +237,21 @@ func finish() -> void:
 		_wait_for(id)
 	_pending.clear()
 
+const WAIT_TIMEOUT_MSEC := 30000 ## max wait for an async panorama worker before giving up
+
 ## Blocks until a panorama worker is done. Its get_image() is answered by the main thread's rendering
 ## queue, so that queue is flushed while waiting: a bare wait_for_task_completion() would deadlock.
-static func _wait_for(id: int) -> void:
+## Returns false if the worker did not finish within WAIT_TIMEOUT_MSEC.
+static func _wait_for(id: int) -> bool:
+	var t0 := Time.get_ticks_msec()
 	while not WorkerThreadPool.is_task_completed(id):
+		if Time.get_ticks_msec() - t0 >= WAIT_TIMEOUT_MSEC:
+			push_error("WorldAssets: timed out waiting %d ms for async sky task %d" % [WAIT_TIMEOUT_MSEC, id])
+			return false
 		RenderingServer.force_sync()
 		OS.delay_usec(500)
 	WorkerThreadPool.wait_for_task_completion(id)
+	return true
 
 # ---------------- ground textures ----------------
 

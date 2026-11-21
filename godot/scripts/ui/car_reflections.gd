@@ -44,6 +44,10 @@ func follow(car: Node3D) -> void:
 	if car:
 		_set_layers(car, CAR_LAYER)
 
+## Marks the probe stale so its next frame redraws the cubemap (e.g. when weather or time of day changes).
+func refresh() -> void:
+	_age = MAX_AGE
+
 func _process(delta: float) -> void:
 	if not is_instance_valid(target) or not visible:
 		return

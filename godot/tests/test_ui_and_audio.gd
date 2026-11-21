@@ -214,6 +214,8 @@ func run() -> Array:
 	# neither node joined the tree, so nothing frees them but us
 	race.dispose()
 	audio.free()
+	if world.assets:
+		world.assets.finish()
 	world.free()
 	completed = true
 	return errors
