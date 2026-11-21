@@ -73,7 +73,7 @@ const TRACK_DEFAULTS := {
 	"zandvoort": {"laps": 6, "wear": 2.0},
 	"fiat": {"laps": 8, "wear": 2.0},
 	"tokyo": {"laps": 2, "wear": 1.0}, # the real C1 inner loop, 14.3 km with the spiral
-	"bielsko": {"laps": 5, "wear": 2.0},
+	"bielsko": {"laps": 2, "wear": 2.0}, # Kamienica/Olszówka loop under Szyndzielnia, 5.05 km, ~3:25 a lap (the invented circuit had 5)
 	"krakow": {"laps": 6, "wear": 2.0},
 	"oswiecim": {"laps": 2, "wear": 2.0}, # the Soła bridges loop, 3.1 km, ~2:20 a lap (the invented circuit had 8)
 	"wilamowice": {"laps": 3, "wear": 2.0},
