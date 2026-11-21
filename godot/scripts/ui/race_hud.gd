@@ -148,6 +148,11 @@ var _map_origin := Vector2.ZERO
 var _map_key := "" ## what minimap_base last drew (track, size, flags)
 var _map_waters: Array[PackedVector2Array] = []
 var _map_buildings: Array[PackedVector2Array] = []
+## the waters and buildings above as one triangle batch (_build_map): one polygon draw each was 600-11,700 canvas
+## draw calls a frame (Tokyo, the Nordschleife), replayed every frame whatever the graphics preset
+var _map_fill_points := PackedVector2Array()
+var _map_fill_colors := PackedColorArray()
+var _map_fill_indices := PackedInt32Array()
 var _dash_key := [] ## what the dash last drew (size, lit segments, gear, speed)
 var _note_key := [] ## what the pace note last drew (race, the notes up, the sector between notes)
 ## Batching: every polygon, circle, arc and polyline drawn on its own is a separate draw call, and text
@@ -817,9 +822,14 @@ func _apply_motion() -> void:
 	if corners_group:
 		corners_group.position = _motion.corner_offset
 	var crot := _motion.corner_rot
+	# set only on a change: assigning these every frame made every corner panel (the minimap with its thousands of
+	# buildings among them) re-record its drawing each frame
 	for c in _corner_panels:
-		c.pivot_offset = c.size * 0.5
-		c.rotation = crot
+		var pivot := c.size * 0.5
+		if c.pivot_offset != pivot:
+			c.pivot_offset = pivot
+		if c.rotation != crot:
+			c.rotation = crot
 
 func _canvas(fn: Callable, parent: Control = null) -> Control:
 	var c := Control.new()
@@ -829,6 +839,9 @@ func _canvas(fn: Callable, parent: Control = null) -> Control:
 	return c
 
 static func _place(c: Control, al: float, at: float, ar: float, ab: float, ol: float, ot: float, orr: float, ob: float) -> void:
+	if c.anchor_left == al and c.anchor_top == at and c.anchor_right == ar and c.anchor_bottom == ab \
+			and c.offset_left == ol and c.offset_top == ot and c.offset_right == orr and c.offset_bottom == ob:
+		return # _layout runs every frame: re-assigning the same anchors made the panel redraw each time
 	c.anchor_left = al
 	c.anchor_top = at
 	c.anchor_right = ar
@@ -1902,6 +1915,10 @@ func _build_map() -> void:
 	_map_start = PackedVector2Array([(2.0 * a - n) * _map_scale + _map_origin, n * _map_scale + _map_origin])
 	_map_waters.clear()
 	_map_buildings.clear()
+	_map_fill_points.clear()
+	_map_fill_colors.clear()
+	_map_fill_indices.clear()
+	var fills := []
 	if tr.cfg:
 		var env_path := "res://data/tracks/%s_env.json" % tr.cfg.key
 		if FileAccess.file_exists(env_path):
@@ -1913,12 +1930,28 @@ func _build_map() -> void:
 						pts.append(Vector2(w[k], w[k + 1]) * _map_scale + _map_origin)
 					if pts.size() >= 3:
 						_map_waters.append(pts)
+						fills.append([pts, Color(0.14, 0.42, 0.72, 0.45), false])
 				for b_entry in env_json.get("buildings", []):
 					var pts := PackedVector2Array()
 					for k in range(3, b_entry.size() - 1, 2):
 						pts.append(Vector2(b_entry[k], b_entry[k + 1]) * _map_scale + _map_origin)
-					if pts.size() >= 3 and not Geometry2D.triangulate_polygon(pts).is_empty(): ## a footprint that collapses at map scale can't be filled
-						_map_buildings.append(pts)
+					if pts.size() >= 3:
+						fills.append([pts, Color(0.42, 0.50, 0.62, 0.24), true])
+	for f in fills:
+		_map_fill(f[0], f[1], f[2])
+
+func _map_fill(pts: PackedVector2Array, col: Color, building: bool) -> void:
+	var tris := Geometry2D.triangulate_polygon(pts)
+	if tris.is_empty():
+		return # a footprint that collapses at map scale can't be filled
+	if building:
+		_map_buildings.append(pts)
+	var base := _map_fill_points.size()
+	_map_fill_points.append_array(pts)
+	for k in pts.size():
+		_map_fill_colors.append(col)
+	for i in tris:
+		_map_fill_indices.append(base + i)
 
 ## What minimap_base shows: the circuit, the map's size and the flags along it.
 func _minimap_key() -> String:
@@ -1941,10 +1974,15 @@ func _draw_minimap_base() -> void:
 	minimap_base.draw_rect(rect, HudLayout.glass_plate(0.84))
 	if _map_track != race.track or _map_size != minimap.size:
 		_build_map()
-	for w in _map_waters:
-		minimap_base.draw_colored_polygon(w, Color(0.14, 0.42, 0.72, 0.45))
-	for b_poly in _map_buildings:
-		minimap_base.draw_colored_polygon(b_poly, Color(0.42, 0.50, 0.62, 0.24))
+	if not _map_fill_indices.is_empty(): # every water and building in one draw (under the circuit's strips, flushed below)
+		var base := _tri_points.size()
+		_tri_points.append_array(_map_fill_points)
+		_tri_colors.append_array(_map_fill_colors)
+		if base == 0: # (the usual case: one native copy, not a GDScript loop over ~130k indices while the HUD sways)
+			_tri_indices.append_array(_map_fill_indices)
+		else:
+			for i in _map_fill_indices:
+				_tri_indices.append(base + i)
 	# glowing neon circuit ribbon
 	_tri_strip(_map_points, 9.5, Color(cyan, 0.28), true)
 	_tri_strip(_map_points, 6.2, _shade(0.88), true)

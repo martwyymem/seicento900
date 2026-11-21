@@ -546,6 +546,12 @@ func _sync_rendering() -> void:
 		_view_live = live
 		render_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS if live else SubViewport.UPDATE_DISABLED
 		world_view.process_mode = Node.PROCESS_MODE_INHERIT if live else Node.PROCESS_MODE_DISABLED
+	# the menu's car turntable: its viewport's parent is the always-visible Game, so WHEN_PARENT_VISIBLE drew a full
+	# car scene behind every race and every free-roam frame
+	if menu_car_viewport:
+		var showcase := SubViewport.UPDATE_ALWAYS if is_instance_valid(menu_car_preview) and menu_car_preview.is_visible_in_tree() else SubViewport.UPDATE_DISABLED
+		if menu_car_viewport.render_target_update_mode != showcase:
+			menu_car_viewport.render_target_update_mode = showcase
 	# the front-end pages draw only UI (the 3D view is off behind them), so they run at the player's own limit
 	var fps: int = FPS_LIMITS[graphics_fps_limit].fps
 	if not _app_focused:
