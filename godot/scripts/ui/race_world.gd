@@ -596,8 +596,12 @@ func _update_atmosphere(hour: float, wet: float, rain: float, snow: float = 0.0,
 	world_environment.fog_sun_scatter = 0.18 * glow + (0.06 + 0.28 * golden) * clear
 	# glow, exposure and grade with the light (SceneMood); ACES deepens colour, so the presets' saturation is eased
 	SceneMood.by_hour(world_environment, day_t, golden, night, lerpf(1.0, 1.0 + (float(preset.saturation) - 1.0) * 0.5, clear))
-	# after dark the lamps, headlights and tail lights wear soft halos, wider in the rain's mist
-	world_environment.glow_bloom += 0.03 * night * clampf(rain * 1.5, 0.0, 1.0)
+	# after dark the lamps, headlights and tail lights wear soft halos; keep rain bloom mild and raise the threshold
+	# on wet night tarmac so lamp reflections do not bloom into a white glare sheet
+	var wet_night := night * clampf(maxf(rain * 1.5, wet), 0.0, 1.0)
+	world_environment.glow_bloom += 0.008 * night * clampf(rain * 1.5, 0.0, 1.0)
+	world_environment.glow_hdr_threshold += 0.14 * wet_night
+	world_environment.glow_intensity *= 1.0 - 0.15 * wet_night
 	var is_fog := fog > 0.1 or (race and race.weather.mode == "fog")
 	# volumetric fog shows the headlight beams in the rain and after dark (High and Ultra only), or when in fog
 	var volumetric := is_fog or (quality >= 2 and (rain > 0.08 or night > 0.45 or hail > 0.08 or snow > 0.08))
@@ -624,7 +628,7 @@ func _update_atmosphere(hour: float, wet: float, rain: float, snow: float = 0.0,
 	if _lamp_material:
 		_lamp_material.emission_energy_multiplier = 7.0 * _lamp_on
 	for d in _lamp_decals:
-		d.emission_energy = float(d.get_meta("glow", POOL_GLOW)) * _lamp_on * (1.0 + 0.4 * wet) # a wet road shines brighter under a lamp
+		d.emission_energy = float(d.get_meta("glow", POOL_GLOW)) * _lamp_on * (1.0 - 0.15 * wet) # wet roads shine via specular and streaks, not an over-bright diffuse pool
 		d.visible = _lamp_on > 0.01
 	if weather_fx:
 		weather_fx.update(rain, snow, hail, fog, race != null and race.weather.mode == "fog", quality)
@@ -3497,15 +3501,15 @@ func _build_lighting() -> void:
 		light.shadow_enabled = false
 		light.spot_attenuation = 0.8
 		light.spot_angle_attenuation = 1.6 # a soft edge to the cone
-		light.light_specular = 0.4 # an omni at 0.6 laid a sheet of white glare over wet tarmac; a spot pointed down does not
-		light.light_volumetric_fog_energy = 0.3 # the lamps' haze would grey the whole picture in rain
+		light.light_specular = 0.22 # low enough that overlapping spots on wet night tarmac do not blow the road edge out to white
+		light.light_volumetric_fog_energy = 0.15 # subtle rain cone without veiling the road on High/Ultra
 		light.visible = false
 		root.add_child(light)
 		_lamp_pool.append(light)
 	_lamp_pick.resize(LAMP_POOL.max() + 1)
 	_lamp_pick_d2.resize(LAMP_POOL.max() + 1)
 
-const CITY_MAST_POWER := 0.35 ## a city circuit's floodlight masts' share of the full 70 (its pool keeps sqrt of it; see _lamp_post)
+const CITY_MAST_POWER := 0.25 ## a city circuit's floodlight masts' share of the full 70 (its pool keeps sqrt of it; see _lamp_post)
 
 ## One lamp post with its foot at track point p (ground height in world units), turned towards track point
 ## look. A street post is a pole with a short arm and a lantern; a mast is a tall pole carrying a bank of
@@ -3537,8 +3541,8 @@ func _lamp_post(fx: Array, p: Vector2, ground: float, look: Vector2, mast: bool,
 		fx[1].append(Transform3D(basis.scaled_local(Vector3(0.11, 0.11, arm)), top + to * arm * 0.5))
 		var at := top + to * (arm - 0.1) - Vector3.UP * 0.12
 		fx[2].append(Transform3D(basis.scaled_local(Vector3(0.42, 0.1, 0.95)), at))
-		_register_lamp(at - Vector3.UP * 0.5, Color("#ffd08a"), 10.0, 30.0, false, Vector3.DOWN, 68.0,
-			Vector3(at.x, ground + 0.8, at.z), 8.5, POOL_GLOW, 1.3)
+		_register_lamp(at - Vector3.UP * 0.5, Color("#ffd08a"), 7.5, 28.0, false, Vector3.DOWN, 64.0,
+			Vector3(at.x, ground + 0.8, at.z), 6.5, POOL_GLOW, 1.3)
 
 ## A lamp at `at` pointing along `aim` with a cone of `cone` degrees. pool_at / pool_r: the pool of light it lays
 ## on the ground (painted by a decal), none when pool_r is 0, and streak_w the width of its reflection streak on a
@@ -3577,7 +3581,7 @@ func _build_lamp_streaks(root: Node3D) -> void:
 	for i in pools.size():
 		var d: Decal = pools[i]
 		mm.set_instance_transform(i, Transform3D(Basis(), d.position + Vector3.UP * 0.07))
-		var c: Color = d.modulate * (0.9 if float(d.get_meta("streak")) > 2.0 else 1.4)
+		var c: Color = d.modulate * (0.42 if float(d.get_meta("streak")) > 2.0 else 0.62)
 		mm.set_instance_custom_data(i, Color(c.r, c.g, c.b, float(d.get_meta("streak"))))
 	var mat := ShaderMaterial.new()
 	mat.shader = preload("res://shaders/lamp_streak.gdshader")
@@ -3589,7 +3593,7 @@ func _build_lamp_streaks(root: Node3D) -> void:
 	inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(inst)
 
-const POOL_GLOW := 0.55 ## emission of a lamp's pool at its middle, after dark
+const POOL_GLOW := 0.24 ## emission of a lamp's pool at its middle, after dark
 
 ## A soft round pool of lamp light on the ground: a decal only the emission of which shows, so it costs no
 ## light and lights nothing but what lies within a couple of metres of the ground under the lamp.

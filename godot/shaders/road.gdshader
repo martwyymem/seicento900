@@ -308,10 +308,10 @@ void fragment() {
 	float puddle = smoothstep(0.62, 0.76, pool_noise + (w - 0.7) * 0.7 - edge * 0.05) * step(0.3, w);
 	col *= mix(1.0, 0.52, w);
 	col = mix(col, col * 0.8, puddle);
-	// a wet sheen, not a mirror: by day the sky would wash the whole road out; after dark there is no bright
-	// sky to mirror, so the film turns glossier and the lamps and tail lights stretch into streaks across it
-	rough = mix(rough, mix(0.3, 0.18, night), w);
-	rough = mix(rough, mix(0.1, 0.05, night), puddle);
+	// a wet sheen, not a mirror: by day the sky would wash the whole road out; after dark the film turns slightly
+	// glossier so lamps reflect cleanly, while keeping roughness high enough that spots do not blow puddles to white
+	rough = mix(rough, mix(0.3, 0.24, night), w);
+	rough = mix(rough, mix(0.1, 0.13, night), puddle);
 	vec3 flat_n = vec3(0.5, 0.5, 1.0);
 	nmap = mix(nmap, flat_n, w * 0.55 + puddle * 0.45);
 	if (rain > 0.02 && puddle > 0.0) {
@@ -338,7 +338,7 @@ void fragment() {
 	ALBEDO = col;
 	ROUGHNESS = clamp(rough, 0.02, 1.0);
 	METALLIC = 0.0;
-	SPECULAR = mix(0.35, mix(0.42, 0.46, night), w) + spark * 0.35;
+	SPECULAR = mix(0.35, mix(0.42, 0.38, night), w) + spark * 0.35;
 	NORMAL_MAP = nmap;
 	NORMAL_MAP_DEPTH = use_textures ? 1.0 : 0.6;
 }

@@ -38,7 +38,7 @@ static func base(env: Environment) -> void:
 static func by_hour(env: Environment, day: float, golden: float, night: float, saturation := 1.15) -> void:
 	# the eye opens up after dark: the moonlit blue stays readable and the lights bloom harder
 	env.tonemap_exposure = lerpf(1.0, 1.35, night)
-	env.glow_hdr_threshold = lerpf(1.2, 0.55, night)
+	env.glow_hdr_threshold = lerpf(1.2, 0.78, night)
 	env.glow_intensity = lerpf(0.4, 1.05, night) + 0.15 * golden
 	env.glow_bloom = 0.012 * night
 	env.adjustment_contrast = 1.12
