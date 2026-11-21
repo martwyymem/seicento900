@@ -273,6 +273,9 @@ func run() -> Array:
 			_check_pszczyna_park(c_tr, c_def, errors)
 			checked += 5
 
+	_check_canopy_rim(errors)
+	checked += 4
+
 	if checked < 1000:
 		errors.append("only %d values checked" % checked)
 	print("    %d values checked" % checked)
@@ -280,6 +283,87 @@ func run() -> Array:
 	return errors
 
 const SURROUNDINGS_GD := preload("res://scripts/ui/surroundings.gd")
+const RACE_WORLD_GD := preload("res://scripts/ui/race_world.gd")
+const WORLD_ASSETS_GD := preload("res://scripts/ui/world_assets.gd")
+
+## Distant woods canopy (surroundings.gd _build_canopy): every outer-rim vertex and rim-edge midpoint must come
+## down to the terrain (< 0.5 m above ground_height) so you cannot see sky/haze underneath the woods.
+func _check_canopy_rim(errors: Array) -> void:
+	for key in ["pszczyna", "gp", "spa", "tokyo"]:
+		var tr := Track.new(Track.load_def(key))
+		var world: Node3D = RACE_WORLD_GD.new()
+		world.assets = WORLD_ASSETS_GD.new()
+		world.quality = 2
+		world.track = tr
+		world.track_root = Node3D.new()
+		world.add_child(world.track_root)
+		var b := tr.bounds
+		world.world_center = Vector2((b[0] + b[2]) * 0.5, (b[1] + b[3]) * 0.5)
+		world.elevation_base = tr.h_min
+		var sur = SURROUNDINGS_GD.new()
+		if not sur.setup(world):
+			errors.append("%s: surroundings setup failed" % key)
+			world.free()
+			continue
+		world.surroundings = sur
+		var ground := MeshInstance3D.new()
+		world.track_root.add_child(ground)
+		world._build_terrain(ground)
+		var sur_root := Node3D.new()
+		sur_root.name = "Surroundings"
+		world.track_root.add_child(sur_root)
+		sur._build_banking(sur_root)
+		var inner: float = sur._clear_distance() + SURROUNDINGS_GD.TREE_BAND[world.quality] - 25.0
+		sur._build_canopy(sur_root, inner)
+		var canopy: Node = sur_root.find_child("Canopy", false, false)
+		if canopy == null or canopy.get_child_count() == 0:
+			errors.append("%s: expected a Canopy mesh for its woods" % key)
+			world.free()
+			continue
+		var vid_by_key := {}
+		var verts: Array[Vector3] = []
+		var edge_count := {}
+		for child in canopy.get_children():
+			var mi := child as MeshInstance3D
+			if mi == null or mi.mesh == null or mi.mesh.get_surface_count() == 0:
+				continue
+			var arr: PackedVector3Array = mi.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+			for i in range(0, arr.size() - 2, 3):
+				var ids := PackedInt32Array([0, 0, 0])
+				for j in 3:
+					var v := arr[i + j]
+					var qk := Vector3i(roundi(v.x * 1000.0), roundi(v.y * 1000.0), roundi(v.z * 1000.0))
+					var id: int = vid_by_key.get(qk, -1)
+					if id < 0:
+						id = verts.size()
+						vid_by_key[qk] = id
+						verts.append(v)
+					ids[j] = id
+				for e in [[ids[0], ids[1]], [ids[1], ids[2]], [ids[2], ids[0]]]:
+					var ea: int = mini(e[0], e[1])
+					var eb: int = maxi(e[0], e[1])
+					if ea != eb:
+						var ek := Vector2i(ea, eb)
+						edge_count[ek] = int(edge_count.get(ek, 0)) + 1
+		var rim_ids := {}
+		var mid_max := -INF
+		for ek in edge_count:
+			if int(edge_count[ek]) == 1:
+				rim_ids[ek.x] = true
+				rim_ids[ek.y] = true
+				var m := (verts[ek.x] + verts[ek.y]) * 0.5
+				var mg: float = sur.ground_height(m.x + world.world_center.x, m.z + world.world_center.y)
+				mid_max = maxf(mid_max, m.y - mg)
+		var rim_max := -INF
+		for id in rim_ids:
+			var v := verts[id]
+			var g: float = sur.ground_height(v.x + world.world_center.x, v.z + world.world_center.y)
+			rim_max = maxf(rim_max, v.y - g)
+		if rim_ids.is_empty():
+			errors.append("%s: canopy has no open rim vertices" % key)
+		elif rim_max > 0.5 or mid_max > 0.5:
+			errors.append("%s: canopy rim floats over ground (worst vert %.2f m, edge mid %.2f m, limit 0.50 m)" % [key, rim_max, mid_max])
+		world.free()
 
 ## Park Zamkowy (OSM way 172576408, leisure=park) simplified to 6 m, in Pszczyna's track metres (x east, y south).
 const PSZCZYNA_PARK := [108, 339, 114, 321, 108, 298, 210, 254, 197, 227, 261, 200, 263, 177, 296, 180, 359, 225, 416, 253,

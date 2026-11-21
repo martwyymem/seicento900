@@ -20,15 +20,15 @@ void vertex() {
 
 void fragment() {
 	vec3 n = normalize(cross(dFdy(world_pos), dFdx(world_pos)));
-	if (n.y < 0.0) {
+	if (dot(n, CAMERA_POSITION_WORLD - world_pos) < 0.0) {
 		n = -n;
 	}
-	// crowns: fine bumps on top of the mesh's lumps
-	vec2 p = world_pos.xz;
+	// crowns: fine bumps on top of the mesh's lumps (y offset prevents vertical streaking on the rim skirt)
+	vec2 p = world_pos.xz + world_pos.y * vec2(0.37, 0.23);
 	float fine = texture(grain, p * 0.21).r;
 	float crowns = texture(grain, p * 0.07 + 0.3).r;
-	float stands = texture(grain, p * 0.006 + 0.7).r;
-	n = normalize(n + vec3(fine - 0.5, 0.0, crowns - 0.5) * 0.9);
+	float stands = texture(grain, world_pos.xz * 0.006 + 0.7).r;
+	n = normalize(n + vec3(fine - 0.5, (crowns - 0.5) * (1.0 - abs(n.y)), crowns - 0.5) * 0.9);
 	NORMAL = normalize((VIEW_MATRIX * vec4(n, 0.0)).xyz);
 	float conifer = step(stands, conifer_share);
 	vec3 col = mix(broadleaf_color, conifer_color, conifer);

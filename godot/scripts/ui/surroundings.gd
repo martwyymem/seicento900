@@ -536,8 +536,10 @@ static func _tree_proxy(species: String, mesh: Mesh) -> ArrayMesh:
 	_tree_proxies[species] = out
 	return out
 
+const CANOPY_SKIRT_SINK := 1.5 ## metres the canopy's rim skirt sinks below ground_height so slopes never expose a gap
+
 ## The canopy: a sheet of crowns 14-24 m over the ground wherever the land map is wood, from inner metres off
-## the centreline outwards (the single trees stand in front of its edge). Its rim drops to the ground.
+## the centreline outwards (the single trees stand in front of its edge). A skirt drops its rim into the ground.
 func _build_canopy(root: Node3D, inner: float) -> void:
 	var span := maxf(land_rect.size.x, land_rect.size.y)
 	var cell := maxf(9.0, span / 560.0)
@@ -562,11 +564,14 @@ func _build_canopy(root: Node3D, inner: float) -> void:
 	var chunks := {} # chunk -> [index of the cell's first corner, ...]
 	var need := PackedByteArray()
 	need.resize(inside.size())
+	var drawn := PackedByteArray()
+	drawn.resize(inside.size())
 	for jz in nz:
 		for jx in nx:
 			var k := jz * row + jx
 			if inside[k] + inside[k + 1] + inside[k + row] + inside[k + row + 1] < 3:
 				continue
+			drawn[k] = 1
 			need[k] = 1
 			need[k + 1] = 1
 			need[k + row] = 1
@@ -577,10 +582,12 @@ func _build_canopy(root: Node3D, inner: float) -> void:
 			chunks[key].append(k)
 	if chunks.is_empty():
 		return
-	# the crown's top at each of those points, once: a point outside the wood or on its edge is the rim,
-	# which comes down towards the ground
+	# the crown's top (and ground-sunk skirt base) at each needed point, once: a point on the wood's edge
+	# shoulders down to 4-7 m and a skirt carries every open rim edge into the terrain
 	var tops := PackedVector3Array()
 	tops.resize(inside.size())
+	var bases := PackedVector3Array()
+	bases.resize(inside.size())
 	for jz in nz + 1:
 		for jx in nx + 1:
 			var k := jz * row + jx
@@ -593,7 +600,11 @@ func _build_canopy(root: Node3D, inner: float) -> void:
 			if inside[k] == 1 and not _is_rim(inside, row, nx, nz, jx, jz):
 				var broad := 0.5 + 0.5 * sin(x * 0.013 + z * 0.007) * cos(z * 0.009 - x * 0.005)
 				h = 14.0 + broad * 6.0 + lump * 4.0
-			tops[k] = Vector3(x - world.world_center.x, ground_height(x, z) + h, z - world.world_center.y)
+			var wx: float = x - world.world_center.x
+			var wz: float = z - world.world_center.y
+			var g := ground_height(x, z)
+			tops[k] = Vector3(wx, g + h, wz)
+			bases[k] = Vector3(wx, g - CANOPY_SKIRT_SINK, wz)
 	var mat := ShaderMaterial.new()
 	mat.shader = CANOPY_SHADER
 	mat.set_shader_parameter("grain", world.noise_texture("grain"))
@@ -604,22 +615,60 @@ func _build_canopy(root: Node3D, inner: float) -> void:
 	root.add_child(canopy)
 	for key in chunks:
 		var verts := PackedVector3Array()
-		for k in chunks[key]:
-			var p00 := tops[k]
-			var p10 := tops[k + 1]
-			var p01 := tops[k + row]
-			var p11 := tops[k + row + 1]
-			# a corner outside the wood drops its triangle
-			if inside[k] == 0:
+		for k: int in chunks[key]:
+			var jx := k % row
+			var jz := k / row
+			var k00 := k
+			var k10 := k + 1
+			var k01 := k + row
+			var k11 := k + row + 1
+			var p00 := tops[k00]
+			var p10 := tops[k10]
+			var p01 := tops[k01]
+			var p11 := tops[k11]
+			var north_open := jz == 0 or drawn[k - row] == 0
+			var south_open := jz == nz - 1 or drawn[k + row] == 0
+			var west_open := jx == 0 or drawn[k - 1] == 0
+			var east_open := jx == nx - 1 or drawn[k + 1] == 0
+			# a corner outside the wood drops its triangle; every open edge gets a skirt down to the ground
+			if inside[k00] == 0:
 				verts.append_array(PackedVector3Array([p10, p11, p01]))
-			elif inside[k + 1] == 0:
+				_append_skirt(verts, tops, bases, k01, k10)
+				if east_open:
+					_append_skirt(verts, tops, bases, k10, k11)
+				if south_open:
+					_append_skirt(verts, tops, bases, k11, k01)
+			elif inside[k10] == 0:
 				verts.append_array(PackedVector3Array([p00, p11, p01]))
-			elif inside[k + row] == 0:
+				_append_skirt(verts, tops, bases, k00, k11)
+				if south_open:
+					_append_skirt(verts, tops, bases, k11, k01)
+				if west_open:
+					_append_skirt(verts, tops, bases, k01, k00)
+			elif inside[k01] == 0:
 				verts.append_array(PackedVector3Array([p00, p10, p11]))
-			elif inside[k + row + 1] == 0:
+				if north_open:
+					_append_skirt(verts, tops, bases, k00, k10)
+				if east_open:
+					_append_skirt(verts, tops, bases, k10, k11)
+				_append_skirt(verts, tops, bases, k11, k00)
+			elif inside[k11] == 0:
 				verts.append_array(PackedVector3Array([p00, p10, p01]))
+				if north_open:
+					_append_skirt(verts, tops, bases, k00, k10)
+				_append_skirt(verts, tops, bases, k10, k01)
+				if west_open:
+					_append_skirt(verts, tops, bases, k01, k00)
 			else:
 				verts.append_array(PackedVector3Array([p00, p10, p01, p10, p11, p01]))
+				if north_open:
+					_append_skirt(verts, tops, bases, k00, k10)
+				if east_open:
+					_append_skirt(verts, tops, bases, k10, k11)
+				if south_open:
+					_append_skirt(verts, tops, bases, k11, k01)
+				if west_open:
+					_append_skirt(verts, tops, bases, k01, k00)
 		var arrays := []
 		arrays.resize(Mesh.ARRAY_MAX)
 		arrays[Mesh.ARRAY_VERTEX] = verts
@@ -629,6 +678,19 @@ func _build_canopy(root: Node3D, inner: float) -> void:
 		inst.mesh = mesh
 		inst.material_override = mat
 		canopy.add_child(inst)
+
+## Two outward-facing (CW) triangles closing one open canopy rim edge from tops down to bases.
+static func _append_skirt(verts: PackedVector3Array, tops: PackedVector3Array, bases: PackedVector3Array, ka: int, kb: int) -> void:
+	var ta := tops[ka]
+	var tb := tops[kb]
+	var ba := bases[ka]
+	var bb := bases[kb]
+	verts.append(tb)
+	verts.append(ta)
+	verts.append(ba)
+	verts.append(tb)
+	verts.append(ba)
+	verts.append(bb)
 
 ## A wood's grid point next to one outside it (or on the grid's edge).
 static func _is_rim(inside: PackedByteArray, row: int, nx: int, nz: int, jx: int, jz: int) -> bool:
