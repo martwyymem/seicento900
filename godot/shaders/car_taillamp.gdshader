@@ -35,5 +35,7 @@ void fragment() {
 	SPECULAR = sheen;
 	CLEARCOAT = sheen;
 	CLEARCOAT_ROUGHNESS = 0.0;
-	EMISSION = vec3(1.0, 0.004, 0.0) * (glow * glow * inner * 1.7 + glow * 0.15) * glow_gain;
+	// kept moderate and green-free: ACES compresses a bright red channel and lets the green through, so a strong glow
+	// read pumpkin orange at dusk (2026-11-21); the lens reads red and the bloom carries the brightness
+	EMISSION = vec3(1.0, 0.0, 0.004) * (glow * glow * inner * 0.85 + glow * 0.1) * glow_gain;
 }

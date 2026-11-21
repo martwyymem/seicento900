@@ -49,7 +49,7 @@ func _lamps(car: Node3D, key: String) -> void:
 	rc.brake_on = true
 	car.sync(rc, 1.0 / 60.0, 0.0, 0.0, false)
 	s = _state(car)
-	check("%s braking by day: bright brake lights, headlamps off" % key, s.tail >= 0.5 and s.bulb >= 3.0 and s.glow == 1.0 and s.lit == 0.0, str(s))
+	check("%s braking by day: bright brake lights, headlamps off" % key, s.tail >= 0.3 and s.bulb >= 2.0 and (s.bulb_col as Color).g < 0.05 and s.glow == 1.0 and s.lit == 0.0, str(s))
 	rc.brake_on = false
 	rc.rev = true
 	car.sync(rc, 1.0 / 60.0, 0.0, 0.0, false)

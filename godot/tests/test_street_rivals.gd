@@ -11,6 +11,7 @@ func run() -> Array:
 	_straight(errors)
 	_wiggly(errors)
 	_drag(errors)
+	_drag_kerbs(errors)
 	_knockout_fast(errors)
 	_knockout_slow(errors)
 	_places(errors)
@@ -346,3 +347,25 @@ func _bands(errors: Array[String]) -> void:
 		t[diff] = sr.best_time()
 	if not (float(t.easy) > float(t.medium) and float(t.medium) > float(t.hard)):
 		errors.append("difficulty does not order the rivals' pace: %s" % [t])
+
+## A drag grid on a narrow street keeps every car's body on the tarmac (2026-11-21 QA: the outer pair of four, 2 m
+## apart, hung over the kerbs of a 6.2 m street): three abreast there, four on a 7.4 m road, no closer than CAR_W.
+func _drag_kerbs(errors: Array[String]) -> void:
+	var path := LiveEvents.resample(_line(402.0), StreetRivals.STEP)
+	for hw: float in [3.1, 3.4, 3.75, 5.0]:
+		var half := PackedFloat32Array()
+		half.resize(path.size())
+		half.fill(hw)
+		var n := mini(3, StreetRivals.drag_rivals_fit(hw))
+		var sr := StreetRivals.new(path, "stock", n, 5, {"grid": "drag", "profile": {"half": half}})
+		var lats: Array = [sr.player_grid().y]
+		for r in sr.rivals:
+			lats.append(float(r.lat))
+		lats.sort()
+		for k in lats.size():
+			if absf(float(lats[k])) > hw - StreetRivals.EDGE + 0.01:
+				errors.append("drag on a %.2f m half street: a car %.2f m off centre hangs over the kerb" % [hw, float(lats[k])])
+			if k > 0 and float(lats[k]) - float(lats[k - 1]) < StreetRivals.CAR_W - 0.01:
+				errors.append("drag on a %.2f m half street: cars %.2f m apart" % [hw, float(lats[k]) - float(lats[k - 1])])
+		if hw >= 3.7 and n != 3 or hw < 3.6 and n != 2:
+			errors.append("drag on a %.2f m half street: %d rivals" % [hw, n])

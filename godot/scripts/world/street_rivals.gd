@@ -116,9 +116,11 @@ func _init(path: PackedVector2Array, car_key: String, count: int, seed_value: in
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value
 	var n := clampi(count, 0, MAX_RIVALS)
-	# a drag grid: everyone abreast, as wide apart as the road allows (a two-lane carriageway takes four)
-	var road_w := 2.0 * (half[0] if n_pts > 0 else 4.0)
-	drag_lane = clampf((road_w - 1.7) / maxf(n, 1), 2.0, 3.6)
+	# a drag grid: everyone abreast, as wide apart as the narrowest of the run allows (a two-lane carriageway takes
+	# four), the outer cars' centres EDGE in from the tarmac's edge so no body hangs over a kerb (2026-11-21 QA: a
+	# 2 m floor put the outer pair of four on a 6.2 m street half over the pavement); drag_rivals_fit is the field
+	var road_w := 2.0 * drag_half(half, n_route)
+	drag_lane = clampf((road_w - 2.0 * EDGE) / maxf(n, 1), CAR_W, 3.6)
 	var dlats := []
 	for k in n + 1:
 		dlats.append((float(k) - float(n) * 0.5) * drag_lane)
@@ -153,6 +155,20 @@ func _init(path: PackedVector2Array, car_key: String, count: int, seed_value: in
 				rk.env = _envelope(float(rk.vmax), float(pc[2]) * float(rk.f) * float(rk.f), float(pc[3]) * float(rk.f))
 
 var _player_lat0 := DRAG_PLAYER_LAT
+
+## The narrowest half width of a drag's run (the route's first n points; 4 m without a profile).
+static func drag_half(halves: PackedFloat32Array, n: int) -> float:
+	if halves.is_empty() or n <= 0:
+		return 4.0
+	var lo := INF
+	for i in mini(n, halves.size()):
+		lo = minf(lo, halves[i])
+	return lo
+
+## How many rivals fit abreast of the player on a drag road `half` m either side of its centre: CAR_W apart, the outer
+## centres EDGE in from the edges.
+static func drag_rivals_fit(half_w: float) -> int:
+	return maxi(1, int(floorf((2.0 * half_w - 2.0 * EDGE) / CAR_W + 0.001)))
 
 ## Where the player should be put at the start, (along, across from the road's centre): the default grid has it
 ## at the route's start, a drag grid in its own lane.

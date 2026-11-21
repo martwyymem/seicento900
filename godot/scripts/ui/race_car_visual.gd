@@ -69,7 +69,7 @@ var _spins := PackedFloat64Array([0.0, 0.0, 0.0, 0.0])
 var _lamp_sig := Vector4(-1.0, -1.0, -1.0, -1.0) ## the lamp state last applied (set_lamps)
 const BULB_OFF := Color(0.36, 0.09, 0.04)
 const BULB_ON := Color(0.9, 0.2, 0.06)
-const BULB_RED := Color(1.0, 0.12, 0.03)
+const BULB_RED := Color(1.0, 0.015, 0.008) ## deep red: any green in a bright emitter turns orange under ACES (2026-11-21 dusk QA)
 const BULB_WHITE := Color(1.0, 0.86, 0.72) ## the reversing lamp
 var _sun: DirectionalLight3D ## the world's sun, for the paint's glint (found from the player's car)
 var _sun_tried := -1000
@@ -503,13 +503,13 @@ func set_lamps(night: float, braking := false, reversing := false) -> void:
 	if not is_instance_valid(_details_node):
 		return
 	var head := headlamp_level(night)
-	var tail := (0.6 + 0.2 * night) if braking else 0.08 * head
+	var tail := (0.4 + 0.35 * night) if braking else 0.08 * head # (lower by day and dusk: the sunlit lens is bright already and more clips red to orange)
 	var sig := Vector4(head, tail, 1.0 if braking else 0.0, 1.0 if reversing else 0.0)
 	if sig.is_equal_approx(_lamp_sig):
 		return
 	_lamp_sig = sig
 	tail_material.emission_energy_multiplier = tail * float((_fit.get("tail_lamp", {}) as Dictionary).get("energy", 1.0))
-	var bulb := (4.0 + 1.5 * night) if braking else (2.4 if reversing else 0.5 * head)
+	var bulb := (2.2 + 1.3 * night) if braking else (2.4 if reversing else 0.5 * head)
 	bulb_material.emission_energy_multiplier = bulb
 	bulb_material.emission = BULB_WHITE if reversing and not braking else BULB_RED
 	bulb_material.albedo_color = BULB_ON if bulb > 0.0 else BULB_OFF
