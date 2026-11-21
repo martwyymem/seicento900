@@ -1,5 +1,5 @@
 ## Every car the player can drive: the Fiat Seicento ("stock"), the Hypercar Seicento ("hypercar") and the cars won in the
-## campaign (the Golf IV, "golf4", first; Volvo V50, Hyundai i20, Dacia Logan and Sandero, Ford Focus and Opel Zafira follow the
+## campaign (the Golf IV, "golf4", first, then the Dacia Logan and the Volvo V50; Hyundai i20, Dacia Sandero, Ford Focus and Opel Zafira follow the
 ## recipe in AGENTS.md). One entry per car: display name, spec factory, GLB path, how the model is dressed (wheel and decal
 ## placement, plate, lamp points), and how it is unlocked. RaceSettings.car_class and WorldProgress.car_class (an index into
 ## KEYS: keep the order, saved settings store it) name a car by its key. Add a car here, in RaceSettings' car_class enum and in
@@ -8,7 +8,7 @@ class_name CarCatalog
 extends RefCounted
 
 ## Index = the saved picker/open-world number: "stock" 0 and "hypercar" 1 as before, then cars in the order they were added.
-const KEYS: Array[String] = ["stock", "hypercar", "golf4", "logan"]
+const KEYS: Array[String] = ["stock", "hypercar", "golf4", "logan", "v50"]
 
 ## How a model is fitted by RaceCarVisual. Positions are in the visual's frame: -Z forward, +X right, +Y up, origin on the
 ## ground midway between the axles. `decals` (stock only) are measured points {surface, normal, up}; `decal_aims` are rays
@@ -68,6 +68,29 @@ const LOGAN_VISUAL := {
 	},
 }
 
+const V50_VISUAL := {
+	"model": "res://models/v50.glb", "wheel_radius": 0.3160, "wheelbase": 2.640, "half_track_front": 0.7675, "half_track_rear": 0.7655,
+	"roof_number": Vector3(0.0, 1.418, 0.30), "brake_light": Vector3(0.0, 0.95, 2.55), "tailpipe": Vector3(0.42, 0.268, 2.32),
+	"fx_axle": Vector3(0.0, 0.03, 1.32), "contact": Vector2(2.1, 4.85),
+	# the plates' bottom edges (front bumper under the grille, tailgate between the lamps) and a top limit (build_v50.py)
+	"plate_y": Vector3(0.445, 0.700, 0.9),
+	# the Golf's deeper red lens: the V50's tall lamps run up the D-pillars
+	"tail_lamp": {"tint": Color(0.70, 0.01, 0.015), "alpha_off": 0.86, "alpha_lit": 0.93, "glow_gain": 0.6, "sheen": 0.3,
+		"reflect": 0.3, "albedo": Color("#5a0404"), "energy": 0.9},
+	# the nose is 2.20 m ahead of the origin and the cowl at 0.80 m, 0.97 m up
+	"bumper_cam": Vector2(2.23, 0.50), "bonnet_cam": Vector2(0.80, 1.13),
+	"chase_back": 0.74, ## the tail is 2.315 m behind the origin (the Seicento's 1.58)
+	# the front door, the top of the windscreen, the bonnet and the sill under the B-pillar
+	"decal_aims": {
+		"DoorDecalL": {"from": Vector3(-1.5, 0.70, -0.22), "dir": Vector3(1, 0, 0), "up": Vector3.UP},
+		"DoorDecalR": {"from": Vector3(1.5, 0.70, -0.22), "dir": Vector3(-1, 0, 0), "up": Vector3.UP},
+		"Sunstrip": {"from": Vector3(0.0, 1.85, -0.47), "dir": Vector3(0.0, -0.88, 0.47), "up": Vector3(0.0, 0.47, 0.88)},
+		"HoodDecal": {"from": Vector3(0.0, 1.4, -1.45), "dir": Vector3(0, -1, 0), "up": Vector3.FORWARD},
+		"SillDecalL": {"from": Vector3(-1.5, 0.38, 0.0), "dir": Vector3(1, 0, 0), "up": Vector3.UP},
+		"SillDecalR": {"from": Vector3(1.5, 0.38, 0.0), "dir": Vector3(-1, 0, 0), "up": Vector3.UP},
+	},
+}
+
 static func is_key(key: String) -> bool:
 	return key in KEYS
 
@@ -85,6 +108,8 @@ static func display_name(key: String) -> String:
 			return "VW Golf IV 1.4"
 		"logan":
 			return "Dacia Logan 1.4"
+		"v50":
+			return "Volvo V50 2.4i"
 	return "Seicento 900"
 
 ## The car's physics spec (a fresh duplicate for every car but the stock one's shared resource).
@@ -96,6 +121,8 @@ static func spec(key: String) -> CarSpec:
 			return Golf4.spec()
 		"logan":
 			return Logan.spec()
+		"v50":
+			return V50.spec()
 	return load("res://data/seicento.tres")
 
 static func model(key: String) -> CarModel:
@@ -108,6 +135,8 @@ static func visual(key: String) -> Dictionary:
 			return GOLF4_VISUAL
 		"logan":
 			return LOGAN_VISUAL
+		"v50":
+			return V50_VISUAL
 	return STOCK_VISUAL
 
 ## The race number, paint and stripes a car always wears (the hypercar is AF Corse's yellow no. 83), or {} for the player's own.
@@ -168,9 +197,14 @@ const PALETTES := {
 		["Blanc Glacier", "#eef0ee"], ["Gris Platine", "#a8acaf"], ["Gris Comète", "#6c7075"], ["Noir Nacré", "#17181b"],
 		["Bleu Minéral", "#3a5c82"], ["Bleu Navy", "#1d2a45"], ["Rouge de Feu", "#b8161b"], ["Beige Toundra", "#b6a68a"],
 	],
+	"v50": [ # Volvo V50 2004-2007
+		["Ice White", "#eceeec"], ["Silver Metallic", "#aeb2b5"], ["Titanium Grey", "#73777a"], ["Black Sapphire", "#141518"],
+		["Barents Blue", "#24344f"], ["Magic Blue", "#2f4f78"], ["Passion Red", "#9c1a22"], ["Willow Green", "#5d6f5c"],
+		["Sandstone Beige", "#b9ad94"],
+	],
 }
 ## Measured with tests/_car_probe.gd (and test_hypercar.gd): [0-100 km/h s, top km/h], for the garage's bars.
-const FIGURES := {"stock": [20.4, 137.0], "hypercar": [3.0, 346.0], "golf4": [13.9, 171.0], "logan": [13.3, 162.0]}
+const FIGURES := {"stock": [20.4, 137.0], "hypercar": [3.0, 346.0], "golf4": [13.9, 171.0], "logan": [13.3, 162.0], "v50": [8.3, 211.0]}
 const PAINT_SAVE := "garage.cfg" ## the paint last picked for each car (SaveData)
 
 ## The car's factory paints: [{name, color}], the stock Seicento's for an unknown key.

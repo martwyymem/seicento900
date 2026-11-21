@@ -64,6 +64,10 @@ const BEATS := {
 		["ola", "A Dacia Logan. It's beige. It's enormous. It has a boot you could live in."],
 		["mirek", "Simple, strong, easy to fix. My kind of car. I might borrow it for fishing."],
 	],
+	"car_v50": [
+		["halina", "Volvo V50, the 2.4 five-cylinder. A hundred and seventy horses: our chase car, because nothing else kept up."],
+		["mirek", "Five cylinders. Listen to it. Heavy, though: brake before you think you need to."],
+	],
 
 	# ---------------------------------------------------------------- Act I
 	"stage_1_brief": [["mirek", "Top three in Wilamowice and Zbyszek lets you into the series. Don't bend my car."]],
@@ -304,7 +308,7 @@ const BEATS := {
 		["ola", "Get away first, stay in the middle of the lane, give them no tow. Easy. Ha."],
 	],
 	"drag_kilometre_won": [
-		["halina", "They've asked for a rematch. On paper. With graphs."],
+		["halina", "They've asked for a rematch. On paper. With graphs. And a deal is a deal: the chase car's yours. Mind the tailgate."],
 		["mirek", "You beat the factory. In Basia's car. Hm."],
 	],
 	"drag_kilometre_miss": [

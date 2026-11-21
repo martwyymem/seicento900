@@ -117,6 +117,13 @@ func _saves(errors: Array[String]) -> void:
 		errors.append("save: rally car reward %s, cars %s" % [rally_first.reward_car, prog.get("cars", [])])
 	if not CarCatalog.unlocked("logan") or not CarCatalog.unlock_hint("logan").contains("Rajd Borów"):
 		errors.append("save: logan not unlocked after the rally, or hint '%s'" % CarCatalog.unlock_hint("logan"))
+	# the standing kilometre awards the Volvo V50, the third car
+	var km_first := Missions.record(Missions.index_of("drag_kilometre"), {"pos": 1, "success": true})
+	prog = Campaign.load_progress()
+	if String(km_first.reward_car) != "v50" or prog.get("cars", []) != ["golf4", "logan", "v50"]:
+		errors.append("save: kilometre car reward %s, cars %s" % [km_first.reward_car, prog.get("cars", [])])
+	if not CarCatalog.unlocked("v50") or not CarCatalog.unlock_hint("v50").contains("Kilometr na S1"):
+		errors.append("save: v50 not unlocked after the kilometre, or hint '%s'" % CarCatalog.unlock_hint("v50"))
 	if Campaign.STAGES[4].trophy in prog.get("trophies", []) or int(prog.get("unlocked", 0)) != 1:
 		errors.append("save: a mission touched the stage chain: %s" % prog)
 	# a drift keeps its best score and tier, and never eases

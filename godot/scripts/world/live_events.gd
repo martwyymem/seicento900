@@ -72,14 +72,16 @@ const VERGE := 2.5 ## m beyond the map's road edge a sliding car may run before 
 const DRIFT_PER_KM := [115.0, 460.0, 1150.0]
 ## Reference driving per car (CarCatalog key): top speed m/s, standing acceleration m/s², grip m/s², braking m/s².
 ## Measured with tests/_car_probe.gd and tests/_pace_probe.gd (2026-11-21): Seicento 137 km/h, 0.96 g (anchor);
-## Golf IV 171 km/h, 0.86 g, 100-0 in 39.3 m; Logan 162 km/h, 0.84 g, 100-0 in 39.1 m; hypercar 346 km/h.
+## Golf IV 171 km/h, 0.86 g, 100-0 in 39.3 m; Logan 162 km/h, 0.84 g, 100-0 in 39.1 m; hypercar 346 km/h;
+## V50 2.4i 211 km/h, 0.86 g, 100-0 in 36.5 m (S1 drags 15.95 s / 30.25 s; bot/pace 1.47 town, 1.31 S1 sprint, between the
+## Golf's and the hypercar's).
 ## Acceleration is fitted to each car's measured S1 drag and sprint runs against the Seicento anchor; grip and braking
 ## are the town tarmac's share of the probe's figures.
-const PACE := {"stock": [38.0, 2.4, 8.4, 7.4], "golf4": [47.5, 2.7, 7.6, 6.9], "logan": [45.0, 2.9, 7.4, 6.9], "hypercar": [96.0, 9.0, 13.5, 10.7]}
+const PACE := {"stock": [38.0, 2.4, 8.4, 7.4], "golf4": [47.5, 2.7, 7.6, 6.9], "logan": [45.0, 2.9, 7.4, 6.9], "v50": [58.5, 3.4, 7.6, 7.4], "hypercar": [96.0, 9.0, 13.5, 10.7]}
 ## The car's own standing start on the map's S1 (the drag_kilometre mission's line), full throttle with the automatic
 ## box (FreeCar), measured with tests/_pace_probe.gd (2026-11-21): seconds over 402 m and 1000 m. A drag field
 ## (StreetRivals) is calibrated against these (scaled by grip_k via pace_time when wet).
-const DRAG_TIMES := {"stock": [21.0, 40.6], "golf4": [19.1, 36.5], "logan": [18.8, 35.9], "hypercar": [9.9, 18.0]}
+const DRAG_TIMES := {"stock": [21.0, 40.6], "golf4": [19.1, 36.5], "logan": [18.8, 35.9], "v50": [16.0, 30.3], "hypercar": [9.9, 18.0]}
 const TOWN_GRIP := 0.9 ## Physics.SURF_GRIP of the map's asphalt, which PACE was measured on
 
 var map: TownMap

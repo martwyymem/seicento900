@@ -12,6 +12,8 @@ const CONTRACT := {
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
 	"res://models/logan.glb": {"objects": ["Body", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
+	"res://models/v50.glb": {"objects": ["Body", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
+		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
 	"res://models/town.glb": {"objects": ["Headframe", "ChurchSpire", "Streetlamp", "TrafficLight", "BusShelter", "LevelCrossing",
 		"FestivalStage", "FestivalArch", "Tent", "FlagPole", "CarHatch", "CarSedan", "CarVan", "Maluch"], "materials": ["Paint", "Lamp", "Banner"]},
 	"res://models/roadside.glb": {"objects": ["BushCluster"], "materials": []},
@@ -30,6 +32,10 @@ const SIZES := {
 	"res://models/logan.glb": { # a Logan I saloon: 4,247 x 1,735 (mirrors out: ~1.96) x 1,525 mm; the wheel is a 185/65 R15 (622 mm)
 		"Body": [Vector3(1.8, 1.2, 4.20), Vector3(2.05, 1.45, 4.30)],
 		"Wheel": [Vector3(0.17, 0.60, 0.60), Vector3(0.24, 0.64, 0.64)],
+	},
+	"res://models/v50.glb": { # a V50 estate: 4,515 x 1,770 (mirrors out: ~2.0) x 1,452 mm over the rails; the wheel is a 205/55 R16 (632 mm)
+		"Body": [Vector3(1.85, 1.3, 4.47), Vector3(2.08, 1.47, 4.56)],
+		"Wheel": [Vector3(0.19, 0.62, 0.62), Vector3(0.26, 0.65, 0.65)],
 	},
 	"res://models/town.glb": {
 		"CarHatch": [Vector3(1.5, 1.2, 3.5), Vector3(2.1, 1.9, 4.6)],

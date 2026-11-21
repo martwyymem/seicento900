@@ -181,7 +181,7 @@ func _weather_targets(map: TownMap, by_kind: Dictionary, errors: Array[String]) 
 	var snow_mu := float(MapMissions.weather_state("snow").mu)
 	# 1. drag_time follows pace_time's grip ratio, not a flat multiplier
 	var ratios_402 := {}
-	for car in ["stock", "golf4", "logan", "hypercar"]:
+	for car in ["stock", "golf4", "logan", "v50", "hypercar"]:
 		var d402 := LiveEvents.drag_time(car, 402.0)
 		var d402_1 := LiveEvents.drag_time(car, 402.0, 1.0)
 		var w402 := LiveEvents.drag_time(car, 402.0, wet_mu)

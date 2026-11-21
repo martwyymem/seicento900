@@ -28,6 +28,11 @@ const SHOTS := {
 		["logan_2.jpg", "ul. Bór · Brzeszcze-Bór"],
 		["logan_3.jpg", "S1 · dusk towards Wilamowice"],
 	],
+	"v50": [
+		["v50_1.jpg", "KWK Brzeszcze · the shaft at sundown"],
+		["v50_2.jpg", "ul. Bór · Brzeszcze-Bór"],
+		["v50_3.jpg", "S1 · dusk towards Wilamowice"],
+	],
 }
 const DIR := "res://textures/loading/"
 const ACCENT := Color("#ff4fa3") ## the festival pink of the open-world HUD's highlights

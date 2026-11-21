@@ -23,6 +23,8 @@ func run() -> Array:
 	await _races()
 	_logan()
 	await _races("logan")
+	_v50()
+	await _races("v50")
 	_settings()
 	completed = true
 	return errors
@@ -250,6 +252,59 @@ func _logan() -> void:
 	var cg := Strategy.new(CarCatalog.model("golf4"), Tyres.new()).calibrate(track)
 	check(not is_same(cl, cg) and absf(cl.T0 - cg.T0) > 0.01 and cl.T0 > 30.0, "the Logan shares the Golf's calibration (T0 %.2f / %.2f)" % [cl.T0, cg.T0])
 	check(not is_same(track.profile_for(lm), track.profile_for(CarCatalog.model("golf4"))), "the Logan has no rail profile of its own")
+
+## The Volvo V50 2.4i: the real car's band, the model at the spec's size, wheels at its axles, decals on its body, its own
+## calibration and rail profile.
+func _v50() -> void:
+	var m: Dictionary = PROBE.measure(V50.model())
+	print("    v50: %.1f s 0-100, %.0f km/h, %.1f m from 100, %.2f g, %.0f kg" % [m.t100, m.top, m.brake, m.lat_g, m.mass])
+	check(m.t100 > 7.9 and m.t100 < 9.0, "the V50's 0-100 is %.2f s (real 8.3, road tests to 8.9)" % m.t100)
+	check(m.top > 204.0 and m.top < 216.0, "the V50's top speed is %.0f km/h (real 210)" % m.top)
+	check(m.brake > 34.0 and m.brake < 40.0, "the V50 stops from 100 km/h in %.1f m (real ~37)" % m.brake)
+	check(m.lat_g > 0.82 and m.lat_g < 0.92, "the V50 holds %.2f g on the skidpad (real ~0.87)" % m.lat_g)
+	check(not V50.spec().awd and m.mass > 1380.0 and m.mass < 1500.0, "the V50 is front-wheel drive at ~1.45 t (%.0f kg)" % m.mass)
+	var g := CarCatalog.spec("v50")
+	var scene := ResourceLoader.load(CarCatalog.visual("v50").model, "", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene
+	check(scene != null, "v50.glb does not load")
+	if scene:
+		var root := scene.instantiate()
+		var body := root.find_child("Body", true, false) as MeshInstance3D
+		if body:
+			var size := body.mesh.get_aabb().size
+			check(absf(size.z - g.length) < 0.05, "the V50's Body is %.3f m long, the spec says %.3f" % [size.z, g.length])
+			var top := body.mesh.get_aabb().end.y
+			check(top > 1.44 and top < 1.46, "the V50's roof rails are %.3f m high (1.452 expected)" % top)
+			check(size.x > g.width and size.x < g.width + 0.25, "the V50's Body is %.3f m wide (mirrors out; spec %.3f)" % [size.x, g.width])
+		var wheel := root.find_child("Wheel", true, false) as MeshInstance3D
+		if wheel:
+			var d := wheel.mesh.get_aabb().size.y
+			check(absf(d * 0.5 - CarCatalog.visual("v50").wheel_radius) < 0.004, "the V50's wheel radius is %.4f m, the visual says %.4f" % [d * 0.5, CarCatalog.visual("v50").wheel_radius])
+		root.free()
+	var parent := Node3D.new()
+	Engine.get_main_loop().root.add_child(parent)
+	var car: Node3D = VISUAL.new()
+	car.car_key = "v50"
+	car.car_number = 7
+	parent.add_child(car)
+	var fl: Vector3 = car._wheel_spots[0]
+	var rr: Vector3 = car._wheel_spots[3]
+	check(car.wheels.size() == 4 and absf(fl.z + 1.32) < 1e-3 and absf(rr.z - 1.32) < 1e-3 and absf(fl.y - 0.316) < 1e-4, "the V50's wheels are not at its axles (%s %s)" % [fl, rr])
+	var tri := (VISUAL._shared_resources("v50").shell as Mesh).generate_triangle_mesh()
+	for n in ["DoorDecalL", "DoorDecalR", "Sunstrip", "HoodDecal", "SillDecalL", "SillDecalR"]:
+		var d := car.body_pivot.get_node_or_null(n) as MeshInstance3D
+		check(d != null and d.mesh != null, "the V50 visual lacks decal %s" % n)
+		if d == null:
+			continue
+		var normal := d.transform.basis.z.normalized()
+		var hit := tri.intersect_ray(d.position + normal * 0.3, -normal)
+		check(not hit.is_empty() and absf(((d.position - (hit.position as Vector3)).dot(normal)) - 0.006) < 0.004, "the V50's %s does not sit on the body" % n)
+	parent.free()
+	var track := Race.get_track("gp")
+	var lm := CarCatalog.model("v50")
+	var cl := Strategy.new(lm, Tyres.new()).calibrate(track)
+	var cg := Strategy.new(CarCatalog.model("logan"), Tyres.new()).calibrate(track)
+	check(not is_same(cl, cg) and cl.T0 < cg.T0 - 0.5 and cl.T0 > 30.0, "the V50 is not faster than the Logan on the calibration (T0 %.2f / %.2f)" % [cl.T0, cg.T0])
+	check(not is_same(track.profile_for(lm), track.profile_for(CarCatalog.model("logan"))), "the V50 has no rail profile of its own")
 
 func _settings() -> void:
 	var st := RaceSettings.new()

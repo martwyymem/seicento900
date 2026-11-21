@@ -79,8 +79,8 @@ const MISSIONS := [
 		"title": "Kilometr na S1",
 		"track": "s1_sprint", "finish_distance": 1000.0, "laps": 1, "opponents": 3, "difficulty": "hard",
 		"weather": "dry", "start_hour": 23.0, "target": 1, "at": 400.0,
-		"trophy": "Standing Kilometre Crown", "reward_car": "",
-		"desc": "The factory test drivers heard about the quarter mile. Now it is a standing kilometre against three of them, flat out until the Seicento runs out of gears.",
+		"trophy": "Standing Kilometre Crown", "reward_car": "v50",
+		"desc": "The factory test drivers heard about the quarter mile. Now it is a standing kilometre against three of them, flat out until the Seicento runs out of gears. Beat them and Halina hands over the keys to the test team's chase car, a Volvo V50 2.4i.",
 		"tip": "Over a kilometre the slipstream comes back into it: get away first, then stay in the middle of your lane so nobody gets your tow.",
 	},
 ]
