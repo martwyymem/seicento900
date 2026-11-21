@@ -389,6 +389,284 @@ def round_junction_corners(dense, marks):
 HOUSE_CLEAR = 0.3  # m between a street's (narrowed) edge and a building corner beside it
 MIN_HALF = 1.5  # m: no street is narrowed below 3 m
 SHED_DROP_AREA = 60.0  # m2: a shed or garage standing in a street this narrow goes (the street was there first)
+PASSAGE_HALF = 2.0  # m: half the clear width cut through a building for a tunnel=building_passage street
+PASSAGE_EXTEND = 2.5  # m: the cut runs this far past the way's end nodes (they sit on, not past, the walls)
+PASSAGE_MIN_AREA = 1.5  # m2: a piece of a cut building smaller than this is dropped
+PASSAGE_MIN_THICK = 0.8  # m: so is a wall left thinner than this (twice its area over its perimeter)
+
+
+def ring_minus_rect(poly, u0, u1, v0, v1, zfn=None):
+    """`poly` (a simple polygon, vertices (u, v) or (u, v, z)) minus the axis-aligned rectangle [u0,u1] x [v0,v1]
+    (Weiler-Atherton for a convex hole): a list of polygons, [] when the rectangle swallows it and None when the
+    rectangle lies wholly inside it (a hole this format cannot hold). A vertex made on the cut gets its z from the
+    edge it splits; a corner of the rectangle inside the polygon gets `zfn(u, v)`."""
+    hasz = len(poly[0]) > 2
+    orig = poly
+    # a hair off the exact numbers so that no vertex of the polygon sits on an edge of the rectangle
+    u0, u1, v0, v1 = u0 + 1.3e-6, u1 - 1.7e-6, v0 + 2.9e-6, v1 - 2.3e-6
+    area2 = sum(poly[i][0] * poly[(i + 1) % len(poly)][1] - poly[(i + 1) % len(poly)][0] * poly[i][1] for i in range(len(poly)))
+    if area2 < 0:
+        poly = poly[::-1]
+    n = len(poly)
+    nodes = []  # node k: (u, v, z)
+    def node(u, v, z):
+        nodes.append((u, v, z))
+        return len(nodes) - 1
+    sub = []  # the polygon's ring as node indices, cut points inserted
+    q_on = [[], [], [], []]  # per rectangle edge (bottom v0, right u1, top v1, left u0): (param along it, node)
+    for i in range(n):
+        p, q = poly[i], poly[(i + 1) % n]
+        sub.append(node(p[0], p[1], p[2] if hasz else 0.0))
+        hits = []
+        for ei, (axis, c, lo, hi) in enumerate(((1, v0, u0, u1), (0, u1, v0, v1), (1, v1, u0, u1), (0, u0, v0, v1))):
+            d = q[axis] - p[axis]
+            if abs(d) < 1e-12:
+                continue
+            t = (c - p[axis]) / d
+            if not 0.0 < t < 1.0:
+                continue
+            o = 1 - axis
+            w = p[o] + t * (q[o] - p[o])
+            if not lo < w < hi:
+                continue
+            z = (p[2] + t * (q[2] - p[2])) if hasz else 0.0
+            hits.append((t, ei, w, z))
+        for t, ei, w, z in sorted(hits):
+            k = node(c_u(ei, u0, u1, w), c_v(ei, v0, v1, w), z)
+            sub.append(k)
+            q_on[ei].append((w, k))
+    if not q_on[0] and not q_on[1] and not q_on[2] and not q_on[3]:
+        if all(u0 < p[0] < u1 and v0 < p[1] < v1 for p in poly):
+            return []
+        if point_in_ring((u0 + u1) / 2, (v0 + v1) / 2, [(p[0], p[1]) for p in poly]):
+            return None
+        return [orig]  # (the very list that came in: the rectangle misses it)
+    # the rectangle's ring counter-clockwise: bottom (u rising), right (v rising), top (u falling), left (v falling)
+    corners = [(u0, v0), (u1, v0), (u1, v1), (u0, v1)]
+    ring_q = []
+    for ei in range(4):
+        cu, cv = corners[ei]
+        ring_q.append(node(cu, cv, zfn(cu, cv) if zfn else 0.0))
+        on = sorted(q_on[ei], reverse=ei >= 2)
+        ring_q += [k for _, k in on]
+    uv = [(p[0], p[1]) for p in poly]
+    out_edges = {}
+    for i in range(len(sub)):
+        a, b = sub[i], sub[(i + 1) % len(sub)]
+        mu, mv = (nodes[a][0] + nodes[b][0]) / 2, (nodes[a][1] + nodes[b][1]) / 2
+        if not (u0 < mu < u1 and v0 < mv < v1):
+            out_edges.setdefault(a, []).append(b)
+    for i in range(len(ring_q)):
+        a, b = ring_q[i], ring_q[(i + 1) % len(ring_q)]
+        mu, mv = (nodes[a][0] + nodes[b][0]) / 2, (nodes[a][1] + nodes[b][1]) / 2
+        if point_in_ring(mu, mv, uv):
+            out_edges.setdefault(b, []).append(a)  # the hole's boundary runs clockwise
+    loops = []
+    used = set()
+    for start in list(out_edges):
+        for first in out_edges[start]:
+            if (start, first) in used:
+                continue
+            loop, cur, nxt = [start], start, first
+            guard = 0
+            while True:
+                used.add((cur, nxt))
+                cur = nxt
+                if cur == start:
+                    break
+                loop.append(cur)
+                options = [m for m in out_edges.get(cur, []) if (cur, m) not in used]
+                if not options or guard > 4 * len(nodes):
+                    return None  # the walk did not close: leave the polygon alone
+                nxt = options[0]
+                guard += 1
+            if len(loop) >= 3:
+                loops.append(loop)
+    result = []
+    for loop in loops:
+        pts = [nodes[k] for k in loop]
+        a2 = sum(pts[i][0] * pts[(i + 1) % len(pts)][1] - pts[(i + 1) % len(pts)][0] * pts[i][1] for i in range(len(pts)))
+        if a2 <= 0:
+            return None  # a hole of its own
+        result.append([(p[0], p[1], p[2]) if hasz else (p[0], p[1]) for p in pts])
+    return result
+
+
+def c_u(ei, u0, u1, w):
+    return w if ei in (0, 2) else (u1 if ei == 1 else u0)
+
+
+def c_v(ei, v0, v1, w):
+    return w if ei in (1, 3) else (v0 if ei == 0 else v1)
+
+
+def _poly_area(pts):
+    return abs(sum(pts[i][0] * pts[(i + 1) % len(pts)][1] - pts[(i + 1) % len(pts)][0] * pts[i][1] for i in range(len(pts)))) / 2
+
+
+def _tidy(pts, tol=0.06, digits=1):
+    """A cut ring at the baked 0.1 m: repeated vertices and vertices on the line between their neighbours go (z of the
+    kept ones is untouched)."""
+    out = []
+    for p in pts:
+        q = tuple(round(v, digits) for v in p)
+        if not out or (q[0], q[1]) != (out[-1][0], out[-1][1]):
+            out.append(q)
+    if len(out) > 1 and (out[0][0], out[0][1]) == (out[-1][0], out[-1][1]):
+        out.pop()
+    changed = True
+    while changed and len(out) > 3:
+        changed = False
+        for i in range(len(out)):
+            a, b, c = out[i - 1], out[i], out[(i + 1) % len(out)]
+            if len(b) == 2 and dist_seg(b[0], b[1], a, c) < tol:
+                del out[i]
+                changed = True
+                break
+    return out
+
+
+def cut_building_passages(out_roads, buildings):
+    """A street OSM maps as `tunnel=building_passage` runs through a building, whose footprint then stands across the
+    carriageway. The footprint (and each LoD2 roof face on it) loses a strip 2 * PASSAGE_HALF wide along the way, from
+    PASSAGE_EXTEND before its first node to PASSAGE_EXTEND past its last (one rectangle per segment of the way), so that what is left is the building either
+    side of the passage (a notch in a corner, or two blocks with a gap if the passage goes right through). The piece
+    that keeps the building's first slot is the largest; the rest are appended. Nothing in the game changes: it draws
+    and collides with the footprints as baked."""
+    cuts = 0
+    for r in out_roads:
+        if not r.get('bp'):
+            continue
+        pts = r['p']
+        segs = []
+        for k, (a, b) in enumerate(zip(pts, pts[1:])):
+            ln = math.dist(a, b)
+            if ln < 1e-6:
+                continue
+            segs.append([a, b, (b[0] - a[0]) / ln, (b[1] - a[1]) / ln, ln, 0.0, 0.0])
+        if not segs:
+            continue
+        for k, s in enumerate(segs):  # mitre the joints: each rectangle runs past a bend by half-width * tan(half angle)
+            for side, o in ((5, k - 1), (6, k + 1)):
+                if 0 <= o < len(segs):
+                    dot = max(-1.0, min(1.0, s[2] * segs[o][2] + s[3] * segs[o][3]))
+                    s[side] = max(0.3, min(PASSAGE_HALF, PASSAGE_HALF * math.tan(math.acos(dot) / 2)))  # (never abutting)
+                else:
+                    s[side] = PASSAGE_EXTEND
+        for bi in range(len(buildings)):
+            b = buildings[bi]
+            ring = b[4]
+            ring_pts = [(ring[m], ring[m + 1]) for m in range(0, len(ring) - 1, 2)]
+            if not any(point_in_ring(*p, ring_pts) for p in pts) and not any(
+                    seg_cross(s[0], s[1], ring_pts[m], ring_pts[(m + 1) % len(ring_pts)])
+                    for s in segs for m in range(len(ring_pts))):
+                continue
+            extra = b[6] if len(b) > 6 and isinstance(b[6], dict) else {}
+            # the footprint and its roof faces, each as a list of pieces after every segment's rectangle
+            def to_uv(poly, s):
+                (ox, oy), ux, uy = (s[0][0], s[0][1]), s[2], s[3]
+                return [((p[0] - ox) * ux + (p[1] - oy) * uy, -(p[0] - ox) * uy + (p[1] - oy) * ux) + tuple(p[2:]) for p in poly]
+            def from_uv(poly, s):
+                ox, oy, ux, uy = s[0][0], s[0][1], s[2], s[3]
+                return [(ox + p[0] * ux - p[1] * uy, oy + p[0] * uy + p[1] * ux) + tuple(p[2:]) for p in poly]
+            def subtract(poly, plane):
+                """(pieces, whether any rectangle touched it); pieces None for a hole."""
+                pieces = [poly]
+                touched = False
+                for si, s in enumerate(segs):
+                    half = PASSAGE_HALF + 0.003 * si  # (a hair wider each time: no two cuts share an edge line)
+                    nxt = []
+                    for pc in pieces:
+                        zf = None
+                        if plane and len(pc[0]) > 2:
+                            zf = lambda u, v, s=s: plane(*from_uv([(u, v)], s)[0])
+                        uvp = to_uv(pc, s)
+                        res = ring_minus_rect(uvp, -s[5], s[4] + s[6], -half, half, zf)
+                        if res is None:
+                            return None, True
+                        if len(res) == 1 and res[0] is uvp:
+                            nxt.append(pc)
+                        else:
+                            touched = True
+                            nxt += [from_uv(x, s) for x in res]
+                    pieces = nxt
+                return pieces, touched
+            foot, touched = subtract(ring_pts, None)
+            if foot is None:
+                print('WARNING: passage', r['id'], 'would make a hole in building', bi, b[0], [round(v, 1) for v in ring], '(left as it is)')
+                continue
+            if not touched:
+                continue
+            area0 = abs(_poly_area(ring_pts))
+            keep = []
+            for pc in foot:
+                pc = _tidy(pc)
+                a = abs(_poly_area(pc)) if len(pc) >= 3 else 0.0
+                per = sum(math.dist(pc[m], pc[(m + 1) % len(pc)]) for m in range(len(pc))) if len(pc) >= 3 else 1.0
+                if a >= PASSAGE_MIN_AREA and 2.0 * a / per >= PASSAGE_MIN_THICK:
+                    keep.append((a, pc))
+            keep.sort(key=lambda x: -x[0])
+            # the roof faces
+            faces = []
+            whole = []
+            for f in extra.get('rs', []):
+                poly = [(f[m], f[m + 1], f[m + 2]) for m in range(0, len(f) - 2, 3)]
+                plane = _plane_of(poly)
+                res, hit = subtract(poly, plane) if plane else ([poly], False)
+                if not hit:
+                    whole.append(f)  # (untouched: the baked numbers as they are)
+                    continue
+                res = [_tidy(pc, digits=2) for pc in res or []]
+                faces += [pc for pc in res if len(pc) >= 3 and abs(_poly_area([(p[0], p[1]) for p in pc])) >= 0.3]
+            entries = []
+            for a, pc in keep:
+                flat = []
+                for p in pc:
+                    flat += [r1(p[0]), r1(p[1])]
+                entry = list(b[:4]) + [flat] + list(b[5:6])
+                ex = dict(extra)
+                if 'rs' in ex:
+                    ex['rs'] = []
+                else:
+                    ex.pop('rs', None)
+                entry.append(ex)
+                entries.append((pc, entry))
+            if not entries:
+                continue
+            for f in whole:
+                cx = sum(f[m] for m in range(0, len(f), 3)) / (len(f) // 3)
+                cy = sum(f[m + 1] for m in range(0, len(f), 3)) / (len(f) // 3)
+                best = min(entries, key=lambda e: 0.0 if point_in_ring(cx, cy, e[0]) else poly_dist(cx, cy, e[0]))
+                best[1][6]['rs'].append(f)
+            for pc in faces:
+                cx = sum(p[0] for p in pc) / len(pc)
+                cy = sum(p[1] for p in pc) / len(pc)
+                best = min(entries, key=lambda e: 0.0 if point_in_ring(cx, cy, e[0]) else poly_dist(cx, cy, e[0]))
+                best[1][6]['rs'].append([v for p in pc for v in (p[0], p[1], p[2])])
+            print('passage', r['id'], 'cuts building', bi, b[0], 'area %.0f m2 ->' % area0, [round(a) for a, _ in keep], 'm2')
+            buildings[bi] = entries[0][1]
+            buildings.extend(e[1] for e in entries[1:])
+            cuts += 1
+    return cuts
+
+
+def _plane_of(poly):
+    """z(x, y) of the plane through a roof face's vertices, None for a vertical or degenerate face."""
+    best = None
+    n = len(poly)
+    for i in range(n):
+        for j in range(i + 1, n):
+            for k in range(j + 1, n):
+                a, b, c = poly[i], poly[j], poly[k]
+                det = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+                if best is None or abs(det) > abs(best[0]):
+                    best = (det, a, b, c)
+    if best is None or abs(best[0]) < 1e-3:
+        return None
+    det, a, b, c = best
+    gx = ((b[2] - a[2]) * (c[1] - a[1]) - (c[2] - a[2]) * (b[1] - a[1])) / det
+    gy = ((c[2] - a[2]) * (b[0] - a[0]) - (b[2] - a[2]) * (c[0] - a[0])) / det
+    return lambda x, y: a[2] + gx * (x - a[0]) + gy * (y - a[1])
 
 
 def narrow_past_buildings(out_roads, zr, buildings):
@@ -1364,6 +1642,7 @@ def build(check_png=None):
                           'g': 1 if gravel else 0,
                           'b': 1 if t.get('bridge') in ('yes', 'viaduct') else 0,
                           'tn': 1 if t.get('tunnel') in ('yes',) else 0,
+                          'bp': t.get('tunnel') == 'building_passage',
                           'lit': 1 if t.get('lit') == 'yes' else 0,
                           'rb': 1 if t.get('junction') == 'roundabout' else 0,
                           'p': dense, 'e': marks, 'lt': bool(t.get('lanes')),
@@ -2379,6 +2658,8 @@ def build(check_png=None):
             out += [r1(p[0]), r1(p[1])]
         return out
 
+    n_b = len(buildings)
+    print(cut_building_passages(out_roads, buildings), 'buildings cut for tunnel=building_passage streets:', n_b, '->', len(buildings))
     road_hw = narrow_past_buildings(out_roads, zr, buildings)
     # a street shifted off a wall may now run over a lamp placed beside it: those lamps go
     lgrid = SegGrid(20.0)

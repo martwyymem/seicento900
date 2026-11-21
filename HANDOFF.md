@@ -5,8 +5,6 @@ Run: `godot --path godot`; tests `timeout 1800 godot --headless --path godot -s 
 parity `timeout 900 godot --headless --path godot -s tests/_run_race_test.gd` (`errors=0`).
 
 In flight (uncommitted, not in that commit):
-- Building passages (`tunnel=building_passage`): a Sonnet agent edits `tools/build_open_world.py` and rebakes
-  `godot/data/world/brzeszcze*`. When done: run the suite, `_invisible_wall_probe.gd`, `_road_audit_probe.gd`, then commit.
 - NixOS laptop (linked environment "nixos", project at /home/mikol2137/Developer/Seicento): an Opus agent adds
   `flake.nix` on a local `nixos-run` branch there and runs the tests; bring the flake into main when it reports.
 
