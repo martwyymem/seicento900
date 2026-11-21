@@ -1,10 +1,16 @@
-# Handoff (2026-11-16)
+# Handoff (2026-11-21)
 
-Uncommitted work on `feat/golf-missions-live-events` from the 2026-11-13/16 fix pass (see TASKS.md "2026-11-13 FIX PASS").
-Checked 2026-11-16 on the combined tree: `tests/run_tests.gd` 63/63, `_run_race_test.gd` no drift, `_live_audit.gd` 0 anomalies.
+State: `main` pushed through the commit that adds dynamic aspect / HUD WIDTH and the free-roam weather cycle.
+Run: `godot --path godot`; tests `timeout 1800 godot --headless --path godot -s tests/run_tests.gd` (ends `0 failure(s)`),
+parity `timeout 900 godot --headless --path godot -s tests/_run_race_test.gd` (`errors=0`).
 
-Open (details in TASKS.md): not yet driven by a human; drift silver/gold targets; 26 dead ends 0-6 m short; 4 buildings in lanes
-by junction nodes; bridge abutment cone collides but is not drawn; Golf tail lamps orange at dusk; per-car circuit hero stills;
-Seicento door numbers 1-16 not compared before/after the 1-99 change; 4 `Geometry2D.is_point_in_polygon` calls left in
-`town_builder.gd` (drawing only: lines 1618, 1994, 1997, 2994).
-Windowed-run check: `ps -axo command | grep -E '^(timeout [0-9]+ )?godot ' | grep -v headless`.
+In flight (uncommitted, not in that commit):
+- Building passages (`tunnel=building_passage`): a Sonnet agent edits `tools/build_open_world.py` and rebakes
+  `godot/data/world/brzeszcze*`. When done: run the suite, `_invisible_wall_probe.gd`, `_road_audit_probe.gd`, then commit.
+- NixOS laptop (linked environment "nixos", project at /home/mikol2137/Developer/Seicento): an Opus agent adds
+  `flake.nix` on a local `nixos-run` branch there and runs the tests; bring the flake into main when it reports.
+
+Needs a human in a window: HUD motion feel, HUD WIDTH on an ultrawide, falling rain/snow look and frequency, landmark
+snow, canopy tree line, Logan night look, mission rival pace.
+Next headless candidates: TASKS.md (Haiku's list: open-world load time, Wola cornfield, track rebuilds, next cars).
+Gemini 4 Neon replaces Sonnet for well-scoped and UI work when its quota allows.

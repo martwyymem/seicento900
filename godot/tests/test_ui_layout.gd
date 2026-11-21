@@ -12,6 +12,10 @@ var completed := false
 const CANVASES: Array[Vector2] = [Vector2(1600, 900), Vector2(1600, 1000), Vector2(1600, 1200), Vector2(1440, 1080),
 	Vector2(2100, 900), Vector2(2133, 900), Vector2(2520, 1080),
 	Vector2(1391, 783), Vector2(1231, 692), Vector2(1231, 923)]
+## the window shapes the dynamic aspect is checked at (5:4 up to 32:9); the interface canvas is the 1600×900
+## design canvas expanded to the window's shape (Window.CONTENT_SCALE_ASPECT_EXPAND), see _window_canvas
+const WINDOWS: Array[Vector2] = [Vector2(1280, 1024), Vector2(1440, 1080), Vector2(1680, 1050), Vector2(1920, 1080),
+	Vector2(2560, 1080), Vector2(3440, 1440), Vector2(5120, 1440)]
 const LONG_SMALL := "An out lap to warm the tyres, then 2 timed laps — the fastest sets your grid slot · Brzęczyszczykiewicz"
 
 func run() -> Array:
@@ -31,6 +35,29 @@ func run() -> Array:
 
 # ------------------------------------------------------------------------------------------ helpers
 
+## The canvas the interface gets in a window: the 1600×900 design canvas, expanded to the window's shape.
+static func _window_canvas(win: Vector2) -> Vector2:
+	var k := minf(win.x / 1600.0, win.y / 900.0)
+	return Vector2(roundf(win.x / k), roundf(win.y / k))
+
+## Every canvas × HUD width setting the HUD and menu checks run at: the older canvases at the default width
+## (none is wider than 21:9, so the safe zone leaves them whole), then each window shape at all three widths.
+static func _layouts() -> Array:
+	var out: Array = []
+	for c in CANVASES:
+		out.append([c, HudLayout.WIDTH_21_9])
+	for w in WINDOWS:
+		for mode in [HudLayout.WIDTH_FULL, HudLayout.WIDTH_21_9, HudLayout.WIDTH_16_9]:
+			out.append([_window_canvas(w), mode])
+	return out
+
+static func _tag(canvas: Vector2, mode: int) -> String:
+	return "%dx%d %s" % [canvas.x, canvas.y, HudLayout.WIDTH_NAMES[mode]]
+
+## A control's rect in canvas coordinates: its anchors and offsets in a safe frame, moved to where that frame sits.
+static func _in_safe(c: Control, safe: Rect2) -> Rect2:
+	return Rect2(_intended(c, safe.size).position + safe.position, _intended(c, safe.size).size)
+
 ## Lets containers and wrapped labels settle (sorting and minimum sizes update at the end of a frame).
 static func _settle(tree: SceneTree, frames := 3) -> void:
 	for k in frames:
@@ -43,13 +70,16 @@ static func _intended(c: Control, p: Vector2) -> Rect2:
 	return Rect2(a, b - a)
 
 ## Every pair of the named rects must not overlap (by more than a pixel) and each must be on the canvas.
-static func _no_overlap(errors: Array[String], where: String, rects: Dictionary, canvas: Vector2) -> void:
+static func _no_overlap(errors: Array[String], where: String, rects: Dictionary, canvas: Vector2, safe := Rect2()) -> void:
 	var names := rects.keys()
 	var screen := Rect2(Vector2.ZERO, canvas).grow(1.0)
+	var zone := safe.grow(1.0)
 	for i in names.size():
 		var a: Rect2 = rects[names[i]]
 		if not screen.encloses(a):
 			errors.append("%s %dx%d: %s %s runs off the canvas" % [where, canvas.x, canvas.y, names[i], a])
+		elif safe.size != Vector2.ZERO and not zone.encloses(a):
+			errors.append("%s %dx%d: %s %s leaves the safe zone %s" % [where, canvas.x, canvas.y, names[i], a, safe])
 		for j in range(i + 1, names.size()):
 			var b: Rect2 = rects[names[j]]
 			var cut := a.intersection(b)
@@ -71,7 +101,12 @@ func _check_race_hud(errors: Array[String], tree: SceneTree) -> void:
 	rs.track = "monza"
 	rs.opponents = 15
 	var race := Race.new(rs)
-	for canvas in CANVASES:
+	var was := HudLayout.hud_width
+	for combo in _layouts():
+		var canvas: Vector2 = combo[0]
+		HudLayout.hud_width = combo[1]
+		var safe := HudLayout.safe_rect(canvas)
+		var tag := _tag(canvas, combo[1])
 		var host := _host(tree, canvas)
 		var hud := RaceHud.new()
 		host.add_child(hud)
@@ -90,17 +125,18 @@ func _check_race_hud(errors: Array[String], tree: SceneTree) -> void:
 		hud._help_full = true
 		hud._feed_h = 400.0
 		hud._layout()
-		var W := canvas.x
+		var sx := safe.position.x
+		var W := safe.size.x
 		var rects := {
-			"tower": Rect2(hud.tower.position, Vector2(RaceHud.TOWER_W, hud.tower.size.y)),
-			"clock": Rect2(W - RaceHud.EDGE - RaceHud.CLOCK_W, RaceHud.EDGE, RaceHud.CLOCK_W, 208.0),
-			"minimap": _intended(hud.minimap, canvas),
-			"feed": _intended(hud.feed, canvas),
-			"pit wall": Rect2(Vector2(RaceHud.EDGE, canvas.y - RaceHud.EDGE - hud._pitwall_height()), Vector2(RaceHud.PITWALL_W, hud._pitwall_height())),
-			"dash": _intended(hud.dash, canvas),
-			"pace notes": Rect2(W * 0.5 - RaceHud.PACENOTE_HALF, RaceHud.EDGE, RaceHud.PACENOTE_HALF * 2.0, 132.0),
+			"tower": Rect2(Vector2(sx, 0.0) + hud.tower.position, Vector2(RaceHud.TOWER_W, hud.tower.size.y)),
+			"clock": Rect2(sx + W - RaceHud.EDGE - RaceHud.CLOCK_W, RaceHud.EDGE, RaceHud.CLOCK_W, 208.0),
+			"minimap": _in_safe(hud.minimap, safe),
+			"feed": _in_safe(hud.feed, safe),
+			"pit wall": Rect2(Vector2(sx + RaceHud.EDGE, canvas.y - RaceHud.EDGE - hud._pitwall_height()), Vector2(RaceHud.PITWALL_W, hud._pitwall_height())),
+			"dash": _in_safe(hud.dash, safe),
+			"pace notes": Rect2(sx + W * 0.5 - RaceHud.PACENOTE_HALF, RaceHud.EDGE, RaceHud.PACENOTE_HALF * 2.0, 132.0),
 			"key help": hud.help_rect(),
-			"status chip": _intended(hud.statusbar, canvas),
+			"status chip": _in_safe(hud.statusbar, safe),
 		}
 		var shown := 0
 		for pair in [["start lights", hud.lights], ["flag board", hud.flagbar], ["overtake", hud._overtake_control],
@@ -108,23 +144,30 @@ func _check_race_hud(errors: Array[String], tree: SceneTree) -> void:
 			var c: Control = pair[1]
 			if c.self_modulate.a > 0.0:
 				shown += 1
-				var r := _intended(c, canvas)
+				var r := _in_safe(c, safe)
 				if c is Label:
 					var tw := minf(r.size.x, hud._label_width(c as Label))
 					r = Rect2(r.get_center().x - tw * 0.5, r.position.y, tw, r.size.y)
 				rects[pair[0]] = r
 		if shown < 3:
-			errors.append("race HUD %dx%d: the centre column dropped too much (%d of 5 left)" % [canvas.x, canvas.y, shown])
+			errors.append("race HUD %s: the centre column dropped too much (%d of 5 left)" % [tag, shown])
 		if not hud._split_beside and hud.splitbox.self_modulate.a > 0.0:
-			rects["split"] = _intended(hud.splitbox, canvas)
+			rects["split"] = _in_safe(hud.splitbox, safe)
 		elif hud._split_beside:
-			rects["split"] = Rect2(W - RaceHud.EDGE - RaceHud.CLOCK_W - 20.0 - 250.0, 32.0, RaceHud.SPLIT_W, 44.0)
-		_no_overlap(errors, "race HUD", rects, canvas)
+			rects["split"] = Rect2(sx + W - RaceHud.EDGE - RaceHud.CLOCK_W - 20.0 - 250.0, 32.0, RaceHud.SPLIT_W, 44.0)
+		_no_overlap(errors, "race HUD [%s]" % combo[1], rects, canvas, safe)
 		# the help fits the room between the pit wall and the dash
 		var hr: Rect2 = rects["key help"]
 		if hr.size.y > 160.0:
-			errors.append("race HUD %dx%d: the key help wrapped to %d px" % [canvas.x, canvas.y, hr.size.y])
+			errors.append("race HUD %s: the key help wrapped to %d px" % [tag, hr.size.y])
+		# the motion groups fill the safe frame exactly, so the rest pose (zero offset) stays where it was laid out
+		for g in [hud.corners_group, hud.dash_group]:
+			if g.position != Vector2.ZERO or not g.size.is_equal_approx(safe.size):
+				errors.append("race HUD %s: %s sits at %s size %s, not the safe frame %s" % [tag, g.name, g.position, g.size, safe])
+		if not hud.safe_frame.position.is_equal_approx(safe.position) or not hud.safe_frame.size.is_equal_approx(safe.size):
+			errors.append("race HUD %s: the safe frame is %s %s, wanted %s" % [tag, hud.safe_frame.position, hud.safe_frame.size, safe])
 		host.free()
+	HudLayout.hud_width = was
 	race.dispose()
 
 ## Overtakes are only called under green; the autopilot note is a chip at the bottom, not the banner.
@@ -185,9 +228,13 @@ func _check_solo_huds(errors: Array[String], tree: SceneTree) -> void:
 	st.track = "fiat"
 	TimeTrial.configure(st, true)
 	var tt := Race.new(st)
+	var was := HudLayout.hud_width
 	for pair in [["rally", rally], ["time trial", tt]]:
 		var race: Race = pair[1]
-		for canvas in CANVASES:
+		for combo in _layouts():
+			var canvas: Vector2 = combo[0]
+			HudLayout.hud_width = combo[1]
+			var safe := HudLayout.safe_rect(canvas)
 			var host := _host(tree, canvas)
 			var hud := RaceHud.new()
 			host.add_child(hud)
@@ -203,19 +250,20 @@ func _check_solo_huds(errors: Array[String], tree: SceneTree) -> void:
 			hud._status_text = "AUTOPILOT  ·  O"
 			hud._layout()
 			var rects := {
-				"stage panel": Rect2(hud.modepanel.position, Vector2(RaceHud.MODE_W, hud.modepanel.size.y)),
-				"clock": Rect2(canvas.x - RaceHud.EDGE - RaceHud.CLOCK_W, RaceHud.EDGE, RaceHud.CLOCK_W, 208.0),
-				"minimap": _intended(hud.minimap, canvas),
-				"dash": _intended(hud.dash, canvas),
+				"stage panel": Rect2(Vector2(safe.position.x, 0.0) + hud.modepanel.position, Vector2(RaceHud.MODE_W, hud.modepanel.size.y)),
+				"clock": Rect2(safe.end.x - RaceHud.EDGE - RaceHud.CLOCK_W, RaceHud.EDGE, RaceHud.CLOCK_W, 208.0),
+				"minimap": _in_safe(hud.minimap, safe),
+				"dash": _in_safe(hud.dash, safe),
 				"key help": hud.help_rect(),
-				"status chip": _intended(hud.statusbar, canvas),
-				"delta bar": _intended(hud.deltabar, canvas),
-				"pace notes": Rect2(canvas.x * 0.5 - RaceHud.PACENOTE_HALF, RaceHud.EDGE, RaceHud.PACENOTE_HALF * 2.0, 132.0),
+				"status chip": _in_safe(hud.statusbar, safe),
+				"delta bar": _in_safe(hud.deltabar, safe),
+				"pace notes": Rect2(safe.get_center().x - RaceHud.PACENOTE_HALF, RaceHud.EDGE, RaceHud.PACENOTE_HALF * 2.0, 132.0),
 			}
 			if hud.deltabar.self_modulate.a <= 0.0 or not hud._delta_showing():
-				errors.append("%s HUD %dx%d: the delta bar should be up" % [pair[0], canvas.x, canvas.y])
-			_no_overlap(errors, "%s HUD" % pair[0], rects, canvas)
+				errors.append("%s HUD %s: the delta bar should be up" % [pair[0], _tag(canvas, combo[1])])
+			_no_overlap(errors, "%s HUD [%s]" % [pair[0], combo[1]], rects, canvas, safe)
 			host.free()
+	HudLayout.hud_width = was
 	rally.dispose()
 	tt.dispose()
 
@@ -261,7 +309,12 @@ func _check_skins(errors: Array[String], tree: SceneTree) -> void:
 # ------------------------------------------------------------------------------------------ open world
 
 func _check_open_world_hud(errors: Array[String], tree: SceneTree) -> void:
-	for canvas in CANVASES:
+	var was := HudLayout.hud_width
+	for combo in _layouts():
+		var canvas: Vector2 = combo[0]
+		HudLayout.hud_width = combo[1]
+		var safe := HudLayout.safe_rect(canvas)
+		var shift := Vector2(safe.position.x, 0.0)
 		var host := _host(tree, canvas)
 		var hud := OpenWorldHud.new()
 		host.add_child(hud)
@@ -277,21 +330,25 @@ func _check_open_world_hud(errors: Array[String], tree: SceneTree) -> void:
 		for k in 5:
 			await tree.process_frame
 			hud._layout()
-		var banners := Rect2(hud.banners.position, hud.banners.size)
-		var card := Rect2(hud.card.position, hud.card.size)
+		var banners := Rect2(shift + hud.banners.position, hud.banners.size)
+		var card := Rect2(shift + hud.card.position, hud.card.size)
 		var rects := {
-			"stats": Rect2(hud.stats_box.position, hud.stats_box.size),
-			"skill chain": Rect2(hud.chain_box.position, hud.chain_box.size),
+			"stats": Rect2(shift + hud.stats_box.position, hud.stats_box.size),
+			"skill chain": Rect2(shift + hud.chain_box.position, hud.chain_box.size),
 			"banners": banners,
 			"event card": card,
-			"district": _text_rect(hud.area_label, canvas),
-			"street": _text_rect(hud.street_label, canvas),
-			"key help": _text_rect(hud.help_label, canvas),
-			"satnav": _intended(hud.minimap, canvas),
-			"speedometer": _intended(hud.speedo, canvas),
+			"district": _text_rect(hud.area_label, safe),
+			"street": _text_rect(hud.street_label, safe),
+			"key help": _text_rect(hud.help_label, safe),
+			"satnav": _in_safe(hud.minimap, safe),
+			"speedometer": _in_safe(hud.speedo, safe),
 		}
-		_no_overlap(errors, "open-world HUD", rects, canvas)
+		_no_overlap(errors, "open-world HUD [%s]" % combo[1], rects, canvas, safe)
+		for g in [hud.corners_group, hud.speedo_group]:
+			if g.position != Vector2.ZERO or not g.size.is_equal_approx(safe.size):
+				errors.append("open-world HUD %s: %s sits at %s size %s, not the safe frame %s" % [_tag(canvas, combo[1]), g.name, g.position, g.size, safe])
 		host.free()
+	HudLayout.hud_width = was
 
 ## Both HUDs draw their speedometer through the shared DashGauge sweep: verifies OpenWorldHud renders speed,
 ## KM/H, GEAR (N / R / forward), redline white segments and the N2O bar inside its bounds across skins and
@@ -379,7 +436,15 @@ func _check_shared_speedo(errors: Array[String], tree: SceneTree) -> void:
 	CmrStyle.apply_skin("cmr")
 	host.free()
 	# 720p, 1080p and scaled canvases: speedo stays clear of controls strip, street plate, satnav and event card
+	var combos: Array = []
 	for canvas: Vector2 in [Vector2(1280, 720), Vector2(1600, 900), Vector2(1920, 1080), Vector2(1231, 692)]:
+		combos.append([canvas, HudLayout.WIDTH_21_9])
+	combos.append_array(_layouts().slice(CANVASES.size()))
+	var was := HudLayout.hud_width
+	for combo in combos:
+		var canvas: Vector2 = combo[0]
+		HudLayout.hud_width = combo[1]
+		var safe := HudLayout.safe_rect(canvas)
 		var h2 := _host(tree, canvas)
 		var hud := OpenWorldHud.new()
 		h2.add_child(hud)
@@ -389,14 +454,15 @@ func _check_shared_speedo(errors: Array[String], tree: SceneTree) -> void:
 		await _settle(tree, 4)
 		hud._layout()
 		var rects := {
-			"speedometer": _intended(hud.speedo, canvas),
-			"satnav": _intended(hud.minimap, canvas),
-			"key help": _text_rect(hud.help_label, canvas),
-			"street plate": _intended(hud.street_plate, canvas),
-			"event card": Rect2(hud.card.position, hud.card.size),
+			"speedometer": _in_safe(hud.speedo, safe),
+			"satnav": _in_safe(hud.minimap, safe),
+			"key help": _text_rect(hud.help_label, safe),
+			"street plate": _in_safe(hud.street_plate, safe),
+			"event card": Rect2(Vector2(safe.position.x, 0.0) + hud.card.position, hud.card.size),
 		}
-		_no_overlap(errors, "open-world speedo", rects, canvas)
+		_no_overlap(errors, "open-world speedo [%s]" % combo[1], rects, canvas, safe)
 		h2.free()
+	HudLayout.hud_width = was
 
 static func _audit_texts(drawn: Array) -> Array[String]:
 	var out: Array[String] = []
@@ -405,8 +471,8 @@ static func _audit_texts(drawn: Array) -> Array[String]:
 	return out
 
 ## The part of a centred label its text covers (at the font size _layout picked).
-static func _text_rect(l: Label, canvas: Vector2) -> Rect2:
-	var r := _intended(l, canvas)
+static func _text_rect(l: Label, safe: Rect2) -> Rect2:
+	var r := _in_safe(l, safe)
 	var f := l.get_theme_font("font")
 	var fs := l.get_theme_font_size("font_size")
 	var tw := minf(r.size.x, f.get_string_size(l.text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x)
@@ -418,11 +484,22 @@ static func _text_rect(l: Label, canvas: Vector2) -> Rect2:
 func _check_menus(errors: Array[String], tree: SceneTree) -> void:
 	var game = load("res://ui/game.tscn").instantiate()
 	tree.root.add_child(game)
+	var combos: Array = []
 	for canvas: Vector2 in [Vector2(1600, 900), Vector2(1600, 1200), Vector2(1440, 1080), Vector2(2100, 900), Vector2(2133, 900), Vector2(2520, 1080), Vector2(1231, 692)]:
+		combos.append([canvas, HudLayout.WIDTH_21_9])
+	combos.append_array(_layouts().slice(CANVASES.size()))
+	var was := HudLayout.hud_width
+	for combo in combos:
+		var canvas: Vector2 = combo[0]
+		HudLayout.hud_width = combo[1]
 		game.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 		game.size = canvas
+		game._apply_layout_safe_zone()
 		await _settle(tree)
-		var tag := "menus %dx%d" % [canvas.x, canvas.y]
+		var safe := HudLayout.safe_rect(canvas)
+		var tag := "menus " + _tag(canvas, combo[1])
+		if not game.menu_safe_frame.position.is_equal_approx(safe.position) or not game.menu_safe_frame.size.is_equal_approx(safe.size):
+			errors.append("%s: the menu frame is %s %s, wanted %s" % [tag, game.menu_safe_frame.position, game.menu_safe_frame.size, safe])
 		# the header: tabs, PLAYER 1 │ YOU, MAIN MENU side by side, none squeezed under another
 		game._show_home()
 		game._home_select(1, false)
@@ -506,6 +583,23 @@ func _check_menus(errors: Array[String], tree: SceneTree) -> void:
 				var r := Rect2((p as Control).global_position, (p as Control).size)
 				if not screen.encloses(r):
 					errors.append("%s: options %s %s runs off the canvas" % [tag, p.name, r])
+		# everything the menus show stays inside the safe zone (and so on the canvas), on every page
+		for page in ["home", "setup", "options", "car", "advanced", "strategy", "repair"]:
+			match page:
+				"home": game._show_home()
+				"setup": game._show_setup_page()
+				"options": game._show_options_page()
+				"car": game._show_car_page()
+				"advanced": game._show_advanced_page()
+				"strategy": game._show_strategy_page()
+				"repair": game._show_repair_page()
+			await _settle(tree, 3)
+			for c in game.menu_safe_frame.get_children():
+				if c is Control and (c as Control).visible:
+					var r := Rect2((c as Control).global_position, (c as Control).size)
+					if r.size.x > 0.0 and not safe.grow(1.0).encloses(r):
+						errors.append("%s: on the %s page %s %s leaves the safe zone %s" % [tag, page, c.name, r, safe])
+	HudLayout.hud_width = was
 	game.queue_free() # (free() fails here: the coroutine runs inside the frame signal)
 	await tree.process_frame
 

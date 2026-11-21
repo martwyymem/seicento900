@@ -11,7 +11,10 @@ func run() -> Array:
 	_volumes(errors)
 	_routing(errors)
 	_presets(errors)
+	_hud_layout(errors)
+	var hud_width_before := HudLayout.hud_width
 	_game_options(errors)
+	HudLayout.hud_width = hud_width_before
 	AudioSettings.levels = saved_levels
 	AudioSettings.apply()
 	completed = true
@@ -146,6 +149,44 @@ func _routing(errors: Array[String]) -> void:
 	world.free()
 	audio.free()
 
+## HudLayout: the safe zone is centred and capped by the setting, the Hor+ FOV keeps 16:9's horizontal view.
+func _hud_layout(errors: Array[String]) -> void:
+	# safe zone: Full is everything, 21:9 and 16:9 cap the width and centre it, narrower windows are left whole
+	for case in [[Vector2(1920, 1080), 0, 1920.0], [Vector2(1920, 1080), 1, 1920.0], [Vector2(1920, 1080), 2, 1920.0],
+			[Vector2(1280, 1024), 2, 1280.0], [Vector2(2560, 1080), 1, 2520.0], [Vector2(2560, 1080), 2, 1920.0], [Vector2(2560, 1080), 0, 2560.0],
+			[Vector2(5120, 1440), 0, 5120.0], [Vector2(5120, 1440), 1, 3360.0], [Vector2(5120, 1440), 2, 2560.0]]:
+		var r := HudLayout.safe_rect(case[0], case[1])
+		if absf(r.size.x - case[2]) > 1.0 or r.size.y != case[0].y or absf(r.position.x * 2.0 + r.size.x - case[0].x) > 1.0:
+			errors.append("safe_rect(%s, %d) should be %d wide, centred and full height, got %s" % [case[0], case[1], case[2], r])
+	# Hor+: the vertical FOV stays from 16:9 up, and grows below it so the horizontal FOV never drops under 16:9's
+	var base := 70.0
+	var h16 := HudLayout.camera_fov(base, 16.0 / 9.0)
+	var h_ref := rad_to_deg(2.0 * atan(tan(deg_to_rad(base) * 0.5) * 16.0 / 9.0))
+	for aspect in [16.0 / 9.0, 21.0 / 9.0, 32.0 / 9.0]:
+		if absf(HudLayout.camera_fov(base, aspect) - base) > 0.001:
+			errors.append("FOV at %.2f:1 should keep the vertical %.0f, got %.2f" % [aspect, base, HudLayout.camera_fov(base, aspect)])
+	for aspect in [4.0 / 3.0, 5.0 / 4.0, 16.0 / 10.0]:
+		var v := HudLayout.camera_fov(base, aspect)
+		var h := rad_to_deg(2.0 * atan(tan(deg_to_rad(v) * 0.5) * aspect))
+		if v <= base or absf(h - h_ref) > 0.01:
+			errors.append("FOV at %.2f:1 should widen so the horizontal view equals 16:9's (%.2f), got v %.2f h %.2f" % [aspect, h_ref, v, h])
+	if absf(h16 - base) > 0.001 or HudLayout.camera_fov(base, 0.0) != base:
+		errors.append("FOV at 16:9 (or an unknown aspect) should be unchanged")
+	# the camera helper reads its viewport and forces vertical-FOV scaling
+	var vp := SubViewport.new()
+	vp.size = Vector2i(1600, 1200)
+	(Engine.get_main_loop() as SceneTree).root.add_child(vp)
+	var cam := Camera3D.new()
+	cam.keep_aspect = Camera3D.KEEP_WIDTH
+	vp.add_child(cam)
+	var got := HudLayout.camera_fov_for(cam, base)
+	if cam.keep_aspect != Camera3D.KEEP_HEIGHT or absf(got - HudLayout.camera_fov(base, 4.0 / 3.0)) > 0.001:
+		errors.append("camera_fov_for in a 4:3 viewport should be %.2f with KEEP_HEIGHT, got %.2f (keep %d)" % [HudLayout.camera_fov(base, 4.0 / 3.0), got, cam.keep_aspect])
+	vp.size = Vector2i(3200, 900)
+	if absf(HudLayout.camera_fov_for(cam, base) - base) > 0.001:
+		errors.append("camera_fov_for in a 32:9 viewport should keep the vertical FOV")
+	vp.free()
+
 ## The options page: the settings survive a save and a load, the aspect ratios set the canvas, and the new
 ## pickers sit in the controller's focus order.
 func _game_options(errors: Array[String]) -> void:
@@ -159,7 +200,7 @@ func _game_options(errors: Array[String]) -> void:
 		if not game.audio_pickers.has(key):
 			errors.append("Options should have a %s volume picker" % key)
 	var items: Array = game._options_focus_items()
-	var order := [game.display_mode_picker, game.resolution_picker, game.aspect_picker]
+	var order := [game.display_mode_picker, game.resolution_picker, game.aspect_picker, game.hud_width_picker]
 	for key in ["master", "engine", "effects", "voice"]:
 		order.append(game.audio_pickers.get(key))
 	var at := -1
@@ -187,11 +228,22 @@ func _game_options(errors: Array[String]) -> void:
 	if not AudioServer.is_bus_mute(AudioServer.get_bus_index("CarFx")) \
 			or not AudioServer.is_bus_mute(AudioServer.get_bus_index("World")):
 		errors.append("Options Effects picker at Off should mute both CarFx and World buses")
+	# HUD WIDTH: the default is 21:9, the picker sets it, and it survives a save and a load
+	if HudLayout.hud_width != HudLayout.WIDTH_21_9 and not FileAccess.file_exists(cfg_path):
+		errors.append("the HUD width should default to 21:9, got %d" % HudLayout.hud_width)
+	if game.hud_width_picker.item_count != 3 or game.hud_width_picker.get_item_text(0) != "Full" or game.hud_width_picker.get_item_text(1) != "21:9" \
+			or game.hud_width_picker.get_item_text(2) != "16:9":
+		errors.append("the HUD WIDTH picker should list Full, 21:9 and 16:9")
+	game.hud_width_picker.select(2)
+	game.hud_width_picker.item_selected.emit(2)
+	if HudLayout.hud_width != HudLayout.WIDTH_16_9:
+		errors.append("picking 16:9 in HUD WIDTH should set it, got %d" % HudLayout.hud_width)
 	game.graphics_resolution = Vector2i(1280, 720)
 	game.graphics_aspect = 3
 	game._save_graphics_settings()
 	game.graphics_resolution = Vector2i(-1, -1)
 	game.graphics_aspect = 0
+	HudLayout.hud_width = HudLayout.WIDTH_FULL
 	AudioSettings.levels = {"master": 100, "engine": 100, "effects": 100, "voice": 100}
 	AudioSettings.apply()
 	game._load_graphics_settings()
@@ -201,6 +253,20 @@ func _game_options(errors: Array[String]) -> void:
 	_restore_cfg(cfg_path, backup) # at once: other suites and agents share the sandbox and would load 21:9 from it
 	if game.graphics_resolution != Vector2i(1280, 720) or game.graphics_aspect != 3:
 		errors.append("resolution and aspect should load back: %s, %d" % [game.graphics_resolution, game.graphics_aspect])
+	if HudLayout.hud_width != HudLayout.WIDTH_16_9 or game.hud_width_picker.selected != HudLayout.WIDTH_16_9 \
+			or reloaded.hud_width_picker.selected != HudLayout.WIDTH_16_9:
+		errors.append("the HUD width should load back as 16:9: %d, pickers %d / %d" % [HudLayout.hud_width, game.hud_width_picker.selected, reloaded.hud_width_picker.selected])
+	# applied live: the menu's safe frame follows the setting
+	game.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	game.size = Vector2(3200, 900)
+	for mode in 3:
+		game.hud_width_picker.item_selected.emit(mode)
+		var want := HudLayout.safe_rect(game.size, mode)
+		if not game.menu_safe_frame.position.is_equal_approx(want.position) or not game.menu_safe_frame.size.is_equal_approx(want.size):
+			errors.append("HUD width %d should put the menu frame at %s, it is at %s %s" % [mode, want, game.menu_safe_frame.position, game.menu_safe_frame.size])
+	game.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	game.hud_width_picker.select(HudLayout.WIDTH_16_9)
+	HudLayout.hud_width = HudLayout.WIDTH_16_9
 	if AudioSettings.levels != {"master": 70, "engine": 30, "effects": 0, "voice": 90}:
 		errors.append("the volumes should load back: %s" % [AudioSettings.levels])
 	if absf(AudioServer.get_bus_volume_db(AudioServer.get_bus_index("Master")) - linear_to_db(0.7)) > 0.001:

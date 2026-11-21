@@ -77,6 +77,7 @@ var banner_small: Label
 var feed: Control
 var pitwall: Control
 var dash: DashGauge
+var safe_frame: Control ## centred HUD safe zone (capped by HudLayout.hud_width on ultrawide displays)
 var corners_group: Control ## g-force sway container for corner panels (tower, clock, minimap, feed, pitwall)
 var dash_group: Control ## g-force sway container for the speedometer cluster (moves most)
 var _corner_panels: Array[Control] = []
@@ -156,6 +157,23 @@ var _nitro_label: Label ## the Nitrous modifier's bottle (CarMods), only while i
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	visibility_changed.connect(func(): if not visible: CoDriver.silence())
+	_font = CmrStyle.font(400)
+	_bold = CmrStyle.font(600)
+	_digits = CmrStyle.digits()
+	_panel_style = CmrStyle.panel(_plate(0.8), Color(CmrStyle.VIOLET, 0.5), 0)
+	_lights_style = StyleBoxFlat.new()
+	_lights_style.bg_color = Color("#0b0b0d")
+	_lights_style.border_color = Color("#222222")
+	_lights_style.set_border_width_all(2)
+
+	tags = _canvas(_draw_tags, self)
+	tags.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	safe_frame = Control.new()
+	safe_frame.name = "SafeFrame"
+	safe_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(safe_frame)
+	HudLayout.apply_safe_frame(safe_frame, size)
 	_nitro_label = Label.new()
 	_nitro_label.add_theme_font_override("font", CmrStyle.font(800))
 	_nitro_label.add_theme_font_size_override("font_size", 16)
@@ -168,19 +186,7 @@ func _ready() -> void:
 	_nitro_label.offset_right = 120
 	_nitro_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_nitro_label.hide()
-	add_child(_nitro_label)
-	visibility_changed.connect(func(): if not visible: CoDriver.silence())
-	_font = CmrStyle.font(400)
-	_bold = CmrStyle.font(600)
-	_digits = CmrStyle.digits()
-	_panel_style = CmrStyle.panel(_plate(0.8), Color(CmrStyle.VIOLET, 0.5), 0)
-	_lights_style = StyleBoxFlat.new()
-	_lights_style.bg_color = Color("#0b0b0d")
-	_lights_style.border_color = Color("#222222")
-	_lights_style.set_border_width_all(2)
-
-	tags = _canvas(_draw_tags)
-	tags.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	safe_frame.add_child(_nitro_label)
 	corners_group = _motion_group("CornersGroup")
 	dash_group = _motion_group("DashGroup")
 	tower = _canvas(_draw_tower, corners_group)
@@ -218,7 +224,7 @@ func _ready() -> void:
 	dash.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	dash.audit_fn = _audit_text
 	dash_group.add_child(dash)
-	move_child(dash_group, -1) # drawn over the panels before it, as the dash was before it moved into a group
+	safe_frame.move_child(dash_group, -1) # drawn over the panels before it, as the dash was before it moved into a group
 	_place(dash, 1.0, 1.0, 1.0, 1.0, -360, -190, -14, -14)
 
 	_overtake_control = _canvas(_draw_overtake)
@@ -229,10 +235,10 @@ func _ready() -> void:
 	# the lights, flag board, split, overtake call, delta bar and banner share one column under the pace
 	# notes: _layout() stacks whichever are showing so no two ever cover each other
 	banner = _banner_label(46)
-	add_child(banner)
+	safe_frame.add_child(banner)
 	banner_small = _banner_label(18)
 	banner_small.add_theme_color_override("font_color", CmrStyle.MUTED)
-	add_child(banner_small)
+	safe_frame.add_child(banner_small)
 
 	help = PanelContainer.new()
 	help.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -246,9 +252,7 @@ func _ready() -> void:
 	help_label.add_theme_font_size_override("font_size", 12)
 	help_label.add_theme_color_override("font_color", CmrStyle.MUTED)
 	help.add_child(help_label)
-	_guide = _canvas(_draw_guide)
-	remove_child(_guide)
-	help.add_child(_guide)
+	_guide = _canvas(_draw_guide, help)
 	_guide.visible = false
 	help.anchor_left = 0.5
 	help.anchor_right = 0.5
@@ -257,7 +261,8 @@ func _ready() -> void:
 	help.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	help.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	help.offset_bottom = -14
-	add_child(help)
+	safe_frame.add_child(help)
+	resized.connect(_layout)
 	_fit_help()
 
 ## Hand the HUD a new race.
@@ -473,8 +478,12 @@ const STATUS_FONT := 13
 ## the pit wall and the dash with the status chip above it. Name tags keep out of the areas noted in
 ## _reserved. Called every frame (cheap: a few rects).
 func _layout() -> void:
-	var W := size.x
-	var H := size.y
+	if size.x < 1.0 or size.y < 1.0:
+		return
+	var safe := HudLayout.apply_safe_frame(safe_frame, size)
+	var sx := safe.position.x
+	var W := safe.size.x
+	var H := safe.size.y
 	if W < 1.0 or H < 1.0:
 		return
 	_reserved.clear()
@@ -491,7 +500,7 @@ func _layout() -> void:
 	if _status_text != "":
 		var sw := _bold.get_string_size(_status_text, HORIZONTAL_ALIGNMENT_LEFT, -1, STATUS_FONT).x + 36.0
 		_place(statusbar, 0.5, 1.0, 0.5, 1.0, -sw * 0.5, floor_y - H - 8.0 - 26.0, sw * 0.5, floor_y - H - 8.0)
-		_reserved.append(Rect2(cx - sw * 0.5, floor_y - 8.0 - 26.0, sw, 26.0))
+		_reserved.append(Rect2(sx + cx - sw * 0.5, floor_y - 8.0 - 26.0, sw, 26.0))
 		floor_y -= 8.0 + 26.0
 	floor_y -= 8.0
 	# the split goes left of the clock, as in CMR, when the pace notes leave it room; else into the column
@@ -499,7 +508,7 @@ func _layout() -> void:
 	if _split_beside:
 		_place(splitbox, 1.0, 0.0, 1.0, 0.0, -EDGE - CLOCK_W - 20 - 250, 32, -EDGE - CLOCK_W - 20 - 12, 90)
 		if _split_showing():
-			_reserved.append(Rect2(W - EDGE - CLOCK_W - 20 - 250, 32, SPLIT_W, 44))
+			_reserved.append(Rect2(sx + W - EDGE - CLOCK_W - 20 - 250, 32, SPLIT_W, 44))
 	# the centre column, most important first; whatever would run into the chip or the help is left out
 	var stack: Array = [] ## [control, width, height]
 	if _lights_showing():
@@ -530,40 +539,45 @@ func _layout() -> void:
 		var used_w := w
 		if c is Label:
 			used_w = minf(w, _label_width(c as Label))
-		_reserved.append(Rect2(cx - used_w * 0.5, y, used_w, h))
+		_reserved.append(Rect2(sx + cx - used_w * 0.5, y, used_w, h))
 		y += h + STACK_GAP
 	_stack_bottom = y - STACK_GAP
-	_reserved.append(Rect2(cx - PACENOTE_HALF, EDGE, PACENOTE_HALF * 2.0, 132.0))
+	_reserved.append(Rect2(sx + cx - PACENOTE_HALF, EDGE, PACENOTE_HALF * 2.0, 132.0))
 	# right column: clock, minimap, then the feed down to just above the dash
 	feed.offset_bottom = maxf(feed.offset_top + 30.0, minf(700.0, H - 190.0 - 10.0))
-	_reserved.append(Rect2(W - EDGE - CLOCK_W, EDGE, CLOCK_W, 208.0))
-	_reserved.append(Rect2(minimap.position, minimap.size))
+	var shift := Vector2(sx, 0.0)
+	_reserved.append(Rect2(sx + W - EDGE - CLOCK_W, EDGE, CLOCK_W, 208.0))
+	_reserved.append(Rect2(shift + minimap.position, minimap.size))
 	if _feed_h > 0.0:
-		_reserved.append(Rect2(feed.position, Vector2(FEED_W, minf(_feed_h, feed.size.y))))
-	_reserved.append(Rect2(dash.position, dash.size))
+		_reserved.append(Rect2(shift + feed.position, Vector2(FEED_W, minf(_feed_h, feed.size.y))))
+	_reserved.append(Rect2(shift + dash.position, dash.size))
 	# left column
 	if tower.visible:
-		_reserved.append(Rect2(tower.position, Vector2(TOWER_W, tower.size.y)))
+		_reserved.append(Rect2(shift + tower.position, Vector2(TOWER_W, tower.size.y)))
 	if modepanel.visible:
-		_reserved.append(Rect2(modepanel.position, Vector2(left_w, modepanel.size.y)))
+		_reserved.append(Rect2(shift + modepanel.position, Vector2(left_w, modepanel.size.y)))
 	if pitwall.visible:
-		_reserved.append(Rect2(pitwall.position, pitwall.size))
+		_reserved.append(Rect2(shift + pitwall.position, pitwall.size))
 
 ## Where the key help sits: the rect its offsets ask for, grown to the panel's real rect (a label can need
 ## more height than measured, e.g. another skin's face, and the panel then grows upward over what is above).
 func help_rect() -> Rect2:
-	var r := Rect2(size.x * 0.5 + help.offset_left, size.y + help.offset_top, help.offset_right - help.offset_left, help.offset_bottom - help.offset_top)
+	var sx := safe_frame.position.x if safe_frame else 0.0
+	var sw := safe_frame.size.x if safe_frame else size.x
+	var sh := safe_frame.size.y if safe_frame else size.y
+	var r := Rect2(sx + sw * 0.5 + help.offset_left, sh + help.offset_top, help.offset_right - help.offset_left, help.offset_bottom - help.offset_top)
 	if help.size.y > 0.0:
-		r = r.merge(Rect2(help.position, help.size))
+		r = r.merge(Rect2(Vector2(sx, 0.0) + help.position, help.size))
 	return r
 
 ## Half the width of the free band down the centre, between the left column (timing tower or stage panel)
-## and the right one (clock, minimap and the event feed, the widest of them), around the canvas centre.
+## and the right one (clock, minimap and the event feed, the widest of them), around the safe-zone centre.
 func _band_half() -> float:
-	var cx := size.x * 0.5
+	var W := safe_frame.size.x if safe_frame else size.x
+	var cx := W * 0.5
 	var left_w := MODE_W if modepanel.visible else (TOWER_W if tower.visible else 0.0)
 	var left := EDGE + left_w + 12.0
-	var right := size.x - EDGE - maxf(CLOCK_W, FEED_W) - 12.0
+	var right := W - EDGE - maxf(CLOCK_W, FEED_W) - 12.0
 	return maxf(PACENOTE_HALF, minf(cx - left, right - cx))
 
 ## The rows the timing tower may show above the pit wall (the rest are cut, the player's row always kept).
@@ -600,10 +614,11 @@ func _draw_guide() -> void:
 		_guide.draw_string(_font, Vector2(x + colw * 0.46, y), GUIDE[i][1], HORIZONTAL_ALIGNMENT_LEFT, colw * 0.54 - 8.0, 12, MUTED)
 
 func _fit_help() -> void:
-	if not _help_label or size.x < 1.0:
+	var W := safe_frame.size.x if safe_frame else size.x
+	var H := safe_frame.size.y if safe_frame else size.y
+	if not _help_label or W < 1.0:
 		return
-	var W := size.x
-	var key := "%d|%d|%s|%s|%s" % [int(W), int(size.y), pitwall.visible, _help_label.text.hash(), _help_full]
+	var key := "%d|%d|%s|%s|%s" % [int(W), int(H), pitwall.visible, _help_label.text.hash(), _help_full]
 	if key == _help_key:
 		return
 	_help_key = key
@@ -700,6 +715,10 @@ func _skin_changed() -> void:
 	for c in get_children():
 		if c is CanvasItem:
 			(c as CanvasItem).queue_redraw()
+	if safe_frame:
+		for c in safe_frame.get_children():
+			if c is CanvasItem:
+				(c as CanvasItem).queue_redraw()
 	for c in _corner_panels:
 		c.queue_redraw()
 
@@ -709,7 +728,7 @@ func _motion_group(group_name: String) -> Control:
 	g.name = group_name
 	g.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	g.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(g)
+	safe_frame.add_child(g)
 	return g
 
 func _update_motion(dt: float) -> void:
@@ -742,7 +761,7 @@ func _canvas(fn: Callable, parent: Control = null) -> Control:
 	var c := Control.new()
 	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	c.draw.connect(fn)
-	(parent if parent != null else self).add_child(c)
+	(parent if parent != null else (safe_frame if safe_frame != null else self)).add_child(c)
 	return c
 
 static func _place(c: Control, al: float, at: float, ar: float, ab: float, ol: float, ot: float, orr: float, ob: float) -> void:

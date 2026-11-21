@@ -198,6 +198,7 @@ var world_view: Node3D
 # UI Panels
 var setup_panel: PanelContainer
 var menu_tint: ColorRect ## the flat page tint behind every front-end page (one colour per page, as in CMR)
+var menu_safe_frame: Control ## centred safe zone for menus (capped by HudLayout.hud_width on ultrawide displays)
 var menu_header: HBoxContainer
 var menu_home: Control
 var menu_home_art: Control
@@ -249,6 +250,7 @@ var display_mode_picker: MenuSelector
 var resolution_picker: MenuSelector
 var resolution_note: Label
 var aspect_picker: MenuSelector
+var hud_width_picker: MenuSelector
 var audio_pickers := {} ## AudioSettings channel key -> its volume picker
 var graphics_resolution := AUTO_RESOLUTION ## Options → Resolution: AUTO_RESOLUTION (the default), ZERO native
 var graphics_aspect := 0 ## index into ASPECTS
@@ -453,6 +455,7 @@ func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	theme = CmrStyle.build_theme()
 	get_viewport().size_changed.connect(_fit_3d_views)
+	resized.connect(_apply_layout_safe_zone)
 
 	_map_pad_buttons()
 	_load_championship()
@@ -471,6 +474,7 @@ func _ready() -> void:
 	loading_screen = LOADING_SCREEN.new()
 	add_child(loading_screen)
 	_build_menu_prompt()
+	_apply_layout_safe_zone()
 	Input.joy_connection_changed.connect(func(_device: int, _connected: bool) -> void: _refresh_prompts())
 	_show_home()
 	_fit_3d_views.call_deferred()
@@ -504,7 +508,7 @@ func _build_menu_prompt() -> void:
 	menu_prompt.anchor_bottom = 0.995
 	menu_prompt.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	menu_prompt.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(menu_prompt)
+	menu_safe_frame.add_child(menu_prompt)
 	menu_prompt.hide()
 
 ## Re-labels every prompt (a pad was plugged in or out, or the page changed).
@@ -761,6 +765,11 @@ func _build_setup() -> void:
 	menu_tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(menu_tint)
 	move_child(menu_tint, 2)
+	menu_safe_frame = Control.new()
+	menu_safe_frame.name = "MenuSafeFrame"
+	menu_safe_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(menu_safe_frame)
+	HudLayout.apply_safe_frame(menu_safe_frame, size)
 
 	_build_menu_header()
 	_build_menu_car_preview()
@@ -775,7 +784,7 @@ func _build_setup() -> void:
 	setup_panel.offset_right = 0
 	setup_panel.offset_top = 0
 	setup_panel.offset_bottom = 0
-	add_child(setup_panel)
+	menu_safe_frame.add_child(setup_panel)
 
 	# the settings scroll; the status, RACE and the key hint stay pinned under them
 	var page := _column(setup_panel, 8)
@@ -1240,7 +1249,7 @@ func _page_panel(page_name: String, left: float, right: float) -> Dictionary:
 	panel.offset_right = 0
 	panel.offset_top = 0
 	panel.offset_bottom = 0
-	add_child(panel)
+	menu_safe_frame.add_child(panel)
 	panel.hide()
 	var page := _column(panel, 8)
 	var scroll := ScrollContainer.new()
@@ -2097,6 +2106,10 @@ func _dev_entries() -> Array:
 			add.call("OPEN WORLD · TELEPORT", String(spot), func() -> void: open_world.dev_teleport(String(spot)), true)
 		for h in [6.0, 12.0, 18.5, 22.0]:
 			add.call("OPEN WORLD · TIME", "%02d:%02d" % [int(h), int(fmod(h, 1.0) * 60.0)], func() -> void: open_world.dev_set_hour(h))
+		add.call("OPEN WORLD · WEATHER", "Weather: %s (Always dry / Dynamic)" % ("Dynamic" if open_world.progress.weather_dynamic else "Always dry"),
+			func() -> void: open_world.set_weather_dynamic(not open_world.progress.weather_dynamic))
+		for w in ["rain", "fog"]:
+			add.call("OPEN WORLD · WEATHER", "%s now (2 game hours)" % String(w).capitalize(), func() -> void: open_world.dev_weather(String(w)), true)
 		for kind in ["CarHatch", "CarSedan", "CarVan", "Maluch"]:
 			add.call("OPEN WORLD · SPAWN", "Park a %s 22 m ahead" % kind.trim_prefix("Car"), func() -> void: open_world.dev_spawn(kind), true)
 		add.call("OPEN WORLD · CAR", "Put the car back on the road", func() -> void: open_world.drive.respawn(), true)
@@ -2529,7 +2542,7 @@ func _build_menu_car_preview() -> void:
 	add_child(viewport)
 	menu_car_preview = _viewport_view(viewport)
 	menu_car_preview.name = "MenuCarPreview"
-	add_child(menu_car_preview)
+	menu_safe_frame.add_child(menu_car_preview)
 
 	var showcase := Node3D.new()
 	showcase.name = "CarShowcase"
@@ -2576,7 +2589,7 @@ func _build_menu_car_preview() -> void:
 	menu_car_rule.anchor_right = 0.555
 	menu_car_rule.anchor_bottom = 0.664
 	menu_car_rule.color = Color(CmrStyle.TEXT, 0.85)
-	add_child(menu_car_rule)
+	menu_safe_frame.add_child(menu_car_rule)
 	menu_car_summary = _label("", 24, INK)
 	menu_car_summary.anchor_left = 0.045
 	menu_car_summary.anchor_top = 0.675
@@ -2584,7 +2597,7 @@ func _build_menu_car_preview() -> void:
 	menu_car_summary.anchor_bottom = 0.79
 	menu_car_summary.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	menu_car_summary.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS # a long circuit name stops short of the set-up column
-	add_child(menu_car_summary)
+	menu_safe_frame.add_child(menu_car_summary)
 
 	# the circuit's map and facts sit between the car and its name on the Set Up page
 	circuit_map_frame = PanelContainer.new()
@@ -2595,7 +2608,7 @@ func _build_menu_car_preview() -> void:
 	map_style.bg_color = CmrStyle.MAP
 	map_style.set_content_margin_all(0)
 	circuit_map_frame.add_theme_stylebox_override("panel", map_style)
-	add_child(circuit_map_frame)
+	menu_safe_frame.add_child(circuit_map_frame)
 	information_map = MENU_TRACK_ART.new()
 	information_map.env_on_demand = false # the circuit prefetcher / rush worker prepares the surroundings
 	information_map.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -2603,7 +2616,7 @@ func _build_menu_car_preview() -> void:
 	circuit_facts = _label("", 14, CmrStyle.ORANGE_SOFT)
 	_anchor_rect(circuit_facts, 0.045, 0.88, 0.555, 0.95)
 	circuit_facts.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	add_child(circuit_facts)
+	menu_safe_frame.add_child(circuit_facts)
 	_update_menu_car_summary()
 
 ## The circuit the front end is currently pointing at: this round's in a championship, otherwise the picked one.
@@ -2655,7 +2668,7 @@ func _build_menu_header() -> void:
 	menu_header.offset_right = -58
 	menu_header.offset_bottom = 100
 	menu_header.add_theme_constant_override("separation", 16) # room either side of the rule before MAIN MENU
-	add_child(menu_header)
+	menu_safe_frame.add_child(menu_header)
 
 	var tabs := HBoxContainer.new()
 	tabs.add_theme_constant_override("separation", 0)
@@ -2728,7 +2741,7 @@ func _build_repair_page() -> void:
 	repair_panel.anchor_top = 0.17
 	repair_panel.anchor_right = 0.98
 	repair_panel.anchor_bottom = 0.96
-	add_child(repair_panel)
+	menu_safe_frame.add_child(repair_panel)
 	var column := VBoxContainer.new()
 	column.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	column.add_theme_constant_override("separation", 2)
@@ -2792,7 +2805,7 @@ func _build_repair_page() -> void:
 	repair_details = Control.new()
 	repair_details.name = "RepairDetails"
 	repair_details.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	add_child(repair_details)
+	menu_safe_frame.add_child(repair_details)
 	var art_frame := PanelContainer.new()
 	art_frame.anchor_left = 0.045
 	art_frame.anchor_top = 0.54
@@ -3020,7 +3033,7 @@ func _build_home_screen() -> void:
 	menu_home = Control.new()
 	menu_home.name = "MainMenu"
 	menu_home.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	add_child(menu_home)
+	menu_safe_frame.add_child(menu_home)
 
 	menu_home_art = MENU_TRACK_ART.new()
 	menu_home_art.anchor_left = 0.08
@@ -3107,7 +3120,7 @@ func _build_options_page() -> void:
 	options_panel.offset_right = 0
 	options_panel.offset_top = 0
 	options_panel.offset_bottom = 0
-	add_child(options_panel)
+	menu_safe_frame.add_child(options_panel)
 	var scroll := ScrollContainer.new()
 	scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -3152,10 +3165,11 @@ func _build_options_page() -> void:
 	resolution_picker.item_selected.connect(_on_resolution_selected)
 	aspect_picker = _option_field(resolution_row, "ASPECT RATIO", ASPECTS.map(func(a): return a.name))
 	aspect_picker.item_selected.connect(_on_aspect_selected)
+	hud_width_picker = _option_field(resolution_row, "HUD WIDTH", HudLayout.WIDTH_NAMES)
+	hud_width_picker.item_selected.connect(_on_hud_width_selected)
 	resolution_note = _label("", 14, MUTED)
 	resolution_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	resolution_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	resolution_row.add_child(resolution_note)
+	column.add_child(resolution_note)
 	var frame_row := HBoxContainer.new()
 	frame_row.add_theme_constant_override("separation", 22)
 	column.add_child(frame_row)
@@ -3273,6 +3287,7 @@ func _build_options_page() -> void:
 	antialiasing_picker.select(graphics_antialiasing)
 	display_mode_picker.select(graphics_display_mode)
 	aspect_picker.select(graphics_aspect)
+	hud_width_picker.select(HudLayout.hud_width)
 	_rebuild_resolution_picker()
 	vsync_toggle.button_pressed = graphics_vsync
 	fps_limit_picker.select(graphics_fps_limit)
@@ -3450,6 +3465,22 @@ func _on_aspect_selected(index: int) -> void:
 	_apply_aspect()
 	_save_graphics_settings()
 
+func _on_hud_width_selected(index: int) -> void:
+	HudLayout.hud_width = clampi(index, 0, HudLayout.WIDTH_NAMES.size() - 1)
+	_apply_layout_safe_zone()
+	_save_graphics_settings()
+
+## Applies the centred HUD/menu safe zone to the front-end menus and any active HUD.
+func _apply_layout_safe_zone() -> void:
+	if is_instance_valid(menu_safe_frame):
+		HudLayout.apply_safe_frame(menu_safe_frame, size)
+		if is_instance_valid(menu_home_strip):
+			_layout_home_strip()
+	if is_instance_valid(hud):
+		hud._layout()
+	if open_world != null and is_instance_valid(open_world.hud):
+		open_world.hud._layout()
+
 ## Auto: the canvas expands to the window's shape. A ratio: the canvas takes that shape (at least 1600×900, as
 ## Auto would lay it out in such a window) and the window letterboxes or pillarboxes it with black bars.
 func _apply_aspect() -> void:
@@ -3457,6 +3488,7 @@ func _apply_aspect() -> void:
 	var ratio: float = ASPECTS[graphics_aspect].ratio
 	win.content_scale_size = aspect_canvas(ratio)
 	win.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND if ratio <= 0.0 else Window.CONTENT_SCALE_ASPECT_KEEP
+	_apply_layout_safe_zone.call_deferred()
 	_fit_3d_views.call_deferred()
 
 ## The canvas size for an aspect ratio (0: Auto, the base canvas).
@@ -3560,6 +3592,9 @@ func _load_graphics_settings() -> void:
 		var res = config.get_value("graphics", "resolution", Vector2i(-1, -1))
 		graphics_resolution = res if res is Vector2i and res.x >= -1 else Vector2i(-1, -1)
 		graphics_aspect = clampi(int(config.get_value("graphics", "aspect", 0)), 0, ASPECTS.size() - 1)
+		HudLayout.load_from(config)
+		if is_instance_valid(hud_width_picker):
+			hud_width_picker.select(HudLayout.hud_width)
 		AudioSettings.load_from(config)
 		codriver_voice = bool(config.get_value("audio", "co_driver_voice", true))
 		graphics_retro_mode = clampi(int(config.get_value("graphics", "retro_mode", 0)), 0, RetroPipeline.MODE_NAMES.size() - 1)
@@ -3585,6 +3620,7 @@ func _load_graphics_settings() -> void:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
 	_apply_resolution()
 	_apply_aspect()
+	_apply_layout_safe_zone()
 	AudioSettings.apply()
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED if graphics_vsync else DisplayServer.VSYNC_DISABLED)
 	_apply_upscaling()
@@ -3651,6 +3687,7 @@ func _save_graphics_settings() -> void:
 	config.set_value("graphics", "ui_scale", graphics_ui_scale)
 	config.set_value("graphics", "resolution", graphics_resolution)
 	config.set_value("graphics", "aspect", graphics_aspect)
+	HudLayout.save_to(config)
 	AudioSettings.save_to(config)
 	config.set_value("audio", "co_driver_voice", codriver_voice)
 	config.set_value("graphics", "retro_mode", graphics_retro_mode)
@@ -3692,7 +3729,8 @@ func _home_select(index: int, animate := true) -> void:
 
 func _home_target_x() -> float:
 	var selected: Control = menu_home_strip.get_child(home_phys * 2)
-	return get_viewport_rect().size.x * 0.16 - selected.position.x
+	var base_w := menu_home.size.x if is_instance_valid(menu_home) and menu_home.size.x > 1.0 else get_viewport_rect().size.x
+	return base_w * 0.16 - selected.position.x
 
 ## After a scroll: hop to the same word in the middle copy (invisible, the copies look alike).
 func _home_recentre() -> void:

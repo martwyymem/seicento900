@@ -21,6 +21,9 @@ var mods := {} ## CarMods switched on (id -> true)
 var tips := {} ## first-time explanations already shown (Poi kind -> true)
 var map_hidden: Array = [] ## the big map's marker categories switched off (MapNav.CATS ids)
 var live := {} ## LiveEvents medals: {tries, done, bronze, silver, gold, kinds: {kind: done}}
+var weather_seed := 0 ## WorldWeather's seed (0: none yet, OpenWorld picks one the first time and saves it)
+var weather_day := 0 ## game days the weather has run (WorldWeather's clock is weather_day * 24 + hour)
+var weather_dynamic := true ## free-roam weather: true Dynamic (WorldWeather), false Always dry
 
 static func load_progress() -> WorldProgress:
 	var path := SaveData.read_path(SAVE_FILE)
@@ -59,6 +62,9 @@ static func from_dict(data: Variant) -> WorldProgress:
 	var lv = data.get("live", {})
 	if lv is Dictionary:
 		w.live = lv
+	w.weather_seed = int(data.get("weather_seed", 0))
+	w.weather_day = maxi(int(data.get("weather_day", 0)), 0)
+	w.weather_dynamic = bool(data.get("weather_dynamic", true))
 	return w
 
 func to_dict() -> Dictionary:
@@ -76,6 +82,9 @@ func to_dict() -> Dictionary:
 		"tips": tips.keys(),
 		"live": live,
 		"map_hidden": map_hidden,
+		"weather_seed": weather_seed,
+		"weather_day": weather_day,
+		"weather_dynamic": weather_dynamic,
 	}
 
 func save() -> void:

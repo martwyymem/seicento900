@@ -105,6 +105,8 @@ var rain := 0.0 ## 0..1 falling rain and the road shaders' rain rings
 var snow := 0.0 ## 0..1 falling snow and snow on the streets (road shaders)
 var hail := 0.0 ## 0..1 falling hail
 var fog := 0.0 ## 0..1 fog: the haze thickens to a race's fog (FOG_DENSITY), the sky greys, the sun dims
+var wx: WorldWeather ## the free-roam weather cycle (a pure function of the saved seed and the clock); null until the world is built
+var _wx_hour := 0.0 ## the clock's hour the cycle was last brought up to
 const FOG_DENSITY := 0.02 ## a race's fog (race_world.gd)
 const NIGHT_DAMP := 0.3
 const LAMP_POOL_GLOW := 0.7 ## emission at the middle of a lamp's pool on the ground (reads on the dark tarmac)
@@ -321,6 +323,7 @@ func _build_world() -> void:
 	_t_log("hud", t)
 	t = Time.get_ticks_msec()
 	drive = FreeCar.new(map)
+	_start_weather()
 	car_visual = CAR_SCENE.instantiate()
 	if CarCatalog.unlocked(CarCatalog.key_at(progress.car_class), progress.fans):
 		car_visual.car_key = CarCatalog.key_at(progress.car_class)
@@ -474,8 +477,8 @@ func _build_environment() -> void:
 	camera = Camera3D.new()
 	camera.near = 0.25
 	camera.far = 42000.0
-	camera.fov = 72.0
 	world.add_child(camera)
+	camera.fov = HudLayout.camera_fov_for(camera, 72.0)
 	camera.make_current()
 	weather_fx = WeatherParticles.new(world, quality)
 
@@ -921,6 +924,7 @@ func _begin_live_ev(lev: Dictionary) -> void:
 		live.board.append(lev)
 		_live_sync()
 	live.stats = progress.live
+	lev["mu"] = drive.mu # the free-roam weather's grip: the rivals' pace (and so the medals) run on it, as a mission's do
 	_start_run(lev)
 	hud.notify("LIVE %s" % LiveEvents.kind_name(lev), String(lev.title), lev.color)
 
@@ -978,6 +982,7 @@ func _after_run() -> void:
 		_saved_hour = -1.0
 		if sun:
 			_apply_time()
+	_wx_hour = hour # the free-roam weather carries on from where the run found it
 	if not gps_waypoint and (gps_target < 0 or gps_target >= events.size() or events[gps_target].has("live")):
 		gps_target = _next_open_event()
 	if hud:
@@ -1209,7 +1214,7 @@ func weather_state() -> Dictionary:
 
 ## Puts a weather (MapMissions.weather_state, or one weather_state() saved) on the map: the road shaders' wet, rain
 ## and snow, the falling weather particles, overcast sky and fog, and the car's grip (FreeCar.mu, as a race's Race.grip).
-func set_weather(st: Dictionary) -> void:
+func set_weather(st: Dictionary, apply := true) -> void:
 	weather = String(st.get("mode", "dry"))
 	wet = float(st.get("wet", 0.0))
 	rain = float(st.get("rain", 0.0))
@@ -1218,8 +1223,64 @@ func set_weather(st: Dictionary) -> void:
 	fog = float(st.get("fog", 0.0))
 	if drive:
 		drive.mu = float(st.get("mu", 1.0))
-	if sun:
+	if sun and apply:
 		_apply_time()
+
+## Free roam's weather: the cycle (WorldWeather) starts from the saved seed and clock. A save without a seed gets one
+## now; "Always dry" (WorldProgress.weather_dynamic off) leaves the map dry.
+func _start_weather() -> void:
+	if progress == null:
+		return
+	var clock := float(progress.weather_day) * 24.0 + hour
+	if progress.weather_seed == 0: # a new game: a random seed whose weather is fine at the start
+		for _try in 20:
+			progress.weather_seed = 1 + (randi() % 0x7ffffffe)
+			var first := WorldWeather.new(progress.weather_seed, clock).state()
+			if String(first.mode) == "dry":
+				break
+	wx = WorldWeather.new(progress.weather_seed, clock)
+	_wx_hour = hour
+	if progress.weather_dynamic:
+		set_weather(wx.state(), false)
+
+## Every frame: the cycle follows the clock (a jump of it, the time-of-day skip, re-settles the weather), and its weather
+## goes on the map unless a mission is running its own (the cycle waits, the clock having been moved for the run).
+func _update_weather() -> void:
+	if wx == null or progress == null:
+		return
+	if not _saved_weather.is_empty():
+		_wx_hour = hour
+		return
+	wx.advance(fposmod(hour - _wx_hour, 24.0))
+	_wx_hour = hour
+	if progress.weather_dynamic:
+		set_weather(wx.state(), false)
+
+## The pause menu's WEATHER switch, and the dev menu's: Dynamic (the cycle) or Always dry. The cycle keeps running
+## while it is off, so switching it back on finds the weather where it would have been. A mission's own weather stays
+## on until it ends; the free-roam weather it puts back follows the switch.
+func set_weather_dynamic(on: bool) -> void:
+	if progress == null:
+		return
+	progress.weather_dynamic = on
+	if wx == null:
+		return
+	var st := wx.state() if on else MapMissions.weather_state("dry")
+	if _saved_weather.is_empty():
+		set_weather(st)
+	else:
+		_saved_weather = st
+
+func _weather_text() -> String:
+	return "WEATHER  ·  %s" % ("DYNAMIC" if progress.weather_dynamic else "ALWAYS DRY")
+
+## Dev menu: rain, fog or snow now for two game hours (turns Dynamic on); it builds up over 12 to 30 game minutes.
+func dev_weather(kind: String) -> void:
+	if wx == null:
+		return
+	wx.force(kind)
+	if not progress.weather_dynamic:
+		set_weather_dynamic(true)
 
 ## A mission (campaign or live) is on: the town's traffic is kept off its roads.
 func _roads_closed() -> bool:
@@ -1860,6 +1921,7 @@ func _show_mods_page() -> void:
 	var items := []
 	for m in CarMods.LIST:
 		items.append(["mod:" + m[0], _mod_text(m), not CarMods.unlocked(m[0], progress.fans)])
+	items.append(["weather", _weather_text()])
 	items.append(["mods_back", "BACK"])
 	hud.set_pause_page("MODIFIERS", items)
 
@@ -2024,6 +2086,7 @@ func _process(delta: float) -> void:
 	builder.update_crossings(delta)
 	builder.update_signals()
 	hour = fmod(hour + delta * DAY_RATE, 24.0)
+	_update_weather()
 	_apply_time()
 	_sync_car(delta)
 	surface_fx.update(drive, car_visual, delta)
@@ -2059,6 +2122,9 @@ func _process(delta: float) -> void:
 		_save()
 	hud.update_drive(drive.speed_kmh(), _gear_shown(), drive.car.rpm, drive.model.spec.limiter, Vector2(drive.car.x, drive.car.y), drive.car.heading, delta, drive.vz)
 	hud.set_stats(progress.fans, progress.roads.size(), map.road_pts.size(), hour)
+	var wx_word := WorldWeather.word(weather_state())
+	if wx_word != "":
+		hud.clock_label.text += "  ·  " + wx_word
 	if audio:
 		audio.update_car(drive.car, true, null)
 
@@ -2115,14 +2181,14 @@ func _update_camera(delta: float) -> void:
 			cam_pos = cam_pos.lerp(target, 1.0 - exp(-delta * 5.0))
 			camera.position = _clear_of_walls(p, look.orbit(p, cam_pos), delta, look.cut)
 			camera.look_at((p + view * 5.0 * cos(look.pitch) + Vector3.UP * 1.0).lerp(p + Vector3.UP * 0.8, at_car), Vector3.UP)
-			camera.fov = 66.0 + kmh * 0.06
+			camera.fov = HudLayout.camera_fov_for(camera, 66.0 + kmh * 0.06)
 		2:
 			camera.global_transform = car_visual.global_transform * Transform3D(Basis(), Vector3(0.0, 1.22, -0.35))
 			camera.rotate_object_local(Vector3.RIGHT, deg_to_rad(-2.0))
 			if look.active(): # the driver turns their head
 				camera.rotate_object_local(Vector3.UP, -look.yaw)
 				camera.rotate_object_local(Vector3.RIGHT, -look.pitch)
-			camera.fov = 78.0 + kmh * 0.05
+			camera.fov = HudLayout.camera_fov_for(camera, 78.0 + kmh * 0.05)
 		_:
 			var back := 6.0 + kmh * 0.012
 			var target := p - d3 * back + Vector3.UP * (2.15 + kmh * 0.004)
@@ -2132,7 +2198,7 @@ func _update_camera(delta: float) -> void:
 			spot.y = maxf(spot.y, map.ground(spot.x, spot.z) + 0.8)
 			camera.position = spot
 			camera.look_at((p + view * 3.5 * cos(look.pitch) + Vector3.UP * 1.05).lerp(p + Vector3.UP * 0.8, at_car), Vector3.UP)
-			camera.fov = lerpf(camera.fov, 70.0 + clampf(kmh, 0.0, 140.0) * 0.1, 1.0 - exp(-delta * 3.0))
+			camera.fov = lerpf(camera.fov, HudLayout.camera_fov_for(camera, 70.0 + clampf(kmh, 0.0, 140.0) * 0.1), 1.0 - exp(-delta * 3.0))
 	if weather_fx:
 		weather_fx.place(camera)
 
@@ -2332,6 +2398,10 @@ func _pause_action(action: String) -> void:
 			_open_garage()
 		"mods":
 			_show_mods_page()
+		"weather":
+			set_weather_dynamic(not progress.weather_dynamic)
+			hud.set_pause_text(CarMods.LIST.size(), _weather_text())
+			hud.notify("WEATHER", "Dynamic: showers and fog come and go" if progress.weather_dynamic else "Always dry", OpenWorldHud.GOLD)
 		"mods_back":
 			hud.set_pause_page("PAUSED", _pause_items())
 			hud.set_car_label(progress.car_class == 1, FanLevels.hypercar_unlocked(progress.fans), _car_name())
@@ -2391,6 +2461,8 @@ func _save() -> void:
 	progress.heading = drive.car.heading
 	progress.has_pos = true
 	progress.hour = hour
+	if wx != null:
+		progress.weather_day = maxi(int(roundf((wx.clock - hour) / 24.0)), 0)
 	progress.odometer += drive.odometer
 	drive.odometer = 0.0
 	progress.save()

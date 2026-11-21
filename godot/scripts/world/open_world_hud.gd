@@ -38,6 +38,7 @@ var minimap: ColorRect
 var minimap_mat: ShaderMaterial
 var overlay: Control
 var speedo: DashGauge
+var safe_frame: Control ## centred HUD safe zone (capped by HudLayout.hud_width on ultrawide displays)
 var corners_group: Control ## g-force sway container for corner panels (satnav, stats, timing list, event card)
 var speedo_group: Control ## g-force sway container for the speedometer cluster (moves most)
 var _corner_panels: Array[Control] = []
@@ -134,10 +135,15 @@ func _motion_group(group_name: String) -> Control:
 	g.name = group_name
 	g.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	g.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(g)
+	safe_frame.add_child(g)
 	return g
 
 func _build() -> void:
+	safe_frame = Control.new()
+	safe_frame.name = "SafeFrame"
+	safe_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(safe_frame)
+	HudLayout.apply_safe_frame(safe_frame, size)
 	speedo_group = _motion_group("SpeedoGroup") # first: stats, tower and the event card draw over the speedometer, as before
 	corners_group = _motion_group("CornersGroup")
 	# satnav disc, bottom left
@@ -197,7 +203,7 @@ func _build() -> void:
 	chain_box.offset_top = 24
 	chain_box.alignment = BoxContainer.ALIGNMENT_BEGIN
 	chain_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(chain_box)
+	safe_frame.add_child(chain_box)
 	chain_points = _label("", 40, GOLD, 900)
 	chain_points.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	chain_box.add_child(chain_points)
@@ -221,7 +227,7 @@ func _build() -> void:
 	banners.size = Vector2(BANNERS_W, 0)
 	banners.add_theme_constant_override("separation", 8)
 	banners.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(banners)
+	safe_frame.add_child(banners)
 	# street name, bottom centre; district, under the chain
 	street_plate = Panel.new()
 	street_plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -231,7 +237,7 @@ func _build() -> void:
 	street_plate.anchor_top = 1.0
 	street_plate.anchor_bottom = 1.0
 	street_plate.modulate.a = 0.0
-	add_child(street_plate)
+	safe_frame.add_child(street_plate)
 	street_label = _label("", 24, Color.WHITE, 800)
 	street_label.anchor_left = 0.5
 	street_label.anchor_right = 0.5
@@ -242,7 +248,7 @@ func _build() -> void:
 	street_label.offset_top = -78
 	street_label.offset_bottom = -40
 	street_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	add_child(street_label)
+	safe_frame.add_child(street_label)
 	area_label = _label("", 46, Color.WHITE, 900)
 	area_label.anchor_left = 0.5
 	area_label.anchor_right = 0.5
@@ -251,7 +257,7 @@ func _build() -> void:
 	area_label.offset_top = 150
 	area_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	area_label.modulate.a = 0.0
-	add_child(area_label)
+	safe_frame.add_child(area_label)
 	# a race's timing list, top right (the event card is hidden while a run is on)
 	tower = Control.new()
 	tower.anchor_left = 1.0
@@ -304,11 +310,12 @@ func _build() -> void:
 	help_label.offset_top = -30
 	help_label.offset_bottom = -10
 	help_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	add_child(help_label)
+	safe_frame.add_child(help_label)
 	resized.connect(_layout)
 	_build_big_map()
 	_build_pause()
 	_build_loading()
+	_layout()
 
 func _street_plate_box() -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
@@ -510,13 +517,22 @@ func show_area(name: String) -> void:
 ## aspect ratio): the district name between the banners and the event card, the street and key help between
 ## the satnav and the speedometer. A label too long for its gap gets a smaller size, then "…".
 func _layout() -> void:
-	var W := size.x
+	if size.x < 1.0:
+		return
+	var safe := HudLayout.apply_safe_frame(safe_frame, size)
+	var W := safe.size.x
+	var H := safe.size.y
 	if W < 1.0:
 		return
-	var H := size.y
 	var cx := W * 0.5
+	var bw := minf(BANNERS_W, maxf(340.0, floorf(W * 0.37)))
+	var cw := minf(CARD_W, maxf(340.0, floorf(W * 0.36)))
+	banners.custom_minimum_size.x = bw
+	banners.size = Vector2(bw, 0.0) # height back to what the stack needs (a Control only grows on its own)
+	card.offset_left = -EDGE - cw
+	card.offset_right = -EDGE
 	var low := minf(cx - (28.0 + MINIMAP_S + 16.0), (W - (SPEEDO_RIGHT + SPEEDO_W) - 16.0) - cx) # satnav left, speedometer right
-	_fit_label(street_label, low, 24, 16)
+	_fit_label(street_label, maxf(80.0, low - 14.0), 24, 16)
 	_fit_label(help_label, low, 12, 10)
 	# the key help on the bottom edge, the street name just above it
 	var help_h := _line_h(help_label)
@@ -526,14 +542,14 @@ func _layout() -> void:
 	street_label.offset_top = street_label.offset_bottom - _line_h(street_label)
 	# the plate hugs the text (at the size _fit_label picked), a little wider and taller
 	var sf := street_label.get_theme_font("font")
-	var sw := minf(low * 2.0, sf.get_string_size(street_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, street_label.get_theme_font_size("font_size")).x + street_label.get_theme_constant("outline_size"))
+	var sw := minf(maxf(0.0, low * 2.0 - 28.0), sf.get_string_size(street_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, street_label.get_theme_font_size("font_size")).x + street_label.get_theme_constant("outline_size"))
 	street_plate.offset_left = -sw * 0.5 - 14.0
 	street_plate.offset_right = sw * 0.5 + 14.0
 	street_plate.offset_top = street_label.offset_top - 3.0
 	street_plate.offset_bottom = street_label.offset_bottom + 3.0
 	street_plate.visible = _street != ""
-	var right := W - EDGE - CARD_W - 12.0 if card.visible else W - EDGE
-	var top := minf(cx - (EDGE + BANNERS_W + 12.0), right - cx)
+	var right := W - EDGE - cw - 12.0 if card.visible else W - EDGE
+	var top := minf(cx - (EDGE + bw + 12.0), right - cx)
 	_fit_label(area_label, top, 46, 24)
 	# the skill chain between the stats and the right edge
 	var stats_w := stats_box.get_combined_minimum_size().x if is_instance_valid(stats_box) else 300.0

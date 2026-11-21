@@ -846,7 +846,8 @@ func _update_camera(delta: float) -> void:
 				var want := p - fwd * TV_HELI_BACK + Vector3.UP * TV_HELI_UP
 				camera.global_position = want if cut else camera.global_position.lerp(want, _ease(2.5, delta, false))
 				camera.look_at(p + fwd * 6.0, Vector3.UP)
-				camera.fov = 34.0 if cut else camera.fov + (34.0 - camera.fov) * _ease(3.0, delta, false)
+				var heli_fov := HudLayout.camera_fov_for(camera, 34.0)
+				camera.fov = heli_fov if cut else camera.fov + (heli_fov - camera.fov) * _ease(3.0, delta, false)
 				return
 			_hide_own_tower(-1 if _tv_heli else _tv_index)
 			var kind := tv_camera_kind[_tv_index]
@@ -859,7 +860,7 @@ func _update_camera(delta: float) -> void:
 			var target := p + Vector3.UP * 0.6 + vel * (1.0 / 9.0)
 			_tv_look = target if cut else _tv_look.lerp(target, _ease(9.0, delta, false))
 			camera.look_at(_tv_look, Vector3.UP)
-			var want_fov := clampf(rad_to_deg(2.0 * atan(TV_FRAME[kind] / maxf(1.0, camera.global_position.distance_to(_tv_look)))), TV_FOV_MIN[kind], TV_FOV_MAX[kind])
+			var want_fov := HudLayout.camera_fov_for(camera, clampf(rad_to_deg(2.0 * atan(TV_FRAME[kind] / maxf(1.0, camera.global_position.distance_to(_tv_look)))), TV_FOV_MIN[kind], TV_FOV_MAX[kind]))
 			camera.fov = want_fov if cut else camera.fov + (want_fov - camera.fov) * _ease(3.0, delta, false)
 			return
 		4: # bird's-eye, car pointing up the screen
@@ -873,7 +874,8 @@ func _update_camera(delta: float) -> void:
 		var t := Time.get_ticks_msec() * 0.001
 		var amp := (on[0] * 0.02 + on[2] * 0.026 + on[1] * 0.01) * clampf(v / 30.0, 0.3, 1.0) * (0.5 if camera_mode == 1 else 1.0)
 		camera.global_position.y += amp * (sin(t * 71.0) * 0.6 + sin(t * 113.0 + 1.3) * 0.4)
-	camera.fov += (fov - camera.fov) * _ease(4.0, delta, snap)
+	var target_fov := HudLayout.camera_fov_for(camera, fov)
+	camera.fov += (target_fov - camera.fov) * _ease(4.0, delta, snap)
 
 ## The trackside director: keeps the camera on air while it has the car (at p, _focus_s along the track) in
 ## view and cuts to the next one when the shot is over. Returns whether it cut.
@@ -1271,8 +1273,8 @@ func _build_environment() -> void:
 	camera = Camera3D.new()
 	camera.name = "RaceCamera"
 	camera.current = true
-	camera.fov = 68.0
 	add_child(camera)
+	camera.fov = HudLayout.camera_fov_for(camera, 68.0)
 
 	ray_tracing = RayTracing.new()
 	add_child(ray_tracing)
