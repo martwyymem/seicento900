@@ -71,13 +71,15 @@ const VERGE := 2.5 ## m beyond the map's road edge a sliding car may run before 
 ## 270-376 points on Babudy, so bronze is a plain sliding run, silver about three times that, gold for the few.
 const DRIFT_PER_KM := [115.0, 460.0, 1150.0]
 ## Reference driving per car (CarCatalog key): top speed m/s, standing acceleration m/s², grip m/s², braking m/s².
-## Measured with tests/_car_probe.gd (2026-11-16): Seicento 137 km/h, 0.96 g; Golf IV 171 km/h, 0.86 g; Logan 162 km/h,
-## 0.84 g, 100-0 in 39.1 m; hypercar 346 km/h. Grip and braking are the town tarmac's share of the probe's figures.
-const PACE := {"stock": [38.0, 2.4, 8.4, 7.4], "golf4": [47.5, 3.3, 7.6, 7.2], "logan": [45.0, 3.4, 7.4, 7.2], "hypercar": [96.0, 9.0, 13.5, 10.7]}
+## Measured with tests/_car_probe.gd and tests/_pace_probe.gd (2026-11-21): Seicento 137 km/h, 0.96 g (anchor);
+## Golf IV 171 km/h, 0.86 g, 100-0 in 39.3 m; Logan 162 km/h, 0.84 g, 100-0 in 39.1 m; hypercar 346 km/h.
+## Acceleration is fitted to each car's measured S1 drag and sprint runs against the Seicento anchor; grip and braking
+## are the town tarmac's share of the probe's figures.
+const PACE := {"stock": [38.0, 2.4, 8.4, 7.4], "golf4": [47.5, 2.7, 7.6, 6.9], "logan": [45.0, 2.9, 7.4, 6.9], "hypercar": [96.0, 9.0, 13.5, 10.7]}
 ## The car's own standing start on the map's S1 (the drag_kilometre mission's line), full throttle with the automatic
-## box (FreeCar), re-measured for every car 2026-11-17: seconds over 402 m and 1000 m. A drag field (StreetRivals)
-## is calibrated against these.
-const DRAG_TIMES := {"stock": [21.0, 40.7], "golf4": [19.1, 36.4], "logan": [18.8, 36.0], "hypercar": [9.9, 18.0]}
+## box (FreeCar), measured with tests/_pace_probe.gd (2026-11-21): seconds over 402 m and 1000 m. A drag field
+## (StreetRivals) is calibrated against these (scaled by grip_k via pace_time when wet).
+const DRAG_TIMES := {"stock": [21.0, 40.6], "golf4": [19.1, 36.5], "logan": [18.8, 35.9], "hypercar": [9.9, 18.0]}
 const TOWN_GRIP := 0.9 ## Physics.SURF_GRIP of the map's asphalt, which PACE was measured on
 
 var map: TownMap
@@ -574,11 +576,18 @@ static func pace_time(path: PackedVector2Array, car_key: String, v0 := 0.0, grip
 		t += pts[i - 1].distance_to(pts[i]) / maxf(0.5 * (v[i - 1] + v[i]), 0.5)
 	return t
 
-## The car's own standing-start time over `dist` m (DRAG_TIMES, a power law between and beyond the two marks).
-static func drag_time(car_key: String, dist: float) -> float:
+## The car's own standing-start time over `dist` m (DRAG_TIMES, a power law between and beyond the two marks),
+## scaled by the pace model's grip factor (`pace_time` on a straight of `dist` m at `grip_k` vs dry tarmac).
+static func drag_time(car_key: String, dist: float, grip_k := 1.0) -> float:
 	var dt: Array = DRAG_TIMES.get(car_key, DRAG_TIMES.stock)
 	var k := log(float(dt[1]) / float(dt[0])) / log(1000.0 / 402.0)
-	return float(dt[0]) * pow(maxf(dist, 1.0) / 402.0, k)
+	var base := float(dt[0]) * pow(maxf(dist, 1.0) / 402.0, k)
+	if grip_k >= 0.9999:
+		return base
+	var straight := PackedVector2Array([Vector2.ZERO, Vector2(maxf(dist, 10.0), 0.0)])
+	var t_dry := pace_time(straight, car_key, 0.0, 1.0)
+	var t_wet := pace_time(straight, car_key, 0.0, grip_k)
+	return base * (t_wet / maxf(t_dry, 0.01))
 
 # ------------------------------------------------------------------------------------------ the run
 
@@ -599,29 +608,32 @@ func holding() -> bool:
 	return is_running() and run.state == "countdown"
 
 ## Starts an event (a live one or a campaign mission from MapMissions.event): the field on the grid, the countdown.
+## Targets, drag calibration, rally crew times and time-outs are fixed to the weather grip (`ev.mu`) at the start;
+## weather changes mid-run do not re-scale them.
 func begin(ev: Dictionary, car_key: String) -> void:
 	ease_field(ev)
-	run = {"ev": ev, "state": "countdown", "t": -COUNTDOWN, "cp": 0, "car": car_key, "tiers": tiers_for(ev, car_key),
-		"drift": DriftScore.new() if ev.kind == "drift_zone" else null, "cps": ev.cps,
+	var start_mu := clampf(float(ev.get("mu", 1.0)), 0.1, 1.0)
+	run = {"ev": ev, "state": "countdown", "t": -COUNTDOWN, "cp": 0, "car": car_key, "mu": start_mu,
+		"tiers": tiers_for(ev, car_key), "drift": DriftScore.new() if ev.kind == "drift_zone" else null, "cps": ev.cps,
 		"rivals": null, "stage": 0, "stage_times": [], "rally": [], "notice": "", "wrong_t": 0.0, "off_t": 0.0,
 		"lost_t": 0.0, "resets": 0}
 	var seed_value := rng.randi()
 	if ev.kind == "race" and int(ev.get("rivals", 0)) > 0:
 		var ro := {"grid": String(ev.get("grid", "")), "knockout": bool(ev.get("knockout", false)),
 			"lap_length": float(ev.get("lap_length", 0.0)), "difficulty": String(ev.get("difficulty", "medium")),
-			"profile": _weather_profile(profile(ev, StreetRivals.STEP), float(ev.get("mu", 1.0)))}
+			"profile": _weather_profile(profile(ev, StreetRivals.STEP), start_mu)}
 		if String(ev.get("grid", "")) == "drag":
-			ro["drag_time"] = drag_time(car_key, float(ev.length))
+			ro["drag_time"] = drag_time(car_key, float(ev.length), grip_of(ev) * start_mu)
 		ro["beyond"] = beyond(ev)
 		if ro.beyond.size() >= 2:
-			ro["beyond_profile"] = _weather_profile(route_profile(map, ro.beyond, StreetRivals.STEP), float(ev.get("mu", 1.0)))
+			ro["beyond_profile"] = _weather_profile(route_profile(map, ro.beyond, StreetRivals.STEP), start_mu)
 		run.rivals = StreetRivals.new(ev.path, car_key, int(ev.rivals), seed_value, ro)
 	elif ev.kind == "rally":
 		var grips := []
 		for st in ev.stages:
 			if not st.has("grip"):
 				st["grip"] = grip_of({"path": st.path})
-			grips.append(float(st.grip) * float(ev.get("mu", 1.0))) # a mission's weather (MapMissions.weather_state)
+			grips.append(float(st.grip) * start_mu) # a mission's or free roam's start weather
 		run.rally = MapMissions.rally_times(ev, car_key, seed_value, grips)
 	if ev.kind == "rally":
 		_arm(ev.stages[0].path, ev.stages[0].cps)
@@ -902,13 +914,14 @@ func progress() -> Vector2:
 	return Vector2(float(run.s), maxf((run.track as PackedVector2Array).size() - 1, 0) * TRACK_STEP)
 
 func _time_limit() -> float:
+	var mu := float(run.get("mu", 1.0))
 	match String(run.ev.kind):
 		"rally":
 			var st: Dictionary = run.ev.stages[int(run.stage)]
-			return pace_time(st.path, String(run.car), 0.0, float(st.get("grip", 1.0))) * 2.5 + 30.0
+			return pace_time(st.path, String(run.car), 0.0, float(st.get("grip", 1.0)) * mu) * 2.5 + 30.0
 		"drift_zone":
-			return pace_time(run.ev.path, String(run.car)) * 3.0 * TIME_OUT
-	return pace_time(run.ev.path, String(run.car), 0.0, grip_of(run.ev)) * 2.5 + 30.0
+			return pace_time(run.ev.path, String(run.car), 0.0, grip_of(run.ev) * mu) * 3.0 * TIME_OUT
+	return pace_time(run.ev.path, String(run.car), 0.0, grip_of(run.ev) * mu) * 2.5 + 30.0
 
 ## A drift over: its score against the tiers.
 func _finish() -> void:
@@ -1067,7 +1080,7 @@ func card(ev: Dictionary, car_key: String, fans_level := 0) -> Array:
 		best = " · Best P%d" % int(ev.best_pos)
 	if int(ev.get("best_tier", 0)) > 0:
 		best += " %s" % "★".repeat(int(ev.best_tier))
-	var body := "%s\n\n%s · %s · %s · live for about %d more min\nTarget: %s%s\nUp to %s fans on a first clear (fan level %d)" % [
+	var body := "%s\n\n%s · %s · %s · live for about %d more min\nTarget: %s%s\nTargets fixed to start weather · up to %s fans on a first clear (fan level %d)" % [
 		BLURB.get(String(ev.get("mkind", "")), ""), length_text(ev), surface_text(ev), field_text(ev), maxi(mins, 1),
 		target_text(ev, car_key), best, OpenWorldHud._thousands(reward(ev, 1, true, true)), fans_level]
 	return ["LIVE %s MISSION" % kind_name(ev), String(ev.title), body, "ENTER / B  ▸  START EVENT HERE ON THE MAP"]

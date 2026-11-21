@@ -54,6 +54,7 @@ func run() -> Array:
 	if by_kind.has("sprint"):
 		_settle(live, by_kind.sprint, errors)
 		_notices(map, by_kind.sprint, errors)
+	_weather_targets(map, by_kind, errors)
 	_ease(map, home, errors)
 	_board(map, home, errors)
 	_save(errors)
@@ -172,6 +173,82 @@ func _brief(live: LiveEvents, ev: Dictionary, errors: Array[String]) -> void:
 		errors.append("a %s has point tiers" % mk)
 	if String(c[3]).find("START") < 0:
 		errors.append("%s card hint reads '%s'" % [mk, c[3]])
+
+## Weather grip scaling: drag_time, rival/rally medal targets and time-outs slow down in wet weather by the pace_time
+## model (not a flat multiplier), stay fixed to the start grip if weather changes mid-run, and the card says so.
+func _weather_targets(map: TownMap, by_kind: Dictionary, errors: Array[String]) -> void:
+	var wet_mu := float(MapMissions.weather_state("wet").mu)
+	var snow_mu := float(MapMissions.weather_state("snow").mu)
+	# 1. drag_time follows pace_time's grip ratio, not a flat multiplier
+	var ratios_402 := {}
+	for car in ["stock", "golf4", "logan", "hypercar"]:
+		var d402 := LiveEvents.drag_time(car, 402.0)
+		var d402_1 := LiveEvents.drag_time(car, 402.0, 1.0)
+		var w402 := LiveEvents.drag_time(car, 402.0, wet_mu)
+		var s402 := LiveEvents.drag_time(car, 402.0, snow_mu)
+		if absf(d402 - d402_1) > 1e-6:
+			errors.append("%s drag_time dry default %.4f != grip 1.0 %.4f" % [car, d402, d402_1])
+		if not (s402 > w402 and w402 > d402):
+			errors.append("%s drag_time not slower in wet/snow: dry %.2f wet %.2f snow %.2f" % [car, d402, w402, s402])
+		var straight := PackedVector2Array([Vector2.ZERO, Vector2(402.0, 0.0)])
+		var want := d402 * (LiveEvents.pace_time(straight, car, 0.0, wet_mu) / LiveEvents.pace_time(straight, car, 0.0, 1.0))
+		if absf(w402 - want) > 1e-4:
+			errors.append("%s wet drag_time %.4f does not match pace_time model %.4f" % [car, w402, want])
+		ratios_402[car] = w402 / d402
+	var r_402 := LiveEvents.drag_time("stock", 402.0, snow_mu) / LiveEvents.drag_time("stock", 402.0, 1.0)
+	var r_1k := LiveEvents.drag_time("stock", 1000.0, snow_mu) / LiveEvents.drag_time("stock", 1000.0, 1.0)
+	if absf(r_402 - r_1k) < 0.002:
+		errors.append("drag_time grip scaling looks like a flat multiplier: 402 m %.4f vs 1000 m %.4f" % [r_402, r_1k])
+	# 2. time-outs slower in wet for sprint, drift and rally, and fixed at start even if ev.mu changes mid-run
+	for kind in ["sprint", "drift", "rally"]:
+		if not by_kind.has(kind):
+			continue
+		var ev_dry: Dictionary = (by_kind[kind] as Dictionary).duplicate()
+		var ev_wet: Dictionary = (by_kind[kind] as Dictionary).duplicate()
+		ev_dry["mu"] = 1.0
+		ev_wet["mu"] = wet_mu
+		var l_dry := LiveEvents.new(map, 606)
+		var l_wet := LiveEvents.new(map, 606)
+		l_dry.begin(ev_dry, "stock")
+		l_wet.begin(ev_wet, "stock")
+		var lim_dry := l_dry._time_limit()
+		var lim_wet := l_wet._time_limit()
+		if not (lim_wet > lim_dry):
+			errors.append("%s time-out not slower in wet: dry %.1f s, wet %.1f s" % [kind, lim_dry, lim_wet])
+		# weather changes mid-run: ev.mu drops, but run.mu and time-out stay fixed to the start grip
+		ev_dry["mu"] = snow_mu
+		if absf(float(l_dry.run.get("mu", 0.0)) - 1.0) > 1e-6 or absf(l_dry._time_limit() - lim_dry) > 1e-6:
+			errors.append("%s time-out or run.mu changed mid-run when ev.mu dropped" % kind)
+		l_dry.abandon()
+		l_wet.abandon()
+	# 3. drag rival field is slower in wet than dry, and fixed at start if ev.mu changes mid-run
+	if by_kind.has("drag"):
+		var d_dry: Dictionary = (by_kind.drag as Dictionary).duplicate()
+		var d_wet: Dictionary = (by_kind.drag as Dictionary).duplicate()
+		d_dry["mu"] = 1.0
+		d_wet["mu"] = wet_mu
+		var l1 := LiveEvents.new(map, 707)
+		var l2 := LiveEvents.new(map, 707)
+		l1.begin(d_dry, "golf4")
+		l2.begin(d_wet, "golf4")
+		var rv1 := l1.rivals()
+		var rv2 := l2.rivals()
+		d_dry["mu"] = snow_mu # mid-run weather shift must not affect rv1
+		for _i in 900:
+			rv1.step(1.0 / 30.0, Vector2.ZERO, 0.0)
+			rv2.step(1.0 / 30.0, Vector2.ZERO, 0.0)
+		var t1 := rv1.best_time()
+		var t2 := rv2.best_time()
+		if t1 <= 0.0 or t2 <= 0.0 or not (t2 > t1):
+			errors.append("wet drag rivals not slower than dry: dry %.2f s, wet %.2f s" % [t1, t2])
+		l1.abandon()
+		l2.abandon()
+	# 4. event card documents that targets are fixed to the weather at the start
+	if by_kind.has("sprint"):
+		var live_c := LiveEvents.new(map, 808)
+		var card_body := String(live_c.card(by_kind.sprint, "stock", 1)[2]).to_lower()
+		if card_body.find("start weather") < 0:
+			errors.append("live event card does not state targets are fixed to start weather: %s" % card_body)
 
 ## Sideways at speed through the drift scores; the result is a tier against the bronze target.
 func _run_drift(live: LiveEvents, ev: Dictionary, errors: Array[String]) -> void:
