@@ -65,6 +65,10 @@ var shot := 0
 var shots: Array = SHOTS.stock ## the set the cover is showing (the driven car's, or the stock one)
 var _photo: TextureRect
 var _fallback: ColorRect
+var _vignette: Control
+var _title_lbl: Label
+var _sub_lbl: Label
+var _place_plate: PanelContainer
 var _place: Label
 var _car_name: Label
 var _badge_letter: Label
@@ -96,17 +100,29 @@ func _init() -> void:
 	add_child(_shade(true))
 	add_child(_shade(false))
 	add_child(_side_shade())
+	_vignette = Control.new()
+	_vignette.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_vignette.draw.connect(_draw_vignette)
+	add_child(_vignette)
 
 	# top left: where we are
 	var top := VBoxContainer.new()
-	top.position = Vector2(56, 44)
-	top.add_theme_constant_override("separation", 0)
+	top.position = Vector2(56, 42)
+	top.add_theme_constant_override("separation", 4)
 	top.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(top)
-	top.add_child(_label("BRZESZCZE", 54, Color.WHITE, 900))
-	top.add_child(_label("SEICENTO FEST · OPEN ROAD", 16, ACCENT, 800))
-	_place = _label("", 15, Color(1, 1, 1, 0.8), 600)
-	top.add_child(_place)
+	_title_lbl = _label("BRZESZCZE", 56, Color.WHITE, 900, true)
+	top.add_child(_title_lbl)
+	_sub_lbl = _label("SEICENTO FEST · OPEN ROAD", 16, HudLayout.neon_hot(), 900, true)
+	top.add_child(_sub_lbl)
+	_place_plate = PanelContainer.new()
+	_place_plate.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_place_plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_place_plate.add_theme_stylebox_override("panel", _place_box_style())
+	top.add_child(_place_plate)
+	_place = _label("", 14, Color(0.92, 0.98, 1.0, 0.94), 700, true)
+	_place_plate.add_child(_place)
 
 	# bottom left: the car and its figures
 	var car := VBoxContainer.new()
@@ -115,7 +131,7 @@ func _init() -> void:
 	car.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	car.offset_left = 56
 	car.offset_bottom = -48
-	car.add_theme_constant_override("separation", 10)
+	car.add_theme_constant_override("separation", 12)
 	car.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(car)
 	var name_row := HBoxContainer.new()
@@ -128,11 +144,11 @@ func _init() -> void:
 	var badge_row := HBoxContainer.new()
 	badge_row.add_theme_constant_override("separation", 0)
 	_badge.add_child(badge_row)
-	_badge_letter = _label("D", 20, Color.WHITE, 900)
+	_badge_letter = _label("D", 20, Color.WHITE, 900, true)
 	_badge_letter.custom_minimum_size.x = 38
 	_badge_letter.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_badge_number = _label("100", 20, Color.BLACK, 800)
-	_badge_number.custom_minimum_size.x = 52
+	_badge_number = _label("100", 20, Color.BLACK, 800, true)
+	_badge_number.custom_minimum_size.x = 54
 	_badge_number.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_badge_number.add_theme_constant_override("outline_size", 0)
 	var number_bg := PanelContainer.new()
@@ -145,14 +161,14 @@ func _init() -> void:
 	badge_row.add_child(_badge_letter)
 	badge_row.add_child(number_bg)
 	name_row.add_child(_badge)
-	_car_name = _label("", 40, Color.WHITE, 900)
+	_car_name = _label("", 42, Color.WHITE, 900, true)
 	name_row.add_child(_car_name)
 	_stats_row = HBoxContainer.new()
-	_stats_row.add_theme_constant_override("separation", 30)
+	_stats_row.add_theme_constant_override("separation", 26)
 	_stats_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	car.add_child(_stats_row)
 
-	# bottom right: what is building and the spinner
+	# bottom right: what is building and the glowing neon spinner
 	var corner := HBoxContainer.new()
 	corner.anchor_left = 1.0
 	corner.anchor_right = 1.0
@@ -165,16 +181,16 @@ func _init() -> void:
 	corner.add_theme_constant_override("separation", 16)
 	corner.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(corner)
-	_status = _label("", 15, Color(1, 1, 1, 0.75), 600)
+	_status = _label("", 15, HudLayout.neon_primary().lightened(0.32), 800, true)
 	_status.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	corner.add_child(_status)
 	_spinner = Control.new()
-	_spinner.custom_minimum_size = Vector2(46, 46)
+	_spinner.custom_minimum_size = Vector2(52, 52)
 	_spinner.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_spinner.draw.connect(_draw_spinner)
 	corner.add_child(_spinner)
 
-	var credit := _label("Map data © OpenStreetMap contributors · Elevation EU-DEM", 11, Color(1, 1, 1, 0.4), 500)
+	var credit := _label("Map data © OpenStreetMap contributors · Elevation EU-DEM", 11, Color(0.85, 0.94, 1.0, 0.45), 500, false)
 	credit.anchor_left = 1.0
 	credit.anchor_right = 1.0
 	credit.anchor_top = 1.0
@@ -207,8 +223,12 @@ func open(spec: CarSpec, car_name: String, index := -1, car_key := "stock") -> v
 	_badge_number.text = str(cls[1])
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = cls[2]
-	sb.border_color = cls[2]
+	sb.border_color = Color.WHITE
 	sb.set_border_width_all(2)
+	sb.skew = Vector2(0.0 if CmrStyle.skin == "ps1" else -0.10, 0.0)
+	if CmrStyle.skin != "ps1":
+		sb.shadow_color = Color(cls[2], 0.48)
+		sb.shadow_size = 10
 	_badge.add_theme_stylebox_override("panel", sb)
 	for child in _stats_row.get_children():
 		child.queue_free()
@@ -220,16 +240,41 @@ func open(spec: CarSpec, car_name: String, index := -1, car_key := "stock") -> v
 			["DRIVE", "AWD" if spec.awd else "FWD", -1.0]]:
 		_stats_row.add_child(_stat(row[0], row[1], row[2]))
 	_t = 0.0
+	restyle()
 	set_status("", 0.0)
 	show()
 
-## The menu skin changed: the plain backdrop behind a missing still follows it.
+## The menu skin changed: backdrop, accents and italic display fonts follow it.
 func restyle() -> void:
 	_fallback.color = CmrStyle.TINT_HOME
+	if is_instance_valid(_sub_lbl):
+		_sub_lbl.add_theme_color_override("font_color", HudLayout.neon_hot())
+		_sub_lbl.add_theme_font_override("font", HudLayout.italic_font(900))
+	if is_instance_valid(_title_lbl):
+		_title_lbl.add_theme_font_override("font", HudLayout.italic_font(900))
+	if is_instance_valid(_car_name):
+		_car_name.add_theme_font_override("font", HudLayout.italic_font(900))
+	if is_instance_valid(_place_plate):
+		_place_plate.add_theme_stylebox_override("panel", _place_box_style())
+	if is_instance_valid(_status):
+		_status.add_theme_color_override("font_color", HudLayout.neon_primary().lightened(0.32))
+		_status.add_theme_font_override("font", HudLayout.italic_font(800))
+	if is_instance_valid(_vignette):
+		_vignette.queue_redraw()
+	if is_instance_valid(_spinner):
+		_spinner.queue_redraw()
+
+func _skin_changed() -> void:
+	restyle()
+
+func _place_box_style() -> StyleBoxFlat:
+	var sb := HudLayout.neon_box(HudLayout.neon_primary(), 0.72, 4, -0.09, 8, 12.0, 4.0)
+	sb.bg_color = HudLayout.glass_plate(0.75)
+	return sb
 
 ## The line beside the spinner: the step that is building now.
 func set_status(text: String, _fraction: float) -> void:
-	_status.text = text.to_lower()
+	_status.text = text.to_upper()
 
 func _process(delta: float) -> void:
 	if not visible:
@@ -247,11 +292,32 @@ func _process(delta: float) -> void:
 
 func _draw_spinner() -> void:
 	var c := _spinner.size * 0.5
-	var r := minf(c.x, c.y) - 3.0
-	_spinner.draw_arc(c, r, 0.0, TAU, 48, Color(1, 1, 1, 0.18), 3.0, true)
-	var sweep := 1.6 + 1.1 * sin(_spin * 0.5)
-	_spinner.draw_arc(c, r, _spin, _spin + sweep, 32, ACCENT, 4.0, true)
-	_spinner.draw_arc(c, r * 0.55, -_spin * 1.4, -_spin * 1.4 + 1.4, 24, Color.WHITE, 3.0, true)
+	var r := minf(c.x, c.y) - 4.0
+	var neon := HudLayout.neon_primary()
+	var hot := HudLayout.neon_hot()
+	var is_ps1 := CmrStyle.skin == "ps1"
+	_spinner.draw_arc(c, r, 0.0, TAU, 48, Color(neon, 0.18), 3.0, true)
+	var sweep := 1.7 + 1.1 * sin(_spin * 0.5)
+	if not is_ps1:
+		_spinner.draw_arc(c, r, _spin, _spin + sweep, 32, Color(neon, 0.28), 9.0, true)
+	_spinner.draw_arc(c, r, _spin, _spin + sweep, 32, neon, 4.0, true)
+	if not is_ps1:
+		_spinner.draw_arc(c, r * 0.58, -_spin * 1.4, -_spin * 1.4 + 1.5, 24, Color(hot, 0.30), 7.0, true)
+	_spinner.draw_arc(c, r * 0.58, -_spin * 1.4, -_spin * 1.4 + 1.5, 24, hot, 3.2, true)
+	var tip := c + Vector2(cos(_spin + sweep), sin(_spin + sweep)) * r
+	_spinner.draw_circle(tip, 3.0, Color.WHITE)
+
+func _draw_vignette() -> void:
+	if CmrStyle.skin == "ps1" or size.x < 2.0:
+		return
+	var neon := HudLayout.neon_primary()
+	var hot := HudLayout.neon_hot()
+	_vignette.draw_rect(Rect2(0.0, 0.0, size.x, 3.0), Color(neon, 0.72))
+	_vignette.draw_rect(Rect2(0.0, 3.0, size.x, 12.0), Color(neon, 0.10))
+	_vignette.draw_rect(Rect2(0.0, size.y - 3.0, size.x, 3.0), Color(hot, 0.72))
+	_vignette.draw_rect(Rect2(0.0, size.y - 14.0, size.x, 11.0), Color(hot, 0.12))
+	HudLayout.draw_radial_glow(_vignette, Vector2(size.x * 0.05, size.y * 0.08), size.y * 0.62, Color(neon, 0.18))
+	HudLayout.draw_radial_glow(_vignette, Vector2(size.x * 0.94, size.y * 0.92), size.y * 0.58, Color(hot, 0.18))
 
 ## The car's headline figures from its spec: top speed (where the best gear's power at the wheels meets drag and
 ## rolling resistance, capped by the limiter in top), peak power and torque, and weight with the driver.
@@ -299,28 +365,33 @@ static func _torque(spec: CarSpec, rpm: float) -> float:
 
 func _stat(caption: String, value: String, fill: float) -> Control:
 	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 2)
+	col.add_theme_constant_override("separation", 3)
 	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	col.add_child(_label(caption, 12, Color(1, 1, 1, 0.65), 800))
-	col.add_child(_label(value, 24, Color.WHITE, 800))
+	col.add_child(_label(caption, 12, HudLayout.neon_primary(), 900, true))
+	col.add_child(_label(value, 24, Color.WHITE, 900, true))
 	if fill >= 0.0:
-		var bar := ColorRect.new()
-		bar.color = Color(1, 1, 1, 0.2)
-		bar.custom_minimum_size = Vector2(110, 4)
+		var bar := Control.new()
+		bar.custom_minimum_size = Vector2(114, 7)
 		bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var lit := ColorRect.new()
-		lit.color = ACCENT
-		lit.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		lit.size = Vector2(110.0 * clampf(fill, 0.04, 1.0), 4)
-		bar.add_child(lit)
+		var clamped := clampf(fill, 0.04, 1.0)
+		bar.draw.connect(func() -> void:
+			var neon := HudLayout.neon_primary()
+			var hot := HudLayout.neon_hot()
+			bar.draw_rect(Rect2(Vector2.ZERO, bar.size), HudLayout.glass_plate(0.82))
+			bar.draw_rect(Rect2(Vector2.ZERO, bar.size), Color(neon, 0.35), false, 1.0)
+			var w := bar.size.x * clamped
+			if CmrStyle.skin != "ps1":
+				bar.draw_rect(Rect2(0.0, -2.0, w, bar.size.y + 4.0), Color(neon, 0.25))
+			bar.draw_rect(Rect2(0.0, 0.0, w, bar.size.y), neon.lerp(hot, clamped * 0.55))
+			bar.draw_rect(Rect2(maxf(0.0, w - 3.0), 0.0, minf(3.0, w), bar.size.y), Color.WHITE))
 		col.add_child(bar)
 	return col
 
-## A dark gradient across the top or bottom so the type reads on any still.
+## A dark midnight gradient across the top or bottom so the type reads on any still.
 func _shade(bottom: bool) -> TextureRect:
 	var g := Gradient.new()
-	g.set_color(0, Color(0, 0, 0, 0.0))
-	g.set_color(1, Color(0, 0, 0, 0.82 if bottom else 0.55))
+	g.set_color(0, Color(0.02, 0.03, 0.09, 0.0))
+	g.set_color(1, Color(0.02, 0.03, 0.09, 0.86 if bottom else 0.60))
 	var tex := GradientTexture2D.new()
 	tex.gradient = g
 	tex.width = 4
@@ -334,17 +405,17 @@ func _shade(bottom: bool) -> TextureRect:
 	r.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	r.anchor_right = 1.0
 	if bottom:
-		r.anchor_top = 0.62
+		r.anchor_top = 0.60
 		r.anchor_bottom = 1.0
 	else:
-		r.anchor_bottom = 0.3
+		r.anchor_bottom = 0.32
 	return r
 
 ## A dark fade across the left third, under the place name and the car's figures, so the type reads on a bright still.
 func _side_shade() -> TextureRect:
 	var g := Gradient.new()
-	g.set_color(0, Color(0, 0, 0, 0.5))
-	g.set_color(1, Color(0, 0, 0, 0.0))
+	g.set_color(0, Color(0.02, 0.03, 0.09, 0.56))
+	g.set_color(1, Color(0.02, 0.03, 0.09, 0.0))
 	var tex := GradientTexture2D.new()
 	tex.gradient = g
 	tex.width = 128
@@ -360,13 +431,13 @@ func _side_shade() -> TextureRect:
 	r.anchor_right = 0.55
 	return r
 
-static func _label(text: String, size: int, color: Color, weight := 700) -> Label:
+static func _label(text: String, size: int, color: Color, weight := 700, italic := false) -> Label:
 	var l := Label.new()
 	l.text = text
-	l.add_theme_font_override("font", CmrStyle.font(weight))
+	l.add_theme_font_override("font", HudLayout.italic_font(weight) if italic else CmrStyle.font(weight))
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", color)
-	l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.6))
+	l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.72))
 	l.add_theme_constant_override("outline_size", maxi(3, size / 8))
 	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return l

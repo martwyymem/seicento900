@@ -33,6 +33,7 @@ func run() -> Array:
 	await _races("focus")
 	_zafira()
 	await _races("zafira")
+	_rival_models()
 	_settings()
 	completed = true
 	return errors
@@ -475,3 +476,104 @@ func _settings() -> void:
 	DirAccess.remove_absolute(path)
 	# the open world stores the class as an index: old saves (0, 1) keep their meaning, an unknown one clamps
 	check(CarCatalog.key_at(0) == "stock" and CarCatalog.key_at(1) == "hypercar" and CarCatalog.key_at(99) == CarCatalog.KEYS[-1], "world car indexes changed meaning")
+
+## Rival car model selection: real catalogue models (never hypercar), deterministic per race & slot, balanced counts,
+## per-model factory paint, and RaceWorld one-make / hypercar overrides.
+func _rival_models() -> void:
+	var pool := CarCatalog.rival_keys()
+	check(pool.size() == CarCatalog.KEYS.size() - 1 and not ("hypercar" in pool), "rival_keys should list every model except hypercar")
+	var seed_a := CarCatalog.rival_seed(["gp", "stock", 15, 6])
+	var seed_b := CarCatalog.rival_seed(["krakow", "stock", 15, 6])
+	check(seed_a != seed_b, "different races should yield different rival seeds")
+	var counts := {}
+	var seq_a: Array[String] = []
+	for slot in 15:
+		var k := CarCatalog.rival_model(slot, seed_a)
+		check(k in pool and k != "hypercar", "rival_model returned invalid key '%s'" % k)
+		check(k == CarCatalog.rival_model(slot, seed_a), "rival_model is not deterministic for slot %d" % slot)
+		counts[k] = int(counts.get(k, 0)) + 1
+		seq_a.append(k)
+	for k in pool:
+		var c := int(counts.get(k, 0))
+		check(c >= 1 and c <= 2, "15-rival field should have 1..2 of %s, got %d" % [k, c])
+	var seq_b: Array[String] = []
+	for slot in 15:
+		seq_b.append(CarCatalog.rival_model(slot, seed_b))
+	check(seq_a != seq_b, "different race seeds should shuffle the rival models differently")
+
+	# RaceWorld: mixed real models by default, deterministic on restart, factory paint per model, one-make & hypercar respected
+	var world: Node3D = load("res://scripts/ui/race_world.gd").new()
+	Engine.get_main_loop().root.add_child(world)
+	var rs := RaceSettings.new()
+	rs.track = "gp"
+	rs.laps = 2
+	rs.opponents = 11
+	rs.car_class = "golf4"
+	rs.race_control = false
+	var cm := CarCatalog.model("golf4")
+	var models := {"car_model": cm, "tyres": Tyres.new(), "strategy": Strategy.new(cm, Tyres.new())}
+	var r1 := Race.new(rs, {"stints": [{"c": "M", "laps": 2}]}, 7, models)
+	world.one_make = false
+	world.set_race(r1)
+	check(world.visuals[r1.player.id].car_key == "golf4", "player visual should keep its chosen car_class")
+	var keys1: Array[String] = []
+	var paints1: Array[Color] = []
+	var model_counts := {}
+	for car in r1.cars:
+		if car.is_player:
+			continue
+		var vis: Node3D = world.visuals[car.id]
+		var rk := String(vis.car_key)
+		check(rk in pool, "race rival visual has non-real car_key '%s'" % rk)
+		check(vis._wheelbase == CarCatalog.visual(rk).wheelbase, "rival %s wheelbase did not match its own model" % rk)
+		var pal_colors: Array = CarCatalog.palette(rk).map(func(e: Dictionary) -> Color: return e.color)
+		check(pal_colors.any(func(pc: Color) -> bool: return pc.is_equal_approx(car.color)), "rival %s paint is not in its factory palette" % rk)
+		keys1.append(rk)
+		paints1.append(car.color)
+		model_counts[rk] = int(model_counts.get(rk, 0)) + 1
+	check(model_counts.size() == pool.size(), "11-rival mixed race should show all %d real models, got %d" % [pool.size(), model_counts.size()])
+	for rk in model_counts:
+		check(int(model_counts[rk]) <= 2, "11-rival mixed race repeated %s %d times" % [rk, int(model_counts[rk])])
+	# Restart: identical grid slot models and paints
+	var r2 := Race.new(rs, {"stints": [{"c": "M", "laps": 2}]}, 7, models)
+	world.set_race(r2)
+	var keys2: Array[String] = []
+	var paints2: Array[Color] = []
+	for car in r2.cars:
+		if not car.is_player:
+			keys2.append(String(world.visuals[car.id].car_key))
+			paints2.append(car.color)
+	check(keys1 == keys2 and paints1 == paints2, "restarting a race should keep the same rival models and paints")
+	# One-make Seicento Cup championship stays all Seicento
+	var rs_cup := RaceSettings.new()
+	rs_cup.track = "gp"
+	rs_cup.laps = 2
+	rs_cup.opponents = 5
+	rs_cup.car_class = "stock"
+	rs_cup.race_control = false
+	var r_cup := Race.new(rs_cup, {"stints": [{"c": "M", "laps": 2}]}, 7)
+	world.one_make = true
+	world.set_race(r_cup)
+	for car in r_cup.cars:
+		check(world.visuals[car.id].car_key == "stock", "one_make Seicento Cup race gave rival %s" % world.visuals[car.id].car_key)
+	# Hypercar race stays all hypercar
+	var rs_hyp := RaceSettings.new()
+	rs_hyp.track = "gp"
+	rs_hyp.laps = 2
+	rs_hyp.opponents = 5
+	rs_hyp.car_class = "hypercar"
+	rs_hyp.race_control = false
+	var hm := CarCatalog.model("hypercar")
+	var r_hyp := Race.new(rs_hyp, {"stints": [{"c": "M", "laps": 2}]}, 7, {"car_model": hm, "tyres": Tyres.new(), "strategy": Strategy.new(hm, Tyres.new())})
+	world.one_make = false
+	world.set_race(r_hyp)
+	for car in r_hyp.cars:
+		check(world.visuals[car.id].car_key == "hypercar", "hypercar race gave rival %s" % world.visuals[car.id].car_key)
+	world.release_race()
+	if world.assets:
+		world.assets.finish()
+	world.free()
+	r1.dispose()
+	r2.dispose()
+	r_cup.dispose()
+	r_hyp.dispose()

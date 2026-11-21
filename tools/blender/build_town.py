@@ -78,6 +78,10 @@ kit.MATERIALS.update({
 	"SignalGreen": (srgb("#10b050"), 0.2, 0.0, {"emit": ((0.1, 1.0, 0.4), 0.6)}),
 	"TrainCream": (srgb("#e8dcb4"), 0.45, 0.1, {}),
 	"TrainBlue": (srgb("#1f3f78"), 0.45, 0.1, {}),
+	"Alloy": (srgb("#b6bcc4"), 0.24, 0.76, {}),
+	"DarkTrim": (srgb("#1a1c20"), 0.58, 0.05, {}),
+	"Tyre": (srgb("#131416"), 0.85, 0.0, {}),
+	"Plate": (srgb("#eeefe9"), 0.45, 0.0, {}),
 })
 
 UP = Vector((0, 0, 1))
@@ -1016,57 +1020,420 @@ CAR_SEDAN = {
 }
 
 
-def van_extra(mb, gl, czl, gu, czu):
-	"""Rear door windows, the door split and tall rear lamps on the van."""
-	y = -2.285
+def _smoothstep(a, b, x):
+	t = min(1.0, max(0.0, (x - a) / max(b - a, 1e-6)))
+	return t * t * (3.0 - 2.0 * t)
+
+
+def _pl_interp(pts, x):
+	"""Piecewise-linear interpolation on sorted (x, y) pairs."""
+	if x <= pts[0][0]:
+		return pts[0][1]
+	if x >= pts[-1][0]:
+		return pts[-1][1]
+	for i in range(len(pts) - 1):
+		x0, y0 = pts[i]
+		x1, y1 = pts[i + 1]
+		if x0 <= x <= x1:
+			return kit.lerp(y0, y1, (x - x0) / max(x1 - x0, 1e-6))
+	return pts[-1][1]
+
+
+def _add_real_wheel(mb, cx, cy, cz, r, width, side, segs=20, style="steel"):
+	"""Clean round 3D tyre + recessed wheel dish/spokes facing `side` (+1 right, -1 left)."""
+	hw = width * 0.5
+	r_rim = r * 0.62
+	r_sh = r * 0.94
+	r_hub = r * 0.18
+	# Profile along X in wheel-local coordinates (outer face towards +side)
+	prof = [
+		(-hw * 0.85, r_rim, "Tyre"),
+		(-hw, r_rim + (r - r_rim) * 0.45, "Tyre"),
+		(-hw * 0.90, r_sh, "Tyre"),
+		(-hw * 0.64, r, "Tyre"),
+		(+hw * 0.64, r, "Tyre"),
+		(+hw * 0.90, r_sh, "Tyre"),
+		(+hw, r_rim + (r - r_rim) * 0.45, "Tyre"),
+		(+hw * 0.85, r_rim, "Alloy"),
+		(+hw * 0.88, r_rim * 0.91, "Alloy"),
+		(+hw * 0.56, r_rim * 0.84, "Alloy" if style == "steel" else "DarkTrim"),
+		(+hw * 0.68, r_rim * 0.42, "Alloy"),
+		(+hw * 0.74, r_hub, "DarkTrim"),
+	]
+	rings = []
+	for lx, rad, _ in prof:
+		x = cx + side * lx
+		ring = [mb.vert((x, cy + rad * math.cos(2 * math.pi * k / segs), cz + rad * math.sin(2 * math.pi * k / segs)))
+			for k in range(segs)]
+		rings.append(ring)
+	for i in range(len(prof) - 1):
+		mat = prof[i][2]
+		r0, r1 = rings[i], rings[i + 1]
+		x0, rad0 = prof[i][0], prof[i][1]
+		x1, rad1 = prof[i + 1][0], prof[i + 1][1]
+		dx, dr = (x1 - x0) * side, rad1 - rad0
+		for k in range(segs):
+			k2 = (k + 1) % segs
+			ang = 2 * math.pi * (k + 0.5) / segs
+			# Outward normal from revolved profile tangent
+			n_rad = dx * side
+			n_x = -dr * side
+			out = Vector((n_x, math.cos(ang) * n_rad, math.sin(ang) * n_rad))
+			if out.length < 1e-6:
+				out = Vector((side, 0, 0))
+			mb.face([r0[k], r0[k2], r1[k2], r1[k]], mat, out)
+	# Hub cap + inner backing disc
+	mb.disc((cx + side * hw * 0.75, cy, cz), r_hub, "DarkTrim", normal=(side, 0, 0), segs=12)
+	mb.disc((cx - side * hw * 0.85, cy, cz), r_rim, "DarkTrim", normal=(-side, 0, 0), segs=12)
+	# Pressed steel wheel vent slots (classic Fiat 126p / commercial van steelies)
+	holes = 8 if style == "steel" else 5
+	hr = r_rim * 0.64
+	hx = cx + side * hw * 0.62
+	for k in range(holes):
+		a = 2 * math.pi * k / holes + 0.2
+		mb.disc((hx, cy + hr * math.cos(a), cz + hr * math.sin(a)), r_rim * 0.11, "DarkTrim", normal=(side, 0, 0), segs=6)
+
+
+def _carved_body(mb, stations, prof_fn, face_mat_fn, axles, arch_r, wheel_z):
+	"""Loft a smooth symmetric car body shell from nose (+Y) to tail (-Y) with carved wheel arches and dark wheelhouses."""
+	# prof_fn(y) returns list of (x >= 0, z) points from bottom-centre -> rocker -> mid-side -> shoulder -> roof-edge -> roof-centre
+	# We mirror around X=0 to form a closed cross-section per station.
+	ys = sorted(stations, reverse=True)
+	grid = []
+	n_half = 0
+	for y in ys:
+		half = list(prof_fn(y))
+		# Raise lower rocker points inside the wheel arch circles to carve real wheel openings.
+		zb_arch = 0.0
+		for ya in axles:
+			dy = y - ya
+			if abs(dy) < arch_r:
+				zb_arch = max(zb_arch, wheel_z + math.sqrt(max(0.0, arch_r * arch_r - dy * dy)))
+		if zb_arch > 0.0:
+			# Raise rocker/lower-edge points (indices 1, 2) over the wheel arch, keeping floor centre (0) low.
+			half_adj = []
+			for idx, (x, z) in enumerate(half):
+				if idx in (1, 2) and z < zb_arch:
+					z = zb_arch
+				half_adj.append((x, z))
+			half = half_adj
+		n_half = len(half)
+		# Closed ring: right side bottom->top (0..n_half-1), then left side top->bottom (n_half-2..1)
+		ring = [Vector((x, y, z)) for x, z in half] + [Vector((-x, y, z)) for x, z in reversed(half[1:-1])]
+		grid.append(ring)
+
+	ids = [[mb.vert(p) for p in row] for row in grid]
+	n = len(grid[0])
+	czs = [sum(p.z for p in row) / n for row in grid]
+	for i in range(len(grid) - 1):
+		ym = 0.5 * (ys[i] + ys[i + 1])
+		zc = 0.5 * (czs[i] + czs[i + 1])
+		for j in range(n):
+			j2 = (j + 1) % n
+			# Symmetric segment index 0..n_half-2 (0=underbody, 1=lower rocker, ..., n_half-2=roof)
+			if j < n_half - 1:
+				seg = j
+			else:
+				seg = n - 1 - j
+			mat = face_mat_fn(ym, seg, i, j)
+			mb.face([ids[i][j], ids[i][j2], ids[i + 1][j2], ids[i + 1][j]], mat,
+				lambda q, zc=zc: Vector((q.x, 0.0, q.z - zc)))
+	# Nose & tail caps
+	mb.face(ids[0], face_mat_fn(ys[0], -1, 0, -1), (0, 1, 0))
+	mb.face(ids[-1], face_mat_fn(ys[-1], -2, len(ys) - 1, -1), (0, -1, 0))
+
+	# Dark wheelhouse liners behind each carved arch so you never see hollow air behind the wheels.
+	for ya in axles:
+		hw = prof_fn(ya)[3][0]
+		for sx in (-1, 1):
+			xi = sx * (hw - 0.30)
+			xo = sx * (hw - 0.015)
+			pts_arch = [(ya + (arch_r - 0.005) * math.cos(math.pi * k / 14),
+				wheel_z + (arch_r - 0.005) * math.sin(math.pi * k / 14)) for k in range(15)]
+			for k in range(len(pts_arch) - 1):
+				y0, z0 = pts_arch[k]
+				y1, z1 = pts_arch[k + 1]
+				mb.quad((xi, y0, z0), (xi, y1, z1), (xo, y1, z1), (xo, y0, z0), "DarkTrim", (0, 0, -1))
+			# Inner vertical wheelhouse backing wall
+			back_pts = [(xi, y, z) for y, z in pts_arch] + [(xi, ya - arch_r, wheel_z - 0.08), (xi, ya + arch_r, wheel_z - 0.08)]
+			mb.poly(back_pts, "DarkTrim", (sx, 0, 0))
+
+
+def real_van():
+	"""Realistic Polish panel van (Fiat Ducato II / Ford Transit Mk6 style): 4.96 x 2.16 (w/ mirrors) x 2.22 m."""
+	mb = MB()
+	# Coordinates: nose at +2.46, tail at -2.46 (4.92 m body + bumpers = 4.98 m), axles at +1.56 and -1.56 (3.12 m wb).
+	axles = (1.56, -1.56)
+	r_wheel = 0.34
+	arch_r = 0.415
+
+	# Profile curves along Y (tail -2.46 -> nose +2.46)
+	w_pts = [(-2.46, 0.86), (-2.42, 0.94), (-2.30, 0.985), (-1.90, 0.995), (0.95, 0.995),
+		(1.55, 0.99), (1.95, 0.975), (2.25, 0.94), (2.40, 0.87), (2.46, 0.78)]
+	wsh_pts = [(-2.46, 0.84), (-2.40, 0.925), (-2.25, 0.965), (0.95, 0.965),
+		(1.65, 0.955), (2.05, 0.93), (2.30, 0.88), (2.42, 0.82), (2.46, 0.75)]
+	wr_pts = [(-2.46, 0.78), (-2.36, 0.85), (-2.15, 0.88), (0.80, 0.88),
+		(1.15, 0.86), (1.55, 0.88), (2.00, 0.87), (2.35, 0.82), (2.46, 0.72)]
+	zb_pts = [(-2.46, 0.34), (-2.30, 0.28), (-1.80, 0.26), (1.85, 0.26), (2.30, 0.29), (2.46, 0.34)]
+	zsh_pts = [(-2.46, 1.18), (-2.30, 1.24), (0.55, 1.24), (1.28, 1.14), (1.56, 1.16),
+		(1.80, 1.16), (2.15, 1.07), (2.38, 0.96), (2.46, 0.84)]
+	zt_pts = [(-2.46, 2.02), (-2.42, 2.13), (-2.28, 2.20), (-1.80, 2.22), (0.72, 2.22),
+		(0.95, 2.18), (1.15, 2.00), (1.42, 1.62), (1.68, 1.22), (1.98, 1.15), (2.28, 1.04), (2.42, 0.92), (2.46, 0.84)]
+
+	def prof(y):
+		w = _pl_interp(w_pts, y)
+		wsh = _pl_interp(wsh_pts, y)
+		wr = _pl_interp(wr_pts, y)
+		zb = _pl_interp(zb_pts, y)
+		zsh = _pl_interp(zsh_pts, y)
+		zt = _pl_interp(zt_pts, y)
+		zm = min(zb + 0.34, zsh - 0.08)
+		# Segment indices: 0 floor, 1 rocker bevel, 2 lower flank, 3 upper flank, 4 belt step, 5 greenhouse/side, 6 roof rail, 7 roof crown
+		z_rail = max(zsh + 0.02, zt - 0.10)
+		if y > 1.68:
+			# Bonnet region (no greenhouse)
+			z_rail = max(zsh + 0.01, zt - 0.04)
+		return [
+			(0.0, zb),
+			(w - 0.07, zb),
+			(w - 0.015, zb + 0.07),
+			(w, zm),
+			(wsh, zsh),
+			(kit.lerp(wsh, wr, 0.85), z_rail),
+			(wr, zt - 0.03),
+			(0.0, zt),
+		]
+
+	# Dense stations round the nose, windscreen, wheel arches and tail
+	stations = [
+		2.46, 2.42, 2.36, 2.26, 2.12, 1.97, 1.86, 1.74, 1.68,
+		1.56, 1.44, 1.32, 1.18, 1.04, 0.92, 0.78, 0.62, 0.35, 0.0,
+		-0.45, -0.95, -1.14, -1.28, -1.42, -1.56, -1.70, -1.84, -1.98,
+		-2.20, -2.35, -2.42, -2.46,
+	]
+	# Add extra points on arch perimeters for round cutouts
+	for ya in axles:
+		for k in range(1, 7):
+			stations.append(ya + arch_r * math.cos(math.pi * k / 7))
+	stations = sorted(set(round(y, 4) for y in stations))
+
+	def face_mat(ym, seg, i, j):
+		if seg == 0:
+			return "DarkTrim"
+		# Windscreen on the sloped front upper face (y between 1.04 and 1.65, crown seg 6)
+		if 1.04 <= ym <= 1.65 and seg == 6:
+			return "Glass"
+		# Cab front door windows (y between 0.66 and 1.44, side greenhouse seg 4)
+		if 0.66 <= ym <= 1.44 and seg == 4:
+			return "Glass"
+		return "Paint"
+
+	_carved_body(mb, stations, prof, face_mat, axles, arch_r, r_wheel)
+
+	# A-pillars framing the windscreen + B-pillar + quarter vent bar + twin wipers
 	for sx in (-1, 1):
-		mb.quad((sx * 0.06, y, 1.45), (sx * 0.74, y, 1.45), (sx * 0.74, y, 1.9), (sx * 0.06, y, 1.9), "Glass", (0, -1, 0))
-	mb.quad((-0.01, -2.306, 0.4), (0.01, -2.306, 0.4), (0.01, -2.306, 1.98), (-0.01, -2.306, 1.98), "Trim", (0, -1, 0))
-	# sliding-door rail and roof rack bars
+		bar(mb, (sx * 0.89, 1.66, 1.22), (sx * 0.85, 1.03, 2.09), 0.068, "Paint")
+		bar(mb, (sx * 0.94, 0.65, 1.24), (sx * 0.88, 0.65, 2.08), 0.065, "DarkTrim")
+		bar(mb, (sx * 0.94, 1.35, 1.18), (sx * 0.90, 1.35, 1.56), 0.028, "DarkTrim")
+	# Scuttle & twin wipers at base of windscreen
+	cube(mb, (-0.82, 1.64, 1.19), (0.82, 1.74, 1.25), "DarkTrim")
+	for x0, x1 in ((-0.65, -0.02), (0.04, 0.68)):
+		bar(mb, (x0, 1.66, 1.25), (x1, 1.50, 1.46), 0.022, "DarkTrim")
+
+	# Heavy commercial front bumper (tapered at corners) + lower intake + fog recesses + Polish front plate
+	cube(mb, (-0.95, 2.12, 0.25), (0.95, 2.38, 0.62), "DarkTrim")
+	cube(mb, (-0.88, 2.34, 0.25), (0.88, 2.50, 0.62), "DarkTrim")
+	cube(mb, (-0.52, 2.47, 0.30), (0.52, 2.515, 0.44), "Rubber")  # lower intake
+	cube(mb, (-0.27, 2.495, 0.43), (0.27, 2.512, 0.56), "DarkTrim")
+	cube(mb, (-0.255, 2.505, 0.44), (0.255, 2.52, 0.55), "Plate")
 	for sx in (-1, 1):
-		cube(mb, (sx * 0.9, -0.35, 1.5), (sx * 0.93, -1.3, 1.53), "Trim")
-	for yb in (-0.4, -1.8):
-		cube(mb, (-0.82, yb - 0.03, 2.08), (0.82, yb + 0.03, 2.13), "Trim")
+		cube(mb, (sx * 0.60, 2.45, 0.33), (sx * 0.78, 2.508, 0.43), "Headlight")
 
-
-CAR_VAN = {
-	"lower": [(2.30, 0.34, 0.80, 0.84, 0.06, 0.10), (2.22, 0.26, 0.92, 0.90, 0.07, 0.14), (1.90, 0.24, 1.02, 0.93, 0.07, 0.14),
-		(1.45, 0.24, 1.06, 0.93, 0.07, 0.12), (-2.20, 0.26, 1.08, 0.93, 0.07, 0.10), (-2.30, 0.32, 1.06, 0.90, 0.06, 0.08)],
-	"upper": [(1.45, 1.04, 1.06, 0.90, 0.88, 0.01), (0.70, 1.06, 2.0, 0.90, 0.85, 0.14), (-2.14, 1.07, 2.08, 0.90, 0.86, 0.14),
-		(-2.28, 1.07, 2.00, 0.90, 0.85, 0.10)],
-	"ws": (1.40, 0.74), "rear": None, "side": [(1.22, -0.05)], "side_p": (0.12, 0.85),
-	"head": (0.45, 0.82, 0.64, 0.80), "grille": (0.40, 0.56, 0.76), "tail": (0.74, 0.89, 0.55, 1.0),
-	"bumpers": ((0.26, 0.54, 0.07), (0.26, 0.52, 0.07)), "plates": (0.32, (0.60, -2.304)),
-	"strip": (0.60, 0.70), "axles": (1.50, -1.30), "r": 0.33, "mirror_mat": "Trim", "extra": van_extra,
-}
-
-
-def maluch_extra(mb, gl, czl, gu, czu):
-	"""Fiat 126p details: round chrome-ringed headlamps, rear engine-lid vents."""
+	# Slatted van grille + swept multi-element headlamps + amber outer corners
+	cube(mb, (-0.46, 2.36, 0.63), (0.46, 2.465, 0.91), "DarkTrim")
+	for z_slat in (0.68, 0.75, 0.82, 0.88):
+		cube(mb, (-0.43, 2.455, z_slat - 0.012), (0.43, 2.478, z_slat + 0.012), "Alloy")
+	mb.disc((0.0, 2.484, 0.77), 0.055, "Alloy", normal=(0, 1, 0), segs=12)
 	for sx in (-1, 1):
-		mb.tube((sx * 0.4, 1.44, 0.5), (sx * 0.4, 1.545, 0.5), 0.085, "Steel", segs=12, caps=False)
-		mb.disc((sx * 0.4, 1.547, 0.5), 0.07, "Headlight", normal=(0, 1, 0), segs=12)
-		mb.disc((sx * 0.62, 1.47, 0.42), 0.035, "SignalAmber", normal=(0, 1, 0), segs=6)
-	ys = [s[0] for s in MALUCH["lower"]]
+		# Headlamp housing + bright inner reflector + outer amber indicator
+		cube(mb, (sx * 0.47, 2.28, 0.65), (sx * 0.84, 2.445, 0.90), "Alloy")
+		cube(mb, (sx * 0.49, 2.435, 0.67), (sx * 0.74, 2.462, 0.88), "Headlight")
+		cube(mb, (sx * 0.74, 2.32, 0.67), (sx * 0.86, 2.452, 0.88), "SignalAmber")
+
+	# Side plastic rubbing strips (classic Ducato/Transit lower body protection), door handles & sliding door rail
+	for sx in (-1, 1):
+		cube(mb, (sx * 0.99, -1.12, 0.44), (sx * 1.015, 1.12, 0.64), "DarkTrim")
+		cube(mb, (sx * 0.975, -2.42, 0.44), (sx * 1.00, -1.98, 0.64), "DarkTrim")
+		cube(mb, (sx * 0.985, 1.98, 0.44), (sx * 1.005, 2.26, 0.64), "DarkTrim")
+		# Cab door handle + vertical shut line
+		cube(mb, (sx * 0.97, 0.72, 1.04), (sx * 1.015, 0.86, 1.09), "DarkTrim")
+		# Large commercial wing mirrors on dual arms
+		bar(mb, (sx * 0.94, 1.44, 1.24), (sx * 1.07, 1.44, 1.24), 0.025, "DarkTrim")
+		bar(mb, (sx * 0.94, 1.44, 1.46), (sx * 1.07, 1.44, 1.46), 0.025, "DarkTrim")
+		cube(mb, (sx * 1.04, 1.37, 1.18), (sx * 1.10, 1.47, 1.54), "DarkTrim")
+	# Sliding cargo door rail + handle on right (+X) side
+	cube(mb, (0.975, -1.25, 1.20), (1.01, -0.10, 1.25), "DarkTrim")
+	cube(mb, (0.97, 0.44, 1.04), (1.015, 0.56, 1.09), "DarkTrim")
+
+	# Rear barn doors: twin windows, vertical centre split, tall pillar tail lamps, 3rd brake light, rear step bumper
+	yr = -2.46
+	for sx in (-1, 1):
+		# Rear door window + dark gasket frame
+		cube(mb, (sx * 0.06, yr - 0.012, 1.38), (sx * 0.72, yr + 0.02, 1.94), "DarkTrim")
+		mb.quad((sx * 0.09, yr - 0.016, 1.41), (sx * 0.69, yr - 0.016, 1.41),
+			(sx * 0.69, yr - 0.016, 1.91), (sx * 0.09, yr - 0.016, 1.91), "Glass", (0, -1, 0))
+		# Tall Ducato/Transit vertical rear lamp clusters
+		cube(mb, (sx * 0.76, yr - 0.03, 0.64), (sx * 0.92, yr + 0.06, 1.26), "Taillight")
+		cube(mb, (sx * 0.77, yr - 0.036, 0.86), (sx * 0.91, yr - 0.02, 1.00), "SignalAmber")
+		cube(mb, (sx * 0.77, yr - 0.036, 0.66), (sx * 0.91, yr - 0.02, 0.77), "Headlight")  # reverse light
+	# Barn-door split line, handle, high 3rd brake light & rear licence plate
+	cube(mb, (-0.012, yr - 0.014, 0.52), (0.012, yr + 0.01, 2.04), "DarkTrim")
+	cube(mb, (0.06, yr - 0.035, 1.02), (0.14, yr, 1.15), "DarkTrim")
+	cube(mb, (-0.18, yr - 0.025, 2.05), (0.18, yr + 0.02, 2.11), "Taillight")
+	cube(mb, (-0.655, yr - 0.018, 0.79), (-0.125, yr + 0.01, 0.93), "DarkTrim")
+	cube(mb, (-0.64, yr - 0.026, 0.80), (-0.14, yr - 0.01, 0.92), "Plate")
+	# Rear step bumper + exhaust pipe
+	cube(mb, (-0.93, yr - 0.07, 0.28), (0.93, yr + 0.16, 0.55), "DarkTrim")
+	mb.tube((-0.55, yr + 0.15, 0.25), (-0.55, yr - 0.04, 0.24), 0.032, "Alloy", segs=8)
+
+	# 4 commercial steel wheels sitting cleanly inside the carved arches
+	for ya in axles:
+		for sx in (-1, 1):
+			_add_real_wheel(mb, sx * 0.86, ya, r_wheel, r_wheel, 0.21, sx, segs=20, style="steel")
+	return mb
+
+
+def real_maluch():
+	"""Realistic Polski Fiat 126p (Maluch FL/EL): 3.06 x 1.50 (w/ mirrors) x 1.34 m, rear-engined classic."""
+	mb = MB()
+	# Coordinates: nose +1.53, tail -1.53 (3.06 m), wheelbase 1.84 m (axles +0.94, -0.90), 12" wheels (r = 0.255 m).
+	axles = (0.94, -0.90)
+	r_wheel = 0.255
+	arch_r = 0.305
+
+	w_pts = [(-1.53, 0.59), (-1.47, 0.655), (-1.30, 0.685), (-0.90, 0.69), (0.94, 0.69),
+		(1.32, 0.68), (1.47, 0.65), (1.53, 0.58)]
+	wsh_pts = [(-1.53, 0.57), (-1.45, 0.635), (-1.20, 0.665), (0.95, 0.665),
+		(1.35, 0.655), (1.48, 0.625), (1.53, 0.56)]
+	wr_pts = [(-1.53, 0.52), (-1.35, 0.57), (-1.12, 0.59), (-0.82, 0.57),
+		(-0.20, 0.565), (0.06, 0.565), (0.48, 0.62), (1.05, 0.615), (1.45, 0.58), (1.53, 0.52)]
+	zb_pts = [(-1.53, 0.28), (-1.38, 0.22), (-1.15, 0.20), (1.15, 0.20), (1.40, 0.23), (1.53, 0.28)]
+	zsh_pts = [(-1.53, 0.72), (-1.45, 0.79), (-1.25, 0.84), (-0.80, 0.855), (0.48, 0.85),
+		(0.95, 0.81), (1.35, 0.74), (1.48, 0.68), (1.53, 0.60)]
+	zt_pts = [(-1.53, 0.72), (-1.47, 0.80), (-1.32, 0.86), (-1.14, 0.90), (-0.98, 1.11),
+		(-0.82, 1.31), (-0.50, 1.335), (-0.15, 1.335), (0.08, 1.305), (0.28, 1.08), (0.48, 0.865),
+		(0.95, 0.83), (1.35, 0.76), (1.49, 0.69), (1.53, 0.60)]
+
+	def prof(y):
+		w = _pl_interp(w_pts, y)
+		wsh = _pl_interp(wsh_pts, y)
+		wr = _pl_interp(wr_pts, y)
+		zb = _pl_interp(zb_pts, y)
+		zsh = _pl_interp(zsh_pts, y)
+		zt = _pl_interp(zt_pts, y)
+		zm = min(zb + 0.26, zsh - 0.08)
+		in_cab = -1.12 <= y <= 0.46
+		z_rail = max(zsh + 0.015, zt - (0.055 if in_cab else 0.025))
+		return [
+			(0.0, zb),
+			(w - 0.055, zb),
+			(w - 0.012, zb + 0.055),
+			(w, zm),
+			(wsh, zsh),
+			(kit.lerp(wsh, wr, 0.88), z_rail),
+			(wr, zt - 0.018),
+			(0.0, zt),
+		]
+
+	stations = [
+		1.53, 1.49, 1.43, 1.33, 1.20, 1.06, 0.94, 0.82, 0.68, 0.56, 0.48,
+		0.38, 0.26, 0.14, 0.06, -0.10, -0.35, -0.58, -0.74, -0.82, -0.90,
+		-1.02, -1.14, -1.26, -1.38, -1.47, -1.53,
+	]
+	for ya in axles:
+		for k in range(1, 6):
+			stations.append(ya + arch_r * math.cos(math.pi * k / 6))
+	stations = sorted(set(round(y, 4) for y in stations))
+
+	def face_mat(ym, seg, i, j):
+		if seg == 0:
+			return "DarkTrim"
+		# Windscreen (y between 0.09 and 0.46, crown seg 6)
+		if 0.09 <= ym <= 0.46 and seg == 6:
+			return "Glass"
+		# Rear window (y between -1.12 and -0.83, crown seg 6)
+		if -1.12 <= ym <= -0.83 and seg == 6:
+			return "Glass"
+		# Side door window (-0.48..0.28) and rear quarter window (-0.98..-0.56), side greenhouse seg 4
+		if (-0.48 <= ym <= 0.28 or -0.98 <= ym <= -0.56) and seg == 4:
+			return "Glass"
+		return "Paint"
+
+	_carved_body(mb, stations, prof, face_mat, axles, arch_r, r_wheel)
+
+	# Crisp thin A-pillars, B-pillars, C-pillars, drip rails & wipers (tucked cleanly into roof line)
+	for sx in (-1, 1):
+		bar(mb, (sx * 0.648, 0.46, 0.86), (sx * 0.578, 0.09, 1.275), 0.038, "Paint")
+		bar(mb, (sx * 0.655, -0.52, 0.855), (sx * 0.578, -0.52, 1.285), 0.052, "Paint")
+		bar(mb, (sx * 0.648, -1.12, 0.87), (sx * 0.578, -0.83, 1.275), 0.052, "Paint")
+		# Quarter vent window bar in the front door
+		bar(mb, (sx * 0.625, 0.14, 0.86), (sx * 0.585, 0.14, 1.23), 0.016, "DarkTrim")
+		# Roof rain-gutter drip rails
+		bar(mb, (sx * 0.575, 0.08, 1.275), (sx * 0.575, -0.82, 1.275), 0.014, "DarkTrim")
+		# Lower FL/EL plastic sill/door trim & black door handle
+		cube(mb, (sx * 0.685, -0.58, 0.26), (sx * 0.708, 0.62, 0.42), "DarkTrim")
+		cube(mb, (sx * 0.675, -0.44, 0.77), (sx * 0.71, -0.32, 0.81), "DarkTrim")
+	# Small square black wing mirrors (classic 126p FL/EL)
+	for sx in (-1, 1):
+		bar(mb, (sx * 0.66, 0.22, 0.87), (sx * 0.73, 0.22, 0.90), 0.018, "DarkTrim")
+		cube(mb, (sx * 0.70, 0.19, 0.87), (sx * 0.77, 0.24, 0.96), "DarkTrim")
+	# Wipers at windscreen base
+	for x0, x1 in ((-0.46, -0.02), (0.04, 0.46)):
+		bar(mb, (x0, 0.46, 0.875), (x1, 0.34, 1.02), 0.015, "DarkTrim")
+
+	# Front fascia: classic Fiat 126p rectangular headlamps, amber corner indicators, central Fiat badge, wrap bumper, front plate
+	yf = 1.53
+	for sx in (-1, 1):
+		# Recessed black bezel + rectangular headlamp glass + amber side indicator
+		cube(mb, (sx * 0.34, yf - 0.04, 0.47), (sx * 0.58, yf + 0.008, 0.60), "DarkTrim")
+		cube(mb, (sx * 0.355, yf - 0.01, 0.485), (sx * 0.53, yf + 0.016, 0.585), "Headlight")
+		cube(mb, (sx * 0.53, yf - 0.02, 0.485), (sx * 0.59, yf + 0.014, 0.585), "SignalAmber")
+		# Small side indicator repeater on the front wing
+		cube(mb, (sx * 0.68, 0.78, 0.58), (sx * 0.70, 0.84, 0.62), "SignalAmber")
+	# Classic Polski Fiat nose badge bar
+	cube(mb, (-0.11, yf - 0.01, 0.53), (0.11, yf + 0.012, 0.58), "DarkTrim")
+	cube(mb, (-0.09, yf + 0.01, 0.542), (0.09, yf + 0.016, 0.568), "Alloy")
+	# Chunky black FL/EL front wrap-around bumper + Polish front plate
+	cube(mb, (-0.67, yf - 0.20, 0.28), (0.67, yf + 0.06, 0.42), "DarkTrim")
+	cube(mb, (-0.23, yf + 0.055, 0.295), (0.23, yf + 0.068, 0.395), "Plate")
+
+	# Rear: horizontal engine-lid cooling louvres, vertical-ish rectangular 126p tail lamps, rear plate, bumper, single exhaust
+	yr = -1.53
+	# Iconic rear engine-deck louvre vents (angled dark slats on the rear deck below the back window)
+	for k in range(6):
+		y_v = -1.16 - k * 0.048
+		z_v = _pl_interp(zt_pts, y_v) + 0.006
+		cube(mb, (-0.42, y_v - 0.014, z_v - 0.008), (0.42, y_v + 0.014, z_v + 0.008), "DarkTrim")
+	# Vertical cooling slits on the upper rear valance
 	for k in range(5):
-		y = -1.08 - k * 0.07
-		s = s_of_y(ys, y)
-		decal(mb, gl, s, s + 0.06, 5.25, 5.75, "Trim", czl, off=0.004)
+		z_s = 0.63 + k * 0.024
+		cube(mb, (-0.30, yr - 0.008, z_s), (0.30, yr + 0.01, z_s + 0.012), "DarkTrim")
+	# Rear tail lamps (classic Fiat 126p rectangular clusters: red tail/brake + amber outer indicator)
+	for sx in (-1, 1):
+		cube(mb, (sx * 0.36, yr - 0.025, 0.47), (sx * 0.57, yr + 0.04, 0.62), "Taillight")
+		cube(mb, (sx * 0.49, yr - 0.030, 0.54), (sx * 0.565, yr - 0.01, 0.615), "SignalAmber")
+		cube(mb, (sx * 0.37, yr - 0.030, 0.475), (sx * 0.45, yr - 0.01, 0.525), "Headlight")  # reverse lamp
+	# Rear plate + black lamp brow + rear wrap-around bumper + left exhaust pipe
+	cube(mb, (-0.23, yr - 0.016, 0.45), (0.23, yr + 0.01, 0.55), "Plate")
+	cube(mb, (-0.16, yr - 0.03, 0.555), (0.16, yr + 0.01, 0.585), "DarkTrim")
+	cube(mb, (-0.67, yr - 0.06, 0.29), (0.67, yr + 0.20, 0.43), "DarkTrim")
+	mb.tube((-0.34, yr + 0.16, 0.23), (-0.34, yr - 0.04, 0.22), 0.022, "Alloy", segs=8)
 
-
-MALUCH = {
-	"lower": [(1.525, 0.32, 0.58, 0.58, 0.06, 0.08), (1.47, 0.25, 0.70, 0.64, 0.08, 0.14), (1.25, 0.22, 0.78, 0.68, 0.09, 0.18),
-		(0.90, 0.22, 0.82, 0.69, 0.09, 0.18), (0.40, 0.22, 0.85, 0.69, 0.09, 0.16), (-1.00, 0.22, 0.86, 0.69, 0.09, 0.16),
-		(-1.35, 0.24, 0.84, 0.67, 0.09, 0.18), (-1.48, 0.28, 0.78, 0.63, 0.08, 0.14), (-1.525, 0.34, 0.70, 0.57, 0.06, 0.08)],
-	"upper": [(0.40, 0.83, 0.85, 0.65, 0.63, 0.01), (-0.08, 0.84, 1.30, 0.64, 0.55, 0.16), (-0.40, 0.84, 1.33, 0.645, 0.56, 0.17),
-		(-0.75, 0.85, 1.30, 0.645, 0.56, 0.16), (-1.15, 0.85, 0.88, 0.64, 0.60, 0.02)],
-	"nc": 3,
-	"ws": (0.36, -0.05), "rear": (-0.80, -1.10), "side": [(0.22, -0.60), (-0.68, -1.0)],
-	"head": None, "grille": None, "tail": (0.36, 0.54, 0.48, 0.64),
-	"bumpers": ((0.30, 0.38, 0.05), (0.32, 0.40, 0.05)), "bumper_mat": "Steel", "bumper_in": 0.04,
-	"plates": (None, (0.42, -1.529)),
-	"axles": (0.975, -0.865), "r": 0.265, "tw": 0.16, "arch": 0.05, "extra": maluch_extra, "mirror_mat": "Trim",
-}
+	# 4 tiny classic 12-inch steel wheels
+	for ya in axles:
+		for sx in (-1, 1):
+			_add_real_wheel(mb, sx * 0.60, ya, r_wheel, r_wheel, 0.155, sx, segs=18, style="steel")
+	return mb
 
 
 # ---------------------------------------------------------------- assembly
@@ -1074,8 +1441,8 @@ PIECES = {
 	"Headframe": headframe, "ChurchSpire": church_spire, "Streetlamp": streetlamp, "StreetlampPark": streetlamp_park,
 	"TrafficLight": traffic_light, "BusShelter": bus_shelter, "Billboard": billboard, "FestivalArch": festival_arch,
 	"FestivalStage": festival_stage, "FlagPole": flag_pole, "Tent": tent,
-	"CarHatch": lambda: car(CAR_HATCH), "CarSedan": lambda: car(CAR_SEDAN), "CarVan": lambda: car(CAR_VAN),
-	"Maluch": lambda: car(MALUCH),
+	"CarHatch": lambda: car(CAR_HATCH), "CarSedan": lambda: car(CAR_SEDAN), "CarVan": real_van,
+	"Maluch": real_maluch,
 	"Bench": bench, "Fence": fence, "LevelCrossing": level_crossing,
 	"LevelCrossingBoom": level_crossing_boom, "Beacon": beacon,
 	"TrainCab": lambda: en57(True), "TrainCar": lambda: en57(False),
@@ -1185,6 +1552,9 @@ def main():
 	R("train.png", (-48, 290, 4.5), (-60, 268, 2.0), 55)
 	R("train_side.png", (-30, 250, 3.0), (-60, 250, 2.0), 70)
 	R("maluch.png", (11, 354.5, 1.8), (7.5, Yc, 0.6), 50)
+	R("maluch_rear.png", (4.2, 346.2, 1.5), (7.5, Yc, 0.6), 45)
+	R("van_front.png", (6.2, 356.0, 2.2), (2.5, Yc, 1.0), 48)
+	R("van_rear.png", (-1.5, 344.2, 2.1), (2.5, Yc, 1.0), 48)
 	R("hatch.png", (-11, 345.5, 1.8), (-7.5, Yc, 0.7), 50)
 	R("cars_front.png", (8, 360, 2.6), (0, Yc, 0.6), 50)
 	R("cars_rear.png", (-8, 340, 2.6), (0, Yc, 0.6), 50)

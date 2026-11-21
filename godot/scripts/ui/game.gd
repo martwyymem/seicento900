@@ -767,6 +767,24 @@ func _build_setup() -> void:
 	menu_tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(menu_tint)
 	move_child(menu_tint, 2)
+	var bg_fx := Control.new()
+	bg_fx.name = "MenuNeonBg"
+	bg_fx.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	bg_fx.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bg_fx.draw.connect(func() -> void:
+		if CmrStyle.skin == "ps1" or bg_fx.size.x < 2.0:
+			return
+		var neon := HudLayout.neon_primary()
+		var hot := HudLayout.neon_hot()
+		var s := bg_fx.size
+		HudLayout.draw_radial_glow(bg_fx, Vector2(s.x * 0.14, s.y * 0.18), s.y * 0.78, Color(neon, 0.20))
+		HudLayout.draw_radial_glow(bg_fx, Vector2(s.x * 0.86, s.y * 0.84), s.y * 0.76, Color(hot, 0.20))
+		HudLayout.draw_radial_glow(bg_fx, Vector2(s.x * 0.52, s.y * 0.52), s.y * 0.62, Color(neon.lerp(hot, 0.5), 0.10))
+		bg_fx.draw_rect(Rect2(0.0, 0.0, s.x, 3.0), Color(neon, 0.78))
+		bg_fx.draw_rect(Rect2(0.0, 3.0, s.x, 12.0), Color(neon, 0.09))
+		bg_fx.draw_rect(Rect2(0.0, s.y - 3.0, s.x, 3.0), Color(hot, 0.78))
+		bg_fx.draw_rect(Rect2(0.0, s.y - 14.0, s.x, 11.0), Color(hot, 0.10)))
+	menu_tint.add_child(bg_fx)
 	menu_safe_frame = Control.new()
 	menu_safe_frame.name = "MenuSafeFrame"
 	menu_safe_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -869,15 +887,8 @@ func _build_setup() -> void:
 	campaign_side.add_child(campaign_stage_picker)
 
 	var briefing_card := PanelContainer.new()
-	var card_style := StyleBoxFlat.new()
-	card_style.bg_color = Color(CmrStyle.PANEL, 0.75)
-	card_style.border_color = Color(CmrStyle.ORANGE, 0.6)
-	card_style.set_border_width_all(1)
-	card_style.set_corner_radius_all(4)
-	card_style.content_margin_left = 14
-	card_style.content_margin_right = 14
-	card_style.content_margin_top = 12
-	card_style.content_margin_bottom = 12
+	var card_style := HudLayout.neon_box(HudLayout.neon_primary(), 0.88, 5, 0.0, 10, 14.0, 12.0)
+	card_style.bg_color = HudLayout.glass_plate(0.88)
 	briefing_card.add_theme_stylebox_override("panel", card_style)
 	campaign_side.add_child(briefing_card)
 
@@ -885,7 +896,8 @@ func _build_setup() -> void:
 	card_col.add_theme_constant_override("separation", 8)
 	briefing_card.add_child(card_col)
 
-	campaign_title_label = _label("Stage 1: Rookie Shakedown", 20, CmrStyle.TEXT)
+	campaign_title_label = _label("Stage 1: Rookie Shakedown", 20, Color.WHITE)
+	campaign_title_label.add_theme_font_override("font", HudLayout.italic_font(900, -0.12))
 	campaign_title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART # long Polish stage names wrap, never run off the card
 	card_col.add_child(campaign_title_label)
 
@@ -1206,11 +1218,12 @@ func _fold_section(parent: VBoxContainer, key: String, title: String, rule := tr
 	head.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	head.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	head.custom_minimum_size = Vector2(1, 34) # a long summary trims instead of widening the column
+	head.add_theme_font_override("font", HudLayout.italic_font(800, -0.10))
 	head.add_theme_font_size_override("font_size", 16)
-	head.add_theme_color_override("font_color", CmrStyle.TEXT)
-	head.add_theme_color_override("font_focus_color", CmrStyle.TEXT)
+	head.add_theme_color_override("font_color", HudLayout.neon_primary())
+	head.add_theme_color_override("font_focus_color", Color.WHITE)
 	for c in ["font_hover_color", "font_pressed_color", "font_hover_pressed_color"]:
-		head.add_theme_color_override(c, ACCENT)
+		head.add_theme_color_override(c, HudLayout.neon_hot())
 	head.tooltip_text = "A / Enter or ◂ ▸ shows or hides these settings"
 	head.pressed.connect(func() -> void: _open_section(key, not setup_open[key]))
 	parent.add_child(head)
@@ -1226,7 +1239,8 @@ func _group(parent: Control, key: String, title: String) -> VBoxContainer:
 	var group := VBoxContainer.new()
 	group.add_theme_constant_override("separation", 8)
 	parent.add_child(group)
-	var head := _label(title, 15, ACCENT)
+	var head := _label(title, 15, HudLayout.neon_primary())
+	head.add_theme_font_override("font", HudLayout.italic_font(900, -0.12))
 	head.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS # a long summary trims instead of widening the column
 	group.add_child(head)
 	_menu_rule(group)
@@ -1660,7 +1674,7 @@ func _setup_focus_changed(control: Control) -> void:
 	if caption:
 		_lit_caption = caption
 		_lit_caption_color = caption.get_theme_color("font_color")
-		caption.add_theme_color_override("font_color", ACCENT)
+		caption.add_theme_color_override("font_color", HudLayout.neon_hot())
 
 func _build_strategy_section(parent: VBoxContainer) -> void:
 	strategy_section = VBoxContainer.new()
@@ -1870,30 +1884,39 @@ func _refresh_strategy() -> void:
 
 func _plan_button(i: int) -> Button:
 	var o: Dictionary = strategy_options[i]
+	var neon := HudLayout.neon_primary()
+	var hot := HudLayout.neon_hot()
 	var b := Button.new()
 	b.toggle_mode = true
 	b.button_group = strategy_group
 	b.button_pressed = strategy_choice == i
 	b.custom_minimum_size.y = 46
-	b.add_theme_stylebox_override("normal", CmrStyle.box(CmrStyle.FIELD_DIM))
-	b.add_theme_stylebox_override("hover", CmrStyle.box(CmrStyle.FIELD))
-	var on := CmrStyle.box(CmrStyle.ORANGE)
+	var idle := HudLayout.neon_box(Color(neon, 0.45), 0.72, 4, 0.0, 0, 10.0, 4.0)
+	idle.bg_color = HudLayout.glass_plate(0.76)
+	var hov := HudLayout.neon_box(neon, 0.88, 5, 0.0, 8, 10.0, 4.0)
+	hov.bg_color = HudLayout.glass_plate(0.90).lightened(0.06)
+	var on := HudLayout.neon_box(hot, 0.96, 6, 0.0, 10, 10.0, 4.0)
+	on.bg_color = neon
+	b.add_theme_stylebox_override("normal", idle)
+	b.add_theme_stylebox_override("hover", hov)
 	b.add_theme_stylebox_override("pressed", on)
 	b.add_theme_stylebox_override("hover_pressed", on)
 	var row := HBoxContainer.new()
 	row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	row.offset_left = 8
+	row.offset_left = 10
 	row.offset_right = -10
 	row.add_theme_constant_override("separation", 3)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	b.add_child(row)
-	_stint_chips(row, o.stints, 5)
+	var fg := CmrStyle.INK if b.button_pressed else CmrStyle.TEXT
+	var soft_fg := Color(CmrStyle.INK, 0.72) if b.button_pressed else CmrStyle.MUTED
+	_stint_chips(row, o.stints, 5, fg, soft_fg)
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(spacer)
 	var head := Race.fmt_time(o.time).get_slice(".", 0) if i == 0 else "+%.1f s" % (o.time - strategy_options[0].time)
-	var right := _label("%s\n%d stop%s · start %.1f L" % [head, o.stops, "" if o.stops == 1 else "s", o.stints[0].fuel], 12, CmrStyle.INK)
+	var right := _label("%s\n%d stop%s · start %.1f L" % [head, o.stops, "" if o.stops == 1 else "s", o.stints[0].fuel], 12, fg)
 	right.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	right.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	right.size_flags_vertical = Control.SIZE_FILL
@@ -1902,18 +1925,21 @@ func _plan_button(i: int) -> Button:
 	b.pressed.connect(func() -> void:
 		strategy_choice = i
 		custom_stints = []
-		b.set_pressed_no_signal(true)
+		for child in strategy_list.get_children():
+			child.queue_free()
+		for k in strategy_options.size():
+			strategy_list.add_child(_plan_button(k))
 		_render_custom_rows()
 	)
 	return b
 
 ## Compound badges with lap counts: S 12 → M 14 → …
-func _stint_chips(row: HBoxContainer, stints: Array, max_shown: int) -> void:
+func _stint_chips(row: HBoxContainer, stints: Array, max_shown: int, fg := CmrStyle.TEXT, soft_fg := CmrStyle.MUTED) -> void:
 	var shown := stints.size() if stints.size() <= max_shown + 1 else max_shown
 	for k in shown:
 		var st: Dictionary = stints[k]
 		if k > 0:
-			row.add_child(_chip_label("→", CmrStyle.INK_SOFT, 13))
+			row.add_child(_chip_label("→", soft_fg, 13))
 		var badge := _chip_label(st.c, CmrStyle.INK, 13)
 		badge.custom_minimum_size = Vector2(22, 22)
 		badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -1923,9 +1949,9 @@ func _stint_chips(row: HBoxContainer, stints: Array, max_shown: int) -> void:
 		style.set_corner_radius_all(11)
 		badge.add_theme_stylebox_override("normal", style)
 		row.add_child(badge)
-		row.add_child(_chip_label(str(st.laps), CmrStyle.INK, 15))
+		row.add_child(_chip_label(str(st.laps), fg, 15))
 	if shown < stints.size():
-		row.add_child(_chip_label("→ … %d more" % (stints.size() - shown), CmrStyle.INK_SOFT, 12))
+		row.add_child(_chip_label("→ … %d more" % (stints.size() - shown), soft_fg, 12))
 
 func _chip_label(text: String, color: Color, size: int) -> Label:
 	var l := _label(text, size, color)
@@ -2160,7 +2186,7 @@ func _dev_entries() -> Array:
 			func() -> void: open_world.set_weather_dynamic(not open_world.progress.weather_dynamic))
 		for w in ["rain", "fog"]:
 			add.call("OPEN WORLD · WEATHER", "%s now (2 game hours)" % String(w).capitalize(), func() -> void: open_world.dev_weather(String(w)), true)
-		for kind in ["CarHatch", "CarSedan", "CarVan", "Maluch"]:
+		for kind in Traffic.KINDS:
 			add.call("OPEN WORLD · SPAWN", "Park a %s 22 m ahead" % kind.trim_prefix("Car"), func() -> void: open_world.dev_spawn(kind), true)
 		add.call("OPEN WORLD · CAR", "Put the car back on the road", func() -> void: open_world.drive.respawn(), true)
 	elif race != null and not menu_tint.visible:
@@ -2601,10 +2627,57 @@ func _build_menu_car_preview() -> void:
 	var environment_data := Environment.new()
 	environment_data.background_mode = Environment.BG_CLEAR_COLOR
 	environment_data.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	environment_data.ambient_light_color = Color("#e6dcf2")
-	environment_data.ambient_light_energy = 0.6
+	environment_data.ambient_light_color = Color("#b8c8ee")
+	environment_data.ambient_light_energy = 0.55
+	environment_data.glow_enabled = true
+	environment_data.glow_intensity = 0.65
+	environment_data.glow_bloom = 0.22
+	environment_data.glow_hdr_threshold = 1.0
 	environment.environment = environment_data
 	showcase.add_child(environment)
+
+	var neon := HudLayout.neon_primary()
+	var hot := HudLayout.neon_hot()
+	var disc := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 4.72
+	cyl.bottom_radius = 4.92
+	cyl.height = 0.14
+	cyl.radial_segments = 64
+	disc.mesh = cyl
+	var disc_mat := StandardMaterial3D.new()
+	disc_mat.albedo_color = Color("#080c18")
+	disc_mat.metallic = 0.5
+	disc_mat.roughness = 0.44
+	disc.material_override = disc_mat
+	disc.position.y = -0.08
+	showcase.add_child(disc)
+	var ring := MeshInstance3D.new()
+	var torus := TorusMesh.new()
+	torus.inner_radius = 4.6
+	torus.outer_radius = 4.82
+	torus.rings = 64
+	torus.ring_segments = 14
+	ring.mesh = torus
+	var ring_mat := StandardMaterial3D.new()
+	ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ring_mat.albedo_color = neon * 2.2
+	ring.material_override = ring_mat
+	ring.position.y = -0.005
+	showcase.add_child(ring)
+	var inner_ring := MeshInstance3D.new()
+	var itorus := TorusMesh.new()
+	itorus.inner_radius = 3.55
+	itorus.outer_radius = 3.65
+	itorus.rings = 64
+	itorus.ring_segments = 12
+	inner_ring.mesh = itorus
+	var iring_mat := StandardMaterial3D.new()
+	iring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	iring_mat.albedo_color = hot * 1.9
+	inner_ring.material_override = iring_mat
+	inner_ring.position.y = -0.004
+	showcase.add_child(inner_ring)
 
 	var car = MENU_CAR_SCENE.instantiate()
 	car.name = "MenuSeicento"
@@ -2616,15 +2689,21 @@ func _build_menu_car_preview() -> void:
 
 	var key_light := DirectionalLight3D.new()
 	key_light.rotation_degrees = Vector3(-42, -32, 0)
-	key_light.light_color = Color("#fff7e7")
+	key_light.light_color = Color("#f2f7ff")
 	key_light.light_energy = 1.05
 	key_light.shadow_enabled = true
 	showcase.add_child(key_light)
 	var fill_light := DirectionalLight3D.new()
 	fill_light.rotation_degrees = Vector3(-18, 145, 0)
-	fill_light.light_color = Color("#c9a8ff")
-	fill_light.light_energy = 0.55
+	fill_light.light_color = neon
+	fill_light.light_energy = 0.72
 	showcase.add_child(fill_light)
+	var hot_rim := OmniLight3D.new()
+	hot_rim.position = Vector3(-6.2, 2.8, 5.2)
+	hot_rim.light_color = hot
+	hot_rim.light_energy = 5.0
+	hot_rim.omni_range = 18.0
+	showcase.add_child(hot_rim)
 
 	var camera := Camera3D.new()
 	camera.position = Vector3(8.4, 3.4, -4.2)
@@ -2638,9 +2717,10 @@ func _build_menu_car_preview() -> void:
 	menu_car_rule.anchor_top = 0.66
 	menu_car_rule.anchor_right = 0.555
 	menu_car_rule.anchor_bottom = 0.664
-	menu_car_rule.color = Color(CmrStyle.TEXT, 0.85)
+	menu_car_rule.color = Color(neon, 0.78)
 	menu_safe_frame.add_child(menu_car_rule)
-	menu_car_summary = _label("", 24, INK)
+	menu_car_summary = _label("", 24, Color.WHITE)
+	menu_car_summary.add_theme_font_override("font", HudLayout.italic_font(900, -0.12))
 	menu_car_summary.anchor_left = 0.045
 	menu_car_summary.anchor_top = 0.675
 	menu_car_summary.anchor_right = 0.555
@@ -2656,14 +2736,21 @@ func _build_menu_car_preview() -> void:
 	circuit_map_frame.clip_contents = true
 	var map_style := StyleBoxFlat.new()
 	map_style.bg_color = CmrStyle.MAP
+	map_style.border_color = Color(neon, 0.68)
+	map_style.set_border_width_all(2)
+	map_style.set_corner_radius_all(0 if CmrStyle.skin == "ps1" else 4)
 	map_style.set_content_margin_all(0)
+	if CmrStyle.skin != "ps1":
+		map_style.shadow_color = Color(neon, 0.25)
+		map_style.shadow_size = 10
 	circuit_map_frame.add_theme_stylebox_override("panel", map_style)
 	menu_safe_frame.add_child(circuit_map_frame)
 	information_map = MENU_TRACK_ART.new()
 	information_map.env_on_demand = false # the circuit prefetcher / rush worker prepares the surroundings
 	information_map.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	circuit_map_frame.add_child(information_map)
-	circuit_facts = _label("", 14, CmrStyle.ORANGE_SOFT)
+	circuit_facts = _label("", 14, HudLayout.neon_primary().lightened(0.28))
+	circuit_facts.add_theme_font_override("font", HudLayout.italic_font(700, -0.08))
 	_anchor_rect(circuit_facts, 0.045, 0.88, 0.555, 0.95)
 	circuit_facts.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	menu_safe_frame.add_child(circuit_facts)
@@ -2710,18 +2797,20 @@ func _update_menu_car_summary() -> void:
 	_refresh_car_setup()
 
 func _build_menu_header() -> void:
+	var neon := HudLayout.neon_primary()
+	var hot := HudLayout.neon_hot()
 	menu_header = HBoxContainer.new()
 	menu_header.name = "MenuHeader"
 	menu_header.set_anchors_preset(Control.PRESET_TOP_WIDE)
 	menu_header.offset_left = 58
-	menu_header.offset_top = 52
+	menu_header.offset_top = 48
 	menu_header.offset_right = -58
-	menu_header.offset_bottom = 100
+	menu_header.offset_bottom = 98
 	menu_header.add_theme_constant_override("separation", 16) # room either side of the rule before MAIN MENU
 	menu_safe_frame.add_child(menu_header)
 
 	var tabs := HBoxContainer.new()
-	tabs.add_theme_constant_override("separation", 0)
+	tabs.add_theme_constant_override("separation", 2)
 	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	menu_header.add_child(tabs)
 	_menu_tab(tabs, "Set Up", _show_setup_page)
@@ -2732,14 +2821,15 @@ func _build_menu_header() -> void:
 
 	var player := Label.new()
 	player.text = "PLAYER 1  │  YOU"
-	player.add_theme_font_size_override("font_size", 21)
-	player.add_theme_color_override("font_color", MUTED)
+	player.add_theme_font_override("font", HudLayout.italic_font(800, -0.10))
+	player.add_theme_font_size_override("font_size", 19)
+	player.add_theme_color_override("font_color", neon.lightened(0.32))
 	player.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	menu_header.add_child(player)
 
 	var sep := ColorRect.new()
-	sep.custom_minimum_size = Vector2(2, 42)
-	sep.color = CmrStyle.DIM
+	sep.custom_minimum_size = Vector2(2, 36)
+	sep.color = Color(neon, 0.45)
 	sep.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	menu_header.add_child(sep)
 
@@ -2747,25 +2837,27 @@ func _build_menu_header() -> void:
 	back_btn.text = "MAIN MENU (Esc)"
 	back_btn.flat = true
 	back_btn.focus_mode = Control.FOCUS_NONE
-	back_btn.add_theme_font_override("font", CmrStyle.font(400))
+	back_btn.add_theme_font_override("font", HudLayout.italic_font(800, -0.10))
 	back_btn.add_theme_font_size_override("font_size", 18)
-	back_btn.add_theme_color_override("font_color", ACCENT)
+	back_btn.add_theme_color_override("font_color", hot)
+	back_btn.add_theme_color_override("font_hover_color", Color.WHITE)
 	back_btn.pressed.connect(_show_home)
 	menu_header.add_child(back_btn)
 	menu_back_button = back_btn
 
-## A CMR header tab: plain text, a hairline between tabs, the current page picked out in orange.
+## A neon header tab: bold slanted type, a cyan hairline between tabs, the active page glowing with a hot accent bar.
 func _menu_tab(parent: Control, title: String, callback: Callable) -> void:
+	var neon := HudLayout.neon_primary()
 	var tab := Button.new()
-	tab.text = title
+	tab.text = title.to_upper()
 	tab.flat = true
 	tab.focus_mode = Control.FOCUS_NONE
 	tab.custom_minimum_size = Vector2(0, 46)
-	tab.add_theme_font_override("font", CmrStyle.font(250))
-	tab.add_theme_font_size_override("font_size", 27)
+	tab.add_theme_font_override("font", HudLayout.italic_font(800, -0.12))
+	tab.add_theme_font_size_override("font_size", 23)
 	tab.add_theme_color_override("font_color", CmrStyle.DIM)
-	tab.add_theme_color_override("font_hover_color", CmrStyle.TEXT)
-	tab.add_theme_color_override("font_pressed_color", ACCENT)
+	tab.add_theme_color_override("font_hover_color", neon)
+	tab.add_theme_color_override("font_pressed_color", Color.WHITE)
 	var clear := StyleBoxEmpty.new()
 	clear.content_margin_left = 12
 	clear.content_margin_right = 12
@@ -2777,8 +2869,8 @@ func _menu_tab(parent: Control, title: String, callback: Callable) -> void:
 		tab.pressed.connect(callback)
 	if title != TOP_MENU_TABS[-1]:
 		var divider := ColorRect.new()
-		divider.custom_minimum_size = Vector2(2, 42)
-		divider.color = CmrStyle.DIM
+		divider.custom_minimum_size = Vector2(2, 32)
+		divider.color = Color(neon, 0.35)
 		divider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		parent.add_child(divider)
 		menu_tab_dividers[title] = divider
@@ -2796,16 +2888,20 @@ func _build_repair_page() -> void:
 	column.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	column.add_theme_constant_override("separation", 2)
 	repair_panel.add_child(column)
-	var title := _label("TIME REMAINING", 26, CmrStyle.TEXT)
+	var title := _label("TIME REMAINING", 24, HudLayout.neon_primary())
+	title.add_theme_font_override("font", HudLayout.italic_font(900, -0.12))
 	column.add_child(title)
-	repair_note = _label("%d minute time allocation" % _service_allocation(), 18, MUTED)
+	repair_note = _label("%d minute time allocation" % _service_allocation(), 16, MUTED)
 	column.add_child(repair_note)
 	var time_row := HBoxContainer.new()
 	time_row.alignment = BoxContainer.ALIGNMENT_BEGIN
 	time_row.add_theme_constant_override("separation", 8)
 	column.add_child(time_row)
-	var time_left := _label("60:00", 70, CmrStyle.TEXT)
-	time_left.add_theme_font_override("font", CmrStyle.digits())
+	var time_left := _label("60:00", 68, Color.WHITE)
+	time_left.add_theme_font_override("font", HudLayout.italic_digits(-0.14))
+	if CmrStyle.skin != "ps1":
+		time_left.add_theme_color_override("font_outline_color", Color(HudLayout.neon_primary(), 0.35))
+		time_left.add_theme_constant_override("outline_size", 6)
 	time_row.add_child(time_left)
 	repair_clock = time_left
 	var minutes := _label("(mins)", 21, MUTED)
@@ -2863,7 +2959,13 @@ func _build_repair_page() -> void:
 	art_frame.anchor_bottom = 0.72
 	var art_style := StyleBoxFlat.new()
 	art_style.bg_color = CmrStyle.PAPER
+	art_style.border_color = Color(HudLayout.neon_primary(), 0.72)
+	art_style.set_border_width_all(2)
+	art_style.set_corner_radius_all(0 if CmrStyle.skin == "ps1" else 4)
 	art_style.set_content_margin_all(0)
+	if CmrStyle.skin != "ps1":
+		art_style.shadow_color = Color(HudLayout.neon_primary(), 0.28)
+		art_style.shadow_size = 10
 	art_frame.add_theme_stylebox_override("panel", art_style)
 	repair_details.add_child(art_frame)
 	var art: Control = MENU_REPAIR_ART.new()
@@ -2871,20 +2973,22 @@ func _build_repair_page() -> void:
 	art_frame.add_child(art)
 	repair_art = art
 
-	repair_part_name = _label("BODY", 17, MUTED)
+	repair_part_name = _label("BODY", 17, HudLayout.neon_primary())
+	repair_part_name.add_theme_font_override("font", HudLayout.italic_font(900, -0.12))
 	repair_part_name.anchor_left = 0.38
 	repair_part_name.anchor_top = 0.54
 	repair_part_name.anchor_right = 0.56
 	repair_part_name.anchor_bottom = 0.575
 	repair_details.add_child(repair_part_name)
-	var replacement_title := _label("Replacement Time", 24, CmrStyle.TEXT)
+	var replacement_title := _label("Replacement Time", 22, CmrStyle.TEXT)
+	replacement_title.add_theme_font_override("font", HudLayout.italic_font(800, -0.10))
 	replacement_title.anchor_left = 0.38
 	replacement_title.anchor_top = 0.58
 	replacement_title.anchor_right = 0.57
 	replacement_title.anchor_bottom = 0.625
 	repair_details.add_child(replacement_title)
-	repair_time_label = _label("08:00", 62, CmrStyle.TEXT)
-	repair_time_label.add_theme_font_override("font", CmrStyle.digits())
+	repair_time_label = _label("08:00", 60, Color.WHITE)
+	repair_time_label.add_theme_font_override("font", HudLayout.italic_digits(-0.14))
 	repair_time_label.anchor_left = 0.38
 	repair_time_label.anchor_top = 0.625
 	repair_time_label.anchor_right = 0.57
@@ -2907,10 +3011,10 @@ func _build_repair_page() -> void:
 	damage_bar.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	damage_bar.stretch_mode = TextureRect.STRETCH_SCALE
 	var damage_gradient := Gradient.new()
-	damage_gradient.set_color(0, CmrStyle.VIOLET)
-	damage_gradient.add_point(0.45, CmrStyle.PURPLE)
-	damage_gradient.add_point(0.72, CmrStyle.ORANGE_SOFT)
-	damage_gradient.set_color(1, CmrStyle.ORANGE)
+	damage_gradient.set_color(0, HudLayout.neon_primary())
+	damage_gradient.add_point(0.45, CmrStyle.VIOLET)
+	damage_gradient.add_point(0.75, HudLayout.neon_hot())
+	damage_gradient.set_color(1, CmrStyle.RED)
 	var damage_texture := GradientTexture2D.new()
 	damage_texture.gradient = damage_gradient
 	damage_bar.texture = damage_texture
@@ -3020,10 +3124,20 @@ func _select_repair_part(index: int) -> void:
 	repair_selected = clampi(index, 0, repair_rows.size() - 1)
 	var names: Array = Service.PARTS.keys()
 	var left := _service_left()
+	var neon := HudLayout.neon_primary()
+	var hot := HudLayout.neon_hot()
 	for i in repair_rows.size():
-		var style := CmrStyle.box(ACCENT if i == repair_selected else CmrStyle.FIELD_DIM, Color.TRANSPARENT, 14, 4)
+		var sel := i == repair_selected
+		var style := HudLayout.neon_box(hot if sel else Color(neon, 0.30), 0.92 if sel else 0.65, 6 if sel else 3, 0.0, 10 if sel else 0, 14.0, 4.0)
+		style.bg_color = neon if sel else HudLayout.glass_plate(0.68)
+		var hov := HudLayout.neon_box(neon, 0.85, 5, 0.0, 6, 14.0, 4.0)
+		hov.bg_color = HudLayout.glass_plate(0.85)
 		repair_rows[i].add_theme_stylebox_override("normal", style)
-		repair_rows[i].add_theme_stylebox_override("hover", style if i == repair_selected else CmrStyle.box(CmrStyle.FIELD, Color.TRANSPARENT, 14, 4))
+		repair_rows[i].add_theme_stylebox_override("hover", style if sel else hov)
+		repair_rows[i].add_theme_font_override("font", HudLayout.italic_font(900 if sel else 700, -0.10))
+		var fg := CmrStyle.INK if sel else CmrStyle.TEXT
+		for ck in ["font_color", "font_hover_color", "font_pressed_color"]:
+			repair_rows[i].add_theme_color_override(ck, fg)
 		repair_row_rules[i].color = Color(0, 0, 0, 0)
 		var sev_i := _part_severity(names[i])
 		repair_marks[i].state = "ok" if sev_i < 0.01 else ("bad" if sev_i >= 0.5 else "warning")
@@ -3080,16 +3194,18 @@ func _select_repair_part(index: int) -> void:
 ## CMR 2.0-style title screen: a column of slanted bars running in from the left edge, the lit one in
 ## lime, with the car turning on its showroom stand to the right.
 func _build_home_screen() -> void:
+	var neon := HudLayout.neon_primary()
+	var hot := HudLayout.neon_hot()
 	menu_home = Control.new()
 	menu_home.name = "MainMenu"
 	menu_home.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	menu_safe_frame.add_child(menu_home)
 
 	menu_home_art = MENU_TRACK_ART.new()
-	menu_home_art.anchor_left = 0.08
-	menu_home_art.anchor_top = 0.14
-	menu_home_art.anchor_right = 0.92
-	menu_home_art.anchor_bottom = 0.75
+	menu_home_art.anchor_left = 0.06
+	menu_home_art.anchor_top = 0.13
+	menu_home_art.anchor_right = 0.94
+	menu_home_art.anchor_bottom = 0.74
 	menu_home_art.set_track(Race.get_track(_menu_track_key()))
 	menu_home_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	menu_home.add_child(menu_home_art)
@@ -3097,24 +3213,57 @@ func _build_home_screen() -> void:
 	var top := HBoxContainer.new()
 	top.set_anchors_preset(Control.PRESET_TOP_WIDE)
 	top.offset_left = 58
-	top.offset_top = 52
+	top.offset_top = 44
 	top.offset_right = -58
-	top.offset_bottom = 100
-	top.add_theme_constant_override("separation", 0)
+	top.offset_bottom = 104
+	top.add_theme_constant_override("separation", 14)
 	menu_home.add_child(top)
-	var title := _label("Main Menu", 27, CmrStyle.TEXT)
+	var brand_bar := ColorRect.new()
+	brand_bar.color = hot
+	brand_bar.custom_minimum_size = Vector2(6, 40)
+	brand_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	top.add_child(brand_bar)
+	var title := _label("SEICENTO CUP", 34, Color.WHITE)
+	title.add_theme_font_override("font", HudLayout.italic_font(900, -0.15))
+	if CmrStyle.skin != "ps1":
+		title.add_theme_color_override("font_outline_color", Color(neon, 0.36))
+		title.add_theme_constant_override("outline_size", 6)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	top.add_child(title)
-	menu_home_track = _label("", 24, MUTED)
+	var track_plate := PanelContainer.new()
+	track_plate.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var tsb := HudLayout.neon_box(neon, 0.78, 4, -0.10, 8, 16.0, 6.0)
+	tsb.bg_color = HudLayout.glass_plate(0.80)
+	track_plate.add_theme_stylebox_override("panel", tsb)
+	top.add_child(track_plate)
+	menu_home_track = _label("", 18, neon.lightened(0.32))
+	menu_home_track.add_theme_font_override("font", HudLayout.italic_font(800, -0.10))
 	menu_home_track.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	top.add_child(menu_home_track)
+	track_plate.add_child(menu_home_track)
 
-	# the strip scrolls sideways so the selected word always sits at the same place
+	# the strip scrolls sideways over a sleek dark-glass neon bar so the selected word always sits at the same place
+	var strip_bg := Panel.new()
+	strip_bg.name = "HomeStripGlass"
+	strip_bg.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	strip_bg.anchor_top = 0.76
+	strip_bg.anchor_bottom = 0.905
+	strip_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sbg := StyleBoxFlat.new()
+	sbg.bg_color = HudLayout.glass_plate(0.82)
+	sbg.border_color = neon
+	sbg.border_width_top = 2
+	sbg.border_width_bottom = 2
+	if CmrStyle.skin != "ps1":
+		sbg.shadow_color = Color(neon, 0.24)
+		sbg.shadow_size = 14
+	strip_bg.add_theme_stylebox_override("panel", sbg)
+	menu_home.add_child(strip_bg)
+
 	var clip := Control.new()
 	clip.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
-	clip.anchor_top = 0.77
-	clip.anchor_bottom = 0.9
+	clip.anchor_top = 0.765
+	clip.anchor_bottom = 0.90
 	clip.clip_contents = true
 	menu_home.add_child(clip)
 	menu_home_strip = HBoxContainer.new()
@@ -3125,8 +3274,8 @@ func _build_home_screen() -> void:
 		var i := k % FRONT_MENU.size()
 		if k > 0:
 			var divider := ColorRect.new()
-			divider.custom_minimum_size = Vector2(2, 96)
-			divider.color = Color(CmrStyle.TEXT, 0.75)
+			divider.custom_minimum_size = Vector2(2, 76)
+			divider.color = Color(neon, 0.42)
 			divider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			menu_home_strip.add_child(divider)
 		var item: Dictionary = FRONT_MENU[i]
@@ -3135,13 +3284,13 @@ func _build_home_screen() -> void:
 		button.flat = true
 		button.focus_mode = Control.FOCUS_NONE
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		button.custom_minimum_size.y = 112
-		button.add_theme_font_override("font", CmrStyle.font(250))
-		button.add_theme_font_size_override("font_size", 82)
-		button.add_theme_color_override("font_hover_color", CmrStyle.TEXT)
+		button.custom_minimum_size.y = 110
+		button.add_theme_font_override("font", HudLayout.italic_font(900, -0.15))
+		button.add_theme_font_size_override("font_size", 74)
+		button.add_theme_color_override("font_hover_color", neon)
 		var clear := StyleBoxEmpty.new()
-		clear.content_margin_left = 22
-		clear.content_margin_right = 22
+		clear.content_margin_left = 26
+		clear.content_margin_right = 26
 		for st in ["normal", "hover", "pressed", "hover_pressed", "focus"]:
 			button.add_theme_stylebox_override(st, clear)
 		button.pressed.connect(_home_item_pressed.bind(i))
@@ -3149,12 +3298,13 @@ func _build_home_screen() -> void:
 	home_phys = FRONT_MENU.size() + home_menu_index
 	menu_home_strip.size = menu_home_strip.get_combined_minimum_size()
 
-	# the one-line hint under the strip, in CMR's highlight colour
-	menu_home_desc = _label("", 18, CmrStyle.ORANGE_SOFT)
+	# the one-line hint under the strip, in neon boost accent
+	menu_home_desc = _label("", 17, HudLayout.neon_boost())
+	menu_home_desc.add_theme_font_override("font", HudLayout.italic_font(800, -0.10))
 	menu_home_desc.anchor_left = 0.16
-	menu_home_desc.anchor_top = 0.905
+	menu_home_desc.anchor_top = 0.912
 	menu_home_desc.anchor_right = 0.92
-	menu_home_desc.anchor_bottom = 0.96
+	menu_home_desc.anchor_bottom = 0.965
 	menu_home_desc.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	menu_home.add_child(menu_home_desc)
 	get_viewport().size_changed.connect(_layout_home_strip)
@@ -3383,7 +3533,56 @@ func _apply_ui_skin() -> void:
 		return
 	CmrStyle.apply_skin(name, self)
 	_lit_caption_color = CmrStyle.recolor(_lit_caption_color)
+	var neon := HudLayout.neon_primary()
+	var is_ps1 := CmrStyle.skin == "ps1"
+	for p in [setup_panel, advanced_panel, car_panel, strategy_panel, options_panel]:
+		if is_instance_valid(p):
+			p.add_theme_stylebox_override("panel", _menu_panel_style())
+	for p in [pause_panel, result_panel]:
+		if is_instance_valid(p):
+			p.add_theme_stylebox_override("panel", _sheet_style())
+	_restyle_neon_fonts(menu_safe_frame, is_ps1)
+	if is_instance_valid(pause_panel):
+		_restyle_neon_fonts(pause_panel, is_ps1)
+	if is_instance_valid(menu_home_desc):
+		menu_home_desc.add_theme_color_override("font_color", HudLayout.neon_boost())
+		menu_home_desc.add_theme_font_override("font", HudLayout.italic_font(800, -0.10))
+	if is_instance_valid(menu_home_strip):
+		_home_select(home_menu_index, false)
+	if is_instance_valid(menu_header) and menu_tab_index >= 0 and menu_tab_index < TOP_MENU_TABS.size():
+		_select_menu_tab(TOP_MENU_TABS[menu_tab_index])
+	if is_instance_valid(menu_car_rule):
+		menu_car_rule.color = Color(neon, 0.78)
+	if is_instance_valid(loading_screen):
+		loading_screen.restyle()
 	_refresh_prompts()
+
+## Refreshes HudLayout.italic_font() and glow shadows on menu controls after a live retro-skin switch.
+func _restyle_neon_fonts(node: Node, is_ps1: bool) -> void:
+	if not is_instance_valid(node) or node is SubViewport or node is Node3D:
+		return
+	if node is Control:
+		var c := node as Control
+		if c.has_theme_font_override("font"):
+			var f := c.get_theme_font("font")
+			if f is FontVariation and (f as FontVariation).variation_transform.y.x != 0.0:
+				c.add_theme_font_override("font", HudLayout.italic_font(800, (f as FontVariation).variation_transform.y.x))
+			elif not is_ps1 and (c is Button or (c is Label and c.get_theme_font_size("font_size") >= 22)):
+				c.add_theme_font_override("font", HudLayout.italic_font(800, -0.12))
+			elif is_ps1:
+				c.add_theme_font_override("font", CmrStyle.font(700))
+		if c.has_theme_constant_override("outline_size"):
+			c.add_theme_constant_override("outline_size", 0 if is_ps1 else 5)
+		for st in ["normal", "hover", "pressed", "hover_pressed", "panel"]:
+			if c.has_theme_stylebox_override(st):
+				var sb := c.get_theme_stylebox(st)
+				if sb is StyleBoxFlat:
+					var sf := sb as StyleBoxFlat
+					if is_ps1:
+						sf.shadow_size = 0
+						sf.skew = Vector2.ZERO
+	for child in node.get_children():
+		_restyle_neon_fonts(child, is_ps1)
 
 func _on_codriver_voice_toggled(enabled: bool) -> void:
 	codriver_voice = enabled
@@ -3770,9 +3969,34 @@ func _home_select(index: int, animate := true) -> void:
 	home_menu_index = logical
 	if not is_instance_valid(menu_home_strip) or menu_home_strip.get_child_count() == 0:
 		return
+	var neon := HudLayout.neon_primary()
+	var hot := HudLayout.neon_hot()
+	var is_ps1 := CmrStyle.skin == "ps1"
+	var lit_sb := StyleBoxFlat.new()
+	lit_sb.bg_color = Color(hot, 0.14)
+	lit_sb.border_color = hot
+	lit_sb.border_width_bottom = 4
+	lit_sb.content_margin_left = 26
+	lit_sb.content_margin_right = 26
+	if not is_ps1:
+		lit_sb.shadow_color = Color(hot, 0.45)
+		lit_sb.shadow_size = 10
+	var dim_sb := StyleBoxEmpty.new()
+	dim_sb.content_margin_left = 26
+	dim_sb.content_margin_right = 26
 	for k in n * 3:
 		var button: Button = menu_home_strip.get_child(k * 2)
-		button.add_theme_color_override("font_color", ACCENT if k % n == home_menu_index else CmrStyle.DIM)
+		var is_sel := k % n == home_menu_index
+		button.add_theme_font_override("font", HudLayout.italic_font(900 if is_sel else 700, -0.15))
+		button.add_theme_color_override("font_color", Color.WHITE if is_sel else Color(CmrStyle.TEXT, 0.36))
+		button.add_theme_color_override("font_hover_color", neon)
+		for st in ["normal", "hover", "pressed", "hover_pressed", "focus"]:
+			button.add_theme_stylebox_override(st, lit_sb if is_sel else dim_sb)
+		if is_sel and not is_ps1:
+			button.add_theme_color_override("font_outline_color", Color(hot, 0.48))
+			button.add_theme_constant_override("outline_size", 6)
+		else:
+			button.add_theme_constant_override("outline_size", 0)
 	menu_home_desc.text = "%s        %s" % [FRONT_MENU[home_menu_index].desc, _hint("home")]
 	var target_x := _home_target_x()
 	if home_tween and home_tween.is_running():
@@ -3841,9 +4065,29 @@ func _scroll_to_control(control: Control) -> void:
 func _select_menu_tab(title: String) -> void:
 	menu_tab_index = maxi(0, TOP_MENU_TABS.find(title))
 	_refresh_service_tab()
+	var neon := HudLayout.neon_primary()
+	var hot := HudLayout.neon_hot()
+	var is_ps1 := CmrStyle.skin == "ps1"
+	var active_sb := StyleBoxFlat.new()
+	active_sb.bg_color = Color(hot, 0.14)
+	active_sb.border_color = hot
+	active_sb.border_width_bottom = 3
+	active_sb.content_margin_left = 12
+	active_sb.content_margin_right = 12
+	if not is_ps1:
+		active_sb.shadow_color = Color(hot, 0.45)
+		active_sb.shadow_size = 8
+	var idle_sb := StyleBoxEmpty.new()
+	idle_sb.content_margin_left = 12
+	idle_sb.content_margin_right = 12
 	for tab_name in TOP_MENU_TABS:
 		var button: Button = menu_tab_buttons[tab_name]
-		button.add_theme_color_override("font_color", ACCENT if tab_name == title else CmrStyle.DIM)
+		var on: bool = (tab_name == title)
+		button.add_theme_font_override("font", HudLayout.italic_font(900 if on else 700, -0.12))
+		button.add_theme_color_override("font_color", Color.WHITE if on else CmrStyle.DIM)
+		button.add_theme_color_override("font_hover_color", neon)
+		for st in ["normal", "hover", "pressed", "hover_pressed", "focus"]:
+			button.add_theme_stylebox_override(st, active_sb if on else idle_sb)
 
 func _show_home() -> void:
 	active_menu_page = "home"
@@ -4078,12 +4322,12 @@ func _build_hud() -> void:
 
 func _build_pause_menu() -> void:
 	pause_dim = ColorRect.new()
-	pause_dim.color = Color(0, 0, 0, 0.6)
+	pause_dim.color = Color(0.02, 0.03, 0.09, 0.72)
 	pause_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	pause_dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	pause_dim.hide()
 	add_child(pause_dim)
-	pause_panel = _sheet(Vector2(380, 0))
+	pause_panel = _sheet(Vector2(400, 0))
 	pause_panel.anchor_left = 0.5
 	pause_panel.anchor_right = 0.5
 	pause_panel.anchor_top = 0.5
@@ -4092,9 +4336,14 @@ func _build_pause_menu() -> void:
 	pause_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
 	add_child(pause_panel)
 	var col := _column(pause_panel, 10)
-	var title := _label("PAUSED", 28, INK)
+	var title := _label("PAUSED", 34, Color.WHITE)
+	title.add_theme_font_override("font", HudLayout.italic_font(900, -0.14))
+	if CmrStyle.skin != "ps1":
+		title.add_theme_color_override("font_outline_color", Color(HudLayout.neon_primary(), 0.42))
+		title.add_theme_constant_override("outline_size", 6)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(title)
+	_menu_rule(col)
 	for spec in [["RESUME", "resume"], ["RESTART RACE", "restart"], ["RETIRE & SEE RESULTS", "retire"], ["QUIT TO MENU", "menu"]]:
 		var b := _button(spec[0], ACCENT if spec[1] == "resume" else CmrStyle.FIELD)
 		b.custom_minimum_size = Vector2(340, 44)
@@ -4500,6 +4749,7 @@ func _set_up_race() -> void:
 		return
 	await _loading_progress(0.6)
 	world_view.mods = race.mods
+	world_view.one_make = is_championship_mode and settings.car_class == "stock"
 	world_view.set_race(race)
 	lap_records = LapRecords.new(race)
 	lap_ghost.start(world_view, lap_records)
@@ -4617,7 +4867,9 @@ func _show_results() -> void:
 		if r.car.is_player:
 			me = r
 	var fast = race.fastest
-	var title := "DNF — %s" % me.car.dnf_reason if me.car.dnf and not me.car.dnf_reason.begins_with("Knocked out") else "P%d OF %d" % [me.pos, rows.size()]
+	var is_dnf: bool = me.car.dnf and not me.car.dnf_reason.begins_with("Knocked out")
+	var badge_txt := "DNF" if is_dnf else "P%d" % me.pos
+	var title := "DNF — %s" % me.car.dnf_reason if is_dnf else "P%d OF %d" % [me.pos, rows.size()]
 	var laps: int = race.winner.finish_lap if race.winner else race.R
 	var sub := "%s · %s%d lap%s · %s" % [race.track.name, ("%s · " % _fmt_hours(race.duration / 3600.0)) if race.timed else "", laps,
 		"" if laps == 1 else "s",
@@ -4626,7 +4878,8 @@ func _show_results() -> void:
 		sub += " · Finish projected from the field's pace"
 	if fast:
 		sub += " · Fastest lap %s %s" % [fast.car.name, Race.fmt_time(fast.t)]
-	col.add_child(_label("CHEQUERED FLAG · %s" % title, 26, INK))
+	var hero_accent := CmrStyle.RED if is_dnf else (HudLayout.neon_boost() if me.pos == 1 else (HudLayout.neon_primary() if me.pos <= 3 else HudLayout.neon_hot()))
+	_result_hero(col, badge_txt, "CHEQUERED FLAG · %s" % title, sub, hero_accent)
 	if is_campaign_mode and me.car.dnf:
 		var dnf_res := CampaignData.record_result(campaign_stage_index, 999) # a retirement counts as a failed try
 		col.add_child(_label("OBJECTIVE FAILED — you did not finish. Retry to advance!", 14, DANGER))
@@ -4648,9 +4901,6 @@ func _show_results() -> void:
 			var req_pos: int = CampaignData.get_stage(campaign_stage_index).target_pos
 			c_box.add_child(_label("OBJECTIVE FAILED — Finished P%d (Target: P%d or better). Retry to advance!" % [me.pos, req_pos], 14, DANGER))
 		c_box.add_child(_label(fan_line, 13, CmrStyle.AMBER))
-	var sub_label := _label(sub, 13, MUTED)
-	sub_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	col.add_child(sub_label)
 	_add_record_note(col, race)
 	if race.brain:
 		var learned := race.brain.progress().filter(func(x): return x.gain > 0.05)
@@ -4691,11 +4941,13 @@ func _show_results() -> void:
 		keep.append(k)
 	headers = keep.map(func(k: int) -> Variant: return headers[k])
 	widths = keep.map(func(k: int) -> Variant: return widths[k])
-	# classification as CMR-style slanted bars: a dark header strip, light rows, the player's in lime
+	# classification as glowing neon standings bars: slanted cyan header, dark-glass rows, glowing player bar
 	var table := VBoxContainer.new()
 	table.add_theme_constant_override("separation", 3)
 	col.add_child(table)
-	table.add_child(_result_row(headers, widths, CmrStyle.box(Color(0, 0, 0, 0.25), Color.TRANSPARENT, 14, 3), CmrStyle.ORANGE_SOFT, 12))
+	var neon := HudLayout.neon_primary()
+	var hot := HudLayout.neon_hot()
+	table.add_child(_result_row(headers, widths, _result_header_style(), neon, 12, null, true, false))
 	for r in rows:
 		var car: RaceCar = r.car
 		var time_txt: String = Race.fmt_time(r.total) if r.pos == 1 and r.total != null else (r.gap if r.gap != "" else ("" if r.status != "" else "—"))
@@ -4711,10 +4963,10 @@ func _show_results() -> void:
 		if is_champ:
 			cells.append("+%d" % _round_points(r))
 		cells = keep.map(func(k: int) -> Variant: return cells[k])
-		var fill: Color = CmrStyle.ORANGE if car.is_player else (CmrStyle.FIELD if r.pos % 2 == 1 else CmrStyle.FIELD_DIM)
-		var row := _result_row(cells, widths, CmrStyle.box(fill, Color.TRANSPARENT, 14, 3), CmrStyle.INK, 15, car.color)
+		var row_ink := CmrStyle.INK if car.is_player else CmrStyle.TEXT
+		var row := _result_row(cells, widths, _result_row_style(car.is_player, r.pos % 2 == 1), row_ink, 15, car.color, false, car.is_player)
 		if fast and fast.car == car and keep.has(5):
-			(row.get_child(0).get_child(keep.find(5)) as Label).add_theme_color_override("font_color", CmrStyle.PLUM)
+			(row.get_child(0).get_child(keep.find(5)) as Label).add_theme_color_override("font_color", CmrStyle.INK if car.is_player else hot)
 		table.add_child(row)
 
 	var buttons := HBoxContainer.new()
@@ -4797,8 +5049,8 @@ func _show_quali_sheet(qrace: Race, rows: Array, simulated: bool) -> void:
 
 	var col := _column(result_scroll, 8)
 	col.custom_minimum_size.x = 1060
+	var badge_txt := "P%d" % me.pos if me.time != null else "—"
 	var title := "P%d OF %d" % [me.pos, rows.size()] if me.time != null else "NO TIME SET — YOU START FROM THE BACK"
-	col.add_child(_label("QUALIFYING · %s" % title, 26, INK))
 	var sub := "%s · Round %d of %d" % [qrace.track.name, _next_round() + 1, _calendar().size()]
 	if simulated:
 		sub += " · Your co-driver ran the laps"
@@ -4808,9 +5060,8 @@ func _show_quali_sheet(qrace: Race, rows: Array, simulated: bool) -> void:
 	var pole: Dictionary = rows[0]
 	if pole.time != null:
 		sub += " · Pole: %s %s" % [pole.name, Race.fmt_time(pole.time)]
-	var sub_label := _label(sub, 13, MUTED)
-	sub_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	col.add_child(sub_label)
+	var q_accent := HudLayout.neon_boost() if me.time != null and me.pos == 1 else (HudLayout.neon_primary() if me.time != null else HudLayout.neon_hot())
+	_result_hero(col, badge_txt, "QUALIFYING · %s" % title, sub, q_accent)
 	_add_record_note(col, qrace)
 
 	# data first: position, driver, time, gap (the speed is a muted last column); a long field scrolls
@@ -4854,16 +5105,96 @@ func _fit_result_panel(col: Control) -> void:
 	result_panel.offset_top = -h * 0.5
 	result_panel.offset_bottom = h * 0.5
 
-## One classification line: fixed-width cells in a slanted bar, with an optional car-colour swatch
+## Glowing neon results header: huge slanted finishing position badge beside the title and session summary.
+func _result_hero(col: VBoxContainer, badge_text: String, heading: String, subtitle: String, accent: Color) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 18)
+	col.add_child(row)
+	var pill := PanelContainer.new()
+	pill.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var sb := HudLayout.neon_box(accent, 0.94, 6, -0.14, 14, 18.0, 6.0)
+	sb.bg_color = HudLayout.glass_plate(0.92)
+	pill.add_theme_stylebox_override("panel", sb)
+	var pos_lbl := Label.new()
+	pos_lbl.text = badge_text
+	pos_lbl.add_theme_font_override("font", HudLayout.italic_digits(-0.15))
+	pos_lbl.add_theme_font_size_override("font_size", 52)
+	pos_lbl.add_theme_color_override("font_color", Color.WHITE)
+	if CmrStyle.skin != "ps1":
+		pos_lbl.add_theme_color_override("font_outline_color", Color(accent, 0.55))
+		pos_lbl.add_theme_constant_override("outline_size", 8)
+	pos_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pos_lbl.custom_minimum_size.x = 88
+	pill.add_child(pos_lbl)
+	row.add_child(pill)
+	var text_col := VBoxContainer.new()
+	text_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	text_col.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	text_col.add_theme_constant_override("separation", 3)
+	row.add_child(text_col)
+	var title_lbl := _label(heading, 26, Color.WHITE)
+	title_lbl.add_theme_font_override("font", HudLayout.italic_font(900, -0.13))
+	if CmrStyle.skin != "ps1":
+		title_lbl.add_theme_color_override("font_outline_color", Color(accent, 0.34))
+		title_lbl.add_theme_constant_override("outline_size", 5)
+	text_col.add_child(title_lbl)
+	var sub_label := _label(subtitle, 13, MUTED)
+	sub_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	text_col.add_child(sub_label)
+	_menu_rule(col)
+
+func _result_header_style() -> StyleBoxFlat:
+	var neon := HudLayout.neon_primary()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = HudLayout.glass_plate(0.95)
+	sb.border_color = neon
+	sb.border_width_bottom = 2
+	sb.border_width_left = 4
+	sb.content_margin_left = 14.0
+	sb.content_margin_right = 14.0
+	sb.content_margin_top = 4.0
+	sb.content_margin_bottom = 4.0
+	return sb
+
+func _result_row_style(is_player: bool, even: bool) -> StyleBoxFlat:
+	var neon := HudLayout.neon_primary()
+	var hot := HudLayout.neon_hot()
+	var is_ps1 := CmrStyle.skin == "ps1"
+	var sb := StyleBoxFlat.new()
+	if is_player:
+		sb.bg_color = neon
+		sb.border_color = hot
+		sb.border_width_left = 6
+		sb.border_width_top = 1
+		sb.border_width_right = 1
+		sb.border_width_bottom = 1
+		if not is_ps1:
+			sb.shadow_color = Color(neon, 0.36)
+			sb.shadow_size = 8
+	else:
+		sb.bg_color = HudLayout.glass_plate(0.88 if even else 0.72)
+		sb.border_color = Color(neon, 0.24)
+		sb.border_width_left = 3
+		sb.border_width_bottom = 1
+	sb.set_corner_radius_all(0 if is_ps1 else 2)
+	sb.content_margin_left = 14.0
+	sb.content_margin_right = 14.0
+	sb.content_margin_top = 3.0
+	sb.content_margin_bottom = 3.0
+	return sb
+
+## One classification line: fixed-width cells in a neon bar, with an optional car-colour swatch
 ## before the driver's name (cell 2).
-func _result_row(cells: Array, widths: Array, style: StyleBox, ink: Color, font_size: int, swatch = null) -> PanelContainer:
+func _result_row(cells: Array, widths: Array, style: StyleBox, ink: Color, font_size: int, swatch = null, header := false, highlight := false) -> PanelContainer:
 	var bar := PanelContainer.new()
 	bar.add_theme_stylebox_override("panel", style)
 	var line := HBoxContainer.new()
 	line.add_theme_constant_override("separation", 10)
 	bar.add_child(line)
+	var cell_font := HudLayout.italic_font(800, -0.10) if header else (HudLayout.italic_font(800, -0.08) if highlight else CmrStyle.font(600))
 	for k in cells.size():
 		var l := _label(str(cells[k]), font_size, ink)
+		l.add_theme_font_override("font", cell_font)
 		l.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0))
 		l.custom_minimum_size.x = widths[k]
 		l.clip_text = true
@@ -4903,7 +5234,8 @@ func _render_championship_standings(col: VBoxContainer) -> void:
 	var heading := "STANDINGS AFTER ROUND %d OF %d" % [round_idx + 1, _calendar().size()]
 	if round_idx >= _calendar().size() - 1 and not list.is_empty():
 		heading = "YOU ARE THE CHAMPION!" if list[0].get("is_player", false) else "CHAMPION: %s" % str(list[0].name).to_upper()
-	var div := _label(heading, 16, ACCENT)
+	var div := _label(heading, 17, HudLayout.neon_primary())
+	div.add_theme_font_override("font", HudLayout.italic_font(900, -0.12))
 	div.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(div)
 	var table := ResultTable.new()
@@ -5866,15 +6198,27 @@ func _quit_race() -> void:
 		_record_rally_stage() # walking away from a stage is retiring from it: classified at the superrally time
 	_return_to_setup()
 
+func _menu_panel_style() -> StyleBoxFlat:
+	var sb := HudLayout.neon_box(HudLayout.neon_primary(), 0.84, 4, 0.0, 12, 18.0, 14.0)
+	sb.bg_color = HudLayout.glass_plate(0.84)
+	return sb
+
+func _sheet_style() -> StyleBoxFlat:
+	var sb := HudLayout.neon_box(HudLayout.neon_primary(), 0.94, 6, 0.0, 18, 24.0, 20.0)
+	sb.bg_color = HudLayout.glass_plate(0.94)
+	return sb
+
 func _panel(min_size := Vector2.ZERO) -> PanelContainer:
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size = min_size
+	panel.add_theme_stylebox_override("panel", _menu_panel_style())
 	return panel
 
-## A panel with its own flat purple sheet, for screens drawn over the race (pause, results).
+## A dark-glass neon sheet for screens drawn over the race (pause, results).
 func _sheet(min_size := Vector2.ZERO) -> PanelContainer:
-	var panel := _panel(min_size)
-	panel.add_theme_stylebox_override("panel", CmrStyle.panel())
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = min_size
+	panel.add_theme_stylebox_override("panel", _sheet_style())
 	return panel
 
 func _column(parent: Control, spacing := 12) -> VBoxContainer:
@@ -5884,19 +6228,25 @@ func _column(parent: Control, spacing := 12) -> VBoxContainer:
 	return box
 
 func _title(parent: Control, title: String, subtitle: String) -> void:
-	var t := _label(title, 30, INK)
-	t.add_theme_font_override("font", CmrStyle.title_font())
+	var neon := HudLayout.neon_primary()
+	var t := _label(title, 30, Color.WHITE)
+	t.add_theme_font_override("font", HudLayout.italic_font(900, -0.14))
+	if CmrStyle.skin != "ps1":
+		t.add_theme_color_override("font_outline_color", Color(neon, 0.35))
+		t.add_theme_constant_override("outline_size", 5)
 	parent.add_child(t)
-	var sub := _label(subtitle, 13, ACCENT)
+	var sub := _label(subtitle, 13, neon)
+	sub.add_theme_font_override("font", HudLayout.italic_font(800, -0.10))
 	parent.add_child(sub)
 
 func _field_label(parent: Control, text: String) -> void:
-	var l := _label(text, 13, MUTED)
+	var l := _label(text, 13, HudLayout.neon_primary().lightened(0.22))
+	l.add_theme_font_override("font", HudLayout.italic_font(800, -0.08))
 	parent.add_child(l)
 
 func _menu_rule(parent: Control) -> void:
 	var line := ColorRect.new()
-	line.color = Color(CmrStyle.TEXT, 0.6)
+	line.color = Color(HudLayout.neon_primary(), 0.55)
 	line.custom_minimum_size.y = 2
 	parent.add_child(line)
 
@@ -5928,19 +6278,43 @@ func _label(text: String, font_size: int, color: Color) -> Label:
 	label.add_theme_color_override("font_color", color)
 	return label
 
-## A flat CMR box. Orange (ACCENT) is the primary action and red a destructive one; any other colour
-## gives the standard light bar.
+## A neon action button. ACCENT gives the electric primary CTA; DANGER gives a crimson-neon button;
+## any other colour inherits the dark-glass neon theme button.
 func _button(text: String, color: Color) -> Button:
 	var button := Button.new()
 	button.text = text
 	button.custom_minimum_size.y = 42
+	button.add_theme_font_override("font", HudLayout.italic_font(800, -0.10))
 	button.add_theme_font_size_override("font_size", 16)
-	if color == ACCENT or color == DANGER:
-		button.add_theme_stylebox_override("normal", CmrStyle.box(color, color.darkened(0.3)))
-		button.add_theme_stylebox_override("hover", CmrStyle.box(color.lightened(0.2), color.darkened(0.3)))
-		if color == DANGER:
-			for key in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
-				button.add_theme_color_override(key, INK)
+	var is_ps1 := CmrStyle.skin == "ps1"
+	if color == ACCENT:
+		var hot := HudLayout.neon_hot()
+		var neon := HudLayout.neon_primary()
+		var norm := HudLayout.neon_box(neon, 0.96, 6, 0.0, 12, 16.0, 8.0)
+		norm.bg_color = hot
+		norm.border_color = neon
+		norm.shadow_color = Color(hot, 0.45)
+		norm.shadow_size = 0 if is_ps1 else 12
+		var hov := HudLayout.neon_box(Color.WHITE, 1.0, 6, 0.0, 16, 16.0, 8.0)
+		hov.bg_color = hot.lightened(0.14)
+		hov.border_color = Color.WHITE
+		hov.shadow_color = Color(hot, 0.60)
+		hov.shadow_size = 0 if is_ps1 else 16
+		button.add_theme_stylebox_override("normal", norm)
+		button.add_theme_stylebox_override("hover", hov)
+		button.add_theme_font_override("font", HudLayout.italic_font(900, -0.13))
+		var fg := Color.WHITE if hot.get_luminance() < 0.45 else CmrStyle.INK
+		for key in ["font_color", "font_hover_color", "font_focus_color"]:
+			button.add_theme_color_override(key, fg)
+	elif color == DANGER:
+		var norm := HudLayout.neon_box(CmrStyle.RED, 0.92, 5, 0.0, 10, 14.0, 6.0)
+		norm.bg_color = CmrStyle.RED.darkened(0.68)
+		var hov := HudLayout.neon_box(CmrStyle.RED.lightened(0.25), 0.96, 5, 0.0, 12, 14.0, 6.0)
+		hov.bg_color = CmrStyle.RED.darkened(0.35)
+		button.add_theme_stylebox_override("normal", norm)
+		button.add_theme_stylebox_override("hover", hov)
+		for key in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+			button.add_theme_color_override(key, Color.WHITE)
 	return button
 
 ## Pickers take their look from the theme; spin boxes also need their inner line edit sized.
@@ -6052,7 +6426,9 @@ func _build_rally_side(col: VBoxContainer) -> void:
 	rally_event_picker.item_selected.connect(_select_rally_event)
 	rally_side.add_child(rally_event_picker)
 	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", CmrStyle.box(Color(CmrStyle.PANEL, 0.75), Color(CmrStyle.ORANGE, 0.6), 14, 12))
+	var rsb := HudLayout.neon_box(HudLayout.neon_primary(), 0.88, 5, 0.0, 10, 14.0, 12.0)
+	rsb.bg_color = HudLayout.glass_plate(0.88)
+	card.add_theme_stylebox_override("panel", rsb)
 	rally_side.add_child(card)
 	rally_info_label = _label("", 15, CmrStyle.TEXT)
 	rally_info_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -6147,34 +6523,35 @@ func _show_rally_results() -> void:
 	var i := ev.stage_index - 1
 	var sd := ev.stage_def(i)
 	var me: Dictionary = rows.filter(func(r): return r.is_player)[0]
+	var badge_txt := "DNF" if me.dnf else "P%d" % me.pos
 	var title := "SS%d %s · %s" % [i + 1, str(sd.name).to_upper(), "RETIRED" if me.dnf else "P%d OF %d" % [me.pos, rows.size()]]
-	col.add_child(_label(title, 26, INK))
 	var sub := "%s · %s · %s · %s" % [ev.def.name, race.track.name, sd.surface, str(sd.weather).capitalize()]
 	if me.note != "":
 		sub += " · " + str(me.note)
-	var sub_label := _label(sub, 14, MUTED)
-	sub_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	col.add_child(sub_label)
+	var r_accent := CmrStyle.RED if me.dnf else (HudLayout.neon_boost() if me.pos == 1 else HudLayout.neon_primary())
+	_result_hero(col, badge_txt, title, sub, r_accent)
 	var widths := [46, 44, 250, 130, 110, 330]
-	var head_style := CmrStyle.box(Color(0, 0, 0, 0.25), Color.TRANSPARENT, 14, 3)
+	var neon := HudLayout.neon_primary()
 	var stage_table := VBoxContainer.new()
 	stage_table.add_theme_constant_override("separation", 3)
 	col.add_child(stage_table)
-	stage_table.add_child(_result_row(["POS", "NO.", "DRIVER", "STAGE TIME", "GAP", ""], widths, head_style, CmrStyle.ORANGE_SOFT, 13))
+	stage_table.add_child(_result_row(["POS", "NO.", "DRIVER", "STAGE TIME", "GAP", ""], widths, _result_header_style(), neon, 13, null, true, false))
 	for r in rows:
-		var fill: Color = CmrStyle.ORANGE if r.is_player else (CmrStyle.FIELD if r.pos % 2 == 1 else CmrStyle.FIELD_DIM)
+		var r_ink := CmrStyle.INK if r.is_player else CmrStyle.TEXT
 		stage_table.add_child(_result_row([str(r.pos), str(r.number), r.name, ("DNF " if r.dnf else "") + Race.fmt_time(r.time),
-			"+%.2f" % r.gap if r.pos > 1 else "", r.note], widths, CmrStyle.box(fill, Color.TRANSPARENT, 14, 3), CmrStyle.INK, 16, r.color))
+			"+%.2f" % r.gap if r.pos > 1 else "", r.note], widths, _result_row_style(r.is_player, r.pos % 2 == 1), r_ink, 16, r.color, false, r.is_player))
 	var table := ev.standings()
-	col.add_child(_label("%s AFTER SS%d" % ["FINAL CLASSIFICATION" if ev.is_over() else "OVERALL", ev.results.size()], 20, INK))
+	var ov_lbl := _label("%s AFTER SS%d" % ["FINAL CLASSIFICATION" if ev.is_over() else "OVERALL", ev.results.size()], 20, neon)
+	ov_lbl.add_theme_font_override("font", HudLayout.italic_font(900, -0.12))
+	col.add_child(ov_lbl)
 	var overall := VBoxContainer.new()
 	overall.add_theme_constant_override("separation", 3)
 	col.add_child(overall)
-	overall.add_child(_result_row(["POS", "NO.", "DRIVER", "TOTAL", "GAP", "STAGE WINS"], widths, head_style, CmrStyle.ORANGE_SOFT, 13))
+	overall.add_child(_result_row(["POS", "NO.", "DRIVER", "TOTAL", "GAP", "STAGE WINS"], widths, _result_header_style(), neon, 13, null, true, false))
 	for r in table:
-		var fill: Color = CmrStyle.ORANGE if r.is_player else (CmrStyle.FIELD if r.pos % 2 == 1 else CmrStyle.FIELD_DIM)
+		var r_ink := CmrStyle.INK if r.is_player else CmrStyle.TEXT
 		overall.add_child(_result_row([str(r.pos), str(r.number), r.name, Race.fmt_time(r.time), "+%.1f" % r.gap if r.pos > 1 else "",
-			str(r.stage_wins) if r.stage_wins > 0 else ""], widths, CmrStyle.box(fill, Color.TRANSPARENT, 14, 3), CmrStyle.INK, 16, r.color))
+			str(r.stage_wins) if r.stage_wins > 0 else ""], widths, _result_row_style(r.is_player, r.pos % 2 == 1), r_ink, 16, r.color, false, r.is_player))
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 12)
 	var primary: Button

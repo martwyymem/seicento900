@@ -3,13 +3,13 @@
 extends Control
 
 var INK: Color:
-	get: return CmrStyle.INK
-## the sketch's fills, a shade under the panel's paper (cream in CMR, the skin's paper elsewhere)
+	get: return HudLayout.neon_primary()
+## dark neon blueprint fills
 var FILL: Color:
-	get: return CmrStyle.PAPER.darkened(0.05)
+	get: return Color(HudLayout.neon_primary(), 0.14)
 var SHADE: Color:
-	get: return CmrStyle.PAPER.darkened(0.11)
-const W := 2.6 ## line width
+	get: return Color(HudLayout.neon_hot(), 0.24)
+const W := 2.4 ## line width
 
 var part := "Body":
 	set(value):

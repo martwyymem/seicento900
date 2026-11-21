@@ -68,25 +68,42 @@ func _road_glitter_regression(errors: Array[String]) -> void:
 	road_mat.shader = road_sh
 	road_mat.set_shader_parameter("wet", 1.0)
 	road_mat.set_shader_parameter("rain", 0.7)
+	road_mat.set_shader_parameter("night", 1.0)
 	road_mat.set_shader_parameter("detail", 1.0)
-	if absf(float(road_mat.get_shader_parameter("wet")) - 1.0) > 1e-6:
-		errors.append("road.gdshader ShaderMaterial did not retain wet parameter")
-	# Check executable (non-comment) lines in road.gdshader for wet-film micro_n flattening and sparkle suppression
+	if absf(float(road_mat.get_shader_parameter("wet")) - 1.0) > 1e-6 or absf(float(road_mat.get_shader_parameter("night")) - 1.0) > 1e-6:
+		errors.append("road.gdshader ShaderMaterial did not retain wet/night parameters")
+	# Check executable (non-comment) lines in road.gdshader for wet-film normal flattening tied to wet,
+	# plus micro_n flattening and dry aggregate glint/sparkle quenching so a wet road does not glitter.
+	var has_wet_w := false
+	var has_nmap_flatten := false
 	var has_micro_n_flatten := false
 	var has_spark_quench := false
+	var has_glint_quench := false
 	for raw_line in road_sh.code.split("\n"):
 		var line := raw_line.split("//")[0].strip_edges()
 		if line.is_empty():
 			continue
+		if line.find("float w =") >= 0 and line.find("wet") >= 0:
+			has_wet_w = true
+		if line.find("nmap = mix(nmap, flat_n,") >= 0 and line.find("w") >= 0 and line.find("puddle") >= 0:
+			has_nmap_flatten = true
 		if line.find("micro_n") >= 0 and line.find("nmap.xy") >= 0 and line.find("puddle") >= 0 and line.find("smoothstep(") >= 0 and line.find(", w)") >= 0:
 			has_micro_n_flatten = true
 		if line.find("spark") >= 0 and line.find("1.0 - w") >= 0:
 			has_spark_quench = true
+		if line.find("glint") >= 0 and line.find("1.0 - w") >= 0:
+			has_glint_quench = true
+	if not has_wet_w:
+		errors.append("road.gdshader does not derive local wetness 'w' from the 'wet' uniform")
+	if not has_nmap_flatten:
+		errors.append("road.gdshader is missing wet-film base normal flattening (mix(nmap, flat_n, ... w ... puddle))")
 	if not has_micro_n_flatten:
 		errors.append("road.gdshader is missing wet-film micro_n flattening (smoothstep(..., w) + puddle attenuation on nmap.xy)")
 	if not has_spark_quench:
 		errors.append("road.gdshader is missing wet-road aggregate sparkle quenching (1.0 - w)")
-	# town_road.gdshader: weather uniforms and wet-film normal flattening
+	if not has_glint_quench:
+		errors.append("road.gdshader is missing wet-road aggregate glint quenching (1.0 - w)")
+	# town_road.gdshader: weather uniforms, wet/night material binding, and wet-film normal flattening
 	var town_sh: Shader = TownBuilder.ROAD_SHADER
 	if town_sh == null or town_sh.code.is_empty():
 		errors.append("town_road.gdshader failed to load or has empty shader code")
@@ -101,18 +118,36 @@ func _road_glitter_regression(errors: Array[String]) -> void:
 			var def_v = RenderingServer.shader_get_parameter_default(town_sh.get_rid(), u)
 			if def_v != null and absf(float(def_v)) > 1e-6:
 				errors.append("town_road.gdshader uniform '%s' defaults to %s, not 0" % [u, str(def_v)])
+	var town_mat := ShaderMaterial.new()
+	town_mat.shader = town_sh
+	town_mat.set_shader_parameter("wet", 1.0)
+	town_mat.set_shader_parameter("night", 1.0)
+	if absf(float(town_mat.get_shader_parameter("wet")) - 1.0) > 1e-6 or absf(float(town_mat.get_shader_parameter("night")) - 1.0) > 1e-6:
+		errors.append("town_road.gdshader ShaderMaterial did not retain wet/night parameters")
+	var town_wet_w := false
+	var town_flat_k := false
 	var town_flatten := false
 	var town_spark := false
+	var town_night_spark := false
+	var town_rough_floor := false
 	for raw_line in town_sh.code.split("\n"):
 		var line := raw_line.split("//")[0].strip_edges()
 		if line.is_empty():
 			continue
+		if line.find("float w =") >= 0 and line.find("wet") >= 0:
+			town_wet_w = true
+		if line.find("float flat_k =") >= 0 and line.find("w") >= 0 and line.find("puddle") >= 0:
+			town_flat_k = true
 		if line.find("micro_n") >= 0 and line.find("flat_k") >= 0:
 			town_flatten = true
 		if line.find("spark") >= 0 and line.find("1.0 - w") >= 0:
 			town_spark = true
-	if not town_flatten or not town_spark:
-		errors.append("town_road.gdshader lost wet-film micro_n flattening or sparkle quenching (flatten=%s spark=%s)" % [town_flatten, town_spark])
+		if line.find("spark") >= 0 and line.find("1.0 - night") >= 0:
+			town_night_spark = true
+		if line.find("ROUGHNESS") >= 0 and line.find("smoothstep(") >= 0 and line.find("wet") >= 0:
+			town_rough_floor = true
+	if not town_wet_w or not town_flat_k or not town_flatten or not town_spark or not town_night_spark or not town_rough_floor:
+		errors.append("town_road.gdshader lost wet/night glitter guard (wet_w=%s flat_k=%s flatten=%s spark=%s night_spark=%s rough_floor=%s)" % [town_wet_w, town_flat_k, town_flatten, town_spark, town_night_spark, town_rough_floor])
 
 ## The weather modes as the races set them up, and their grip against a dry road.
 func _states(errors: Array[String]) -> void:

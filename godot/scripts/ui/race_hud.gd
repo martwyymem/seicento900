@@ -38,14 +38,19 @@ static func _plate(a: float) -> Color:
 
 static func _shade(a: float) -> Color:
 	return Color(CmrStyle.PLATE.darkened(0.4), a)
-# Layout, in pixels on the 1600×900 design canvas
+# Layout, in pixels on the 1600×900 design canvas (scaled by _s on compact canvases, pulled inward by HudLayout.hud_inset)
 const REFRESH := 0.12 ## s between redraws of the text panels (about 8 Hz, like the reference)
-const ROW_H := 21.0 ## height of one timing-tower row
-const TOWER_W := 240.0 ## timing tower (standings) width
-const PITWALL_W := 290.0 ## pit-wall panel width
-const FEED_W := 330.0 ## event feed width
-const CLOCK_W := 300.0 ## lap / clock panel width
-const MAP_S := 190.0 ## minimap size (square)
+const ROW_H := 28.0 ## height of one timing-tower row
+const TOWER_HEADER := 48.0 ## Unbound-style big P1/N callout header above the standings rows
+const TOWER_W := 304.0 ## timing tower (standings) width
+const PITWALL_W := 336.0 ## pit-wall panel width
+const FEED_W := 346.0 ## event feed width
+const CLOCK_W := 356.0 ## lap / clock panel width
+const CLOCK_H := 236.0 ## lap / clock panel height (race mode)
+const MODE_CLOCK_H := 248.0 ## lap / clock panel height (rally / time trial)
+const MAP_S := 214.0 ## minimap size (square)
+const DASH_W := 326.0 ## bottom-right circular neon dial width
+const DASH_H := 268.0 ## bottom-right circular neon dial height
 const REPAIR_AT_HUD := 0.3 ## the damage at which the gauge turns red (RaceControl.REPAIR_AT)
 var FEED_BORDER: Dictionary:
 	get: return {"good": GOOD, "bad": RED, "warn": CmrStyle.ORANGE_SOFT, "box": YELLOW, "pit": Color("#8a8f99"),
@@ -82,6 +87,9 @@ var corners_group: Control ## g-force sway container for corner panels (tower, c
 var dash_group: Control ## g-force sway container for the speedometer cluster (moves most)
 var _corner_panels: Array[Control] = []
 var _motion := HudMotion.new()
+var _mx := 72.0 ## active horizontal inset inside safe_frame (HudLayout.hud_inset)
+var _my := 41.0 ## active vertical inset inside safe_frame
+var _s := 1.0 ## responsive panel scale (1.0 at 1600x900+, easing down on compact scaled canvases)
 var minimap: Control
 var minimap_base: Control ## the map's backdrop, line and flags under minimap's dots, redrawn only when they change
 var tags: Control
@@ -225,25 +233,24 @@ func _ready() -> void:
 	dash.audit_fn = _audit_text
 	dash_group.add_child(dash)
 	safe_frame.move_child(dash_group, -1) # drawn over the panels before it, as the dash was before it moved into a group
-	_place(dash, 1.0, 1.0, 1.0, 1.0, -360, -190, -14, -14)
+	_place(dash, 1.0, 1.0, 1.0, 1.0, -_mx - DASH_W, -_my - DASH_H, -_mx, -_my)
 
 	_overtake_control = _canvas(_draw_overtake)
-	_place(_overtake_control, 0.5, 0.0, 0.5, 0.0, -170, 192, 170, 234)
+	_place(_overtake_control, 0.5, 0.0, 0.5, 0.0, -190, 192, 190, 240)
 	statusbar = _canvas(_draw_status)
-	_place(statusbar, 0.5, 1.0, 0.5, 1.0, -100, -80, 100, -56)
+	_place(statusbar, 0.5, 1.0, 0.5, 1.0, -100, -80, 100, -52)
 
 	# the lights, flag board, split, overtake call, delta bar and banner share one column under the pace
 	# notes: _layout() stacks whichever are showing so no two ever cover each other
-	banner = _banner_label(46)
+	banner = _banner_label(52)
 	safe_frame.add_child(banner)
-	banner_small = _banner_label(18)
+	banner_small = _banner_label(20)
 	banner_small.add_theme_color_override("font_color", CmrStyle.MUTED)
 	safe_frame.add_child(banner_small)
 
 	help = PanelContainer.new()
 	help.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var help_style := CmrStyle.box(_plate(0.62), Color.TRANSPARENT, 18, 6)
-	help.add_theme_stylebox_override("panel", help_style)
+	help.add_theme_stylebox_override("panel", _help_style())
 	var help_label := Label.new()
 	_help_label = help_label
 	help_label.text = QUICK_HELP
@@ -260,10 +267,15 @@ func _ready() -> void:
 	help.anchor_bottom = 1.0
 	help.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	help.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	help.offset_bottom = -14
+	help.offset_bottom = -12
 	safe_frame.add_child(help)
 	resized.connect(_layout)
-	_fit_help()
+	_layout()
+
+func _help_style() -> StyleBoxFlat:
+	var sb := CmrStyle.box(_plate(0.74), Color(HudLayout.neon_primary(), 0.45), 18, 6)
+	sb.border_width_bottom = 2
+	return sb
 
 ## Hand the HUD a new race.
 func start(race_: Race, world_: Node3D, audio_: RaceAudio) -> void:
@@ -332,13 +344,14 @@ func _draw_overtake() -> void:
 	var W := _overtake_control.size.x
 	var H := _overtake_control.size.y
 	var alpha := clampf(_overtake_timer * 2.0, 0.0, 1.0)
-	var bg := Color(CmrStyle.GREEN.darkened(0.45), 0.92 * alpha) if _overtake_up else Color(CmrStyle.AMBER, 0.88 * alpha)
-	var ink := Color(1, 1, 1, alpha) if _overtake_up else Color(CmrStyle.INK, alpha)
+	var accent := HudLayout.neon_primary() if _overtake_up else HudLayout.neon_hot()
 	var r := Rect2(0, 0, W, H)
-	_overtake_control.draw_rect(r, bg)
-	_overtake_control.draw_rect(r, Color(1, 1, 1, 0.9 * alpha), false, 2.0)
+	HudLayout.draw_neon_panel(_overtake_control, r, accent, 0.90 * alpha, 6.0, true)
 	var txt := ("▲ OVERTAKE! P%d" % _overtake_pos) if _overtake_up else ("▼ P%d" % _overtake_pos)
-	_overtake_control.draw_string(_bold, Vector2(0, 27), txt, HORIZONTAL_ALIGNMENT_CENTER, W, 18, ink)
+	var f := HudLayout.italic_font(900)
+	var fs := maxi(14, roundi(20.0 * _s))
+	_overtake_control.draw_string_outline(f, Vector2(0, H * 0.68), txt, HORIZONTAL_ALIGNMENT_CENTER, W, fs, 4, Color(0, 0, 0, 0.85 * alpha))
+	_overtake_control.draw_string(f, Vector2(0, H * 0.68), txt, HORIZONTAL_ALIGNMENT_CENTER, W, fs, Color(accent.lightened(0.45), alpha))
 
 ## Whether a change of place may be called out: never under a safety car, a red flag or yellows (nobody may
 ## pass there, places only change through the pits or a car stopping), nor while a place must be given back.
@@ -354,11 +367,8 @@ func update(dt: float) -> void:
 	if not race:
 		return
 	_clock += dt
-	_nitro_label.visible = race.mods.has("nitro") and visible
-	if _nitro_label.visible:
-		var bars := int(round(race.nitro * 10.0))
-		_nitro_label.text = "N2O  " + "█".repeat(bars) + "░".repeat(10 - bars)
-		_nitro_label.add_theme_color_override("font_color", Color("#7fe8ff") if race.nitro_burning else Color("#3aa8ff"))
+	# Nitrous feeds straight into DashGauge's curved Unbound-style boost bar (keeps bottom centre clear of the car)
+	_nitro_label.visible = false
 	# The keys stay untyped: a script error inside _dash_state / _pacenote_key returns null, and in an
 	# exported (release) build a typed Array `!=` on that null dereferences it and crashes the game.
 	var dash_key = _dash_state()
@@ -366,7 +376,8 @@ func update(dt: float) -> void:
 		_dash_key = dash_key
 		if dash_key.size() >= 6:
 			var frac := clampf(race.player.rpm / race.spec.limiter, 0.0, 1.0)
-			dash.set_state(int(dash_key[3]), String(dash_key[2]), frac, bool(dash_key[4]), bool(dash_key[5]))
+			var n2o := race.nitro if race.mods.has("nitro") else -1.0
+			dash.set_state(int(dash_key[3]), String(dash_key[2]), frac, bool(dash_key[4]), bool(dash_key[5]), n2o, race.nitro_burning)
 	if co_driver:
 		co_driver.voice_on = voice_on
 		co_driver.update(audio != null and audio.muted, warp)
@@ -449,9 +460,7 @@ func update(dt: float) -> void:
 	if race.s.qualifying:
 		_sheet = Qualifying.sheet(race)
 	pitwall.visible = _pit_relevant()
-	tower.size.y = mini(_sheet.size(), _tower_rows()) * (ROW_H + 2.0) if race.s.qualifying else _tower_list().size() * (ROW_H + 2.0) + 3.0
-	var pw_h := _pitwall_height()
-	pitwall.offset_top = -14.0 - pw_h
+	_layout()
 	tower.queue_redraw()
 	clock.queue_redraw()
 	modepanel.queue_redraw()
@@ -463,20 +472,26 @@ func update(dt: float) -> void:
 	_update_event_sounds()
 
 # ---------------- layout ----------------
-const EDGE := 14.0 ## margin from the canvas edge
-const STACK_TOP := 150.0 ## the centre column starts under the pace notes (14..146)
+const EDGE := 14.0 ## legacy margin constant; _layout() pulls panels inward via HudLayout.hud_inset()
+const STACK_TOP := 150.0 ## legacy reference constant
 const STACK_GAP := 6.0
-const PACENOTE_HALF := 150.0
-const SPLIT_W := 238.0
+const PACENOTE_HALF := 154.0
+const SPLIT_W := 248.0
 const LIGHTS_W := 180.0 ## five lamps on their board (see _draw_lights)
 const HELP_FONT := 12
-const STATUS_FONT := 13
+const STATUS_FONT := 14
 
-## Places everything that can share screen space, from the canvas size and what is showing: the centre
-## column (start lights, flag board, split, overtake call, delta bar, banner) stacks top-down in the band
-## between the left panel and the clock; the event feed stops above the dash; the key help wraps between
-## the pit wall and the dash with the status chip above it. Name tags keep out of the areas noted in
-## _reserved. Called every frame (cheap: a few rects).
+func _tower_height() -> float:
+	if not race:
+		return roundf(40.0 * _s)
+	var row_step := roundf((ROW_H + 3.0) * _s)
+	var hdr := roundf(TOWER_HEADER * _s)
+	var rows := mini(_sheet.size(), _tower_rows()) if race.s.qualifying else _tower_list().size()
+	return hdr + rows * row_step + roundf(6.0 * _s)
+
+## Places everything that can share screen space, from the canvas size and what is showing: corner panels
+## sit 1.3-1.4x bigger and pulled ~4.5% inward from the safe frame (HudLayout.hud_inset), scaling cleanly
+## down on compact canvases so nothing overlaps. Name tags keep out of _reserved.
 func _layout() -> void:
 	if size.x < 1.0 or size.y < 1.0:
 		return
@@ -486,47 +501,87 @@ func _layout() -> void:
 	var H := safe.size.y
 	if W < 1.0 or H < 1.0:
 		return
+	var inset := HudLayout.hud_inset(safe.size)
+	_mx = inset.x
+	_my = inset.y
+	_s = HudLayout.hud_scale(safe.size)
+	var s := _s
 	_reserved.clear()
 	var cx := W * 0.5
-	var left_w := MODE_W if modepanel.visible else (TOWER_W if tower.visible else 0.0)
+	var solo_mode := race != null and race.s.mode != "race"
+
+	# Corner panels: bigger, pulled inward by (_mx, _my), scaled cleanly by s
+	var tw := roundf(TOWER_W * s)
+	var th := _tower_height()
+	_place(tower, 0.0, 0.0, 0.0, 0.0, _mx, _my, _mx + tw, _my + th)
+	var mw := roundf(MODE_W * s)
+	var mh := minf(roundf(530.0 * s), H - _my * 2.0)
+	_place(modepanel, 0.0, 0.0, 0.0, 0.0, _mx, _my, _mx + mw, _my + mh)
+	var cw := roundf(CLOCK_W * s)
+	var ch := roundf((MODE_CLOCK_H if solo_mode else CLOCK_H) * s)
+	_place(clock, 1.0, 0.0, 1.0, 0.0, -_mx - cw, _my, -_mx, _my + ch)
+	var ms := roundf(MAP_S * s)
+	var map_top := _my + ch + roundf(10.0 * s)
+	_place(minimap_base, 1.0, 0.0, 1.0, 0.0, -_mx - ms, map_top, -_mx, map_top + ms)
+	_place(minimap, 1.0, 0.0, 1.0, 0.0, -_mx - ms, map_top, -_mx, map_top + ms)
+	var dw := roundf(DASH_W * s)
+	var dh := roundf(DASH_H * s)
+	_place(dash, 1.0, 1.0, 1.0, 1.0, -_mx - dw, -_my - dh, -_mx, -_my)
+	var fw := roundf(FEED_W * s)
+	var feed_top := map_top + ms + roundf(8.0 * s)
+	var feed_bot := maxf(feed_top + 24.0, H - _my - dh - roundf(8.0 * s))
+	_place(feed, 1.0, 0.0, 1.0, 0.0, -_mx - fw, feed_top, -_mx, feed_bot)
+	var pw_w := roundf(PITWALL_W * s)
+	var pw_h := _pitwall_height()
+	_place(pitwall, 0.0, 1.0, 0.0, 1.0, _mx, -_my - pw_h, _mx + pw_w, -_my)
+
+	var pn_half := roundf(PACENOTE_HALF * s)
+	var pn_h := roundf(132.0 * s)
+	_place(pacenote, 0.5, 0.0, 0.5, 0.0, -pn_half, _my, pn_half, _my + pn_h)
+
+	var left_w := mw if modepanel.visible else (tw if tower.visible else 0.0)
 	var band := _band_half()
-	# bottom centre first (the column above must stop over it): the key help, the status chip above it
+	# bottom centre first (stays tucked low so the car stays clear): key help, status chip above it
 	_fit_help()
-	var floor_y := H - EDGE
+	var floor_y := H - 12.0
 	if help.visible:
 		var hr := help_rect()
 		_reserved.append(hr)
 		floor_y = hr.position.y
 	if _status_text != "":
-		var sw := _bold.get_string_size(_status_text, HORIZONTAL_ALIGNMENT_LEFT, -1, STATUS_FONT).x + 36.0
-		_place(statusbar, 0.5, 1.0, 0.5, 1.0, -sw * 0.5, floor_y - H - 8.0 - 26.0, sw * 0.5, floor_y - H - 8.0)
-		_reserved.append(Rect2(sx + cx - sw * 0.5, floor_y - 8.0 - 26.0, sw, 26.0))
-		floor_y -= 8.0 + 26.0
+		var sw := _bold.get_string_size(_status_text, HORIZONTAL_ALIGNMENT_LEFT, -1, STATUS_FONT).x + 40.0
+		var sh := 28.0
+		_place(statusbar, 0.5, 1.0, 0.5, 1.0, -sw * 0.5, floor_y - H - 8.0 - sh, sw * 0.5, floor_y - H - 8.0)
+		_reserved.append(Rect2(sx + cx - sw * 0.5, floor_y - 8.0 - sh, sw, sh))
+		floor_y -= 8.0 + sh
 	floor_y -= 8.0
-	# the split goes left of the clock, as in CMR, when the pace notes leave it room; else into the column
-	_split_beside = W - EDGE - CLOCK_W - 20.0 - SPLIT_W - 12.0 >= cx + PACENOTE_HALF + 12.0
+	# the split goes left of the clock when the pace notes leave it room; else into the centre column
+	var sp_w := roundf(SPLIT_W * s)
+	var sp_h := roundf(48.0 * s)
+	_split_beside = W - _mx - cw - 12.0 - sp_w >= cx + pn_half + 12.0
 	if _split_beside:
-		_place(splitbox, 1.0, 0.0, 1.0, 0.0, -EDGE - CLOCK_W - 20 - 250, 32, -EDGE - CLOCK_W - 20 - 12, 90)
+		var sp_top := _my + roundf(20.0 * s)
+		_place(splitbox, 1.0, 0.0, 1.0, 0.0, -_mx - cw - 12.0 - sp_w, sp_top, -_mx - cw - 12.0, sp_top + sp_h)
 		if _split_showing():
-			_reserved.append(Rect2(sx + W - EDGE - CLOCK_W - 20 - 250, 32, SPLIT_W, 44))
+			_reserved.append(Rect2(sx + W - _mx - cw - 12.0 - sp_w, sp_top, sp_w, sp_h))
 	# the centre column, most important first; whatever would run into the chip or the help is left out
 	var stack: Array = [] ## [control, width, height]
 	if _lights_showing():
 		stack.append([lights, LIGHTS_W, 48.0])
 	if not _flag.is_empty():
-		stack.append([flagbar, minf(420.0, band * 2.0), 54.0])
+		stack.append([flagbar, minf(roundf(440.0 * s), band * 2.0), roundf(58.0 * s)])
 	if not _split_beside and _split_showing():
-		stack.append([splitbox, SPLIT_W, 44.0])
+		stack.append([splitbox, minf(sp_w, band * 2.0), sp_h])
 	if _overtake_timer > 0.0:
-		stack.append([_overtake_control, minf(340.0, band * 2.0), 42.0])
+		stack.append([_overtake_control, minf(roundf(370.0 * s), band * 2.0), roundf(48.0 * s)])
 	if _delta_showing():
-		stack.append([deltabar, minf(DELTA_W, band * 2.0), _delta_height()])
+		stack.append([deltabar, minf(roundf(DELTA_W * s), band * 2.0), _delta_height()])
 	if _mission_showing():
-		stack.append([missionbar, minf(MISSION_W, band * 2.0), MISSION_H])
+		stack.append([missionbar, minf(roundf(MISSION_W * s), band * 2.0), roundf(MISSION_H * s)])
 	for b: Label in [banner, banner_small]:
 		if b.text != "":
 			stack.append([b, band * 2.0, _label_height(b, band * 2.0)])
-	var y := STACK_TOP
+	var y := _my + pn_h + roundf(8.0 * s)
 	for item in stack:
 		var c: Control = item[0]
 		var w: float = item[1]
@@ -542,22 +597,20 @@ func _layout() -> void:
 		_reserved.append(Rect2(sx + cx - used_w * 0.5, y, used_w, h))
 		y += h + STACK_GAP
 	_stack_bottom = y - STACK_GAP
-	_reserved.append(Rect2(sx + cx - PACENOTE_HALF, EDGE, PACENOTE_HALF * 2.0, 132.0))
-	# right column: clock, minimap, then the feed down to just above the dash
-	feed.offset_bottom = maxf(feed.offset_top + 30.0, minf(700.0, H - 190.0 - 10.0))
+	_reserved.append(Rect2(sx + cx - pn_half, _my, pn_half * 2.0, pn_h))
 	var shift := Vector2(sx, 0.0)
-	_reserved.append(Rect2(sx + W - EDGE - CLOCK_W, EDGE, CLOCK_W, 208.0))
-	_reserved.append(Rect2(shift + minimap.position, minimap.size))
+	_reserved.append(Rect2(sx + W - _mx - cw, _my, cw, ch))
+	_reserved.append(Rect2(shift + Vector2(W - _mx - ms, map_top), Vector2(ms, ms)))
 	if _feed_h > 0.0:
-		_reserved.append(Rect2(shift + feed.position, Vector2(FEED_W, minf(_feed_h, feed.size.y))))
-	_reserved.append(Rect2(shift + dash.position, dash.size))
+		_reserved.append(Rect2(shift + Vector2(W - _mx - fw, feed_top), Vector2(fw, minf(_feed_h, feed_bot - feed_top))))
+	_reserved.append(Rect2(shift + Vector2(W - _mx - dw, H - _my - dh), Vector2(dw, dh)))
 	# left column
 	if tower.visible:
-		_reserved.append(Rect2(shift + tower.position, Vector2(TOWER_W, tower.size.y)))
+		_reserved.append(Rect2(shift + Vector2(_mx, _my), Vector2(tw, th)))
 	if modepanel.visible:
-		_reserved.append(Rect2(shift + modepanel.position, Vector2(left_w, modepanel.size.y)))
+		_reserved.append(Rect2(shift + Vector2(_mx, _my), Vector2(left_w, mh)))
 	if pitwall.visible:
-		_reserved.append(Rect2(shift + pitwall.position, pitwall.size))
+		_reserved.append(Rect2(shift + Vector2(_mx, H - _my - pw_h), Vector2(pw_w, pw_h)))
 
 ## Where the key help sits: the rect its offsets ask for, grown to the panel's real rect (a label can need
 ## more height than measured, e.g. another skin's face, and the panel then grows upward over what is above).
@@ -575,17 +628,17 @@ func help_rect() -> Rect2:
 func _band_half() -> float:
 	var W := safe_frame.size.x if safe_frame else size.x
 	var cx := W * 0.5
-	var left_w := MODE_W if modepanel.visible else (TOWER_W if tower.visible else 0.0)
-	var left := EDGE + left_w + 12.0
-	var right := W - EDGE - maxf(CLOCK_W, FEED_W) - 12.0
-	return maxf(PACENOTE_HALF, minf(cx - left, right - cx))
+	var left_w := roundf(MODE_W * _s) if modepanel.visible else (roundf(TOWER_W * _s) if tower.visible else 0.0)
+	var left := _mx + left_w + 12.0
+	var right := W - _mx - maxf(roundf(CLOCK_W * _s), roundf(FEED_W * _s)) - 12.0
+	return maxf(roundf(PACENOTE_HALF * _s), minf(cx - left, right - cx))
 
 ## The rows the timing tower may show above the pit wall (the rest are cut, the player's row always kept).
 func _tower_rows() -> int:
 	if not pitwall.visible:
 		return 99
-	var room := size.y - EDGE - _pitwall_height() - 10.0 - EDGE
-	return maxi(4, int(floorf(room / (ROW_H + 2.0))))
+	var room := size.y - _my - _pitwall_height() - 12.0 - _my - roundf(TOWER_HEADER * _s)
+	return maxi(4, int(floorf(room / maxf(1.0, roundf((ROW_H + 3.0) * _s)))))
 
 func _label_height(l: Label, width: float) -> float:
 	var f := l.get_theme_font("font")
@@ -622,13 +675,14 @@ func _fit_help() -> void:
 	if key == _help_key:
 		return
 	_help_key = key
-	var left := EDGE + (PITWALL_W if pitwall.visible else 0.0) + 12.0
-	var right := W - EDGE - 346.0 - 12.0 # the dash
-	var room := 2.0 * minf(W * 0.5 - left, right - W * 0.5) - 36.0
+	var left := _mx + (roundf(PITWALL_W * _s) if pitwall.visible else 0.0) + 12.0
+	var right := W - _mx - roundf(DASH_W * _s) - 12.0 # the dash
+	var room := maxf(180.0, 2.0 * minf(W * 0.5 - left, right - W * 0.5) - 36.0)
 	var natural := _font.get_multiline_string_size(_help_label.text, HORIZONTAL_ALIGNMENT_CENTER, -1, HELP_FONT).x
 	var tw := minf(natural, room)
 	_help_label.visible = not _help_full
 	_guide.visible = _help_full
+	var bottom_pad := 12.0
 	if _help_full:
 		var gw := clampf(room, 300.0, 600.0)
 		var rows := ceili(GUIDE.size() / 2.0)
@@ -636,8 +690,8 @@ func _fit_help() -> void:
 		_guide.queue_redraw()
 		help.offset_left = -(gw + 36.0) * 0.5
 		help.offset_right = (gw + 36.0) * 0.5
-		help.offset_top = -EDGE - (24.0 + rows * 16.0) - 12.0
-		help.offset_bottom = -EDGE
+		help.offset_top = -bottom_pad - (24.0 + rows * 16.0) - 12.0
+		help.offset_bottom = -bottom_pad
 		return
 	_help_label.custom_minimum_size.y = 0.0
 	if natural > room:
@@ -656,8 +710,8 @@ func _fit_help() -> void:
 		th = maxf(th, n * _help_label.get_line_height() + spacing * (n - 1))
 	help.offset_left = -(tw + 36.0) * 0.5
 	help.offset_right = (tw + 36.0) * 0.5
-	help.offset_top = -EDGE - th - 12.0
-	help.offset_bottom = -EDGE
+	help.offset_top = -bottom_pad - th - 12.0
+	help.offset_bottom = -bottom_pad
 
 func _lights_showing() -> bool:
 	return false # the 3D gantry carries the start lights
@@ -684,27 +738,28 @@ func _delta_showing() -> bool:
 
 func _delta_height() -> float:
 	var showing := not _mode_split.is_empty() and _clock < float(_mode_split.until)
-	return 50.0 if race.tt and not showing and race.tt.out_lap() else 84.0
+	return roundf((52.0 if race.tt and not showing and race.tt.out_lap() else 88.0) * _s)
 
 ## The chip above the key help: AUTOPILOT, or the co-driver driving with the clock sped up.
 func _draw_status() -> void:
 	if _status_text == "" or not race:
 		return
 	var r := Rect2(Vector2.ZERO, statusbar.size)
-	statusbar.draw_rect(r, _plate(0.82))
-	statusbar.draw_rect(Rect2(0, 0, 5, r.size.y), YELLOW)
-	statusbar.draw_string(_bold, Vector2(5, 18), _status_text, HORIZONTAL_ALIGNMENT_CENTER, r.size.x - 5, STATUS_FONT, TEXT)
+	var accent := HudLayout.neon_boost()
+	HudLayout.draw_neon_panel(statusbar, r, accent, 0.86, 5.0, false)
+	statusbar.draw_string(HudLayout.italic_font(800), Vector2(6, r.size.y * 0.70), _status_text, HORIZONTAL_ALIGNMENT_CENTER, r.size.x - 8, STATUS_FONT, Color.WHITE)
 
 ## CmrStyle.restyle() calls this on a skin change: the plates and outlines built from the palette are rebuilt.
 func _skin_changed() -> void:
 	_panel_style = CmrStyle.panel(_plate(0.8), Color(CmrStyle.VIOLET, 0.5), 0)
 	if help:
-		help.add_theme_stylebox_override("panel", CmrStyle.box(_plate(0.62), Color.TRANSPARENT, 18, 6))
+		help.add_theme_stylebox_override("panel", _help_style())
 	if _help_label:
 		_help_label.add_theme_color_override("font_color", CmrStyle.MUTED)
 	for b in [banner, banner_small]:
 		if b:
-			(b as Label).add_theme_color_override("font_outline_color", _shade(0.9))
+			(b as Label).add_theme_font_override("font", HudLayout.italic_font(900))
+			(b as Label).add_theme_color_override("font_outline_color", _shade(0.92))
 	if dash:
 		dash._skin_changed()
 	_dash_key = []
@@ -780,9 +835,9 @@ func _banner_label(size: int) -> Label:
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART # a long line wraps inside the free band, never under a panel
 	l.add_theme_font_size_override("font_size", size)
-	l.add_theme_font_override("font", _bold)
-	l.add_theme_color_override("font_outline_color", _shade(0.9))
-	l.add_theme_constant_override("outline_size", 12 if size > 20 else 6)
+	l.add_theme_font_override("font", HudLayout.italic_font(900))
+	l.add_theme_color_override("font_outline_color", _shade(0.92))
+	l.add_theme_constant_override("outline_size", 14 if size > 24 else 7)
 	return l
 
 func _text(c: Control, at: Vector2, s: String, size: int, color: Color, bold := false, align := HORIZONTAL_ALIGNMENT_LEFT, width := -1.0) -> void:
@@ -947,16 +1002,25 @@ func _text_w(s: String, size: int, bold := false) -> float:
 	return (_bold if bold else _font).get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
 
 func _fit(s: String, size: int, width: float) -> String:
-	var key := "%s|%d|%d" % [s, size, int(width)]
+	return _fit_font(_bold, s, size, width)
+
+func _fit_font(f: Font, s: String, size: int, width: float) -> String:
+	var key := "%d|%s|%d|%d" % [f.get_instance_id() % 100003, s, size, int(width)]
 	if _fitted.has(key):
 		return _fitted[key]
 	var out := s
-	if _text_w(out, size, true) > width:
-		while out.length() > 1 and _text_w(out + "…", size, true) > width:
+	if f.get_string_size(out, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x > width:
+		while out.length() > 1 and f.get_string_size(out + "…", HORIZONTAL_ALIGNMENT_LEFT, -1, size).x > width:
 			out = out.left(-1)
 		out += "…"
 	_fitted[key] = out
 	return out
+
+func _shrink_fs(f: Font, s: String, hi: int, lo: int, width: float) -> int:
+	var fs := hi
+	while fs > lo and f.get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x > width:
+		fs -= 1
+	return fs
 
 static func _clock_text(sec: float) -> String:
 	var t := maxi(0, int(floorf(sec)))
@@ -992,23 +1056,54 @@ func _gap_text(car: RaceCar, leader: RaceCar, i: int) -> String:
 
 ## Qualifying: the time sheet instead of the running order, pole on top.
 func _draw_sheet() -> void:
+	var W := tower.size.x
+	var s := W / TOWER_W
+	var hdr_h := roundf(TOWER_HEADER * s)
+	var row_h := roundf(ROW_H * s)
+	var row_step := roundf((ROW_H + 3.0) * s)
+	var cyan := HudLayout.neon_primary()
+	var boost := HudLayout.neon_boost()
+	var it_bold := HudLayout.italic_font(900, -0.14)
+	var it_dig := HudLayout.italic_digits(-0.14)
+	var mine := 0
+	for k in _sheet.size():
+		if _sheet[k].is_player:
+			mine = k + 1
+	HudLayout.draw_neon_panel(tower, Rect2(0, 0, W, hdr_h - 6.0 * s), cyan, 0.88, 6.0 * s, true)
+	var pos_str := "P%d" % mine if mine > 0 else "P—"
+	var pos_fs := _shrink_fs(it_dig, pos_str, maxi(14, roundi(32.0 * s)), 12, 92.0 * s)
+	_q(Vector2(14.0 * s, hdr_h - 14.0 * s), pos_str, pos_fs, Color.WHITE, it_dig, HORIZONTAL_ALIGNMENT_LEFT, 96.0 * s)
+	var pw := it_dig.get_string_size(pos_str, HORIZONTAL_ALIGNMENT_LEFT, -1, pos_fs).x
+	_q(Vector2(18.0 * s + pw, hdr_h - 16.0 * s), "/ %d" % _sheet.size(), maxi(10, roundi(16.0 * s)), Color(cyan.lightened(0.35), 0.9), it_bold, HORIZONTAL_ALIGNMENT_LEFT, maxf(30.0, W - 110.0 * s - pw))
+	_q(Vector2(W - 92.0 * s, hdr_h - 17.0 * s), "QUALI", maxi(10, roundi(12.0 * s)), cyan.lightened(0.25), it_bold, HORIZONTAL_ALIGNMENT_RIGHT, 82.0 * s)
+	var y := hdr_h
 	for i in mini(_sheet.size(), _tower_rows()):
 		var r: Dictionary = _sheet[i]
-		var y := i * (ROW_H + 2.0)
+		var rect := Rect2(0, y, W, row_h)
 		if r.is_player:
-			_gbar(tower, Rect2(0, y, TOWER_W, ROW_H), YELLOW, Color(YELLOW, 0.55))
+			_tri_rect(rect.grow(2.5 * s), Color(boost, 0.25))
+			_tri_rect(rect, Color(boost, 0.94))
+			_tri_rect(Rect2(0, y, 6.0 * s, row_h), Color.WHITE)
 		else:
-			_gbar(tower, Rect2(0, y, TOWER_W, ROW_H), BAR_HI, BAR_LO)
-		var base := y + 15.5
-		_text(tower, Vector2(4, base), str(i + 1), 13, INK, true, HORIZONTAL_ALIGNMENT_RIGHT, 24)
-		tower.draw_rect(Rect2(36, y + 3, 4, 15), r.color)
-		_text(tower, Vector2(44, base), str(r.number), 11, CmrStyle.INK_SOFT, true, HORIZONTAL_ALIGNMENT_RIGHT, 26)
+			_tri_rect(rect, HudLayout.glass_plate(0.84))
+			_tri_rect(Rect2(0, y, 4.5 * s, row_h), r.color)
+			_tri_frame(rect, Color(cyan, 0.24), 1.0)
+		var ink := CmrStyle.INK.darkened(0.5) if r.is_player else Color.WHITE
+		var base := y + row_h * 0.72
+		var fs_p := maxi(10, roundi(14.0 * s))
+		var fs_n := maxi(10, roundi(13.0 * s))
+		var fs_t := maxi(10, roundi(13.0 * s))
+		_q(Vector2(8.0 * s, base), str(i + 1), fs_p, ink, it_bold, HORIZONTAL_ALIGNMENT_RIGHT, 24.0 * s)
 		var nm: String = str(r.name).to_upper() if r.is_player else str(r.name).split(" ")[-1].to_upper()
-		_text(tower, Vector2(78, base), _fit(nm, 12, 64), 12, INK, true)
+		var nm_w := maxf(40.0, W - 40.0 * s - 102.0 * s)
+		_q(Vector2(40.0 * s, base), _fit_font(_bold, nm, fs_n, nm_w), fs_n, ink, _bold, HORIZONTAL_ALIGNMENT_LEFT, nm_w)
 		var t := "—"
 		if r.time != null:
 			t = Race.fmt_time(r.time) if i == 0 else "+%.3f" % r.gap
-		_text(tower, Vector2(120, base), t, 12, INK, true, HORIZONTAL_ALIGNMENT_RIGHT, 112)
+		_q(Vector2(W - 98.0 * s, base), _fit_font(_bold, t, fs_t, 90.0 * s), fs_t, ink, _bold, HORIZONTAL_ALIGNMENT_RIGHT, 90.0 * s)
+		y += row_step
+	_tri_flush(tower)
+	_q_flush(tower)
 
 ## The compact list: the leader, then the player with two cars ahead and two behind (de-duplicated).
 ## Each row shows the interval to the car directly ahead; the leader's row shows the lap instead.
@@ -1055,36 +1150,68 @@ func _draw_tower() -> void:
 		return
 	var order := race.order
 	var rows := _tower_list()
-	var W := TOWER_W
+	var W := tower.size.x
+	var s := W / TOWER_W
+	var hdr_h := roundf(TOWER_HEADER * s)
+	var row_h := roundf(ROW_H * s)
+	var row_step := roundf((ROW_H + 3.0) * s)
+	var cyan := HudLayout.neon_primary()
+	var hot := HudLayout.neon_hot()
+	var boost := HudLayout.neon_boost()
+	var it_bold := HudLayout.italic_font(900, -0.14)
+	var it_dig := HudLayout.italic_digits(-0.14)
+	var p := race.player
+	var hdr_accent := boost if p.pos == 1 else (cyan if p.pos <= 3 else hot)
+	# Unbound-style HUGE position readout ("P1 / 16") right above the standings
+	HudLayout.draw_neon_panel(tower, Rect2(0, 0, W, hdr_h - 6.0 * s), hdr_accent, 0.88, 6.0 * s, true)
+	var pos_str := "P%d" % p.pos
+	var pos_fs := _shrink_fs(it_dig, pos_str, maxi(14, roundi(32.0 * s)), 12, 92.0 * s)
+	_q(Vector2(14.0 * s, hdr_h - 14.0 * s), pos_str, pos_fs, Color.WHITE, it_dig, HORIZONTAL_ALIGNMENT_LEFT, 96.0 * s)
+	var pw := it_dig.get_string_size(pos_str, HORIZONTAL_ALIGNMENT_LEFT, -1, pos_fs).x
+	var tot_str := "/ %d" % race.cars.size()
+	_q(Vector2(18.0 * s + pw, hdr_h - 16.0 * s), tot_str, maxi(10, roundi(16.0 * s)), Color(hdr_accent.lightened(0.35), 0.92), it_bold, HORIZONTAL_ALIGNMENT_LEFT, maxf(30.0, W - 114.0 * s - pw))
+	var lap_tag := ("LAP %d/%d" % [mini(p.lap + 1, race.R), race.R]) if not race.timed else "LAP %d" % (p.lap + 1)
+	_q(Vector2(W - 102.0 * s, hdr_h - 17.0 * s), _fit_font(it_bold, lap_tag, maxi(10, roundi(12.0 * s)), 92.0 * s), maxi(10, roundi(12.0 * s)), Color(1.0, 1.0, 1.0, 0.88), it_bold, HORIZONTAL_ALIGNMENT_RIGHT, 92.0 * s)
+
 	var prev := -1
-	var y := 0.0
+	var y := hdr_h
 	for i in rows:
 		var c: RaceCar = order[i]
 		if prev >= 0 and i > prev + 1:
-			y += 3.0 # a visible break where cars were left out
+			y += roundf(4.0 * s) # a visible break where cars were left out
 		prev = i
 		var fade := 0.5 if c.dnf else 1.0
-		var base := y + 15.5
+		var base := y + row_h * 0.72
+		var rect := Rect2(0, y, W, row_h)
 		if c.is_player:
-			_tri_rect(Rect2(0, y, W, ROW_H), YELLOW)
+			var pcol := cyan.lerp(boost, 0.45)
+			_tri_rect(rect.grow(2.5 * s), Color(pcol, 0.30 * fade))
+			_tri_rect(rect, Color(pcol, 0.95 * fade))
+			_tri_rect(Rect2(0, y, 6.5 * s, row_h), Color(1.0, 1.0, 1.0, fade))
+			_tri_frame(rect, Color(1.0, 1.0, 1.0, 0.85 * fade), 1.5)
 		else:
-			_tri_rect(Rect2(0, y, W, ROW_H), _plate(0.66 * fade))
-		_tri_rect(Rect2(0, y, 4, ROW_H), Color(c.color, fade))
-		var ink := INK if c.is_player else TEXT
-		_q(Vector2(8, base), str(i + 1), 13, Color(ink, fade), _bold, HORIZONTAL_ALIGNMENT_RIGHT, 22)
+			_tri_rect(rect, HudLayout.glass_plate(0.84 * fade))
+			_tri_rect(Rect2(0, y, 5.0 * s, row_h), Color(c.color, fade))
+			_tri_frame(rect, Color(cyan, 0.24 * fade), 1.0)
+		var ink := Color(0.03, 0.04, 0.08) if c.is_player else Color.WHITE
+		var fs_p := maxi(10, roundi(15.0 * s))
+		var fs_n := maxi(10, roundi(14.0 * s))
+		var fs_g := maxi(10, roundi(13.0 * s))
+		_q(Vector2(10.0 * s, base), str(i + 1), fs_p, Color(ink, fade), it_bold, HORIZONTAL_ALIGNMENT_RIGHT, 24.0 * s)
 		var nm := c.name.to_upper() if c.is_player else Brain.short(c).to_upper()
-		_q(Vector2(38, base), _fit(nm, 12, 112), 12, Color(ink, fade), _bold)
+		var nm_w := maxf(40.0, W - 42.0 * s - 94.0 * s)
+		_q(Vector2(42.0 * s, base), _fit_font(_bold, nm, fs_n, nm_w), fs_n, Color(ink, fade), _bold, HORIZONTAL_ALIGNMENT_LEFT, nm_w)
 		var txt := _interval_text(i)
 		if i == 0 and not c.finished and not c.dnf:
-			txt = "LAP %d/%d" % [(c.lap + 1), race.R] if not race.timed else "LAP %d" % (c.lap + 1)
-		var col := Color("#ff9a7a") if c.mode == "pit" and not c.is_player else ink
-		_q(Vector2(W - 84, base), txt, 12, Color(col, fade), _bold, HORIZONTAL_ALIGNMENT_RIGHT, 78)
-		y += ROW_H + 2.0
+			txt = "LEADER" if c.is_player else ("LAP %d/%d" % [(c.lap + 1), race.R] if not race.timed else "LAP %d" % (c.lap + 1))
+		var col := Color("#ff9a7a") if c.mode == "pit" and not c.is_player else (cyan.lightened(0.3) if i == 0 and not c.is_player else ink)
+		_q(Vector2(W - 92.0 * s, base), _fit_font(_bold, txt, fs_g, 82.0 * s), fs_g, Color(col, fade), _bold, HORIZONTAL_ALIGNMENT_RIGHT, 82.0 * s)
+		y += row_step
 	_tri_flush(tower)
 	_q_flush(tower)
 
 # ---------------- clock stack (top right) ----------------
-## Segmented lap progress, the big clock, then lap / position / lap-time rows fading to the left.
+## Glowing neon lap progress, dark-glass big clock with Unbound-style position/record readout, and crisp telemetry rows.
 func _draw_clock() -> void:
 	if not race:
 		return
@@ -1092,21 +1219,31 @@ func _draw_clock() -> void:
 		_draw_mode_clock()
 		return
 	var p := race.player
-	var W := CLOCK_W
-	var x0 := clock.size.x - W
-	# progress through the lap in green blocks, like CMR's stage splits
+	var W := clock.size.x
+	var s := W / CLOCK_W
+	var cyan := HudLayout.neon_primary()
+	var hot := HudLayout.neon_hot()
+	var boost := HudLayout.neon_boost()
+	var it_bold := HudLayout.italic_font(900, -0.14)
+	var it_dig := HudLayout.italic_digits(-0.14)
+
+	# Glowing segmented lap progress bar along the top
 	var segs := 12
+	var bar_h := roundf(13.0 * s)
+	var sw := (W - (segs - 1) * 3.5 * s) / segs
 	var frac := clampf(p.s / race.track.L, 0.0, 1.0) if race.phase == "racing" else 0.0
-	var sw := (W - (segs - 1) * 3.0) / segs
 	for k in segs:
-		var r := Rect2(x0 + k * (sw + 3.0), 0, sw, 12)
+		var r := Rect2(k * (sw + 3.5 * s), 0.0, sw, bar_h)
 		var fill := clampf(frac * segs - k, 0.0, 1.0)
-		# shapes into the triangle list and text queued, drawn together at the end (see _tri_quad)
-		_tri_rect(r, _plate(0.55))
+		var seg_col := cyan.lerp(hot, float(k) / float(segs - 1))
+		_tri_rect(r, HudLayout.glass_plate(0.75))
 		if fill > 0.0:
-			_tri_rect(Rect2(r.position, Vector2(r.size.x * fill, r.size.y)), YELLOW)
-		_tri_frame(r, Color(1, 1, 1, 0.35))
-	# the clock
+			var fr := Rect2(r.position, Vector2(r.size.x * fill, r.size.y))
+			_tri_rect(fr.grow(2.0 * s), Color(seg_col, 0.30))
+			_tri_rect(fr, seg_col)
+		_tri_frame(r, Color(seg_col, 0.48), 1.0)
+
+	# Main clock dark-glass neon box
 	var time_text: String
 	var quali := race.s.qualifying
 	if quali:
@@ -1118,51 +1255,64 @@ func _draw_clock() -> void:
 			time_text = _clock_text(race.time_left) if race.time_left > 0.0 else "FINAL"
 	else:
 		time_text = "0:00.00" if race.phase == "countdown" else Race.fmt_time(race.race_time)
-	var box := Rect2(x0, 18, W, 58)
-	var box_style := CmrStyle.box(BAR_HI, Color.TRANSPARENT, 0, 0)
-	box_style.border_color = Color(1, 1, 1, 0.9)
-	box_style.border_width_top = 2
-	box_style.draw(clock.get_canvas_item(), box)
+	var box := Rect2(0.0, roundf(19.0 * s), W, roundf(66.0 * s))
+	HudLayout.draw_neon_panel(clock, box, cyan, 0.90, 5.0 * s, true)
 	var clock_label := "TIME LEFT" if race.timed else "RACE"
 	if quali:
 		clock_label = "OUT LAP" if p.lap == 0 else "TIMED LAP %d / %d" % [mini(p.lap, race.R - 1), race.R - 1]
-	_q(Vector2(x0 + 14, 34), clock_label, 11, CmrStyle.INK_SOFT)
+	var lbl_fs := maxi(9, roundi(11.0 * s))
+	_q(Vector2(14.0 * s, box.position.y + 16.0 * s), _fit_font(it_bold, clock_label, lbl_fs, 126.0 * s), lbl_fs, cyan.lightened(0.25), it_bold, HORIZONTAL_ALIGNMENT_LEFT, 128.0 * s)
 	if not quali and not records:
-		var rank_col := Color("#d97706") if p.pos == 1 else (Color("#475569") if p.pos == 2 else (Color("#b45309") if p.pos == 3 else INK))
-		_q(Vector2(x0 + 14, 52), "P%d" % p.pos, 22, rank_col, _bold, HORIZONTAL_ALIGNMENT_LEFT, 50)
-		_q(Vector2(x0 + 58, 50), "/ %d" % race.cars.size(), 11, CmrStyle.INK_SOFT, _bold, HORIZONTAL_ALIGNMENT_LEFT, 40)
+		var rank_col := boost if p.pos == 1 else (cyan.lightened(0.2) if p.pos == 2 else (hot.lightened(0.15) if p.pos == 3 else Color.WHITE))
+		var pstr := "P%d" % p.pos
+		var pfs := _shrink_fs(it_dig, pstr, maxi(14, roundi(28.0 * s)), 12, 72.0 * s)
+		_q(Vector2(14.0 * s, box.position.y + 52.0 * s), pstr, pfs, rank_col, it_dig, HORIZONTAL_ALIGNMENT_LEFT, 74.0 * s)
+		var pw := it_dig.get_string_size(pstr, HORIZONTAL_ALIGNMENT_LEFT, -1, pfs).x
+		_q(Vector2(18.0 * s + pw, box.position.y + 50.0 * s), "/ %d" % race.cars.size(), maxi(9, roundi(13.0 * s)), Color(MUTED, 0.92), it_bold, HORIZONTAL_ALIGNMENT_LEFT, maxf(28.0, 120.0 * s - pw))
 	if records and records.ghost_time != null:
-		# under the label: how far behind (+) or ahead (−) of the lap record this lap is, or the record itself
 		var gap = records.gap()
-		_q(Vector2(x0 + 14, 50), "VS RECORD" if gap != null else "RECORD", 10, CmrStyle.INK_SOFT)
+		_q(Vector2(14.0 * s, box.position.y + 34.0 * s), "VS RECORD" if gap != null else "RECORD", maxi(9, roundi(10.0 * s)), MUTED, _bold, HORIZONTAL_ALIGNMENT_LEFT, 122.0 * s)
 		if gap != null:
-			_q(Vector2(x0 + 14, 70), "%s%.2f" % ["+" if gap >= 0.0 else "−", absf(gap)], 18, RED if gap >= 0.0 else PURPLE)
+			var gstr := "%s%.2f" % ["+" if gap >= 0.0 else "−", absf(gap)]
+			var gfs := _shrink_fs(it_dig, gstr, maxi(12, roundi(19.0 * s)), 11, 118.0 * s)
+			_q(Vector2(14.0 * s, box.position.y + 56.0 * s), gstr, gfs, RED if gap >= 0.0 else hot.lightened(0.2), it_dig, HORIZONTAL_ALIGNMENT_LEFT, 122.0 * s)
 		else:
-			_q(Vector2(x0 + 14, 67), Race.fmt_time(records.ghost_time), 13, CmrStyle.INK_SOFT)
-	_q(Vector2(x0, 68), time_text, 38, INK, _digits, HORIZONTAL_ALIGNMENT_RIGHT, W - 18)
-	# rows
+			_q(Vector2(14.0 * s, box.position.y + 54.0 * s), Race.fmt_time(records.ghost_time), maxi(10, roundi(13.0 * s)), Color.WHITE, _digits, HORIZONTAL_ALIGNMENT_LEFT, 122.0 * s)
+	var time_w := W - 150.0 * s
+	var time_fs := _shrink_fs(it_dig, time_text, maxi(18, roundi(38.0 * s)), 16, time_w)
+	if CmrStyle.skin != "ps1":
+		clock.draw_string_outline(it_dig, Vector2(138.0 * s, box.position.y + 53.0 * s), time_text, HORIZONTAL_ALIGNMENT_RIGHT, time_w, time_fs, maxi(3, roundi(7.0 * s)), Color(cyan, 0.24))
+	_q(Vector2(138.0 * s, box.position.y + 53.0 * s), time_text, time_fs, Color.WHITE, it_dig, HORIZONTAL_ALIGNMENT_RIGHT, time_w)
+
+	# Crisp dark-glass neon rows
 	var lap := str(p.lap + 1) if race.timed else "%d / %d" % [mini(p.lap + 1, race.R), race.R]
-	var best_col := PURPLE if race.fastest and race.fastest.car == p else INK
+	var best_col := hot.lightened(0.25) if race.fastest and race.fastest.car == p else Color.WHITE
 	var current := Race.fmt_time(race.race_time - p.lap_start) if race.phase == "racing" else "—"
-	var rows := [["LAP", lap, INK], ["POS", "%d / %d" % [p.pos, race.cars.size()], INK],
-		["THIS LAP", current, INK], ["LAST", Race.fmt_time(p.last_lap), INK], ["BEST", Race.fmt_time(p.best_lap), best_col]]
+	var rows := [["LAP", lap, boost], ["POS", "%d / %d" % [p.pos, race.cars.size()], cyan.lightened(0.25)],
+		["THIS LAP", current, Color.WHITE], ["LAST", Race.fmt_time(p.last_lap), Color.WHITE], ["BEST", Race.fmt_time(p.best_lap), best_col]]
 	if quali:
 		var pole = _sheet[0].time if not _sheet.is_empty() else null
 		var mine := 0
 		for k in _sheet.size():
 			if _sheet[k].is_player:
 				mine = k + 1
-		rows = [["LAP", "OUT" if p.lap == 0 else "%d / %d" % [mini(p.lap, race.R - 1), race.R - 1], INK],
-			["GRID", "P%d / %d" % [mine, _sheet.size()] if p.best_lap != null else "—", INK],
-			["LAST", Race.fmt_time(p.last_lap) if p.lap > 1 else "—", INK], ["BEST", Race.fmt_time(p.best_lap), PURPLE if mine == 1 and p.best_lap != null else INK],
-			["POLE", Race.fmt_time(pole), INK]]
-	var y := 82.0
+		rows = [["LAP", "OUT" if p.lap == 0 else "%d / %d" % [mini(p.lap, race.R - 1), race.R - 1], boost],
+			["GRID", "P%d / %d" % [mine, _sheet.size()] if p.best_lap != null else "—", cyan.lightened(0.25)],
+			["LAST", Race.fmt_time(p.last_lap) if p.lap > 1 else "—", Color.WHITE], ["BEST", Race.fmt_time(p.best_lap), hot.lightened(0.25) if mine == 1 and p.best_lap != null else Color.WHITE],
+			["POLE", Race.fmt_time(pole), Color.WHITE]]
+	var y := box.end.y + roundf(6.0 * s)
+	var row_h := roundf(22.0 * s)
+	var row_step := roundf(24.5 * s)
 	for row in rows:
-		_tri_gbar(Rect2(x0 + 40, y, W - 40, 20), Color(BAR_HI, 0.55), BAR_HI)
-		_q(Vector2(x0 + 56, y + 15), row[0], 11, CmrStyle.INK_SOFT)
-		_q(Vector2(x0 + 60, y + 15.5), row[1], 14, row[2], _bold, HORIZONTAL_ALIGNMENT_RIGHT, W - 72)
-		y += 22.0
-	# weather and local time, on a dark plate so it reads over a bright sky or a busy background
+		var rr := Rect2(20.0 * s, y, W - 20.0 * s, row_h)
+		_tri_rect(rr, HudLayout.glass_plate(0.80))
+		_tri_rect(Rect2(rr.position, Vector2(3.5 * s, row_h)), Color(cyan, 0.72))
+		_tri_frame(rr, Color(cyan, 0.22), 1.0)
+		_q(Vector2(34.0 * s, y + row_h * 0.72), row[0], maxi(9, roundi(11.5 * s)), MUTED, _bold, HORIZONTAL_ALIGNMENT_LEFT, 92.0 * s)
+		var vfs := maxi(11, roundi(15.0 * s))
+		_q(Vector2(126.0 * s, y + row_h * 0.74), _fit_font(_bold, row[1], vfs, W - 138.0 * s), vfs, row[2], _bold, HORIZONTAL_ALIGNMENT_RIGHT, W - 138.0 * s)
+		y += row_step
+	# weather and local time strip
 	var tod := race.time_of_day
 	var clock_text := "%02d:%02d" % [int(tod), int(fmod(tod, 1.0) * 60.0)]
 	if warp > 1:
@@ -1170,10 +1320,14 @@ func _draw_clock() -> void:
 	var w := race.weather
 	var sky := "RAIN" if w.rain > 0.05 else ("DAMP" if w.wet > 0.05 else "DRY")
 	var weather_text := "%s %d%% · %s · %s" % [sky, roundi(w.wet * 100.0), w.forecast(maxf(0.0, race.race_time)), clock_text]
-	var tw := minf(W, _text_w(weather_text, 12) + 16.0)
+	var wfs := maxi(9, roundi(12.0 * s))
 	if w.rain > 0.05 or w.wet > 0.05 or warp > 1:
-		_tri_rect(Rect2(x0 + W - tw, y + 1, tw, 17), _shade(0.62))
-		_q(Vector2(x0, y + 14), weather_text, 12, TEXT, _font, HORIZONTAL_ALIGNMENT_RIGHT, W - 8, true)
+		var wfit := _fit_font(_font, weather_text, wfs, W - 16.0 * s)
+		var tw := minf(W, _font.get_string_size(wfit, HORIZONTAL_ALIGNMENT_LEFT, -1, wfs).x + 18.0 * s)
+		var wr := Rect2(W - tw, y + 1.0, tw, maxf(14.0, clock.size.y - y - 1.0))
+		_tri_rect(wr, HudLayout.glass_plate(0.84))
+		_tri_frame(wr, Color(cyan, 0.45), 1.0)
+		_q(Vector2(W - tw + 8.0 * s, wr.position.y + wr.size.y * 0.76), wfit, wfs, Color.WHITE, _font, HORIZONTAL_ALIGNMENT_RIGHT, tw - 16.0 * s, true)
 	_tri_flush(clock)
 	_q_flush(clock)
 
@@ -1184,8 +1338,11 @@ func _draw_clock() -> void:
 func _draw_pacenote() -> void:
 	if not race:
 		return
-	var S := 74.0
+	var s := pacenote.size.x / (PACENOTE_HALF * 2.0)
+	var S := 74.0 * s
 	var cx := pacenote.size.x * 0.5
+	var cyan := HudLayout.neon_primary()
+	var it_bold := HudLayout.italic_font(900, -0.14)
 	var live: Array = co_driver.current() if co_driver else []
 	var caption := ""
 	if not live.is_empty():
@@ -1193,26 +1350,30 @@ func _draw_pacenote() -> void:
 		if live.size() > 1:
 			# the next one already called, smaller beside it
 			var s2 := S * 0.62
-			_draw_note_box(Rect2(cx + S * 0.5 + 8.0, 0, s2, s2), live[1], 0.8)
+			_draw_note_box(Rect2(cx + S * 0.5 + 8.0 * s, 0, s2, s2), live[1], 0.85)
 		caption = PaceNotes.label(live[0])
 	if caption != "":
-		caption = _fit(caption, 13, pacenote.size.x - 28.0) # a long corner name ends in "…" inside its plate
-		var tw := minf(pacenote.size.x, _text_w(caption, 13, true) + 28.0)
-		var r := Rect2(cx - tw * 0.5, S + 8, tw, 22)
-		_tri_gbar(r, _plate(0.8), _plate(0.8))
-		_q(Vector2(r.position.x, r.position.y + 16), caption, 13, TEXT, _bold, HORIZONTAL_ALIGNMENT_CENTER, tw)
+		var cfs := maxi(10, roundi(14.0 * s))
+		caption = _fit_font(it_bold, caption, cfs, pacenote.size.x - 28.0 * s)
+		var tw := minf(pacenote.size.x, it_bold.get_string_size(caption, HORIZONTAL_ALIGNMENT_LEFT, -1, cfs).x + 28.0 * s)
+		var r := Rect2(cx - tw * 0.5, S + 7.0 * s, tw, 23.0 * s)
+		_tri_rect(r.grow(2.5 * s), Color(cyan, 0.22))
+		_tri_rect(r, HudLayout.glass_plate(0.88))
+		_tri_frame(r, Color(cyan, 0.72), 1.5)
+		_q(Vector2(r.position.x, r.position.y + r.size.y * 0.74), caption, cfs, Color.WHITE, it_bold, HORIZONTAL_ALIGNMENT_CENTER, tw)
 
-	# Gran Turismo 4 style dynamic corner BRAKE alert
+	# Gran Turismo 4 / neon style dynamic corner BRAKE alert
 	var p := race.player
 	var brake_need: float = race.brake_assist(p) if (race.phase == "racing" and not p.finished) else 0.0
 	if brake_need > 0.08 and p.speed > 13.0 and p.brake < 0.25:
 		var pulse := int(_clock * 8.0) % 2 == 0
-		var bw := 124.0
-		var bh := 24.0
-		var br := Rect2(cx - bw * 0.5, S + 34, bw, bh)
-		_tri_rect(br, Color(RED, 0.95 if pulse else 0.72))
+		var bw := 142.0 * s
+		var bh := 25.0 * s
+		var br := Rect2(cx - bw * 0.5, S + 34.0 * s, bw, bh)
+		_tri_rect(br.grow(4.0 * s), Color(RED, 0.36 if pulse else 0.16))
+		_tri_rect(br, Color(RED, 0.95 if pulse else 0.76))
 		_tri_frame(br, Color(1, 1, 1, 0.95), 2.0)
-		_q(Vector2(br.position.x, br.position.y + 17), "[ ! BRAKE ! ]", 14, Color.WHITE, _bold, HORIZONTAL_ALIGNMENT_CENTER, bw)
+		_q(Vector2(br.position.x, br.position.y + bh * 0.72), "[ ! BRAKE ! ]", maxi(11, roundi(15.0 * s)), Color.WHITE, it_bold, HORIZONTAL_ALIGNMENT_CENTER, bw)
 
 	_tri_flush(pacenote)
 	_q_flush(pacenote)
@@ -1352,19 +1513,29 @@ func _draw_splits() -> void:
 	if not race or _split_show.is_empty() or race.race_time > _split_show.until or warp > 1:
 		return
 	var W := splitbox.size.x
+	var H := splitbox.size.y
+	var s := W / SPLIT_W
 	var fade := clampf((_split_show.until - race.race_time) / 0.4, 0.0, 1.0)
-	_gbar(splitbox, Rect2(0, 0, W, 44), Color(BAR_HI, BAR_HI.a * fade), Color(BAR_LO, BAR_LO.a * fade))
+	var accent := HudLayout.neon_primary()
+	if _split_show.delta != null:
+		accent = RED if float(_split_show.delta) >= 0.0 else HudLayout.neon_hot()
+	HudLayout.draw_neon_panel(splitbox, Rect2(0, 0, W, H), accent, 0.88 * fade, 5.0 * s, true)
 	var label := "LAP" if _split_show.k == SPLITS - 1 else "SPLIT %d" % (_split_show.k + 1)
-	_text(splitbox, Vector2(12, 17), label, 11, Color(CmrStyle.INK_SOFT, fade), true)
-	_text(splitbox, Vector2(12, 37), Race.fmt_time(_split_show.t), 18, Color(INK, fade), true)
+	var it_bold := HudLayout.italic_font(900)
+	var it_dig := HudLayout.italic_digits()
+	_text(splitbox, Vector2(14.0 * s, 17.0 * s), label, maxi(9, roundi(11.0 * s)), Color(accent.lightened(0.3), fade), true)
+	_audit_text(splitbox, it_dig, Vector2(14.0 * s, H - 10.0 * s), Race.fmt_time(_split_show.t), HORIZONTAL_ALIGNMENT_LEFT, 120.0 * s, maxi(12, roundi(19.0 * s)))
+	splitbox.draw_string(it_dig, Vector2(14.0 * s, H - 10.0 * s), Race.fmt_time(_split_show.t), HORIZONTAL_ALIGNMENT_LEFT, 120.0 * s, maxi(12, roundi(19.0 * s)), Color(Color.WHITE, fade))
 	if _split_show.delta != null:
 		var d: float = _split_show.delta
-		_text(splitbox, Vector2(0, 37), "%s%.2f" % ["+" if d >= 0.0 else "−", absf(d)], 18, Color(RED if d >= 0.0 else PURPLE, fade), true, HORIZONTAL_ALIGNMENT_RIGHT, W - 12)
+		var dstr := "%s%.2f" % ["+" if d >= 0.0 else "−", absf(d)]
+		_audit_text(splitbox, it_bold, Vector2(124.0 * s, H - 10.0 * s), dstr, HORIZONTAL_ALIGNMENT_RIGHT, W - 136.0 * s, maxi(12, roundi(19.0 * s)))
+		splitbox.draw_string(it_bold, Vector2(124.0 * s, H - 10.0 * s), dstr, HORIZONTAL_ALIGNMENT_RIGHT, W - 136.0 * s, maxi(12, roundi(19.0 * s)), Color(accent.lightened(0.25), fade))
 
 func _draw_lights() -> void:
 	pass # no HUD start lights: the 3D gantry lamps are the start sequence
 
-## Race control's flag for the player: a coloured board under the pace notes.
+## Race control's flag for the player: a neon-framed coloured board under the pace notes.
 func _draw_flag() -> void:
 	if not race or not race.rc or race.phase != "racing":
 		return
@@ -1372,18 +1543,25 @@ func _draw_flag() -> void:
 	if f.is_empty():
 		return
 	var W := flagbar.size.x
+	var H := flagbar.size.y
+	var s := _s
 	var col: Color = f.color
 	var title: String = f.title
 	# the safety-car boards flash like the marshals' lights
 	var flash := title.begins_with("SAFETY CAR") or title == "DOUBLE YELLOW"
 	var a := 0.72 + 0.28 * absf(cos(_clock * PI * 1.5)) if flash else 1.0
-	flagbar.draw_rect(Rect2(0, 0, W, 54), _shade(0.72))
-	flagbar.draw_rect(Rect2(0, 0, 62, 54), Color(col, a))
+	HudLayout.draw_neon_panel(flagbar, Rect2(0, 0, W, H), Color(col, a), 0.90, 0.0, true)
+	var swatch_w := roundf(62.0 * s)
+	flagbar.draw_rect(Rect2(0, 0, swatch_w, H), Color(col, a))
 	if title == "DOUBLE YELLOW":
-		flagbar.draw_rect(Rect2(31, 0, 2, 54), Color(0, 0, 0, 0.5))
-	flagbar.draw_rect(Rect2(62, 0, W - 62, 3), Color(col, a))
-	_text(flagbar, Vector2(74, 25), _fit(title, 20, W - 84), 20, col.lightened(0.1) if col.get_luminance() > 0.3 else TEXT, true)
-	flagbar.draw_string(_font, Vector2(74, 44), f.sub, HORIZONTAL_ALIGNMENT_LEFT, W - 84, 12, TEXT) # clipped to the board
+		flagbar.draw_rect(Rect2(swatch_w * 0.5, 0, 2, H), Color(0, 0, 0, 0.55))
+	flagbar.draw_rect(Rect2(swatch_w, 0, W - swatch_w, 3), Color(col, a))
+	var it_bold := HudLayout.italic_font(900)
+	var tfs := maxi(14, roundi(21.0 * s))
+	var tfit := _fit_font(it_bold, title, tfs, W - swatch_w - 22.0 * s)
+	_audit_text(flagbar, it_bold, Vector2(swatch_w + 12.0 * s, H * 0.48), tfit, HORIZONTAL_ALIGNMENT_LEFT, W - swatch_w - 20.0 * s, tfs)
+	flagbar.draw_string(it_bold, Vector2(swatch_w + 12.0 * s, H * 0.48), tfit, HORIZONTAL_ALIGNMENT_LEFT, W - swatch_w - 20.0 * s, tfs, col.lightened(0.22) if col.get_luminance() > 0.25 else Color.WHITE)
+	flagbar.draw_string(_font, Vector2(swatch_w + 12.0 * s, H * 0.82), f.sub, HORIZONTAL_ALIGNMENT_LEFT, W - swatch_w - 20.0 * s, maxi(10, roundi(12.5 * s)), Color.WHITE)
 
 func _update_banner() -> void:
 	var p := race.player
@@ -1488,6 +1666,9 @@ func _feed_events() -> Array:
 func _draw_feed() -> void:
 	if not race:
 		return
+	var W := feed.size.x
+	var s := W / FEED_W
+	var fs := maxi(10, roundi(13.0 * s))
 	var now := race.clock
 	var first := _feed_events().size()
 	var shown := 0
@@ -1499,21 +1680,26 @@ func _draw_feed() -> void:
 	while first < _feed_events().size():
 		var total := 0.0
 		for i in range(first, _feed_events().size()):
-			total += _font.get_multiline_string_size(_feed_events()[i].text, HORIZONTAL_ALIGNMENT_LEFT, FEED_W - 23.0, 13).y + 14.0
+			total += _font.get_multiline_string_size(_feed_events()[i].text, HORIZONTAL_ALIGNMENT_LEFT, W - 24.0 * s, fs).y + 14.0 * s
 		if total <= feed.size.y + 4.0:
 			break
 		first += 1
 	for i in range(first, _feed_events().size()):
 		var e: Dictionary = _feed_events()[i]
 		var fade := minf(1.0, (10.0 - (now - e.t)) / 2.0)
-		var h := _font.get_multiline_string_size(e.text, HORIZONTAL_ALIGNMENT_LEFT, FEED_W - 23.0, 13).y + 10.0
-		_gbar(feed, Rect2(0, y, FEED_W, h), Color(BAR_LO, BAR_LO.a * fade), Color(BAR_HI, BAR_HI.a * fade))
-		feed.draw_rect(Rect2(FEED_W - 5, y, 5, h), Color(FEED_BORDER.get(e.kind, Color("#666666")), fade))
-		feed.draw_multiline_string(_bold, Vector2(10, y + 18), e.text, HORIZONTAL_ALIGNMENT_RIGHT, FEED_W - 23.0, 13, -1, Color(INK, fade))
-		y += h + 4.0
+		var h := _font.get_multiline_string_size(e.text, HORIZONTAL_ALIGNMENT_LEFT, W - 24.0 * s, fs).y + 10.0 * s
+		var bcol: Color = FEED_BORDER.get(e.kind, HudLayout.neon_primary())
+		var r := Rect2(0, y, W, h)
+		feed.draw_rect(r, HudLayout.glass_plate(0.82 * fade))
+		feed.draw_rect(r, Color(bcol, 0.45 * fade), false, 1.0)
+		feed.draw_rect(Rect2(W - 5.5 * s, y, 5.5 * s, h), Color(bcol, fade))
+		feed.draw_multiline_string(_bold, Vector2(10.0 * s, y + 17.0 * s), e.text, HORIZONTAL_ALIGNMENT_RIGHT, W - 24.0 * s, fs, -1, Color(Color.WHITE, fade))
+		y += h + 4.0 * s
 	_feed_h = y
 
 func _service() -> Variant:
+	if not race:
+		return null
 	var p := race.player
 	if p.service:
 		return p.service
@@ -1522,10 +1708,13 @@ func _service() -> Variant:
 	return null
 
 func _pitwall_height() -> float:
-	return 8.0 + 30.0 + 30.0 + (24.0 if _damage_row() else 0.0) + 24.0 + 22.0 + (22.0 if _service() else 0.0) + 6.0
+	var base := 10.0 + 34.0 + 34.0 + (28.0 if _damage_row() else 0.0) + 28.0 + 24.0 + (24.0 if _service() else 0.0) + 8.0
+	return roundf(base * _s)
 
 ## The car's damage and the stewards' time penalties get a row on the pit wall once there are any.
 func _damage_row() -> bool:
+	if not race:
+		return false
 	var p := race.player
 	return race.rc != null and (p.damage > 0.01 or p.penalty > 0.0)
 
@@ -1543,64 +1732,77 @@ func _draw_pitwall() -> void:
 		return
 	var p := race.player
 	var w := race.weather
-	var W := PITWALL_W
-	_tri_rect(Rect2(0, 0, W, pitwall.size.y), _plate(0.7))
-	_tri_rect(Rect2(0, 0, 3, pitwall.size.y), YELLOW)
-	var x := 12.0
-	var y := 8.0
+	var W := pitwall.size.x
+	var s := W / PITWALL_W
+	var cyan := HudLayout.neon_primary()
+	var boost := HudLayout.neon_boost()
+	HudLayout.draw_neon_panel(pitwall, Rect2(0, 0, W, pitwall.size.y), boost if p.pit_request else cyan, 0.88, 5.0 * s, true)
+	var x := 14.0 * s
+	var y := 10.0 * s
+	var tx := x + 34.0 * s
+	var fs_main := maxi(10, roundi(14.0 * s))
+	var fs_sub := maxi(9, roundi(12.0 * s))
 	# tyres: badge, compound and wear, laps left, wear bar
 	var t: Dictionary = p.tyre
 	var per_lap: float = race.track.L * race.tyres.wear_per_metre(t.c, w.wet, race.s.wear_mult)
 	var tyre_laps: float = t.wear / per_lap if per_lap > 0.0 else 0.0
-	_q_badge(Vector2(x + 10, y + 12), t.c, true)
-	var tx := x + 30.0
-	_q(Vector2(tx, y + 12), "%s  %d%%" % [race.tyres.compounds[t.c].display_name, roundi(t.wear * 100.0)], 13, TEXT, _bold)
-	_q(Vector2(tx, y + 12), "≈%.1f laps" % tyre_laps, 11, MUTED, _font, HORIZONTAL_ALIGNMENT_RIGHT, W - 12 - tx)
-	_tri_meter(Rect2(tx, y + 19, W - 12 - tx, 5), t.wear, RED if t.wear < 0.25 else (YELLOW if t.wear < 0.5 else GOOD))
-	y += 30.0
+	_q_badge(Vector2(x + 11.0 * s, y + 13.0 * s), t.c, true)
+	var tyre_l := "%s  %d%%" % [race.tyres.compounds[t.c].display_name, roundi(t.wear * 100.0)]
+	var tyre_r := "≈%.1f laps" % tyre_laps
+	var right_w := maxf(60.0 * s, _font.get_string_size(tyre_r, HORIZONTAL_ALIGNMENT_LEFT, -1, fs_sub).x + 6.0 * s)
+	var left_w := maxf(60.0 * s, W - 14.0 * s - tx - right_w - 6.0 * s)
+	_q(Vector2(tx, y + 13.0 * s), _fit_font(_bold, tyre_l, fs_main, left_w), fs_main, Color.WHITE, _bold, HORIZONTAL_ALIGNMENT_LEFT, left_w)
+	_q(Vector2(W - 14.0 * s - right_w, y + 13.0 * s), tyre_r, fs_sub, MUTED, _font, HORIZONTAL_ALIGNMENT_RIGHT, right_w)
+	var tbar_col := RED if t.wear < 0.25 else (boost if t.wear < 0.5 else cyan)
+	_tri_meter(Rect2(tx, y + 21.0 * s, W - 14.0 * s - tx, 6.0 * s), t.wear, tbar_col)
+	y += 34.0 * s
 	# fuel
 	var fpl := race.car_fpl(p) * p.mix_fuel
 	var margin := race.fuel_margin(p)
-	var m_col := RED if margin < 0.0 else (YELLOW if margin < fpl * 0.3 else GOOD)
-	_q(Vector2(x, y + 12), "FUEL", 11, MUTED, _bold)
-	_q(Vector2(tx, y + 12), "%.1f L" % p.fuel, 13, TEXT, _bold)
-	_q(Vector2(tx, y + 12), "%s · %+.1f L" % [Strategy.MIXES[p.mix].name.to_upper(), margin], 11, m_col, _font, HORIZONTAL_ALIGNMENT_RIGHT, W - 12 - tx)
-	_tri_meter(Rect2(tx, y + 19, W - 12 - tx, 5), p.fuel / race.spec.tank, BLUE)
-	y += 30.0
+	var m_col := RED if margin < 0.0 else (boost if margin < fpl * 0.3 else cyan)
+	var fuel_r := "%s · %+.1f L" % [Strategy.MIXES[p.mix].name.to_upper(), margin]
+	var f_rw := maxf(70.0 * s, _font.get_string_size(fuel_r, HORIZONTAL_ALIGNMENT_LEFT, -1, fs_sub).x + 6.0 * s)
+	_q(Vector2(x, y + 13.0 * s), "FUEL", maxi(9, roundi(11.0 * s)), MUTED, _bold, HORIZONTAL_ALIGNMENT_LEFT, 32.0 * s)
+	_q(Vector2(tx, y + 13.0 * s), "%.1f L" % p.fuel, fs_main, Color.WHITE, _bold, HORIZONTAL_ALIGNMENT_LEFT, maxf(44.0 * s, W - 14.0 * s - tx - f_rw - 4.0 * s))
+	_q(Vector2(W - 14.0 * s - f_rw, y + 13.0 * s), _fit_font(_font, fuel_r, fs_sub, f_rw), fs_sub, m_col, _font, HORIZONTAL_ALIGNMENT_RIGHT, f_rw)
+	_tri_meter(Rect2(tx, y + 21.0 * s, W - 14.0 * s - tx, 6.0 * s), p.fuel / race.spec.tank, cyan)
+	y += 34.0 * s
 	if _damage_row():
 		var pen := "PENALTY +%d s" % roundi(p.penalty) if p.penalty > 0.0 else ""
 		if p.damage > 0.01:
-			var dcol := RED if p.damage >= RaceControl.REPAIR_AT else (YELLOW if p.damage > 0.12 else TEXT)
-			_q(Vector2(x, y + 12), "DMG", 11, MUTED, _bold)
-			_q(Vector2(tx, y + 12), "%d%%" % roundi(p.damage * 100.0), 13, dcol, _bold)
-			_q(Vector2(tx, y + 12), "≈%.0f s" % race.rc.repair_time(p) + ("  ·  " + pen if pen != "" else ""), 11, MUTED, _font, HORIZONTAL_ALIGNMENT_RIGHT, W - 12 - tx)
-			_tri_meter(Rect2(tx, y + 17, W - 12 - tx, 4), p.damage, dcol)
+			var dcol := RED if p.damage >= RaceControl.REPAIR_AT else (boost if p.damage > 0.12 else Color.WHITE)
+			var dmg_r := "≈%.0f s" % race.rc.repair_time(p) + (" · " + pen if pen != "" else "")
+			var d_rw := minf(W - 14.0 * s - tx - 48.0 * s, _font.get_string_size(dmg_r, HORIZONTAL_ALIGNMENT_LEFT, -1, fs_sub).x + 6.0 * s)
+			_q(Vector2(x, y + 13.0 * s), "DMG", maxi(9, roundi(11.0 * s)), MUTED, _bold, HORIZONTAL_ALIGNMENT_LEFT, 32.0 * s)
+			_q(Vector2(tx, y + 13.0 * s), "%d%%" % roundi(p.damage * 100.0), fs_main, dcol, _bold, HORIZONTAL_ALIGNMENT_LEFT, 44.0 * s)
+			_q(Vector2(W - 14.0 * s - d_rw, y + 13.0 * s), _fit_font(_font, dmg_r, fs_sub, d_rw), fs_sub, MUTED, _font, HORIZONTAL_ALIGNMENT_RIGHT, d_rw)
+			_tri_meter(Rect2(tx, y + 19.0 * s, W - 14.0 * s - tx, 5.0 * s), p.damage, dcol)
 		else:
-			_q(Vector2(x, y + 12), pen, 12, YELLOW, _bold)
-		y += 24.0
-	# the plan: done stints fade, the current one is outlined
+			_q(Vector2(x, y + 13.0 * s), pen, fs_sub, boost, _bold, HORIZONTAL_ALIGNMENT_LEFT, W - x - 14.0 * s)
+		y += 28.0 * s
+	# the plan: done stints fade, the current one is outlined in neon
 	var from := maxi(0, p.stint_idx - 2)
 	var cx := x
 	if from > 0:
-		_q(Vector2(cx, y + 15), "+%d" % from, 11, Color(MUTED, 0.6), _font)
-		cx += 22.0
+		_q(Vector2(cx, y + 16.0 * s), "+%d" % from, fs_sub, Color(MUTED, 0.6), _font)
+		cx += 24.0 * s
 	for k in range(from, mini(p.plan.size(), from + 8)):
 		var st: Dictionary = p.plan[k]
-		var chip_w := 26.0 + _text_w(str(st.laps), 12, true)
-		if cx + chip_w > W - 12:
+		var chip_w := 28.0 * s + _text_w(str(st.laps), fs_sub, true)
+		if cx + chip_w > W - 14.0 * s:
 			break
 		var done := k < p.stint_idx
-		var chip := Rect2(cx, y + 2, chip_w, 19)
+		var chip := Rect2(cx, y + 2.0 * s, chip_w, 21.0 * s)
 		_tri_rect(chip, Color(CHIP_BG, 0.45 if done else 1.0))
 		if k == p.stint_idx:
-			_tri_frame(chip, YELLOW)
-		_q_badge(Vector2(cx + 10, y + 11.5), st.c)
-		_q(Vector2(cx + 21, y + 16), str(st.laps), 12, Color(TEXT, 0.45 if done else 1.0))
-		cx += chip_w + 4.0
-	y += 24.0
+			_tri_frame(chip, cyan, 1.5)
+		_q_badge(Vector2(cx + 10.0 * s, y + 12.5 * s), st.c)
+		_q(Vector2(cx + 22.0 * s, y + 17.0 * s), str(st.laps), fs_sub, Color(Color.WHITE, 0.45 if done else 1.0))
+		cx += chip_w + 5.0 * s
+	y += 28.0 * s
 	# status line
 	var status := ""
-	var status_col := TEXT
+	var status_col := Color.WHITE
 	var next_stop := race.player_next_stop_lap()
 	if p.mode == "pit" and p.pit:
 		if p.pit.phase == "in":
@@ -1614,41 +1816,43 @@ func _draw_pitwall() -> void:
 			status = "Released, pit exit ahead"
 	elif p.pit_request:
 		status = "BOX THIS LAP"
-		status_col = YELLOW
+		status_col = boost
 	elif next_stop > 0:
 		if next_stop == p.lap + 1:
 			status = "Box this lap (P to confirm)"
-			status_col = YELLOW
+			status_col = boost
 		else:
 			status = "Box after lap %d  ·  P = request" % next_stop
 	else:
 		status = "Stop required  ·  P = request"
-	_q(Vector2(x, y + 13), status, 12, status_col, _bold)
-	y += 22.0
+	_q(Vector2(x, y + 14.0 * s), _fit_font(_bold, status, fs_sub, W - x - 14.0 * s), fs_sub, status_col, _bold, HORIZONTAL_ALIGNMENT_LEFT, W - x - 14.0 * s)
+	y += 24.0 * s
 	var sv = _service()
 	if sv:
 		var sx := x
-		_q(Vector2(sx, y + 12), "Stop:", 11, MUTED, _font)
-		sx += _text_w("Stop: ", 11)
+		var stop_lbl := "Stop:"
+		_q(Vector2(sx, y + 13.0 * s), stop_lbl, fs_sub, MUTED, _font)
+		sx += _font.get_string_size(stop_lbl + " ", HORIZONTAL_ALIGNMENT_LEFT, -1, fs_sub).x
 		var tyre_txt := "keep tyres"
 		if sv.c:
-			_q_badge(Vector2(sx + 8, y + 8), sv.c)
-			sx += 20.0
+			_q_badge(Vector2(sx + 8.0 * s, y + 9.0 * s), sv.c)
+			sx += 20.0 * s
 			tyre_txt = race.tyres.compounds[sv.c].display_name
 		var rest := tyre_txt
 		if race.rules.refuel:
 			rest += " · +%.1f L" % sv.litres
 		rest += " · ≈%.1f s" % sv.time
-		_q(Vector2(sx, y + 12), rest, 11, TEXT, _font)
+		var rest_w := maxf(40.0, W - sx - 14.0 * s)
+		_q(Vector2(sx, y + 13.0 * s), _fit_font(_font, rest, fs_sub, rest_w), fs_sub, Color.WHITE, _font, HORIZONTAL_ALIGNMENT_LEFT, rest_w)
 	_tri_flush(pitwall)
 	_flush_badges(pitwall)
 	_q_flush(pitwall)
 
 # ---------------- dash (bottom right) ----------------
-## CMR 2.0 rev counter: drawn by the shared DashGauge control (also used by OpenWorldHud).
+## Shared glowing circular neon dial (DashGauge, also used by OpenWorldHud).
 const DASH_SEGMENTS := DashGauge.SEGMENTS
 
-## What the dash shows: [size, segments lit, gear, km/h, redline, drafting]. It is only redrawn when this changes.
+## What the dash shows: [size, segments lit, gear, km/h, redline, drafting, nitro_q, nitro_burning].
 func _dash_state() -> Array:
 	if not race:
 		return []
@@ -1663,7 +1867,8 @@ func _dash_state() -> Array:
 	var lit := DashGauge.lit_segments(frac)
 	var redline := DashGauge.is_redline(frac, _clock)
 	var drafting: bool = p.tow > 0.18
-	return [dash.size, lit, gear, kmh, redline, drafting]
+	var n2o_q := -1 if not race.mods.has("nitro") else roundi(clampf(race.nitro, 0.0, 1.0) * 100.0)
+	return [dash.size, lit, gear, kmh, redline, drafting, n2o_q, race.nitro_burning]
 
 func _build_map() -> void:
 	var tr := race.track
@@ -1720,20 +1925,32 @@ func _draw_minimap_base() -> void:
 		return
 	_map_key = _minimap_key()
 	var rect := Rect2(Vector2.ZERO, minimap_base.size)
-	minimap_base.draw_rect(rect, _plate(0.72))
-	minimap_base.draw_rect(Rect2(0, 0, rect.size.x, 2), Color(CmrStyle.VIOLET, 0.7))
+	var cyan := HudLayout.neon_primary()
+	var hot := HudLayout.neon_hot()
+	minimap_base.draw_rect(rect, HudLayout.glass_plate(0.84))
 	if _map_track != race.track or _map_size != minimap.size:
 		_build_map()
 	for w in _map_waters:
-		minimap_base.draw_colored_polygon(w, Color(0.18, 0.45, 0.72, 0.45))
+		minimap_base.draw_colored_polygon(w, Color(0.14, 0.42, 0.72, 0.45))
 	for b_poly in _map_buildings:
-		minimap_base.draw_colored_polygon(b_poly, Color(0.42, 0.48, 0.58, 0.22))
-	_tri_strip(_map_points, 7.0, _shade(0.8), true)
-	_tri_strip(_map_points, 3.2, Color("#e8f2ff"), true)
-	_tri_strip(_map_start, 3.0, RED)
+		minimap_base.draw_colored_polygon(b_poly, Color(0.42, 0.50, 0.62, 0.24))
+	# glowing neon circuit ribbon
+	_tri_strip(_map_points, 9.5, Color(cyan, 0.28), true)
+	_tri_strip(_map_points, 6.2, _shade(0.88), true)
+	_tri_strip(_map_points, 3.4, Color("#f2f9ff"), true)
+	_tri_strip(_map_start, 3.5, hot)
 	if race.rc:
 		_draw_map_flags(race.rc)
 	_tri_flush(minimap_base)
+	# thick glowing neon radar border + bright corner accents
+	minimap_base.draw_rect(rect.grow(-2.5), Color(cyan, 0.28), false, 6.0)
+	minimap_base.draw_rect(rect.grow(-1.5), cyan, false, 2.5)
+	var corner := 18.0
+	for p0 in [Vector2(1.5, 1.5), Vector2(rect.size.x - 1.5, 1.5), Vector2(1.5, rect.size.y - 1.5), Vector2(rect.size.x - 1.5, rect.size.y - 1.5)]:
+		var dx := corner if p0.x < rect.size.x * 0.5 else -corner
+		var dy := corner if p0.y < rect.size.y * 0.5 else -corner
+		minimap_base.draw_line(p0, p0 + Vector2(dx, 0), hot, 3.0)
+		minimap_base.draw_line(p0, p0 + Vector2(0, dy), hot, 3.0)
 
 func _draw_minimap() -> void:
 	if not race:
@@ -1742,6 +1959,8 @@ func _draw_minimap() -> void:
 		_build_map()
 	var rc := race.rc
 	var p := race.player
+	var cyan := HudLayout.neon_primary()
+	var boost := HudLayout.neon_boost()
 	# all the dots, then all their rims: two batched draws instead of two per car
 	var dots: Array = [] ## [centre, colour]
 	for car in race.cars:
@@ -1753,24 +1972,25 @@ func _draw_minimap() -> void:
 			continue
 		dots.append([Vector2(car.x, car.y) * _map_scale + _map_origin, car.color])
 	for d in dots:
-		_round(minimap, d[0], 3.2, d[1])
+		_round(minimap, d[0], 3.6, d[1])
 	for d in dots:
-		_round(minimap, d[0], 3.7, Color(0, 0, 0, 0.7), 2.7 / 3.7)
+		_round(minimap, d[0], 4.2, Color(0, 0, 0, 0.78), 3.0 / 4.2)
 	if not p.dnf:
 		var pp := Vector2(p.x, p.y) * _map_scale + _map_origin
-		_round(minimap, pp, 5.5, YELLOW)
-		_round(minimap, pp, 6.5, Color.BLACK, 4.5 / 6.5)
+		_round(minimap, pp, 10.5, Color(cyan, 0.28))
+		_round(minimap, pp, 6.0, boost)
+		_round(minimap, pp, 7.2, Color.BLACK, 5.0 / 7.2)
 		var fwd := Vector2(cos(p.heading), sin(p.heading)).normalized()
-		var tip := pp + fwd * 10.0
-		var wing1 := pp - fwd * 3.5 + Vector2(-fwd.y, fwd.x) * 4.5
-		var wing2 := pp - fwd * 3.5 - Vector2(-fwd.y, fwd.x) * 4.5
-		minimap.draw_colored_polygon(PackedVector2Array([tip, wing1, pp, wing2]), YELLOW)
-		minimap.draw_polyline(PackedVector2Array([wing1, tip, wing2]), Color.BLACK, 1.5, true)
+		var tip := pp + fwd * 12.0
+		var wing1 := pp - fwd * 4.0 + Vector2(-fwd.y, fwd.x) * 5.2
+		var wing2 := pp - fwd * 4.0 - Vector2(-fwd.y, fwd.x) * 5.2
+		minimap.draw_colored_polygon(PackedVector2Array([tip, wing1, pp, wing2]), Color.WHITE)
+		minimap.draw_polyline(PackedVector2Array([wing1, tip, wing2]), cyan, 1.8, true)
 	if rc and rc.sc_state in ["out", "in"]:
 		var sp := Vector2(rc.sc.x, rc.sc.y) * _map_scale + _map_origin
 		var on := fmod(_clock, 0.5) < 0.25
-		minimap.draw_rect(Rect2(sp - Vector2(4, 4), Vector2(8, 8)), Color("#ffd21a") if on else Color.WHITE)
-		minimap.draw_rect(Rect2(sp - Vector2(4, 4), Vector2(8, 8)), Color.BLACK, false, 1.5)
+		minimap.draw_rect(Rect2(sp - Vector2(4.5, 4.5), Vector2(9, 9)), Color("#ffd21a") if on else Color.WHITE)
+		minimap.draw_rect(Rect2(sp - Vector2(4.5, 4.5), Vector2(9, 9)), Color.BLACK, false, 1.5)
 
 ## Yellow marshal sectors along the minimap line (the whole lap turns red under a red flag).
 func _draw_map_flags(rc: RaceControl) -> void:
@@ -1898,27 +2118,36 @@ func _update_mode() -> void:
 			_mode_seen = n
 			_mode_split = {"lap": race.tt.laps[-1], "until": _clock + MODE_SPLIT_SHOW}
 
-## The right-hand clock for a stage or a time trial: progress, the big time, then a few rows.
+## The right-hand clock for a stage or a time trial: glowing neon progress, dark-glass big time, crisp rows.
 func _draw_mode_clock() -> void:
 	var p := race.player
-	var W := CLOCK_W
-	var x0 := clock.size.x - W
+	var W := clock.size.x
+	var s := W / CLOCK_W
 	var st := race.stage
 	var tt := race.tt
+	var cyan := HudLayout.neon_primary()
+	var hot := HudLayout.neon_hot()
+	var boost := HudLayout.neon_boost()
+	var it_bold := HudLayout.italic_font(900, -0.14)
+	var it_dig := HudLayout.italic_digits(-0.14)
 	var frac := 0.0
 	if race.phase == "racing" or (st and st.time != null):
 		frac = clampf(st.progress / st.length, 0.0, 1.0) if st else clampf(p.s / race.track.L, 0.0, 1.0)
 		if st and st.time != null:
 			frac = 1.0
 	var segs := 12
-	var sw := (W - (segs - 1) * 3.0) / segs
+	var bar_h := roundf(13.0 * s)
+	var sw := (W - (segs - 1) * 3.5 * s) / segs
 	for k in segs:
-		var r := Rect2(x0 + k * (sw + 3.0), 0, sw, 12)
+		var r := Rect2(k * (sw + 3.5 * s), 0, sw, bar_h)
 		var fill := clampf(frac * segs - k, 0.0, 1.0)
-		_tri_rect(r, _plate(0.55))
+		var seg_col := cyan.lerp(hot, float(k) / float(segs - 1))
+		_tri_rect(r, HudLayout.glass_plate(0.75))
 		if fill > 0.0:
-			_tri_rect(Rect2(r.position, Vector2(r.size.x * fill, r.size.y)), YELLOW)
-		_tri_frame(r, Color(1, 1, 1, 0.35))
+			var fr := Rect2(r.position, Vector2(r.size.x * fill, r.size.y))
+			_tri_rect(fr.grow(2.0 * s), Color(seg_col, 0.30))
+			_tri_rect(fr, seg_col)
+		_tri_frame(r, Color(seg_col, 0.48), 1.0)
 	var label := ""
 	var time_text := ""
 	var rows := []
@@ -1927,34 +2156,39 @@ func _draw_mode_clock() -> void:
 		label = ("STAGE %d / %d" % [st.index + 1, n]) if st.event else "STAGE"
 		time_text = Race.fmt_time(st.elapsed())
 		var pen := st.penalty()
-		rows.append(["PENALTY", "+%d s" % roundi(pen) if pen > 0.0 else "—", RED if pen > 0.0 else INK])
+		rows.append(["PENALTY", "+%d s" % roundi(pen) if pen > 0.0 else "—", RED if pen > 0.0 else Color.WHITE])
 		if st.event:
 			var before: int = st.event.player_position() if st.event.results.size() else 0
-			rows.append(["OVERALL", "P%d / %d" % [before, st.event.rivals.size() + 1] if before > 0 else "—", INK])
+			rows.append(["OVERALL", "P%d / %d" % [before, st.event.rivals.size() + 1] if before > 0 else "—", boost])
 		var lead := st.leader_at(Rally.SPLITS)
-		rows.append(["STAGE BEST", Race.fmt_time(lead.t) if not lead.is_empty() else "—", INK])
-		rows.append(["DAMAGE", "%d %%" % roundi(p.damage * 100.0), RED if p.damage >= REPAIR_AT_HUD else INK])
+		rows.append(["STAGE BEST", Race.fmt_time(lead.t) if not lead.is_empty() else "—", cyan.lightened(0.25)])
+		rows.append(["DAMAGE", "%d %%" % roundi(p.damage * 100.0), RED if p.damage >= REPAIR_AT_HUD else Color.WHITE])
 	else:
 		label = "ROLLING START" if tt.out_lap() else "LAP %d" % (tt.laps.size() + 1)
 		time_text = Race.fmt_time(maxf(0.0, race.race_time - p.lap_start)) if race.phase == "racing" and not tt.out_lap() else "0:00.000"
 		var last = tt.laps[-1] if tt.laps.size() else null
-		rows.append(["LAST", ("INVALID" if not last.valid else Race.fmt_time(last.time)) if last else "—", (RED if not last.valid else INK) if last else INK])
-		rows.append(["BEST", Race.fmt_time(tt.best_lap), PURPLE if tt.best_lap != null else INK])
-		rows.append(["IDEAL", Race.fmt_time(tt.ideal_lap()), INK])
-		rows.append(["RECORD", Race.fmt_time(tt.record_time), INK])
-	var box := Rect2(x0, 18, W, 64)
-	var box_style := CmrStyle.box(BAR_HI, Color.TRANSPARENT, 0, 0)
-	box_style.border_color = Color(1, 1, 1, 0.9)
-	box_style.border_width_top = 2
-	box_style.draw(clock.get_canvas_item(), box)
-	_q(Vector2(x0 + 14, 36), label, 13, CmrStyle.INK_SOFT, _bold)
-	_q(Vector2(x0, 74), time_text, 42, INK, _digits, HORIZONTAL_ALIGNMENT_RIGHT, W - 16)
-	var y := 88.0
+		rows.append(["LAST", ("INVALID" if not last.valid else Race.fmt_time(last.time)) if last else "—", (RED if not last.valid else Color.WHITE) if last else Color.WHITE])
+		rows.append(["BEST", Race.fmt_time(tt.best_lap), hot.lightened(0.25) if tt.best_lap != null else Color.WHITE])
+		rows.append(["IDEAL", Race.fmt_time(tt.ideal_lap()), cyan.lightened(0.25)])
+		rows.append(["RECORD", Race.fmt_time(tt.record_time), boost])
+	var box := Rect2(0, roundf(19.0 * s), W, roundf(68.0 * s))
+	HudLayout.draw_neon_panel(clock, box, cyan, 0.90, 5.0 * s, true)
+	_q(Vector2(14.0 * s, box.position.y + 18.0 * s), label, maxi(10, roundi(13.0 * s)), cyan.lightened(0.25), it_bold, HORIZONTAL_ALIGNMENT_LEFT, W - 28.0 * s)
+	var time_w := W - 28.0 * s
+	var time_fs := _shrink_fs(it_dig, time_text, maxi(20, roundi(42.0 * s)), 18, time_w)
+	_q(Vector2(14.0 * s, box.position.y + 58.0 * s), time_text, time_fs, Color.WHITE, it_dig, HORIZONTAL_ALIGNMENT_RIGHT, time_w)
+	var y := box.end.y + roundf(7.0 * s)
+	var row_h := roundf(28.0 * s)
+	var row_step := roundf(32.0 * s)
 	for row in rows:
-		_tri_gbar(Rect2(x0 + 30, y, W - 30, 26), Color(BAR_HI, 0.6), BAR_HI)
-		_q(Vector2(x0 + 44, y + 19), row[0], 13, CmrStyle.INK_SOFT, _bold)
-		_q(Vector2(x0 + 60, y + 20), row[1], 18, row[2], _bold, HORIZONTAL_ALIGNMENT_RIGHT, W - 72)
-		y += 29.0
+		var rr := Rect2(16.0 * s, y, W - 16.0 * s, row_h)
+		_tri_rect(rr, HudLayout.glass_plate(0.82))
+		_tri_rect(Rect2(rr.position, Vector2(4.0 * s, row_h)), Color(cyan, 0.72))
+		_tri_frame(rr, Color(cyan, 0.24), 1.0)
+		_q(Vector2(30.0 * s, y + row_h * 0.72), row[0], maxi(10, roundi(12.5 * s)), MUTED, _bold, HORIZONTAL_ALIGNMENT_LEFT, 108.0 * s)
+		var vfs := maxi(12, roundi(17.5 * s))
+		_q(Vector2(138.0 * s, y + row_h * 0.75), _fit_font(_bold, row[1], vfs, W - 150.0 * s), vfs, row[2], _bold, HORIZONTAL_ALIGNMENT_RIGHT, W - 150.0 * s)
+		y += row_step
 	_tri_flush(clock)
 	_q_flush(clock)
 
@@ -2218,18 +2452,25 @@ func _draw_mission() -> void:
 			var kind := race.track.loose_at(race.track.wrap_s(p.s)) if race.s.loose_spans else 0
 			line = ["TARMAC", "DIRT", "GRAVEL"][kind] if race.s.loose_spans else "%d TO BEAT" % maxi(0, p.pos - 1)
 			fill = run / L
-	c.draw_rect(Rect2(0, 0, W, MISSION_H), MODE_PLATE)
-	c.draw_rect(Rect2(0, 0, W, 4), col)
+	var H := c.size.y
+	var s := W / MISSION_W
+	var it_bold := HudLayout.italic_font(900, -0.14)
+	HudLayout.draw_neon_panel(c, Rect2(0, 0, W, H), col, 0.90, 6.0 * s, true)
+	c.draw_rect(Rect2(0, 0, W, 3.0), col)
 	if fill >= 0.0:
-		c.draw_rect(Rect2(0, MISSION_H - 4, W * clampf(fill, 0.0, 1.0), 4), Color(col, 0.85))
-	var rw := _bold.get_string_size(right, HORIZONTAL_ALIGNMENT_LEFT, -1, 18).x if right != "" else 0.0
-	_mt(c, Vector2(14, 26), head, 18, TEXT, _bold, HORIZONTAL_ALIGNMENT_LEFT, W - 42 - rw)
+		c.draw_rect(Rect2(0, H - 5.0 * s, W * clampf(fill, 0.0, 1.0), 5.0 * s), Color(col.lightened(0.25), 0.95))
+	var hfs := maxi(13, roundi(19.0 * s))
+	var lfs := maxi(11, roundi(14.0 * s))
+	var rw := it_bold.get_string_size(right, HORIZONTAL_ALIGNMENT_LEFT, -1, hfs).x if right != "" else 0.0
+	var head_w := maxf(40.0, W - 36.0 * s - rw)
+	_mt(c, Vector2(16.0 * s, H * 0.45), _fit_font(it_bold, head, hfs, head_w), hfs, Color.WHITE, it_bold, HORIZONTAL_ALIGNMENT_LEFT, head_w)
 	if right != "":
-		_mt(c, Vector2(W - 14 - rw, 26), right, 18, YELLOW, _bold, HORIZONTAL_ALIGNMENT_LEFT, rw + 1.0)
-	var lw := _bold.get_string_size(line_right, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x if line_right != "" else 0.0
-	_mt(c, Vector2(14, 47), line, 14, line_col, _bold, HORIZONTAL_ALIGNMENT_LEFT, W - 42 - lw)
+		_mt(c, Vector2(W - 14.0 * s - rw, H * 0.45), right, hfs, HudLayout.neon_boost(), it_bold, HORIZONTAL_ALIGNMENT_LEFT, rw + 2.0)
+	var lw := _bold.get_string_size(line_right, HORIZONTAL_ALIGNMENT_LEFT, -1, lfs).x if line_right != "" else 0.0
+	var line_w := maxf(40.0, W - 36.0 * s - lw)
+	_mt(c, Vector2(16.0 * s, H * 0.80), _fit_font(_bold, line, lfs, line_w), lfs, line_col, _bold, HORIZONTAL_ALIGNMENT_LEFT, line_w)
 	if line_right != "":
-		_mt(c, Vector2(W - 14 - lw, 47), line_right, 14, MUTED, _bold, HORIZONTAL_ALIGNMENT_LEFT, lw + 1.0)
+		_mt(c, Vector2(W - 14.0 * s - lw, H * 0.80), line_right, lfs, MUTED, _bold, HORIZONTAL_ALIGNMENT_LEFT, lw + 2.0)
 
 func _mission_name(car: RaceCar) -> String:
 	return "YOU" if car.is_player else str(car.name).split(" ")[-1].to_upper()

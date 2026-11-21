@@ -190,19 +190,26 @@ func _ensure_marker() -> void:
 	_marker = Control.new()
 	_marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_marker.draw.connect(func() -> void:
-		_marker.draw_circle(Vector2.ZERO, 9.0, Color(CmrStyle.ORANGE, 0.3))
-		_marker.draw_circle(Vector2.ZERO, 4.2, CmrStyle.ORANGE))
+		var hot := HudLayout.neon_hot()
+		if CmrStyle.skin != "ps1":
+			_marker.draw_circle(Vector2.ZERO, 16.0, Color(hot, 0.16))
+			_marker.draw_circle(Vector2.ZERO, 9.5, Color(hot, 0.38))
+		_marker.draw_circle(Vector2.ZERO, 4.8, hot)
+		_marker.draw_circle(Vector2.ZERO, 2.2, Color.WHITE))
 	add_child(_marker)
 
 func _draw() -> void:
 	if _path.size() < 2:
 		return
+	var neon := HudLayout.neon_primary()
+	var hot := HudLayout.neon_hot()
+	var is_ps1 := CmrStyle.skin == "ps1"
 	if map_mode:
-		var water_color := Color(0.20, 0.40, 0.65, 0.42)
-		var shore_color := Color(0.32, 0.58, 0.85, 0.70)
-		var river_color := Color(0.24, 0.45, 0.70, 0.55)
-		var b_fill := Color(0.60, 0.62, 0.68, 0.16)
-		var b_stroke := Color(0.70, 0.72, 0.80, 0.30)
+		var water_color := Color(0.05, 0.25, 0.48, 0.55)
+		var shore_color := Color(neon, 0.52)
+		var river_color := Color(0.08, 0.36, 0.62, 0.65)
+		var b_fill := Color(neon, 0.08)
+		var b_stroke := Color(neon, 0.22)
 		if not _map_env.is_empty():
 			var water_mesh := _env_mesh(_map_env, "water")
 			if water_mesh:
@@ -217,15 +224,30 @@ func _draw() -> void:
 			if _map_edges.size() >= 2:
 				draw_multiline(_map_edges, b_stroke, 1.0, true)
 
-		# Road outline with shadow and crisp boundary
-		draw_polyline(_path, Color(0.0, 0.0, 0.0, 0.45), 6.5, true)
-		draw_polyline(_path, Color(0.12, 0.14, 0.18, 0.85), 4.2, true)
-		draw_polyline(_path, Color(CmrStyle.TEXT, 0.95), 2.2, true)
+		# Glowing neon road ribbon with dark kerb contrast
+		if not is_ps1:
+			draw_polyline(_path, Color(neon, 0.24), 10.5, true)
+		draw_polyline(_path, Color(0.03, 0.05, 0.10, 0.88), 5.6, true)
+		draw_polyline(_path, neon.lightened(0.28), 2.5, true)
 
-		# Distinct start / finish marker
-		draw_circle(_path[0], 7.5, Color(CmrStyle.ORANGE, 0.35))
-		draw_circle(_path[0], 4.5, CmrStyle.ORANGE)
-		draw_circle(_path[0], 2.0, Color.WHITE)
+		# Glowing hot-neon start / finish beacon
+		if not is_ps1:
+			draw_circle(_path[0], 11.0, Color(hot, 0.28))
+		draw_circle(_path[0], 6.0, hot)
+		draw_circle(_path[0], 2.6, Color.WHITE)
 	else:
-		draw_polyline(_path, Color(CmrStyle.TEXT, 0.12), 7.0, true)
-		draw_polyline(_path, Color(CmrStyle.TEXT, 0.7), 1.6, true)
+		# Main menu neon track hologram with subtle architectural grid
+		if not is_ps1:
+			var step := 64.0
+			var grid_col := Color(neon, 0.045)
+			var x := fmod(size.x * 0.5, step)
+			while x < size.x:
+				draw_line(Vector2(x, 0.0), Vector2(x, size.y), grid_col, 1.0)
+				x += step
+			var y := fmod(size.y * 0.5, step)
+			while y < size.y:
+				draw_line(Vector2(0.0, y), Vector2(size.x, y), grid_col, 1.0)
+				y += step
+			draw_polyline(_path, Color(neon, 0.09), 20.0, true)
+			draw_polyline(_path, Color(neon, 0.22), 8.5, true)
+		draw_polyline(_path, Color(neon.lightened(0.32), 0.90), 2.2, true)

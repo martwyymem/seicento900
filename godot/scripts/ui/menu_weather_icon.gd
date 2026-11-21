@@ -7,10 +7,11 @@ var condition := "cloud":
 		queue_redraw()
 
 var INK: Color:
-	get: return CmrStyle.INK
-const CLOUD := Color("#f4f3ef")
+	get: return HudLayout.neon_primary()
+var CLOUD: Color:
+	get: return HudLayout.glass_plate(0.88).lightened(0.14)
 var SUN: Color:
-	get: return CmrStyle.ORANGE
+	get: return HudLayout.neon_boost()
 
 func _ready() -> void:
 	custom_minimum_size = Vector2(48, 52)
@@ -71,4 +72,4 @@ func _draw_rain(long_drops: bool) -> void:
 	for x in [12.0, 24.0, 36.0]:
 		var y := 38.0 if long_drops else 35.0
 		var length := 10.0 if long_drops else 5.0
-		draw_line(Vector2(x + 2.0, y), Vector2(x - 2.0, y + length), CmrStyle.PLUM, 2.0, true)
+		draw_line(Vector2(x + 2.0, y), Vector2(x - 2.0, y + length), HudLayout.neon_primary(), 2.2, true)

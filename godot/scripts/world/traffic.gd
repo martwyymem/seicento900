@@ -20,12 +20,29 @@ const CAR_MASS := 1150.0
 const RADIUS := 0.95 ## each car is two circles this big, 1.1 m either side of its middle
 const RAIL_LOOK := 70.0 ## m: how far ahead a driver watches for a closed crossing or the train
 const RAIL_BRAKE := 4.5 ## m/s²: how hard they brake for one
-const KINDS := ["CarHatch", "CarSedan", "CarVan", "Maluch"]
-const KIND_WEIGHTS := [0.45, 0.32, 0.14, 0.09] ## hatches and saloons mostly, the odd van, a Maluch now and then
+const KINDS := ["CarGolf4", "CarSeicento", "CarFocus", "CarSandero", "CarLogan", "CarZafira", "CarI20", "CarV50", "CarVan", "Maluch"]
+## Realistic Polish street mix: Golfs and Tychy-built Seicentos lead, everyday compact hatches/saloons/MPVs, vans and the odd Maluch.
+const KIND_WEIGHTS := [0.20, 0.14, 0.11, 0.10, 0.10, 0.09, 0.08, 0.06, 0.08, 0.04]
+## Per-kind real dimensions (m), kerb mass (kg) and CarCatalog palette key ("" for vans/Maluchs/legacy fallbacks).
+const KIND_SPECS := {
+	"CarGolf4": {"len": 4.22, "w": 1.80, "mass": 1200.0, "cat": "golf4"},
+	"CarSeicento": {"len": 3.45, "w": 1.56, "mass": 820.0, "cat": "stock"},
+	"CarFocus": {"len": 4.40, "w": 1.86, "mass": 1320.0, "cat": "focus"},
+	"CarSandero": {"len": 4.05, "w": 1.78, "mass": 1070.0, "cat": "sandero"},
+	"CarLogan": {"len": 4.30, "w": 1.80, "mass": 1080.0, "cat": "logan"},
+	"CarZafira": {"len": 4.49, "w": 1.86, "mass": 1520.0, "cat": "zafira"},
+	"CarI20": {"len": 3.96, "w": 1.76, "mass": 1060.0, "cat": "i20"},
+	"CarV50": {"len": 4.57, "w": 1.82, "mass": 1420.0, "cat": "v50"},
+	"CarVan": {"len": 5.05, "w": 2.02, "mass": 2100.0, "cat": ""},
+	"Maluch": {"len": 3.19, "w": 1.44, "mass": 680.0, "cat": ""},
+	"CarHatch": {"len": 4.20, "w": 1.80, "mass": 1150.0, "cat": ""},
+	"CarSedan": {"len": 4.62, "w": 1.84, "mass": 1280.0, "cat": ""},
+}
 ## Vans are mostly fleet white and silver; a Maluch wears the colours they were sold in (cream, mustard, sky blue,
-## olive, the red and white); the rest draw from TownBuilder.CAR_PAINTS.
-const VAN_PAINTS := ["#f5f5f5", "#f5f5f5", "#eceff1", "#b0bec5", "#9e9e9e", "#1e3a5f", "#c62828"]
+## olive, the red and white); catalogue cars draw from their real factory colour charts (CarCatalog.PALETTES).
+const VAN_PAINTS := ["#f5f5f5", "#f5f5f5", "#f2f3f0", "#eceff1", "#b0bec5", "#9e9e9e", "#1e3a5f", "#c62828"]
 const MALUCH_PAINTS := ["#e8dcb5", "#d4a017", "#87a9c9", "#6b7d3a", "#b71c1c", "#f2f2ee", "#c9773c", "#3f5e8c"]
+static var _palettes := {} ## kind -> Array[Color]
 const CAR_LEN := 4.2 ## m, centre-to-centre gap that means bumpers touch
 const SENSE_DT := 0.12 ## s between a driver's looks round (the steps between are dead reckoning)
 const LOOK_AHEAD := [4.0, 9.0, 16.0, 26.0, 38.0, 52.0] ## m: where the driver checks the road's curvature
@@ -142,21 +159,56 @@ static func _point_on(pts: PackedVector2Array, s: float) -> Array:
 		acc += l
 	return [pts[0], Vector2.RIGHT, 0, 0.0]
 
+## Per-kind dimensions, mass and palette key (defaults to Golf IV for unknown names).
+static func kind_spec(kind: String) -> Dictionary:
+	return KIND_SPECS.get(kind, KIND_SPECS.CarGolf4)
+
+## Real-world paint palette (Color array) for a traffic or parked car kind.
+static func paint_palette(kind: String) -> Array:
+	if _palettes.has(kind):
+		return _palettes[kind]
+	var out: Array = []
+	if kind == "CarVan":
+		for h in VAN_PAINTS:
+			out.append(Color(h))
+	elif kind == "Maluch":
+		for h in MALUCH_PAINTS:
+			out.append(Color(h))
+	else:
+		var cat := String(kind_spec(kind).get("cat", ""))
+		if cat != "" and CarCatalog.PALETTES.has(cat):
+			for e in CarCatalog.PALETTES[cat]:
+				out.append(Color(String(e[1])))
+		else:
+			for h in TownBuilder.CAR_PAINTS:
+				out.append(Color(h))
+	_palettes[kind] = out
+	return out
+
 ## A driver: pace against the limit, pull-away and comfortable braking (m/s²), time gap (s), standstill gap (m),
 ## the sideways acceleration they take bends at (m/s²) and how long they take to move off once the way is clear (s).
-## Maluch drivers are old and gentle, vans heavy, the odd hatch in a hurry.
+## Maluch drivers are old and gentle, Seicentos modest, vans heavy, Zafiras steady family cars, Golfs/Focuses brisker.
 func _driver(kind: String) -> Dictionary:
 	var r := _rng
 	var d := {"f": r.randf_range(0.82, 1.08), "a": r.randf_range(1.3, 2.4), "b": r.randf_range(2.0, 3.2),
 		"T": r.randf_range(0.9, 1.8), "s0": r.randf_range(1.8, 3.2), "lat": r.randf_range(2.2, 3.6),
 		"react": r.randf_range(0.35, 1.1), "cap": 40.0, "wob": r.randf() * TAU, "wob_f": r.randf_range(0.05, 0.12)}
+	var hurry := 0.12
 	match kind:
 		"Maluch":
 			d.f = r.randf_range(0.7, 0.92)
 			d.a = r.randf_range(0.8, 1.3)
 			d.T = r.randf_range(1.4, 2.2)
 			d.lat = r.randf_range(1.8, 2.6)
-			d.cap = 27.0 # ~100 km/h flat out
+			d.cap = 27.0 # ~97 km/h flat out
+			hurry = 0.03
+		"CarSeicento":
+			d.f = r.randf_range(0.80, 1.02)
+			d.a = r.randf_range(1.1, 1.8)
+			d.T = r.randf_range(1.0, 1.9)
+			d.lat = r.randf_range(2.2, 3.3)
+			d.cap = 34.0 # ~122 km/h
+			hurry = 0.08
 		"CarVan":
 			d.f = r.randf_range(0.78, 1.0)
 			d.a = r.randf_range(1.0, 1.7)
@@ -164,7 +216,20 @@ func _driver(kind: String) -> Dictionary:
 			d.T = r.randf_range(1.2, 2.0)
 			d.lat = r.randf_range(1.9, 2.8)
 			d.cap = 31.0 # ~110 km/h loaded
-	if r.randf() < (0.12 if kind != "Maluch" else 0.03): # in a hurry
+			hurry = 0.09
+		"CarZafira":
+			d.f = r.randf_range(0.82, 1.04)
+			d.a = r.randf_range(1.2, 2.0)
+			d.b = r.randf_range(2.0, 3.0)
+			d.T = r.randf_range(1.1, 1.9)
+			d.lat = r.randf_range(2.0, 3.0) # family MPV: takes corners calmly
+			d.cap = 38.0
+			hurry = 0.07
+		"CarGolf4", "CarFocus", "CarV50":
+			d.f = r.randf_range(0.86, 1.10)
+			d.a = r.randf_range(1.5, 2.5)
+			hurry = 0.16
+	if r.randf() < hurry: # in a hurry
 		d.f = r.randf_range(1.08, 1.22)
 		d.a = r.randf_range(2.2, 3.0) if kind != "Maluch" else d.a * 1.15 # a Maluch has no more to give
 		d.T = r.randf_range(0.6, 1.0)
@@ -191,10 +256,10 @@ func _spawn(from_node: String, e: Array, pts: PackedVector2Array, s: float) -> v
 	_place(c)
 	cars.append(c)
 
-## A paint colour for a car of this kind (see VAN_PAINTS, MALUCH_PAINTS).
+## A paint colour for a car of this kind (factory colour chart for real models, VAN_PAINTS / MALUCH_PAINTS for vans/Maluchs).
 func _paint_for(kind: String) -> Color:
-	var pal: Array = VAN_PAINTS if kind == "CarVan" else (MALUCH_PAINTS if kind == "Maluch" else TownBuilder.CAR_PAINTS)
-	return Color(pal[_rng.randi() % pal.size()])
+	var pal := paint_palette(kind)
+	return pal[_rng.randi() % pal.size()]
 
 ## Dev menu: a parked car `gap` metres ahead of the player, along the way the player faces (it stays until it is knocked off).
 func spawn_ahead(player: FreeCar, kind: String, gap := 22.0) -> void:
@@ -229,9 +294,11 @@ func _car_node(kind: String, paint: Color) -> Node3D:
 	if not _paint_cache.has(key):
 		var m := StandardMaterial3D.new()
 		m.albedo_color = paint
-		m.metallic = 0.4
-		m.roughness = 0.3
+		m.metallic = 0.25
+		m.roughness = 0.26
 		m.clearcoat_enabled = true
+		m.clearcoat = 0.9
+		m.clearcoat_roughness = 0.05
 		_paint_cache[key] = m
 	var painted := false
 	for i in mesh.get_surface_count():
@@ -539,16 +606,18 @@ func _accel(c: Dictionary, player: FreeCar) -> float:
 	var lv := 0.0
 	var lead: Variant = c.get("lead")
 	var room := 0.0 # stop well back from something odd in the road, to have room to steer round it
+	var my_len: float = float(kind_spec(String(c.get("kind", "CarGolf4"))).len)
 	if lead is Dictionary:
 		var o: Dictionary = lead
 		if not o.has("gone"):
-			gap = (o.pos as Vector2).distance_to(c.pos) - CAR_LEN
+			var o_len: float = float(kind_spec(String(o.get("kind", "CarGolf4"))).len)
+			gap = (o.pos as Vector2).distance_to(c.pos) - (my_len + o_len) * 0.5
 			lv = float(o.v) * maxf(0.0, Vector2(cos(float(o.heading)), sin(float(o.heading))).dot(c.dir))
 			if o.has("parked") or float(o.knock) > 0.0:
 				room = 3.0
 	elif lead is String and player != null:
 		var pp := Vector2(player.car.x, player.car.y)
-		gap = pp.distance_to(c.pos) - CAR_LEN
+		gap = pp.distance_to(c.pos) - (my_len + FreeCar.HALF_L * 2.0) * 0.5
 		lv = maxf(0.0, Vector2(player.car.vx, player.car.vy).dot(c.dir))
 		if lv < 1.0:
 			room = 3.0
@@ -951,13 +1020,16 @@ func _train_contact(c: Dictionary) -> void:
 		var f := Vector2.from_angle(float(tc[1]))
 		var r := Vector2(-f.y, f.x)
 		var dir := Vector2(cos(c.heading), sin(c.heading))
-		for k: float in [-1.1, 1.1]:
+		var sp := kind_spec(String(c.get("kind", "CarGolf4")))
+		var rad := clampf(float(sp.w) * 0.5, 0.72, 1.02)
+		var span := maxf(0.55, float(sp.len) * 0.5 - rad)
+		for k: float in [-span, span]:
 			var q: Vector2 = p + dir * k
 			var lq := q - tcen
 			var ax := lq.dot(f)
 			var ay := lq.dot(r)
-			var ox := float(tc[2]) + RADIUS - absf(ax)
-			var oy := float(tc[3]) + RADIUS - absf(ay)
+			var ox := float(tc[2]) + rad - absf(ax)
+			var oy := float(tc[3]) + rad - absf(ay)
 			if ox <= 0.0 or oy <= 0.0:
 				continue
 			var tv: Vector2 = tc[5] if tc.size() > 5 else Vector2.ZERO
@@ -1023,18 +1095,22 @@ func _contact(player: FreeCar) -> void:
 		var dir := Vector2(cos(c.heading), sin(c.heading))
 		var cv := dir * float(c.v)
 		var rel := (pv - cv).length()
+		var sp := kind_spec(String(c.get("kind", "CarGolf4")))
+		var rad := clampf(float(sp.w) * 0.5, 0.72, 1.02)
+		var span := maxf(0.55, float(sp.len) * 0.5 - rad)
+		var mass := float(sp.mass)
 		var touched := false
-		for k: float in [-1.1, 1.1]:
+		for k: float in [-span, span]:
 			var q: Vector2 = p + dir * k
 			var local := (q - pc).rotated(-car.heading)
 			var cl := Vector2(clampf(local.x, -FreeCar.HALF_L, FreeCar.HALF_L), clampf(local.y, -FreeCar.HALF_W, FreeCar.HALF_W))
 			var d := local.distance_to(cl)
-			if d < RADIUS:
+			if d < rad:
 				touched = true
 				var n_local := (cl - local).normalized() if d > 1e-4 else Vector2(-1, 0)
 				var n_out := n_local.rotated(car.heading) # from the traffic car towards the player
-				var v := player.bump(n_out, (RADIUS - d) * (0.15 if player.monster else 0.6), cl.rotated(car.heading), CAR_MASS, cv)
-				c.push = (c.push as Vector2) - n_out * (RADIUS - d) * (1.2 if player.monster else 0.4)
+				var v := player.bump(n_out, (rad - d) * (0.15 if player.monster else 0.6), cl.rotated(car.heading), mass, cv)
+				c.push = (c.push as Vector2) - n_out * (rad - d) * (1.2 if player.monster else 0.4)
 				if v > 2.0:
 					c.knock = 2.5
 					c.spin = float(c.spin) + clampf(v * 0.03, 0.0, 0.6) * signf(n_out.cross(dir))

@@ -1317,11 +1317,21 @@ func _spawn_rivals() -> void:
 	var rv := live.rivals()
 	if rv == null:
 		return
+	var ev: Dictionary = live.run.get("ev", {})
+	var field_seed := CarCatalog.rival_seed([int(ev.get("mission", -1)), String(ev.get("id", "")), String(ev.get("title", ""))])
+	var avoid := _player_paint()
+	var seen_models := {}
 	for k in rv.rivals.size():
+		var rival_key := CarCatalog.rival_model(k, field_seed)
+		var occ := int(seen_models.get(rival_key, 0))
+		seen_models[rival_key] = occ + 1
 		var node: Node3D = CAR_SCENE.instantiate()
-		node.car_key = CarCatalog.key_at(progress.car_class)
+		node.car_key = rival_key
 		world.add_child(node)
-		node.set_paint(CarCatalog.field_color(String(node.car_key), k, _player_paint())) # the driven car's factory paints
+		node.set_paint(CarCatalog.field_color(rival_key, occ, avoid, field_seed + CarCatalog.index_of(rival_key) * 3))
+		node.set_stripes(posmod(field_seed + k * 7, 10) < 3)
+		if mods.has("monster"):
+			node.set_wheel_scale(CarMods.MONSTER_WHEELS)
 		var r: Dictionary = rv.rivals[k]
 		if r.has("number"):
 			node.set("car_number", int(r.number))
@@ -1335,7 +1345,7 @@ func _spawn_rivals() -> void:
 		tag.fixed_size = true # the same size on screen near and far (a world-sized tag filled the view a car ahead)
 		tag.pixel_size = 0.0006
 		tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-		tag.position = Vector3(0, 2.0, 0)
+		tag.position = Vector3(0, float(CarCatalog.visual(rival_key).roof_number.y) + 0.55, 0)
 		tag.modulate = Color(1, 1, 1, 0.9)
 		tag.visibility_range_begin = 7.0 # not over a car right in front of the camera
 		tag.visibility_range_end = 160.0
@@ -1371,7 +1381,16 @@ func _update_rivals(delta: float) -> void:
 		node.visible = true
 		node.position = Vector3(p.x, y, p.y)
 		node.basis = Basis(Vector3.UP, -dir.angle() - PI / 2.0)
-		node.call("set_lamps", night) # headlamps and position lights after dark, like the player's
+		var rv_speed := float(r.v)
+		var prev_v := float(node.get_meta("prev_v", rv_speed))
+		var braking := delta > 0.001 and rv_speed > 0.2 and (prev_v - rv_speed) / delta > 1.5
+		node.set_meta("prev_v", rv_speed)
+		if delta > 0.0 and rv_speed > 0.01:
+			var wr := maxf(float(node.get("_wheel_radius")), 0.1)
+			var spin := rv_speed * delta / wr
+			for w in (node.get("wheels") as Array):
+				(w as Node3D).rotation.x = fmod((w as Node3D).rotation.x - spin, TAU)
+		node.call("set_lamps", night, braking) # headlamps, position lights and brake lamps like the player's
 		# contact: two cars' worth of circles, the player shoved out and the rival knocked across
 		var d := me.distance_to(p)
 		if d < 2.1 and d > 0.01:

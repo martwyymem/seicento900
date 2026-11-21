@@ -573,6 +573,18 @@ func _world(map: TownMap, home: Vector2, errors: Array[String]) -> void:
 		var rv := ow.live.rivals()
 		if rv == null or ow._rival_nodes.size() != rv.rivals.size() or rv.rivals.size() != int(Missions.get_def(di).opponents):
 			errors.append("the drag mission's field is not drawn: %d nodes" % ow._rival_nodes.size())
+		var drag_keys: Array[String] = []
+		var real_pool := CarCatalog.rival_keys()
+		for rn in ow._rival_nodes:
+			var rk := String(rn.get("car_key"))
+			if not (rk in real_pool):
+				errors.append("open-world rival has non-real car_key '%s'" % rk)
+			drag_keys.append(rk)
+		var uniq_drag := {}
+		for rk in drag_keys:
+			uniq_drag[rk] = true
+		if drag_keys.size() >= 2 and uniq_drag.size() < drag_keys.size():
+			errors.append("drag mission rivals repeated models unnecessarily: %s" % [drag_keys])
 		if not ow._roads_closed():
 			errors.append("the roads stay open to traffic in a mission")
 		if absf(ow.hour - float(Missions.get_def(di).start_hour)) > 0.01:
@@ -584,6 +596,11 @@ func _world(map: TownMap, home: Vector2, errors: Array[String]) -> void:
 		ow._pause_action("restart_live")
 		if not ow.live.holding() or ow._rival_nodes.size() != int(Missions.get_def(di).opponents):
 			errors.append("RESTART EVENT did not put the drag back on the grid with its field")
+		var drag_keys2: Array[String] = []
+		for rn in ow._rival_nodes:
+			drag_keys2.append(String(rn.get("car_key")))
+		if drag_keys2 != drag_keys:
+			errors.append("restarting a mission changed its rival models: %s -> %s" % [drag_keys, drag_keys2])
 		ow._pause_action("abandon_live")
 		if ow.live.is_running() or not ow._rival_nodes.is_empty() or ow._roads_closed():
 			errors.append("abandoning the mission left the run, its field or the roads closed")

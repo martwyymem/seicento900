@@ -26,8 +26,18 @@ func setup(cols: Array, max_body_px := 460.0) -> void:
 	for c in get_children():
 		c.queue_free()
 	rows_added = 0
-	add_child(_line(cols.map(func(c: Dictionary) -> String: return c.title), CmrStyle.box(Color(0, 0, 0, 0.25), Color.TRANSPARENT, 14, 3),
-		CmrStyle.ORANGE_SOFT, 12, null, HEADER_H, true))
+	var neon := HudLayout.neon_primary()
+	var hdr_style := StyleBoxFlat.new()
+	hdr_style.bg_color = HudLayout.glass_plate(0.95)
+	hdr_style.border_color = neon
+	hdr_style.border_width_bottom = 2
+	hdr_style.border_width_left = 4
+	hdr_style.content_margin_left = 14.0
+	hdr_style.content_margin_right = 14.0
+	hdr_style.content_margin_top = 3.0
+	hdr_style.content_margin_bottom = 3.0
+	add_child(_line(cols.map(func(c: Dictionary) -> String: return c.title), hdr_style,
+		neon, 12, null, HEADER_H, true, false))
 	scroll = ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -41,9 +51,32 @@ func setup(cols: Array, max_body_px := 460.0) -> void:
 ## One row. highlight picks the player's row out; swatch (a Color) puts the car colour before the driver;
 ## muted greys the row (a car with no time).
 func add_row(cells: Array, highlight := false, swatch = null, muted := false) -> void:
-	var fill: Color = CmrStyle.ORANGE if highlight else (CmrStyle.FIELD if rows_added % 2 == 0 else CmrStyle.FIELD_DIM)
-	var ink: Color = CmrStyle.INK if not muted or highlight else CmrStyle.INK_SOFT
-	body.add_child(_line(cells, CmrStyle.box(fill, Color.TRANSPARENT, 14, 3), ink, 15, swatch, ROW_H, false))
+	var neon := HudLayout.neon_primary()
+	var hot := HudLayout.neon_hot()
+	var is_ps1 := CmrStyle.skin == "ps1"
+	var st := StyleBoxFlat.new()
+	if highlight:
+		st.bg_color = neon
+		st.border_color = hot
+		st.border_width_left = 6
+		st.border_width_top = 1
+		st.border_width_right = 1
+		st.border_width_bottom = 1
+		if not is_ps1:
+			st.shadow_color = Color(neon, 0.35)
+			st.shadow_size = 8
+	else:
+		st.bg_color = HudLayout.glass_plate(0.88 if rows_added % 2 == 0 else 0.72)
+		st.border_color = Color(neon, 0.24)
+		st.border_width_left = 3
+		st.border_width_bottom = 1
+	st.set_corner_radius_all(0 if is_ps1 else 2)
+	st.content_margin_left = 14.0
+	st.content_margin_right = 14.0
+	st.content_margin_top = 3.0
+	st.content_margin_bottom = 3.0
+	var ink: Color = CmrStyle.INK if highlight else (CmrStyle.MUTED if muted else CmrStyle.TEXT)
+	body.add_child(_line(cells, st, ink, 15, swatch, ROW_H, false, highlight))
 	rows_added += 1
 	_fit_body()
 
@@ -54,7 +87,7 @@ func _fit_body() -> void:
 func body_height() -> float:
 	return minf(rows_added * (ROW_H + ROW_GAP), max_body)
 
-func _line(cells: Array, style: StyleBox, ink: Color, font_size: int, swatch, height: float, header: bool) -> PanelContainer:
+func _line(cells: Array, style: StyleBox, ink: Color, font_size: int, swatch, height: float, header: bool, highlight := false) -> PanelContainer:
 	var bar := PanelContainer.new()
 	bar.add_theme_stylebox_override("panel", style)
 	bar.custom_minimum_size.y = height
@@ -62,12 +95,17 @@ func _line(cells: Array, style: StyleBox, ink: Color, font_size: int, swatch, he
 	var line := HBoxContainer.new()
 	line.add_theme_constant_override("separation", 10)
 	bar.add_child(line)
+	var hdr_font := HudLayout.italic_font(800, -0.10)
+	var hi_font := HudLayout.italic_font(800, -0.08)
+	var row_font := CmrStyle.font(600)
 	for k in columns.size():
 		var col: Dictionary = columns[k]
 		var l := Label.new()
 		l.text = str(cells[k]) if k < cells.size() else ""
+		l.add_theme_font_override("font", hdr_font if header else (hi_font if highlight else row_font))
 		l.add_theme_font_size_override("font_size", font_size)
-		l.add_theme_color_override("font_color", CmrStyle.MUTED if (col.get("muted", false) and not header and ink == CmrStyle.INK) else ink)
+		var cell_col := CmrStyle.MUTED if (col.get("muted", false) and not header and not highlight) else ink
+		l.add_theme_color_override("font_color", cell_col)
 		l.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0))
 		l.clip_text = true
 		l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS # a cut name says so ("…")

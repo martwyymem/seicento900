@@ -128,13 +128,13 @@ func _check_race_hud(errors: Array[String], tree: SceneTree) -> void:
 		var sx := safe.position.x
 		var W := safe.size.x
 		var rects := {
-			"tower": Rect2(Vector2(sx, 0.0) + hud.tower.position, Vector2(RaceHud.TOWER_W, hud.tower.size.y)),
-			"clock": Rect2(sx + W - RaceHud.EDGE - RaceHud.CLOCK_W, RaceHud.EDGE, RaceHud.CLOCK_W, 208.0),
+			"tower": _in_safe(hud.tower, safe),
+			"clock": _in_safe(hud.clock, safe),
 			"minimap": _in_safe(hud.minimap, safe),
 			"feed": _in_safe(hud.feed, safe),
-			"pit wall": Rect2(Vector2(sx + RaceHud.EDGE, canvas.y - RaceHud.EDGE - hud._pitwall_height()), Vector2(RaceHud.PITWALL_W, hud._pitwall_height())),
+			"pit wall": _in_safe(hud.pitwall, safe),
 			"dash": _in_safe(hud.dash, safe),
-			"pace notes": Rect2(sx + W * 0.5 - RaceHud.PACENOTE_HALF, RaceHud.EDGE, RaceHud.PACENOTE_HALF * 2.0, 132.0),
+			"pace notes": _in_safe(hud.pacenote, safe),
 			"key help": hud.help_rect(),
 			"status chip": _in_safe(hud.statusbar, safe),
 		}
@@ -154,7 +154,7 @@ func _check_race_hud(errors: Array[String], tree: SceneTree) -> void:
 		if not hud._split_beside and hud.splitbox.self_modulate.a > 0.0:
 			rects["split"] = _in_safe(hud.splitbox, safe)
 		elif hud._split_beside:
-			rects["split"] = Rect2(sx + W - RaceHud.EDGE - RaceHud.CLOCK_W - 20.0 - 250.0, 32.0, RaceHud.SPLIT_W, 44.0)
+			rects["split"] = _in_safe(hud.splitbox, safe)
 		_no_overlap(errors, "race HUD [%s]" % combo[1], rects, canvas, safe)
 		# the help fits the room between the pit wall and the dash
 		var hr: Rect2 = rects["key help"]
@@ -250,14 +250,14 @@ func _check_solo_huds(errors: Array[String], tree: SceneTree) -> void:
 			hud._status_text = "AUTOPILOT  ·  O"
 			hud._layout()
 			var rects := {
-				"stage panel": Rect2(Vector2(safe.position.x, 0.0) + hud.modepanel.position, Vector2(RaceHud.MODE_W, hud.modepanel.size.y)),
-				"clock": Rect2(safe.end.x - RaceHud.EDGE - RaceHud.CLOCK_W, RaceHud.EDGE, RaceHud.CLOCK_W, 208.0),
+				"stage panel": _in_safe(hud.modepanel, safe),
+				"clock": _in_safe(hud.clock, safe),
 				"minimap": _in_safe(hud.minimap, safe),
 				"dash": _in_safe(hud.dash, safe),
 				"key help": hud.help_rect(),
 				"status chip": _in_safe(hud.statusbar, safe),
 				"delta bar": _in_safe(hud.deltabar, safe),
-				"pace notes": Rect2(safe.get_center().x - RaceHud.PACENOTE_HALF, RaceHud.EDGE, RaceHud.PACENOTE_HALF * 2.0, 132.0),
+				"pace notes": _in_safe(hud.pacenote, safe),
 			}
 			if hud.deltabar.self_modulate.a <= 0.0 or not hud._delta_showing():
 				errors.append("%s HUD %s: the delta bar should be up" % [pair[0], _tag(canvas, combo[1])])

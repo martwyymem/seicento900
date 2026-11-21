@@ -18,6 +18,7 @@ const FOLIAGE_SHADER := preload("res://shaders/foliage.gdshader")
 const WATER_SHADER := preload("res://shaders/water.gdshader")
 const VEGETATION := preload("res://scripts/world/vegetation.gd")
 const TOWN_MODELS := "res://models/town.glb"
+const TRAFFIC_MODELS := "res://models/traffic_cars.glb" ## tools/blender/build_traffic.py (real-car traffic LODs)
 const LANDMARK_MODELS := "res://models/brzeszcze_landmarks.glb" ## tools/blender/build_brzeszcze.py
 const LAND_RES := 2.5 ## metres per texel of data/world/<key>_land.png (tools/build_open_world.py)
 
@@ -75,10 +76,10 @@ func _init(town: TownMap, parent: Node3D) -> void:
 	assets = WORLD_ASSETS.new()
 	_load_models()
 
-## The prop kit (town.glb) and the hand-built Brzeszcze landmarks. Both load before build_buildings(), which
-## leaves out the generic mesh of every building a landmark model stands on.
+## The prop kit (town.glb), the real-car traffic LODs (traffic_cars.glb) and the hand-built Brzeszcze landmarks.
+## All load before build_buildings(), which leaves out the generic mesh of every building a landmark model stands on.
 func _load_models() -> void:
-	for path in [TOWN_MODELS, LANDMARK_MODELS]:
+	for path in [TOWN_MODELS, TRAFFIC_MODELS, LANDMARK_MODELS]:
 		if not ResourceLoader.exists(path) and not FileAccess.file_exists(path):
 			continue
 		var scene: Node = WORLD_ASSETS._load_model(path)
@@ -153,7 +154,7 @@ static func cache_spec(tag: String) -> Dictionary:
 			return {"data": ["terrain", "extent", "areas", "waterways", "roads", "rail", "tunnels", "buildings", "passages", "places", "boundary",
 				"trees", "fences", "garden_beds", "lamps", "signals", "stops", "level_crossings"],
 				"code": ["build_props", "build_roads", "build_rail", "build_tunnels", "build_buildings", "build_trees", "build_fences"],
-				"models": true, "plan": true, "files": [TOWN_MODELS, LANDMARK_MODELS, ROADSIDE_MODELS, SURROUNDINGS.TREES_PATH]}
+				"models": true, "plan": true, "files": [TOWN_MODELS, TRAFFIC_MODELS, LANDMARK_MODELS, ROADSIDE_MODELS, SURROUNDINGS.TREES_PATH]}
 	return {}
 
 ## Sections of the baked map that no cached step reads (the test checks that every section is in one list or the other).
@@ -3239,12 +3240,12 @@ func _place_many(parent: Node3D, name: String, mesh_xf: Array, xfs: Array, tints
 func _multimesh_chunked(parent: Node3D, mesh: Mesh, xfs: Array, tints: Array, mat: Material, range_end: float) -> Array[MultiMeshInstance3D]:
 	return _multimesh_cells(parent, mesh, _chunk_cells(xfs, tints), not tints.is_empty(), mat, range_end)
 
-## The instances split into SMALL_CHUNK cells, each as [instance buffer (instance_buffer), count].
-func _chunk_cells(xfs: Array, tints: Array) -> Array:
+## The instances split into `cell_size` squares (SMALL_CHUNK by default), each as [instance buffer (instance_buffer), count].
+func _chunk_cells(xfs: Array, tints: Array, cell_size := SMALL_CHUNK) -> Array:
 	var cells := {}
 	for i in xfs.size():
 		var o: Vector3 = (xfs[i] as Transform3D).origin
-		var c := _chunk_of(Vector2(o.x, o.z), SMALL_CHUNK)
+		var c := _chunk_of(Vector2(o.x, o.z), cell_size)
 		if not cells.has(c):
 			cells[c] = [[], []]
 		cells[c][0].append(xfs[i])
@@ -3641,12 +3642,16 @@ func update_signals() -> void:
 		for k in 3:
 			_signal_nodes[i].set_surface_override_material(_signal_lens[k], _lens_mats[k * 2 + (1 if on[k] else 0)])
 
-## Cars parked along the residential streets and in the car parks: mostly the cars Poles drove, all colours.
+const PARKED_CHUNK := 256.0 ## m: larger cells keep 10 parked car models to roughly the same draw-call count as 4 in 128 m cells
+const PARKED_RANGE := 400.0
+const PARKED_KINDS := ["CarGolf4", "CarSeicento", "CarFocus", "CarSandero", "CarLogan", "CarZafira", "CarI20", "CarV50", "CarVan", "Maluch"]
+const PARKED_WEIGHTS := [0.20, 0.15, 0.10, 0.10, 0.10, 0.09, 0.08, 0.06, 0.06, 0.06]
+
+## Cars parked along the residential streets and in the car parks: a realistic Polish town mix in factory colours.
 func _build_parked_cars(group: Node3D, hit := {}, fresh := {}) -> void:
-	var kinds := ["CarHatch", "CarSedan", "CarVan", "Maluch"]
 	var mesh_xf := {}
 	var local_of := {}
-	for k in kinds:
+	for k in PARKED_KINDS:
 		mesh_xf[k] = _model(k, _fallback_car.bind(k))
 		local_of[k] = mesh_xf[k][1]
 	var made: Dictionary = hit
@@ -3658,24 +3663,24 @@ func _build_parked_cars(group: Node3D, hit := {}, fresh := {}) -> void:
 			map.add_post(Vector2(v.x, v.y), v.z)
 	var paint := StandardMaterial3D.new()
 	paint.vertex_color_use_as_albedo = true
-	paint.metallic = 0.35
-	paint.roughness = 0.28
+	paint.metallic = 0.25
+	paint.roughness = 0.26
 	paint.clearcoat_enabled = true
-	for k in kinds:
+	paint.clearcoat = 0.9
+	paint.clearcoat_roughness = 0.06
+	for k in PARKED_KINDS:
 		var mesh: Mesh = mesh_xf[k][0]
 		if models.has(k):
-			_place_cells(group, "Parked" + k, _with_surface_material(mesh, "Paint", paint), made.parked[k], true, null, 400.0)
+			_place_cells(group, "Parked" + k, _with_surface_material(mesh, "Paint", paint), made.parked[k], true, null, PARKED_RANGE)
 		else:
-			_place_cells(group, "Parked" + k, mesh, made.parked[k], true, paint, 400.0)
+			_place_cells(group, "Parked" + k, mesh, made.parked[k], true, paint, PARKED_RANGE)
 
 ## Where the cars park: the instance cells of each kind (_chunk_cells of its transforms times the model's local one, tinted)
 ## and the collision posts each car stood (in the order it stood them; a later car keeps clear of an earlier one's).
 func _parked_placements(local_of: Dictionary) -> Dictionary:
-	var kinds := ["CarHatch", "CarSedan", "CarVan", "Maluch"]
-	var weights := [0.45, 0.3, 0.1, 0.15]
 	var posts := PackedVector3Array()
 	var lists := {}
-	for k in kinds:
+	for k in PARKED_KINDS:
 		lists[k] = [[], []]
 	for ri in map.road_pts.size():
 		var kind := map.road_kind[ri]
@@ -3700,34 +3705,42 @@ func _parked_placements(local_of: Dictionary) -> Dictionary:
 					var sgn := 1.0 if hash2(q.x, q.y, 22.0) > 0.5 else -1.0
 					var spot := q + side * sgn * (map.road_w[ri] * 0.5 + 1.0)
 					if not map.inside_building(spot) and map.posts_near(spot, 2.0).is_empty():
-						var pick := _pick_index(weights, hash2(q.x, q.y, 23.0))
+						var pick := _pick_index(PARKED_WEIGHTS, hash2(q.x, q.y, 23.0))
+						var car_kind: String = PARKED_KINDS[pick]
 						var h := atan2(t.y, t.x) + (PI if sgn < 0.0 else 0.0)
-						var at := spot + side * sgn * _pavement_nudge(spot, h, side * sgn)
-						if _parked_clear(at, h): # not across another street's lanes (a bend, a junction)
-							_add_parked(lists[kinds[pick]], at, h, posts)
+						var at := spot + side * sgn * _pavement_nudge(spot, h, side * sgn, car_kind)
+						if _parked_clear(at, h, car_kind): # not across another street's lanes (a bend, a junction)
+							_add_parked(lists[car_kind], at, h, posts, car_kind)
 				d += 9.0
 			acc += ln
 	var cells := {}
-	for k in kinds:
+	for k in PARKED_KINDS:
 		var out := []
 		for xf in lists[k][0]:
 			out.append(xf * (local_of[k] as Transform3D))
-		cells[k] = _chunk_cells(out, lists[k][1])
+		cells[k] = _chunk_cells(out, lists[k][1], PARKED_CHUNK)
 	return {"parked": cells, "parked_posts": posts}
 
-## The four corners of a parked car's footprint (a sedan is about 4 m by 1.8 m).
-func _parked_corners(p: Vector2, heading: float) -> PackedVector2Array:
-	var f := Vector2(cos(heading), sin(heading)) * 2.0
-	var r := Vector2(-f.y, f.x).normalized() * 0.9
+## Half-length and half-width of a parked car kind (metres).
+static func _parked_half(kind: String) -> Vector2:
+	var sp := Traffic.kind_spec(kind)
+	return Vector2(float(sp.len) * 0.5, float(sp.w) * 0.5)
+
+## The four corners of a parked car's footprint.
+func _parked_corners(p: Vector2, heading: float, kind := "CarGolf4") -> PackedVector2Array:
+	var hs := _parked_half(kind)
+	var f := Vector2(cos(heading), sin(heading)) * hs.x
+	var r := Vector2(-f.y, f.x).normalized() * hs.y
 	return PackedVector2Array([p + f + r, p + f - r, p - f - r, p - f + r])
 
 ## Whether a car parked at p (its footprint and its two collision circles) keeps off every carriageway.
-func _parked_clear(p: Vector2, heading: float) -> bool:
+func _parked_clear(p: Vector2, heading: float, kind := "CarGolf4") -> bool:
+	var hs := _parked_half(kind)
 	var f := Vector2(cos(heading), sin(heading))
 	var r := Vector2(-f.y, f.x)
-	for u in [-2.0, -1.0, 0.0, 1.0, 2.0]:
-		for v in [-0.9, 0.0, 0.9]:
-			var q: Vector2 = p + f * u + r * v
+	for fu: float in [-1.0, -0.5, 0.0, 0.5, 1.0]:
+		for fv: float in [-1.0, 0.0, 1.0]:
+			var q: Vector2 = p + f * (fu * hs.x) + r * (fv * hs.y)
 			var hit := map.road_at(q.x, q.y)
 			if not hit.is_empty() and float(hit.deck) < 0.5:
 				return false
@@ -3735,10 +3748,10 @@ func _parked_clear(p: Vector2, heading: float) -> bool:
 
 ## How far to slide a car parked at the kerb along `out` (away from the road) so it stands wholly on the pavement
 ## rather than straddling the kerb step; 0 when it already does or sits wholly off it.
-func _pavement_nudge(p: Vector2, heading: float, out: Vector2) -> float:
+func _pavement_nudge(p: Vector2, heading: float, out: Vector2, kind := "CarGolf4") -> float:
 	for d in [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]:
 		var n := 0
-		for q in _parked_corners(p + out * d, heading):
+		for q in _parked_corners(p + out * d, heading, kind):
 			if map.kerb_at(q.x, q.y) > 0.0:
 				n += 1
 		if n == 0 or n == 4:
@@ -3746,21 +3759,26 @@ func _pavement_nudge(p: Vector2, heading: float, out: Vector2) -> float:
 	return 0.0
 
 ## Height a parked car rests at: ground, plus the kerb if any wheel stands on the pavement (none sink into it).
-func _parked_y(p: Vector2, heading: float) -> float:
+func _parked_y(p: Vector2, heading: float, kind := "CarGolf4") -> float:
 	var k := 0.0
-	for q in _parked_corners(p, heading):
+	for q in _parked_corners(p, heading, kind):
 		k = maxf(k, map.kerb_at(q.x, q.y))
 	return map.ground(p.x, p.y) + 0.02 + k
 
-func _add_parked(list: Array, p: Vector2, heading: float, posts: PackedVector3Array) -> void:
+func _add_parked(list: Array, p: Vector2, heading: float, posts: PackedVector3Array, kind := "CarGolf4") -> void:
 	var basis := Basis(Vector3.UP, -heading - PI / 2.0)
-	list[0].append(Transform3D(basis, Vector3(p.x, _parked_y(p, heading), p.y)))
-	list[1].append(color_lin(CAR_PAINTS[int(hash2(p.x, p.y, 31.0) * 997.0) % CAR_PAINTS.size()]))
+	list[0].append(Transform3D(basis, Vector3(p.x, _parked_y(p, heading, kind), p.y)))
+	var pal := Traffic.paint_palette(kind)
+	var col: Color = pal[int(hash2(p.x, p.y, 31.0) * 997.0) % pal.size()]
+	list[1].append(col.srgb_to_linear())
+	var hs := _parked_half(kind)
+	var rad := clampf(hs.y, 0.72, 0.98)
+	var span := maxf(0.55, hs.x - rad)
 	var f := Vector2(cos(heading), sin(heading))
 	for sgn: float in [1.0, -1.0]:
-		var q := p + f * sgn
-		map.add_post(q, 0.85)
-		posts.append(Vector3(q.x, q.y, 0.85))
+		var q := p + f * (sgn * span)
+		map.add_post(q, rad)
+		posts.append(Vector3(q.x, q.y, rad))
 
 static func _pick_index(weights: Array, r: float) -> int:
 	var acc := 0.0
@@ -3835,9 +3853,10 @@ static func _fallback_crossing() -> Mesh:
 	return mesh
 
 static func _fallback_car(kind: String) -> Mesh:
-	var l: float = {"CarHatch": 4.0, "CarSedan": 4.5, "CarVan": 4.6, "Maluch": 3.05}.get(kind, 4.0)
-	var w: float = {"CarVan": 1.9, "Maluch": 1.38}.get(kind, 1.72)
-	var h: float = {"CarVan": 2.0, "Maluch": 1.33}.get(kind, 1.45)
+	var sp := Traffic.kind_spec(kind)
+	var l: float = float(sp.len)
+	var w: float = float(sp.w)
+	var h: float = {"CarVan": 2.22, "Maluch": 1.33, "CarZafira": 1.64}.get(kind, 1.48)
 	var mb := MeshBatch.new(false, true)
 	var white := Color.WHITE
 	mb.beam(Vector3(0, 0.3, -l * 0.5), Vector3(0, 0.3, l * 0.5), w, h * 0.45, white)

@@ -33,6 +33,8 @@ var tail_material: StandardMaterial3D
 var bulb_material: StandardMaterial3D
 const BRAKE_LIGHT_ENERGY := 2.0
 var _brake_light: SpotLight3D
+var _near_beam: SpotLight3D ## wide dipped apron filling the tarmac right ahead of the bumper (top edge below horizontal)
+var _beam_pool: Decal ## horizontal tarmac low-beam pool (normal_fade keeps it off walls)
 var body_pivot: Node3D
 var number_label: Label3D
 var stripes_node: MeshInstance3D
@@ -92,6 +94,34 @@ var fx_quality := 2 ## graphics level for a car outside a race (the open world),
 
 func _ready() -> void:
 	_build()
+	child_entered_tree.connect(_on_child_entered)
+	for c in get_children():
+		if c is SpotLight3D:
+			_fit_headlight_beam(c as SpotLight3D)
+
+func _on_child_entered(node: Node) -> void:
+	if node is SpotLight3D:
+		_fit_headlight_beam(node as SpotLight3D)
+
+## Positions and shapes a front headlight SpotLight3D child to match this car's headlamps: aimed straight ahead and
+## dipped slightly down for a clean low-beam cut-off (stops below upper storeys on walls), with shadows off.
+func _fit_headlight_beam(s: SpotLight3D) -> void:
+	if s.position.z >= 0.0:
+		return
+	var side: float = float(s.get_meta("_hl_side", -1.0 if s.position.x < 0.0 else 1.0))
+	s.set_meta("_hl_side", side)
+	var sh := _shared_resources(car_key)
+	var bp: Vector3 = sh.get("beam_pos", Vector3(0.52, 0.66, -1.78))
+	s.position = Vector3(side * bp.x, bp.y, bp.z)
+	s.rotation = Vector3(deg_to_rad(-13.5), 0.0, 0.0)
+	s.spot_range = 54.0
+	s.spot_angle = 28.0
+	s.spot_angle_attenuation = 2.6
+	s.spot_attenuation = 1.4
+	s.light_specular = 0.12
+	s.light_color = Color(1.0, 0.95, 0.84)
+	s.light_projector = null
+	s.shadow_enabled = false
 
 ## Swaps the visual to another catalogue car: the body, lamps, wheels and decals are rebuilt, the paint, livery, stripes and
 ## number are kept.
@@ -111,6 +141,8 @@ func set_car(key: String) -> void:
 	_light_bar.clear()
 	_fx.clear()
 	_brake_light = null
+	_near_beam = null
+	_beam_pool = null
 	_beacon = null
 	_lamp_sig = Vector4(-1.0, -1.0, -1.0, -1.0)
 	_damage_shown = 0.0
@@ -559,6 +591,7 @@ func sync(car: RaceCar, dt: float, curvature: float, night: float, ghost: bool) 
 		# one power: the sun drowns it by day, the dark shows it; white and softer for the reversing lamp
 		_brake_light.light_color = Color(1.0, 0.04, 0.02) if car.brake_on or not reversing else Color(1.0, 0.92, 0.82)
 		_brake_light.light_energy = BRAKE_LIGHT_ENERGY if car.brake_on else (BRAKE_LIGHT_ENERGY * 0.6 if reversing else 0.0)
+		_sync_headlight_apron(headlamp_level(night))
 
 	if ghost != _ghost:
 		_ghost = ghost
@@ -743,33 +776,24 @@ static func _shared_resources(key := "stock") -> Dictionary:
 	var details: Mesh = meshes.get("Details", BoxMesh.new())
 
 	# Glass and headlights are the same on every car, so they live on the shared meshes.
-	var glass := StandardMaterial3D.new() # tinted dark and glossy, a little see-through, mirroring the sky on top
-	glass.albedo_color = Color(0.008, 0.012, 0.016, 0.7)
+	var glass := StandardMaterial3D.new() # tinted dark and glossy, see-through face-on with Fresnel sky reflection at grazing angles
+	glass.resource_name = "Glass"
+	glass.albedo_color = Color(0.01, 0.014, 0.018, 0.56)
 	glass.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	glass.cull_mode = BaseMaterial3D.CULL_DISABLED
-	glass.roughness = 0.015
-	glass.metallic_specular = 1.0
-	glass.clearcoat_enabled = true
-	glass.clearcoat = 1.0
-	glass.clearcoat_roughness = 0.0
-	glass.next_pass = _env_material(1.0, 0.10, 0.0, false)
+	glass.roughness = 0.02
+	glass.metallic_specular = 0.6
+	glass.clearcoat_enabled = false
+	glass.next_pass = _env_material(0.85, 0.035, 0.0, false, 1.2)
 	var head := ShaderMaterial.new() # the reflector bowl (car_headlamp.gdshader): dark chrome facets, a bulb that lights at night
 	head.shader = load("res://shaders/car_headlamp.gdshader")
 	head.resource_name = "Headlight" # still found by name (_surface) once it replaces the glTF's material on the mesh
 	var glass_surface := _surface(shell, "Glass")
 	if glass_surface >= 0:
 		shell.surface_set_material(glass_surface, glass)
-	var lens := StandardMaterial3D.new() # the clear polycarbonate cover over the lamps: a hard sheen, barely tinted
-	lens.albedo_color = Color(0.86, 0.92, 1.0, 0.045)
-	lens.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	lens.roughness = 0.02
-	lens.metallic_specular = 1.0
-	lens.clearcoat_enabled = true
-	lens.clearcoat = 1.0
-	lens.clearcoat_roughness = 0.0
-	lens.rim_enabled = true
-	lens.rim = 0.0
-	lens.rim_tint = 0.2
+	var lens := ShaderMaterial.new() # clear polycarbonate cover with soft front-only headlamp scatter at night
+	lens.shader = load("res://shaders/car_lamp_glass.gdshader")
+	lens.resource_name = "LampGlass"
 	lens.next_pass = _env_material(1.0, 0.12, 0.0, false)
 	var lens_surface := _surface(details, "LampGlass")
 	if lens_surface >= 0:
@@ -798,10 +822,29 @@ static func _shared_resources(key := "stock") -> Dictionary:
 				lm.surface_set_material(i, mm)
 		liveries[k] = lm
 	var head_surface := _surface(details, "Headlight")
+	var bezel_surface := _surface(details, "LampBezel")
+	var lamp_info := _lamp_bounds(details, head_surface) if head_surface >= 0 else {"centre": Vector2(0.40, 0.64), "half": Vector2(0.18, 0.055), "beam_pos": Vector3(0.50, 0.64, -1.75)}
+	var lamp_centre: Vector2 = lamp_info.centre if fit.model != CarCatalog.STOCK_VISUAL.model else Vector2(0.40, 0.64)
+	var lamp_half: Vector2 = lamp_info.half
 	if head_surface >= 0:
 		details.surface_set_material(head_surface, head)
+		head.set_shader_parameter("lamp_half", lamp_half)
+		head.set_shader_parameter("twin_bowl", 1.0 if bezel_surface >= 0 else 0.0)
 		if fit.model != CarCatalog.STOCK_VISUAL.model: # (the Seicento keeps the shader's hand-placed bulb)
-			head.set_shader_parameter("centre", _lamp_centre(details, head_surface))
+			head.set_shader_parameter("centre", lamp_centre)
+	if bezel_surface >= 0:
+		var old_bezel := details.surface_get_material(bezel_surface) as BaseMaterial3D
+		var bezel := ShaderMaterial.new() # inner headlamp bezel: satin metallic by day, catches warm bulb spill at night
+		bezel.shader = load("res://shaders/car_headlamp_bezel.gdshader")
+		bezel.resource_name = "LampBezel"
+		bezel.set_shader_parameter("centre", lamp_centre)
+		bezel.set_shader_parameter("lamp_half", lamp_half)
+		if old_bezel:
+			bezel.set_shader_parameter("base_color", old_bezel.albedo_color)
+		details.surface_set_material(bezel_surface, bezel)
+	if lens_surface >= 0:
+		lens.set_shader_parameter("centre", lamp_centre)
+		lens.set_shader_parameter("lamp_half", lamp_half)
 	# Unpainted plastic (bumpers, sills, trim, gaskets): the world's warm sun, ACES and the car's reflection probe lifted the
 	# glTF's dark grey to tan, so these get an explicit near-black, satin, low-specular material.
 	for pair in [[details, "Bumper", 0.21, 0.55], [details, "Trim", 0.10, 0.5], [details, "Gasket", 0.07, 0.8],
@@ -831,6 +874,16 @@ static func _shared_resources(key := "stock") -> Dictionary:
 		var grille := ShaderMaterial.new() # the air intake's black diamond mesh (car_grille.gdshader)
 		grille.shader = load("res://shaders/car_grille.gdshader")
 		details.surface_set_material(grille_surface, grille)
+	var chrome_surface := _surface(details, "Chrome")
+	if chrome_surface >= 0:
+		# satin-polished automotive chrome: crisp metallic trim without a blinding sun-glare bloom blob across grilles
+		var chrome := StandardMaterial3D.new()
+		chrome.resource_name = "Chrome"
+		chrome.albedo_color = Color(0.54, 0.56, 0.59)
+		chrome.metallic = 0.52
+		chrome.roughness = 0.44
+		chrome.metallic_specular = 0.12
+		details.surface_set_material(chrome_surface, chrome)
 
 	# Soft dark ellipse under the car keeps it sitting on the road: a dense core under the floor (ambient
 	# occlusion) and a wide soft falloff past the sills and bumpers.
@@ -857,7 +910,7 @@ static func _shared_resources(key := "stock") -> Dictionary:
 		"flakes": common.get("flakes") if not common.is_empty() else _flake_texture(), "peel": common.get("peel") if not common.is_empty() else _peel_texture(),
 		"coat": common.get("coat") if not common.is_empty() else _coat_material(), "puff": common.get("puff") if not common.is_empty() else _puff_mesh(),
 		"fx": common.get("fx") if not common.is_empty() else _fx_materials(), "stripes": meshes.get("Stripes", BoxMesh.new()), "liveries": liveries,
-		"wheel": meshes.get("Wheel", BoxMesh.new()), "contact": contact, "head": head,
+		"wheel": meshes.get("Wheel", BoxMesh.new()), "contact": contact, "head": head, "beam_pos": lamp_info.beam_pos, "nose_z": shell.get_aabb().position.z,
 		"paint_surface": maxi(0, _surface(shell, "Paint")), "tail_surface": maxi(0, _surface(details, "Taillight")), "bulb_surface": _surface(details, "TailBulb")}
 	if key == "stock":
 		_shared = made
@@ -868,10 +921,11 @@ static func _shared_resources(key := "stock") -> Dictionary:
 ## The mirror pass (shaders/car_coat.gdshader) over the paint, glass and lamp lenses: a crisp horizon and sun glint on top of
 ## the sky's soft radiance. Every one made here is kept in "env" so the world's sky, the sun and the night reach all of them.
 ## strength is the weight at full day (set_night takes it down), f0 the reflectance face-on.
-static func _env_material(strength: float, f0: float, priority: float, vertex_colour: bool) -> ShaderMaterial:
+static func _env_material(strength: float, f0: float, priority: float, vertex_colour: bool, exposure := 1.7) -> ShaderMaterial:
 	var m := ShaderMaterial.new()
 	m.shader = load("res://shaders/car_coat.gdshader")
 	m.set_shader_parameter("f0", f0)
+	m.set_shader_parameter("exposure", exposure)
 	m.set_shader_parameter("use_vertex_color", 1.0 if vertex_colour else 0.0)
 	m.render_priority = int(priority) + 1
 	m.set_meta("day_strength", strength)
@@ -988,17 +1042,105 @@ static func _load_model(path := MODEL_PATH) -> Node:
 		return null
 	return doc.generate_scene(state)
 
+## The middle, half-size and beam origin of the right-hand headlamp (x > 0, in the model's frame) from a surface.
+static func _lamp_bounds(mesh: Mesh, surface: int) -> Dictionary:
+	var verts: PackedVector3Array = mesh.surface_get_arrays(surface)[Mesh.ARRAY_VERTEX]
+	var lo := Vector3(INF, INF, INF)
+	var hi := Vector3(-INF, -INF, -INF)
+	for v in verts:
+		if v.x > 0.0:
+			lo = lo.min(v)
+			hi = hi.max(v)
+	if lo.x >= INF:
+		return {"centre": Vector2(0.40, 0.64), "half": Vector2(0.18, 0.055), "beam_pos": Vector3(0.50, 0.64, -1.75)}
+	var c := Vector2((lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5)
+	var half := Vector2(maxf((hi.x - lo.x) * 0.5, 0.04), maxf((hi.y - lo.y) * 0.5, 0.03))
+	var bp := Vector3(clampf(c.x, 0.42, 0.72), clampf(c.y, 0.58, 0.78), lo.z - 0.05)
+	return {"centre": c, "half": half, "beam_pos": bp}
+
 ## The middle of the right-hand lamp of a surface (x > 0, in the model's frame) as (x, y): where car_headlamp.gdshader puts
 ## its bulb, so each car's reflector lights round its own lamp.
 static func _lamp_centre(mesh: Mesh, surface: int) -> Vector2:
-	var verts: PackedVector3Array = mesh.surface_get_arrays(surface)[Mesh.ARRAY_VERTEX]
-	var lo := Vector2(INF, INF)
-	var hi := Vector2(-INF, -INF)
-	for v in verts:
-		if v.x > 0.0:
-			lo = lo.min(Vector2(v.x, v.y))
-			hi = hi.max(Vector2(v.x, v.y))
-	return (lo + hi) * 0.5 if lo.x < INF else Vector2(0.40, 0.64)
+	return _lamp_bounds(mesh, surface).centre
+
+## Keeps the player's near-bumper dipped apron light and ground beam pool in step with nightfall (and hides both if a
+## probe explicitly switched off the parent's open-world SpotLight3D beams).
+func _sync_headlight_apron(head: float) -> void:
+	var has_spot := false
+	var any_spot_on := false
+	for c in get_children():
+		if c is SpotLight3D and (c as SpotLight3D).position.z < 0.0:
+			has_spot = true
+			if c.visible:
+				any_spot_on = true
+	var on := head > 0.0 and (not has_spot or any_spot_on)
+	if not on and _near_beam == null and _beam_pool == null:
+		return
+	var sh := _shared_resources(car_key)
+	var bp: Vector3 = sh.get("beam_pos", Vector3(0.52, 0.66, -1.78))
+	var nose_z: float = minf(bp.z, float(sh.get("nose_z", bp.z)))
+	if _near_beam == null:
+		_near_beam = SpotLight3D.new()
+		_near_beam.name = "HeadlightApron"
+		_near_beam.position = Vector3(0.0, 0.48, nose_z - 0.08) # clear of the protruding nose/grille on every car
+		_near_beam.rotation = Vector3(deg_to_rad(-48.0), 0.0, 0.0) # top edge -2 deg (below horizontal: never hits walls)
+		_near_beam.spot_range = 10.0
+		_near_beam.spot_angle = 46.0
+		_near_beam.spot_angle_attenuation = 2.2
+		_near_beam.spot_attenuation = 1.5
+		_near_beam.light_specular = 0.08
+		_near_beam.light_color = Color(1.0, 0.95, 0.84)
+		_near_beam.shadow_enabled = false
+		body_pivot.add_child(_near_beam)
+	if _beam_pool == null:
+		_beam_pool = Decal.new()
+		_beam_pool.name = "HeadlightPool"
+		_beam_pool.size = Vector3(13.5, 5.0, 36.0)
+		_beam_pool.position = Vector3(0.0, -0.5, nose_z - 18.0) # starts right ahead of the bumper, reaches 36 m forward
+		_beam_pool.texture_emission = _headlight_pool_texture()
+		_beam_pool.albedo_mix = 0.0
+		_beam_pool.modulate = Color(1.0, 0.94, 0.80)
+		_beam_pool.upper_fade = 0.45
+		_beam_pool.lower_fade = 0.45
+		_beam_pool.normal_fade = 0.65 # horizontal road and verges only, never vertical walls or buildings
+		body_pivot.add_child(_beam_pool)
+	_near_beam.visible = on
+	_near_beam.light_energy = 2.6 * head if on else 0.0
+	_beam_pool.visible = on
+	_beam_pool.emission_energy = 0.78 * head if on else 0.0
+
+## Shared twin-headlamp low-beam road pool texture (Decal.texture_emission): two overlapping cones flaring smoothly from
+## just ahead of the front bumper out to ~36 m, with a soft ECE kerb reach on the right and soft Gaussian edges.
+static func _headlight_pool_texture() -> ImageTexture:
+	var sh := _shared_resources()
+	if sh.has("beam_pool"):
+		return sh["beam_pool"]
+	const N := 128
+	const WIDTH := 13.5
+	const LENGTH := 36.0
+	var img := Image.create(N, N, false, Image.FORMAT_RGBA8)
+	for y in N:
+		var v := (float(y) + 0.5) / float(N)
+		var d := (1.0 - v) * LENGTH # 0 m at front bumper (v=1), LENGTH m far ahead (v=0)
+		var start_in := smoothstep(0.0, 0.65, d)
+		var near_trim := lerpf(0.62, 1.0, smoothstep(0.5, 5.5, d)) # gentle right at bumper where SpotLight3Ds are close
+		var hw := 0.52 + d * 0.21 # cone half-width flaring gently with distance
+		for x in N:
+			var u := (float(x) + 0.5) / float(N)
+			var xm := (u - 0.5) * WIDTH # metres right of car centreline
+			# Slight right-hand-traffic ECE kerb reach on the right side
+			var reach := LENGTH * (1.0 + 0.14 * smoothstep(-0.5, 3.0, xm))
+			var along := pow(clampf(1.0 - d / reach, 0.0, 1.0), 1.2)
+			var left := exp(-pow((xm + 0.56) / hw, 2.0))
+			var right := exp(-pow((xm - 0.56) / hw, 2.0))
+			var fan := clampf((left + right) * 0.68, 0.0, 1.0)
+			var edge_x := smoothstep(WIDTH * 0.5, WIDTH * 0.36, absf(xm))
+			var val := clampf(fan * start_in * near_trim * along * edge_x, 0.0, 1.0)
+			img.set_pixel(x, y, Color(val, val, val, 1.0))
+	img.generate_mipmaps()
+	var tex := ImageTexture.create_from_image(img)
+	sh["beam_pool"] = tex
+	return tex
 
 ## Index of the surface whose material has this name (from Blender), or -1.
 static func _surface(mesh: Mesh, material_name: String) -> int:

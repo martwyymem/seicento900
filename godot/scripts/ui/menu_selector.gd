@@ -151,13 +151,14 @@ func _fitted(label: String) -> String:
 		out = out.left(-1)
 	return out.strip_edges() + "…"
 
-## ◂ ▸ hugging the value, in the text colour, on whole pixels (crisp in the PS1 skin).
+## ◂ ▸ hugging the value, lit in the neon accent (hot accent when focused), on whole pixels (crisp in PS1).
 func _draw() -> void:
 	if text == "":
 		return
 	var font := get_theme_font("font")
 	var fs := get_theme_font_size("font_size")
-	var col := get_theme_color("font_disabled_color" if disabled else "font_color")
+	var lit := has_focus()
+	var col := get_theme_color("font_disabled_color") if disabled else (HudLayout.neon_hot() if lit else HudLayout.neon_primary())
 	var a := _arrow_size()
 	var tw := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 	var cx := size.x * 0.5
@@ -166,5 +167,10 @@ func _draw() -> void:
 	var lx := roundf(cx - half)
 	var rx := roundf(cx + half)
 	var hh := roundf(a.y * 0.5)
+	if not disabled and CmrStyle.skin != "ps1":
+		var halo := Color(col, 0.34 if lit else 0.18)
+		var g := 2.5
+		draw_colored_polygon(PackedVector2Array([Vector2(lx - a.x - g, cy), Vector2(lx + 1.0, cy - hh - g), Vector2(lx + 1.0, cy + hh + g)]), halo)
+		draw_colored_polygon(PackedVector2Array([Vector2(rx + a.x + g, cy), Vector2(rx - 1.0, cy - hh - g), Vector2(rx - 1.0, cy + hh + g)]), halo)
 	draw_colored_polygon(PackedVector2Array([Vector2(lx - a.x, cy), Vector2(lx, cy - hh), Vector2(lx, cy + hh)]), col)
 	draw_colored_polygon(PackedVector2Array([Vector2(rx + a.x, cy), Vector2(rx, cy - hh), Vector2(rx, cy + hh)]), col)

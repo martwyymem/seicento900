@@ -44,18 +44,24 @@ const TIPS_RALLY := [
 ]
 
 var _photo: TextureRect
+var _vignette: Control
 var _title: HBoxContainer
 var _facts: HBoxContainer
+var _tip_panel: PanelContainer
+var _tip_tag: PanelContainer
 var _tip_row: HBoxContainer
 var _tip: Label
 var _caption: Label
 var _value: Label
+var _bar_frame: PanelContainer
+var _bar_glow: Control
 var _blocks: Array[ColorRect] = []
+var _progress := 0.0
 var _t := 0.0
 var BLOCK_ON: Color:
-	get: return CmrStyle.TEXT
+	get: return HudLayout.neon_primary()
 var BLOCK_OFF: Color:
-	get: return Color(CmrStyle.TEXT, 0.28)
+	get: return Color(HudLayout.neon_primary(), 0.16)
 
 func _init() -> void:
 	name = "LoadingScreen"
@@ -71,9 +77,15 @@ func _init() -> void:
 	_photo.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_photo.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_photo)
-	add_child(_shade(true, 0.5, 0.0, 0.0, 0.3)) # top: the screen's edge, so the picture sits in a frame
-	add_child(_shade(true, 0.0, 0.86, 0.5, 1.0)) # bottom: under the type
-	add_child(_shade(false, 0.55, 0.0, 0.0, 0.62)) # left: the title block
+	add_child(_shade(true, 0.58, 0.0, 0.0, 0.30)) # top: midnight frame edge
+	add_child(_shade(true, 0.0, 0.90, 0.48, 1.0)) # bottom: deep midnight glass under the type
+	add_child(_shade(false, 0.62, 0.0, 0.0, 0.64)) # left: under the title block
+
+	_vignette = Control.new()
+	_vignette.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_vignette.draw.connect(_draw_vignette)
+	add_child(_vignette)
 
 	# bottom left: the title, the conditions and a tip
 	var left := VBoxContainer.new()
@@ -82,7 +94,7 @@ func _init() -> void:
 	left.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	left.offset_left = MARGIN.x
 	left.offset_bottom = -MARGIN.y
-	left.add_theme_constant_override("separation", 22)
+	left.add_theme_constant_override("separation", 18)
 	left.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(left)
 	_title = HBoxContainer.new()
@@ -90,36 +102,35 @@ func _init() -> void:
 	_title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	left.add_child(_title)
 	_facts = HBoxContainer.new()
-	_facts.add_theme_constant_override("separation", 28)
+	_facts.add_theme_constant_override("separation", 26)
 	_facts.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	left.add_child(_facts)
+
+	_tip_panel = PanelContainer.new()
+	_tip_panel.custom_minimum_size.x = 660
+	_tip_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_tip_panel.add_theme_stylebox_override("panel", _tip_box_style())
+	left.add_child(_tip_panel)
 	_tip_row = HBoxContainer.new()
 	_tip_row.add_theme_constant_override("separation", 12)
-	_tip_row.custom_minimum_size.x = 640
 	_tip_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	left.add_child(_tip_row)
-	var tag := PanelContainer.new()
-	tag.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	tag.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var tag_box := StyleBoxFlat.new()
-	tag_box.bg_color = CmrStyle.ORANGE
-	tag_box.content_margin_left = 7
-	tag_box.content_margin_right = 7
-	tag_box.content_margin_top = 1
-	tag_box.content_margin_bottom = 1
-	tag.add_theme_stylebox_override("panel", tag_box)
-	var tag_text := _text("tip", 14, 800, HORIZONTAL_ALIGNMENT_LEFT, CmrStyle.INK)
+	_tip_panel.add_child(_tip_row)
+	_tip_tag = PanelContainer.new()
+	_tip_tag.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_tip_tag.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_tip_tag.add_theme_stylebox_override("panel", _tip_tag_style())
+	var tag_text := _text("TIP", 13, 900, HORIZONTAL_ALIGNMENT_LEFT, CmrStyle.INK, true)
 	tag_text.add_theme_constant_override("shadow_offset_y", 0)
-	tag.add_child(tag_text)
-	_tip_row.add_child(tag)
-	_tip = _text("", 16, 500, HORIZONTAL_ALIGNMENT_LEFT, Color(CmrStyle.TEXT, 0.92))
+	_tip_tag.add_child(tag_text)
+	_tip_row.add_child(_tip_tag)
+	_tip = _text("", 16, 600, HORIZONTAL_ALIGNMENT_LEFT, Color(0.95, 0.98, 1.0, 0.96), false)
 	_tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_tip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_tip_row.add_child(_tip)
 
-	# bottom right: what the circuit is, and the blocks
+	# bottom right: what the circuit is, and the glowing neon progress bar
 	var corner := VBoxContainer.new()
-	corner.add_theme_constant_override("separation", 2)
+	corner.add_theme_constant_override("separation", 4)
 	corner.anchor_left = 1.0
 	corner.anchor_right = 1.0
 	corner.anchor_top = 1.0
@@ -130,20 +141,33 @@ func _init() -> void:
 	corner.offset_bottom = -MARGIN.y
 	corner.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(corner)
-	_caption = _text("", 17, 700)
-	_value = _text("", 17, 400)
+	_caption = _text("", 15, 800, HORIZONTAL_ALIGNMENT_RIGHT, HudLayout.neon_primary(), true)
+	_value = _text("", 24, 900, HORIZONTAL_ALIGNMENT_RIGHT, Color.WHITE, true)
 	corner.add_child(_caption)
 	corner.add_child(_value)
 
+	_bar_frame = PanelContainer.new()
+	_bar_frame.size_flags_horizontal = Control.SIZE_SHRINK_END
+	_bar_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_bar_frame.add_theme_stylebox_override("panel", _bar_frame_style())
+	corner.add_child(_bar_frame)
+	var bar_host := Control.new()
+	bar_host.custom_minimum_size = Vector2(BLOCKS * 16 + (BLOCKS - 1) * 4, 18)
+	bar_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_bar_frame.add_child(bar_host)
+	_bar_glow = Control.new()
+	_bar_glow.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_bar_glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_bar_glow.draw.connect(_draw_bar_glow)
+	bar_host.add_child(_bar_glow)
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 3)
-	row.size_flags_horizontal = Control.SIZE_SHRINK_END
-	row.custom_minimum_size.y = 18
+	row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	row.add_theme_constant_override("separation", 4)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	corner.add_child(row)
+	bar_host.add_child(row)
 	for i in BLOCKS:
 		var block := ColorRect.new()
-		block.custom_minimum_size = Vector2(12, 16)
+		block.custom_minimum_size = Vector2(16, 18)
 		block.color = BLOCK_OFF
 		block.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.add_child(block)
@@ -155,20 +179,38 @@ func _init() -> void:
 ## "hour" (the start time, for the night still and the clock), "weather", "mode" ("race", "rally" ...) and "facts"
 ## (an array of [caption, value] shown under the title; the weather and the clock are added when they are not in it).
 func open(segments: Array, caption: String, value: String, info := {}) -> void:
+	var neon := HudLayout.neon_primary()
+	var hot := HudLayout.neon_hot()
 	for child in _title.get_children():
 		child.queue_free()
-	var words: Array = ["loading"] + segments
-	for i in words.size():
+	var badge := PanelContainer.new()
+	badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var bsb := HudLayout.neon_box(hot, 0.94, 4, -0.14, 10, 14.0, 5.0)
+	bsb.bg_color = hot
+	badge.add_theme_stylebox_override("panel", bsb)
+	var blbl := _text("LOADING", 20, 900, HORIZONTAL_ALIGNMENT_CENTER, Color.WHITE, true)
+	blbl.add_theme_constant_override("shadow_offset_y", 0)
+	badge.add_child(blbl)
+	_title.add_child(badge)
+	for i in segments.size():
 		if i > 0:
 			var rule := ColorRect.new()
-			rule.color = CmrStyle.TEXT
-			rule.custom_minimum_size = Vector2(2, 44)
+			rule.color = neon
+			rule.custom_minimum_size = Vector2(3, 36)
 			rule.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			_title.add_child(rule)
-		_title.add_child(_text(str(words[i]).to_lower(), 44, 300, HORIZONTAL_ALIGNMENT_LEFT))
-	_caption.text = caption
-	_value.text = value
+		var seg := _text(str(segments[i]).to_upper(), 40 if i == 0 else 30, 900 if i == 0 else 800,
+			HORIZONTAL_ALIGNMENT_LEFT, Color.WHITE if i == 0 else neon.lightened(0.32), true)
+		seg.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		if i == 0 and CmrStyle.skin != "ps1":
+			seg.add_theme_color_override("font_outline_color", Color(neon, 0.35))
+			seg.add_theme_constant_override("outline_size", 6)
+		_title.add_child(seg)
+	_caption.text = caption.to_upper()
+	_caption.add_theme_color_override("font_color", neon)
+	_value.text = value.to_upper()
 	var hour := float(info.get("hour", -1.0))
 	var weather := String(info.get("weather", ""))
 	var path := hero_path(String(info.get("track", "")), hour, String(info.get("car", "stock")))
@@ -186,18 +228,88 @@ func open(segments: Array, caption: String, value: String, info := {}) -> void:
 	_facts.visible = not facts.is_empty()
 	_tip.text = pick_tip(weather, hour, String(info.get("mode", "race")))
 	_t = 0.0
+	restyle()
 	set_progress(0.0)
 	show()
 
 ## 0..1 along the row of blocks.
 func set_progress(fraction: float) -> void:
-	var lit := roundi(clampf(fraction, 0.0, 1.0) * BLOCKS)
+	_progress = clampf(fraction, 0.0, 1.0)
+	var lit := roundi(_progress * BLOCKS)
 	for i in BLOCKS:
 		_blocks[i].color = BLOCK_ON if i < lit else BLOCK_OFF
+	if is_instance_valid(_bar_glow):
+		_bar_glow.queue_redraw()
 
-## The menu skin changed: the plain backdrop behind a missing still follows it.
+## The menu skin changed: backdrop, neon frames, glow and accents follow it.
 func restyle() -> void:
 	color = CmrStyle.TINT_HOME
+	if is_instance_valid(_tip_panel):
+		_tip_panel.add_theme_stylebox_override("panel", _tip_box_style())
+	if is_instance_valid(_tip_tag):
+		_tip_tag.add_theme_stylebox_override("panel", _tip_tag_style())
+	if is_instance_valid(_bar_frame):
+		_bar_frame.add_theme_stylebox_override("panel", _bar_frame_style())
+	if is_instance_valid(_caption):
+		_caption.add_theme_color_override("font_color", HudLayout.neon_primary())
+		_caption.add_theme_font_override("font", HudLayout.italic_font(800))
+	if is_instance_valid(_value):
+		_value.add_theme_font_override("font", HudLayout.italic_font(900))
+	if is_instance_valid(_vignette):
+		_vignette.queue_redraw()
+	set_progress(_progress)
+
+func _skin_changed() -> void:
+	restyle()
+
+func _tip_box_style() -> StyleBoxFlat:
+	var sb := HudLayout.neon_box(HudLayout.neon_primary(), 0.80, 4, -0.05, 8, 14.0, 8.0)
+	sb.bg_color = HudLayout.glass_plate(0.82)
+	return sb
+
+func _tip_tag_style() -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = HudLayout.neon_boost()
+	sb.set_corner_radius_all(0 if CmrStyle.skin == "ps1" else 3)
+	sb.skew = Vector2(0.0 if CmrStyle.skin == "ps1" else -0.14, 0.0)
+	sb.content_margin_left = 8
+	sb.content_margin_right = 8
+	sb.content_margin_top = 2
+	sb.content_margin_bottom = 2
+	return sb
+
+func _bar_frame_style() -> StyleBoxFlat:
+	var sb := HudLayout.neon_box(HudLayout.neon_primary(), 0.84, 4, -0.10, 12, 10.0, 7.0)
+	sb.bg_color = HudLayout.glass_plate(0.86)
+	return sb
+
+func _draw_bar_glow() -> void:
+	if CmrStyle.skin == "ps1":
+		return
+	var lit := roundi(_progress * BLOCKS)
+	if lit <= 0:
+		return
+	var neon := HudLayout.neon_primary()
+	var hot := HudLayout.neon_hot()
+	var step := 20.0
+	for i in mini(lit, BLOCKS):
+		var r := Rect2(i * step, 0.0, 16.0, 18.0)
+		_bar_glow.draw_rect(r.grow(3.5), Color(neon, 0.24))
+	var tip_r := Rect2((mini(lit, BLOCKS) - 1) * step, 0.0, 16.0, 18.0)
+	_bar_glow.draw_rect(tip_r.grow(5.0), Color(hot, 0.30))
+
+func _draw_vignette() -> void:
+	if CmrStyle.skin == "ps1" or size.x < 2.0:
+		return
+	var neon := HudLayout.neon_primary()
+	var hot := HudLayout.neon_hot()
+	# subtle street-neon edge glow + thin frame hairlines
+	_vignette.draw_rect(Rect2(0.0, 0.0, size.x, 3.0), Color(neon, 0.72))
+	_vignette.draw_rect(Rect2(0.0, 3.0, size.x, 10.0), Color(neon, 0.10))
+	_vignette.draw_rect(Rect2(0.0, size.y - 3.0, size.x, 3.0), Color(hot, 0.72))
+	_vignette.draw_rect(Rect2(0.0, size.y - 14.0, size.x, 11.0), Color(hot, 0.12))
+	HudLayout.draw_radial_glow(_vignette, Vector2(size.x * 0.06, size.y * 0.92), size.y * 0.62, Color(neon, 0.18))
+	HudLayout.draw_radial_glow(_vignette, Vector2(size.x * 0.94, size.y * 0.08), size.y * 0.56, Color(hot, 0.16))
 
 func _process(delta: float) -> void:
 	if not visible or not _photo.visible:
@@ -251,19 +363,25 @@ static func pick_tip(weather: String, hour: float, mode: String) -> String:
 	return String(pool[randi() % pool.size()])
 
 func _fact(caption: String, value: String) -> Control:
+	var panel := PanelContainer.new()
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sb := HudLayout.neon_box(HudLayout.neon_primary(), 0.72, 4, -0.09, 6, 12.0, 6.0)
+	sb.bg_color = HudLayout.glass_plate(0.76)
+	panel.add_theme_stylebox_override("panel", sb)
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 0)
 	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	col.add_child(_text(caption.to_lower(), 15, 700, HORIZONTAL_ALIGNMENT_LEFT, Color(CmrStyle.TEXT, 0.62)))
-	col.add_child(_text(value.to_lower(), 28, 300, HORIZONTAL_ALIGNMENT_LEFT))
-	return col
+	col.add_child(_text(caption.to_upper(), 12, 800, HORIZONTAL_ALIGNMENT_LEFT, HudLayout.neon_primary(), true))
+	col.add_child(_text(value.to_upper(), 22, 900, HORIZONTAL_ALIGNMENT_LEFT, Color.WHITE, true))
+	panel.add_child(col)
+	return panel
 
-## A dark gradient across the screen, `a_start` opaque at the `from` fraction of its length (down for `vertical`, across
+## A dark midnight gradient across the screen, `a_start` opaque at the `from` fraction of its length (down for `vertical`, across
 ## otherwise) fading to `a_end` at `to`, so the type reads on any still.
 func _shade(vertical: bool, a_start: float, a_end: float, from: float, to: float) -> TextureRect:
 	var g := Gradient.new()
-	g.set_color(0, Color(0, 0, 0, a_start))
-	g.set_color(1, Color(0, 0, 0, a_end))
+	g.set_color(0, Color(0.02, 0.03, 0.08, a_start))
+	g.set_color(1, Color(0.02, 0.03, 0.08, a_end))
 	var tex := GradientTexture2D.new()
 	tex.gradient = g
 	tex.width = 4 if vertical else 128
@@ -285,15 +403,15 @@ func _shade(vertical: bool, a_start: float, a_end: float, from: float, to: float
 		r.anchor_right = to
 	return r
 
-static func _text(text: String, size: int, weight: int, align := HORIZONTAL_ALIGNMENT_RIGHT, color := CmrStyle.TEXT) -> Label:
+static func _text(text: String, size: int, weight: int, align := HORIZONTAL_ALIGNMENT_RIGHT, color := CmrStyle.TEXT, italic := false) -> Label:
 	var label := Label.new()
 	label.text = text
-	label.add_theme_font_override("font", CmrStyle.font(weight))
+	label.add_theme_font_override("font", HudLayout.italic_font(weight) if italic else CmrStyle.font(weight))
 	label.add_theme_font_size_override("font_size", size)
 	label.add_theme_color_override("font_color", color)
-	label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.55))
+	label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.72))
 	label.add_theme_constant_override("shadow_offset_x", 0)
-	label.add_theme_constant_override("shadow_offset_y", maxi(1, size / 16))
+	label.add_theme_constant_override("shadow_offset_y", maxi(1, size / 14))
 	label.horizontal_alignment = align
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return label

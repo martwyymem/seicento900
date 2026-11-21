@@ -374,6 +374,44 @@ static func field_color(key: String, i: int, avoid: Color, seed := 0) -> Color:
 			pool.append(pal[k].color)
 	return pool[posmod(i + seed, pool.size())]
 
+## Real car models the rival field draws from (every catalogue entry except the hypercar).
+static func rival_keys() -> Array[String]:
+	var out: Array[String] = []
+	for k in KEYS:
+		if k != "hypercar":
+			out.append(k)
+	return out
+
+## Deterministic rival car model for slot `slot` in a race seeded by `seed_value`: shuffles the real-car pool in
+## full-deck passes so every model appears before any repeats (at most two of any model for fields up to twice the pool).
+static func rival_model(slot: int, seed_value: int) -> String:
+	var pool := rival_keys()
+	var n := pool.size()
+	if n == 0:
+		return "stock"
+	var idx := maxi(slot, 0)
+	var pass_idx := idx / n
+	var pos_in_pass := idx % n
+	var rng := RandomNumberGenerator.new()
+	rng.seed = (int(seed_value & 0x7fffffff) * 1103515245 + pass_idx * 2654435761 + 12345) & 0x7fffffffffffffff
+	var order := pool.duplicate()
+	for i in range(n - 1, 0, -1):
+		var j := rng.randi_range(0, i)
+		var tmp: String = order[i]
+		order[i] = order[j]
+		order[j] = tmp
+	return order[pos_in_pass]
+
+## Deterministic seed for a rival field from stable race or event identifiers (replay or restart picks the same field).
+static func rival_seed(parts: Array) -> int:
+	var h := 2166136261
+	for p in parts:
+		var s := str(p)
+		for i in s.length():
+			h = ((h ^ s.unicode_at(i)) * 16777619) & 0x7fffffff
+		h = ((h ^ 0x1f) * 16777619) & 0x7fffffff
+	return h
+
 ## The paint the player last picked for this car (the garage), else the palette entry nearest `fallback`; always a
 ## factory paint, and the livery's colour for a car with a fixed livery.
 static func saved_paint(key: String, fallback: Color) -> Color:

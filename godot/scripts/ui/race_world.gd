@@ -93,6 +93,7 @@ var skidmarks_root: Node3D
 var camera: Camera3D
 
 var visuals: Dictionary = {}
+var one_make := false ## Seicento Cup championship keeps a one-make field (game.gd sets this before set_race)
 var mods := {} ## the player's CarMods (game.gd sets them with the race): monster wheels on every car, tiny and rainbow on the player's
 var _rainbow_t := 0.0
 var world_center := Vector2.ZERO
@@ -399,12 +400,26 @@ func set_race(value: Race) -> void:
 	visuals.clear()
 	_reset_skids()
 
+	var player_key := value.s.car_class if CarCatalog.is_key(value.s.car_class) else "stock"
+	var mix_rivals := not one_make and player_key != "hypercar"
+	var field_seed := CarCatalog.rival_seed([value.s.track, player_key, value.s.opponents, value.s.laps])
+	var rival_slot := 0
+	var seen_models := {}
 	for car in value.cars:
 		var visual := CAR_SCENE.instantiate()
-		visual.car_key = value.s.car_class if CarCatalog.is_key(value.s.car_class) else "stock" # the whole field drives the chosen car
+		var car_key := player_key
+		var paint := car.color
+		if not car.is_player and mix_rivals:
+			car_key = CarCatalog.rival_model(rival_slot, field_seed)
+			rival_slot += 1
+			var occ := int(seen_models.get(car_key, 0))
+			seen_models[car_key] = occ + 1
+			paint = CarCatalog.field_color(car_key, occ, value.s.player_color, field_seed + CarCatalog.index_of(car_key) * 3)
+			car.color = paint # pit bands and timing swatch follow the rival's own model paint
+		visual.car_key = car_key
 		visuals[car.id] = visual
 		cars_root.add_child(visual)
-		visual.set_paint(car.color)
+		visual.set_paint(paint)
 		visual.car_number = car.number
 		visual.is_player = car.is_player
 		visual.set_livery(car.finish)
@@ -1202,7 +1217,8 @@ func _update_beams() -> void:
 			continue
 		var visual: Node3D = visuals[_rank_cars[i].id]
 		var fwd := -visual.basis.z
-		var from := visual.position + fwd * 1.9 + Vector3.UP * 0.66
+		var nose := float(CarCatalog.visual(String(visual.car_key)).get("bumper_cam", Vector2(1.78, 0.42)).x) + 0.12
+		var from := visual.position + fwd * nose + Vector3.UP * 0.66
 		beam.look_at_from_position(from, visual.position + fwd * 26.0 - Vector3.UP * 0.4, Vector3.UP)
 		beam.light_energy = 24.0 * level * Service.lamp(_rank_cars[i], race.clock) # damaged electrics dim and flicker
 		beam.visible = true

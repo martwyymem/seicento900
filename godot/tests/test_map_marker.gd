@@ -13,6 +13,7 @@ func run() -> Array:
 	_check_big_map(errors)
 	_check_inside(errors)
 	await _check_hud(errors, Engine.get_main_loop() as SceneTree)
+	await _check_disc_clamp(errors, Engine.get_main_loop() as SceneTree)
 	completed = true
 	return errors
 
@@ -119,3 +120,88 @@ func _check_hud(errors: Array[String], tree: SceneTree) -> void:
 		if pins.size() != 1 or pins[0].pos != wp:
 			errors.append("the HUD keeps exactly the latest waypoint (%s): %s" % [wp, pins])
 	hud.free()
+
+## Every drawn satnav element (stage, mission, live event, waypoint, nearby & routed POIs, the North "N" badge,
+## edge arrows and the GPS route) stays strictly inside the inner bezel of the neon ring at every zoom, heading
+## and window aspect — even with markers placed kilometres away in every direction.
+func _check_disc_clamp(errors: Array[String], tree: SceneTree) -> void:
+	var car := Vector2(400.0, -300.0)
+	var ms := []
+	# 16 compass directions, mixing stage, mission, live, waypoint, and POIs at near, rim-edge and far distances
+	for k in 16:
+		var ang := TAU * float(k) / 16.0
+		var dir := Vector2(cos(ang), sin(ang))
+		var dist: float = [120.0, 210.0, 245.0, 1200.0, 8000.0][k % 5]
+		var kind: String = ["", "mission", "live", "poi", "poi"][k % 5]
+		var m := {"pos": car + dir * dist, "color": Color.ORANGE, "label": "m%d" % k, "kind": kind}
+		if kind == "poi":
+			m["shape"] = "diamond" if k % 2 == 0 else "square"
+			m["unknown"] = k % 4 == 3
+			m["routed"] = false
+		ms.append(m)
+	# far waypoint + far routed POI + close rim-edge POI + long GPS route leaving the disc
+	ms.append({"pos": car + Vector2(-9500.0, 3200.0), "color": OpenWorldHud.PURPLE, "label": "WAYPOINT", "kind": "waypoint"})
+	ms.append({"pos": car + Vector2(6400.0, -4800.0), "color": Poi.KINDS[Poi.TRAP].color, "label": "Trap", "kind": "poi",
+		"shape": "diamond", "unknown": false, "routed": true})
+	var route := PackedVector2Array([
+		car + Vector2(-400.0, -400.0), car, car + Vector2(180.0, 40.0),
+		car + Vector2(900.0, 220.0), car + Vector2(4000.0, -1500.0),
+	])
+	var canvases: Array[Vector2] = [Vector2(1600, 900), Vector2(1231, 692), Vector2(1440, 1080), Vector2(2520, 1080)]
+	var zooms := [170.0, 250.0, 330.0]
+	var headings := [0.0, 0.73, PI * 0.5, -2.15, PI]
+	for canvas in canvases:
+		var host := Control.new()
+		host.size = canvas
+		tree.root.add_child(host)
+		var hud := OpenWorldHud.new()
+		host.add_child(hud)
+		hud.set_markers(ms)
+		hud.set_route(route)
+		await tree.process_frame
+		hud._layout()
+		var sz := hud.minimap.size
+		if sz.x < 100.0 or absf(sz.x - sz.y) > 1.0:
+			errors.append("satnav at %s is not a square disc: %s" % [canvas, sz])
+		var test_sizes: Array[Vector2] = [sz, Vector2(sz.x, sz.x * 0.8)]
+		for tsz in test_sizes:
+			for radius in zooms:
+				for h in headings:
+					hud.car_pos = car
+					hud.car_heading = h
+					var plan := hud.minimap_draw_plan(tsz, radius)
+					var c: Vector2 = plan.centre
+					var inner_r: float = plan.inner_r
+					var items: Array = plan.items
+					if items.is_empty():
+						errors.append("satnav plan had no markers at %s r=%.0f h=%.2f" % [tsz, radius, h])
+					var saw_edge := false
+					for it: Dictionary in items:
+						var q: Vector2 = it.pos
+						var outer_r: float = it.outer_r
+						var tip: Vector2 = it.tip
+						if q.distance_to(c) + outer_r > inner_r + 0.05:
+							errors.append("satnav marker '%s' exceeds inner ring (%.1f + %.1f > %.1f) at %s r=%.0f h=%.2f" % [
+								it.marker.get("label", "?"), q.distance_to(c), outer_r, inner_r, tsz, radius, h])
+						if tip.distance_to(c) > inner_r + 0.05:
+							errors.append("satnav edge arrow '%s' exceeds inner ring (%.1f > %.1f) at %s r=%.0f h=%.2f" % [
+								it.marker.get("label", "?"), tip.distance_to(c), inner_r, tsz, radius, h])
+						if bool(it.edge):
+							saw_edge = true
+					if not saw_edge:
+						errors.append("far markers were not clamped to the rim at %s r=%.0f h=%.2f" % [tsz, radius, h])
+					var nd: Dictionary = plan.north
+					if (nd.pos as Vector2).distance_to(c) + float(nd.outer_r) > inner_r + 0.05:
+						errors.append("satnav North badge exceeds inner ring (%.1f + %.1f > %.1f) at %s h=%.2f" % [
+							(nd.pos as Vector2).distance_to(c), float(nd.outer_r), inner_r, tsz, h])
+					var rhw: float = plan.route_half_w
+					for run: PackedVector2Array in plan.route_runs:
+						for v in run:
+							if v.distance_to(c) + rhw > inner_r + 0.05:
+								errors.append("satnav route vertex exceeds inner ring (%.1f + %.1f > %.1f) at %s r=%.0f h=%.2f" % [
+									v.distance_to(c), rhw, inner_r, tsz, radius, h])
+		# also exercise _draw_minimap_overlay end-to-end
+		hud.overlay.set_meta("radius", 250.0)
+		hud.overlay.queue_redraw()
+		await tree.process_frame
+		host.free()

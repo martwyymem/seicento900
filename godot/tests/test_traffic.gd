@@ -23,8 +23,50 @@ func run() -> Array:
 	_go_round(errors)
 	_crossing(errors)
 	_signals(errors)
+	_fleet_models(errors)
 	completed = true
 	return errors
+
+## Every kind in Traffic.KINDS has a loaded GLB mesh with Paint and Taillight surfaces, valid dimensions/palette,
+## and weights that sum to 1.
+func _fleet_models(errors: Array[String]) -> void:
+	if Traffic.KINDS.size() != Traffic.KIND_WEIGHTS.size() or Traffic.KINDS.size() < 8:
+		errors.append("traffic KINDS/KIND_WEIGHTS mismatch (%d vs %d)" % [Traffic.KINDS.size(), Traffic.KIND_WEIGHTS.size()])
+		return
+	var wsum := 0.0
+	for w in Traffic.KIND_WEIGHTS:
+		wsum += float(w)
+	if absf(wsum - 1.0) > 0.01:
+		errors.append("traffic KIND_WEIGHTS sum to %.3f (1.0 expected)" % wsum)
+	var root := Node3D.new()
+	var builder := TownBuilder.new(map, root)
+	var tr := Traffic.new(map, root, builder)
+	for kind in Traffic.KINDS:
+		if not builder.has_model(kind):
+			errors.append("traffic kind '%s' has no loaded GLB model" % kind)
+			continue
+		var sp := Traffic.kind_spec(kind)
+		if float(sp.len) < 2.8 or float(sp.len) > 5.8 or float(sp.w) < 1.3 or float(sp.w) > 2.3:
+			errors.append("traffic kind '%s' has implausible size %.2f x %.2f m" % [kind, float(sp.len), float(sp.w)])
+		if Traffic.paint_palette(kind).is_empty():
+			errors.append("traffic kind '%s' has an empty paint palette" % kind)
+		var node := tr._car_node(kind, tr._paint_for(kind))
+		var body := node.get_node_or_null("Body") as MeshInstance3D
+		if body == null or body.mesh == null:
+			errors.append("traffic kind '%s' built no Body mesh" % kind)
+		else:
+			var has_paint := false
+			var has_tail := false
+			for s in body.mesh.get_surface_count():
+				var sm := body.mesh.surface_get_material(s)
+				if sm and sm.resource_name == "Paint":
+					has_paint = true
+				elif sm and sm.resource_name == "Taillight":
+					has_tail = true
+			if not has_paint or not has_tail:
+				errors.append("traffic kind '%s' missing surface (Paint=%s Taillight=%s)" % [kind, has_paint, has_tail])
+		node.free()
+	root.free()
 
 ## A traffic car on edge e, s metres along it, at speed v (no mesh).
 func _car(tr: Traffic, from: String, e: Array, s: float, v: float, kind := "CarHatch") -> Dictionary:
