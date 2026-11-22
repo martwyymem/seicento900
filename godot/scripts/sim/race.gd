@@ -2255,6 +2255,7 @@ func barrier_contact(car: RaceCar, mass: float) -> void:
 	var sh := sin(car.heading)
 	var hit := 0.0
 	var hit_f := 0.0 ## where the hardest hit came from (cosine against the heading), for the damaged parts
+	var hit_r := Vector2.ZERO ## and the corner it landed on (for the visual)
 	for side in [1.0, -1.0]:
 		var wall: float = lim[1] + hw if side > 0.0 else lim[0] - hw
 		var pen := 0.0
@@ -2279,6 +2280,9 @@ func barrier_contact(car: RaceCar, mass: float) -> void:
 		if h > hit:
 			hit = h
 			hit_f = (ch * nx + sh * ny) * side
+			hit_r = Vector2(rx, ry)
+	if hit > 0.0:
+		car.note_hit(hit_r.x, hit_r.y, hit)
 	if rc and hit > 0.0:
 		rc.report_barrier(car, hit, hit_f)
 	if hear_impacts and hit > 0.0:
@@ -2371,6 +2375,8 @@ func collide() -> void:
 				var py := (a.y + ca[1] + b.y + cb[1]) / 2.0
 				kick(a, -nx * jimp * wa, -ny * jimp * wa, px - a.x, py - a.y)
 				kick(b, nx * jimp * wb, ny * jimp * wb, px - b.x, py - b.y)
+				a.note_hit(px - a.x, py - a.y, jimp * wa)
+				b.note_hit(px - b.x, py - b.y, jimp * wb)
 				if rc:
 					rc.report_contact(a, b, nx, ny, jimp * wa, jimp * wb)
 				if hear_impacts:

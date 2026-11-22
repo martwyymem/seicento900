@@ -1242,7 +1242,8 @@ def build_marlboro(pj):
 
 
 def _nz(p, a):
-	return math.sin(p.x * 23.0 + p.y * 17.0 + a) * math.sin(p.y * 29.0 - p.z * 19.0 + a * 1.7)
+	# the dents' irregularity: half-metre waves (shorter ones folded thin panels over themselves at a full dent)
+	return math.sin(p.x * 9.0 + p.y * 7.0 + a) * math.sin(p.y * 11.0 - p.z * 8.0 + a * 1.7)
 
 
 def dent_delta(key, p):
@@ -1436,15 +1437,20 @@ def main():
 	for name, ob in (("Body", objs[0]), ("Details", objs[1]), ("Stripes", objs[2]), ("Wheel", objs[3]), ("Cabin", objs[4]),
 			("Martini", objs[5]), ("Abarth", objs[6]), ("Marlboro", objs[7])):
 		print("%-8s %6d tris" % (name, sum(len(p.vertices) - 2 for p in ob.data.polygons)))
-	named = {"Body": objs[0], "Stripes": objs[2], "Martini": objs[5], "Abarth": objs[6], "Marlboro": objs[7]}
+	named = {"Body": objs[0], "Details": objs[1], "Stripes": objs[2], "Martini": objs[5], "Abarth": objs[6], "Marlboro": objs[7]}
+	sites = carkit.crush_sites(objs[0])
 	carkit.split_bonnet(named, Y0, S_SCUTTLE, material("Trim"))
-	bonnet = [ob for k, ob in named.items() if k.startswith("Bonnet")]
+	carkit.split_damage_parts(named, Y0, FRONT_AXLE_S, REAR_AXLE_S, ARCH_R, S_DOOR, S_RG0 - 0.02, material("Trim"))
+	bonnet = [ob for k, ob in named.items() if k not in ("Body", "Details", "Stripes", "Martini", "Abarth", "Marlboro")]
 	for i in (0, 1, 2, 5, 6, 7):
 		add_damage_keys(objs[i])
+		carkit.add_crush_keys(objs[i], sites)
 	for ob in bonnet:
 		add_damage_keys(ob)
+		carkit.add_crush_keys(ob, sites)
 	os.makedirs(os.path.dirname(OUT_GLB), exist_ok=True)
 	kit.export_glb(OUT_GLB, texcoords=False)
+	carkit.sparsify_glb(OUT_GLB)
 	if arg("--blend"):
 		bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(arg("--blend")))
 	if arg("--renders"):
@@ -1465,8 +1471,12 @@ def main():
 				w.scale.x = sx
 				bpy.context.scene.collection.objects.link(w)
 		objs[3].hide_render = True
-		for ob in bonnet:  # the bonnet's stripe and livery pieces show with their parent mesh (--no-bonnet: the bay under it)
-			ob.hide_render = "--no-bonnet" in sys.argv or (ob.name != "Bonnet" and bpy.data.objects[ob.name[6:]].hide_render)
+		for ob in bonnet:  # the panels' stripe and livery pieces show with their parent mesh (--no-bonnet: the bay under it)
+			part = next((p for p in carkit.PARTS if ob.name.startswith(p)), None)
+			rest = ob.name[len(part):] if part else ""
+			ob.hide_render = ("--no-bonnet" in sys.argv and part == "Bonnet") or (rest in carkit.DECALS and bpy.data.objects[rest].hide_render)
+		if "--wreck" in sys.argv:
+			carkit.pose_wreck(named, sites)
 		render_views(cam, os.path.abspath(arg("--renders")))
 
 

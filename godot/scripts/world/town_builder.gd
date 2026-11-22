@@ -67,6 +67,7 @@ const LAMP_CELL := 64.0 ## m: cells of the lamp lookup (lamps_near)
 var _lamp_cells := {} ## Vector2i cell -> PackedInt32Array of indices into lamp_spots
 var beacon_nodes := {} ## spot name -> Node3D
 var festival_pos := Vector3.ZERO
+var festival: FestivalDressing
 var crossing_points: Array = [] ## [Vector2 position, road index] where a street crosses the railway at grade
 var models := {} ## town.glb meshes by object name
 
@@ -4054,49 +4055,10 @@ func _build_festival(group: Node3D) -> void:
 	var spot: Array = map.spots.get("festival", [])
 	if spot.is_empty():
 		return
-	var p := Vector2(spot[0], spot[1])
-	var g := map.ground(p.x, p.y)
-	festival_pos = Vector3(p.x, g, p.y)
-	var fest := Node3D.new()
-	fest.name = "Festival"
-	group.add_child(fest)
-	var near := map.nearest_road(p, 300.0)
-	var face := 0.0
-	if not near.is_empty():
-		var d: Vector2 = (near.pos as Vector2) - p
-		face = atan2(-d.x, -d.y)
-	fest.transform = Transform3D(Basis(Vector3.UP, face), festival_pos)
-	var banner := StandardMaterial3D.new()
-	banner.albedo_color = Color("#ff6a1a")
-	banner.emission_enabled = true
-	banner.emission = Color("#ff6a1a")
-	banner.emission_energy_multiplier = 0.15
-	var banner2 := banner.duplicate() as StandardMaterial3D
-	banner2.albedo_color = Color("#7a3cff")
-	banner2.emission = Color("#7a3cff")
-	var pieces := [["FestivalStage", Vector3(0, 0, 18), 0.0, banner], ["FestivalArch", Vector3(0, 0, -16), 0.0, banner2]]
-	for k in 6:
-		var a := -PI * 0.8 + k * PI * 0.32
-		pieces.append(["Tent", Vector3(sin(a) * 14.0, 0, cos(a) * 9.0), a, banner if k % 2 == 0 else banner2])
-	for k in 10:
-		pieces.append(["FlagPole", Vector3(-18.0 + k * 4.0, 0, -22.0), 0.0, banner if k % 2 == 0 else banner2])
-	for pc in pieces:
-		var mesh_xf := _model(pc[0], _fallback_festival.bind(pc[0]))
-		var inst := MeshInstance3D.new()
-		inst.mesh = mesh_xf[0]
-		inst.transform = Transform3D(Basis(Vector3.UP, pc[2]), pc[1]) * (mesh_xf[1] as Transform3D)
-		_tint_banner(inst, pc[3])
-		fest.add_child(inst)
-	var label := Label3D.new()
-	label.text = "SEICENTO FEST\nBRZESZCZE"
-	label.font_size = 220
-	label.pixel_size = 0.02
-	label.outline_size = 24
-	label.modulate = Color("#ffd166")
-	label.outline_modulate = Color("#3a1060")
-	label.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
-	label.position = Vector3(0, 13, 18)
-	fest.add_child(label)
+	festival = FestivalDressing.new()
+	festival.setup(map, self)
+	festival_pos = festival.festival_pos
+	group.add_child(festival)
 
 func _tint_banner(inst: MeshInstance3D, mat: Material) -> void:
 	var mesh := inst.mesh
@@ -4345,18 +4307,23 @@ func add_beacon(name: String, p: Vector2, color: Color, label_text: String) -> N
 	ring_inst.visibility_range_end = 300.0
 	node.add_child(ring_inst)
 	var label := Label3D.new()
+	label.name = "Label"
 	label.text = label_text
-	label.font_size = 96
-	label.pixel_size = 0.03
-	label.outline_size = 18
+	label.font_size = 72
+	label.pixel_size = 0.020
+	label.outline_size = 14
 	label.modulate = Color.WHITE
 	label.outline_modulate = color.darkened(0.6)
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	label.no_depth_test = true
+	label.no_depth_test = false
 	label.fixed_size = false
-	label.position = Vector3(0, 9.0, 0)
-	label.visibility_range_end = 450.0
+	var near_hub := festival_pos != Vector3.ZERO and Vector2(p.x - festival_pos.x, p.y - festival_pos.z).length() < 40.0
+	label.position = Vector3(0, 20.5 if near_hub else 11.5, 0)
+	label.visibility_range_end = 420.0
 	label.layers = CarReflections.OVERLAY_LAYER # seen, never mirrored in the car parked under it
+	label.set_meta("base_color", label.modulate)
+	label.set_meta("base_outline", label.outline_modulate)
+	label.set_meta("is_cp", name == "live_cp")
 	node.add_child(label)
 	root.add_child(node)
 	beacon_nodes[name] = node

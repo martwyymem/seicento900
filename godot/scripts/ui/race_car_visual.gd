@@ -59,6 +59,10 @@ var car_number := 1:
 		car_number = value
 		if is_instance_valid(_details_node):
 			_details_node.set_instance_shader_parameter("plate_id", float(posmod(car_number * 5 + 3, PLATE_ROWS)))
+		for name in _panels: # a plate on a bumper or the tailgate
+			for p in _panels[name].parts:
+				if String(p[0].name).ends_with("Details"):
+					(p[0] as MeshInstance3D).set_instance_shader_parameter("plate_id", float(posmod(car_number * 5 + 3, PLATE_ROWS)))
 		if is_instance_valid(number_label):
 			number_label.text = str(car_number)
 		_update_decals()
@@ -87,33 +91,81 @@ var _beacon: OmniLight3D
 var _shell: MeshInstance3D
 var _details_node: MeshInstance3D
 var _dents_shown := {"front": 0.0, "rear": 0.0, "left": 0.0, "right": 0.0}
-## The bonnet (the model's Bonnet mesh and its stripe and livery pieces, hinged at its rear edge): a heavy frontal hit pops
-## its catch and it lifts and flaps on the hinge with speed; a hard frontal crash, or the wind at motorway speed, tears it
-## off as a loose RigidBody3D, and a repaired front (dents back to nothing) puts it back. RaceCar.dents.front adds
-## 3 x ((dv - 3) / 6.7)^2 per hit (RaceControl.hurt, FreeCar._impact) and saturates at 1 near 25 km/h, so the dent only
-## decides the pop (BONNET_POP is one hit of about 21 km/h, or a few smaller ones). Tearing it off goes by the crash itself:
-## the visual's own forward speed lost against a reference that may fall only at 3 g (no brakes do that).
-const BONNET_POP := 0.5
+## Crash damage the body shows (all cosmetic: nothing here feeds back into the sim). The model's loose panels (Bonnet,
+## DoorL/R, BumperF/R, Boot, each with its "<panel>Details" and stripe/livery pieces, cut out of the Body by
+## tools/blender/carkit.py) hang on hinges: the bonnet pops and flaps and is torn off, a door swings ajar on a side hit
+## and is torn off by a big one, a bumper sags at the struck end and drops, the boot lid pops. The glass cracks
+## (Windscreen: shaders/car_windscreen.gdshader) or shatters (side and rear windows), each lamp breaks
+## (shaders/car_damage.gdshaderinc), crush_* blend shapes crumple the skin round each contact point (on top of the
+## four whole-side dent_* ones), scrape decals show bare metal where it struck, and a huge crash tears a wheel off
+## (RaceCar.wheel_off) or bends it. RaceCar.dents (RaceControl.hurt, FreeCar._dent: 3 x ((dv - 3) / 6.7)^2 per hit,
+## full near 25 km/h) and RaceCar.hit_log (where and how hard each impact was) drive it; dents back to nothing (a pit
+## repair, a reset) put everything back. Thresholds are the closing speed of one impact (m/s).
+const BONNET_POP := 0.5 ## front dent that pops the bonnet's catch (one hit of about 21 km/h, or a few smaller ones)
 const BONNET_TEAR_DV := 11.0 ## m/s (40 km/h) of speed lost in a crash that tears a popped bonnet off
 const BONNET_RIP_DV := 15.0 ## m/s (54 km/h): a crash that pops and tears off a shut one at once
-const BONNET_WIND_V := 33.0 ## m/s (120 km/h): a popped bonnet driven this fast ...
+const BONNET_WIND_V := 33.0 ## m/s (120 km/h): a popped bonnet (or an ajar door) driven this fast ...
 const BONNET_WIND_T := 4.0 ## ... for this long in s is torn off by the wind
 const BONNET_REF_FALL := 30.0 ## m/s^2 the crash reference speed may fall
-const BONNET_MASS := 12.0
-const BONNET_LIFE := 20.0 ## s a thrown bonnet lies about
-const BONNET_REACH := 150.0 ## m from the car past which a thrown bonnet is cleared
-const BONNET_LAYER := 1 << 19 ## physics layer of loose bonnets and the ground they land on (nothing else uses it)
-var _bonnet: Node3D ## the hinge (null: a model without a Bonnet)
+const DOOR_AJAR_DV := 7.0 ## a side hit on the door this hard springs it ajar (or a side dent of DOOR_AJAR_DENT)
+const DOOR_AJAR_DENT := 0.6
+const DOOR_TEAR_DV := 13.0 ## and this hard (47 km/h) tears it off
+const BUMPER_SAG_DV := 6.0 ## a hit on a bumper this hard knocks one end loose (or a dent of BUMPER_SAG_DENT on that end)
+const BUMPER_SAG_DENT := 0.45
+const BUMPER_DROP_DV := 11.0 ## a hit this hard, or a sagging one hit again at BUMPER_SAG_DV, or dragged at 100 km/h for
+const BUMPER_DROP_T := 5.0 ## this long, drops it
+const BOOT_POP_DV := 6.5 ## a rear hit this hard (or a rear dent of BONNET_POP) pops the boot lid or tailgate
+const WINDOW_DV := 8.0 ## a hit this hard on a side (the rear) shatters that side's (the rear) window ...
+const WINDOW_DENT := 0.85 ## ... as does a dent this deep there
+const LAMP_DV := 5.0 ## a hit this hard near a lamp breaks it; a dent of LAMP_DENT breaks both on that end
+const LAMP_DENT := 0.8
+const SCRAPE_DV := 3.5 ## a hit this hard scrapes the paint to bare metal there
+const SCRAPES := 4 ## scrape decals a car keeps (the oldest is reused)
+const PART_MASS := {"Bonnet": 12.0, "DoorL": 22.0, "DoorR": 22.0, "BumperF": 6.0, "BumperR": 6.0, "Boot": 12.0}
+const WHEEL_MASS := 16.0
+const PART_LIFE := 20.0 ## s a thrown part lies about
+const PART_REACH := 150.0 ## m from the car past which a thrown part is cleared
+const BONNET_LAYER := 1 << 19 ## physics layer of loose parts and the ground they land on (nothing else uses it)
+const PANELS := ["Bonnet", "DoorL", "DoorR", "BumperF", "BumperR", "Boot"]
+const PANEL_PIECES := ["Details", "Stripes", "Martini", "Abarth", "Marlboro"]
+const GLASS := ["Windscreen", "WindowL", "WindowR", "RearWindow"]
+const DENT_KEYS := ["front", "rear", "left", "right"]
+const DENT_SCALE := 0.7 ## of the whole-side dent_* shapes the dents show, now the crush_* ones crumple the blow's own spot
+## The crush_* blend shapes' sites (tools/blender/carkit.py CRUSH): along the car (0 nose .. 1 tail), across it (-1 left
+## .. 1 right of the half width)
+const CRUSH_SITES := {"fl": Vector2(0.0, -0.62), "fc": Vector2(0.0, 0.0), "fr": Vector2(0.0, 0.62),
+	"rl": Vector2(1.0, -0.62), "rc": Vector2(1.0, 0.0), "rr": Vector2(1.0, 0.62),
+	"l1": Vector2(0.2, -1.0), "l2": Vector2(0.4, -1.0), "l3": Vector2(0.6, -1.0), "l4": Vector2(0.82, -1.0),
+	"r1": Vector2(0.2, 1.0), "r2": Vector2(0.4, 1.0), "r3": Vector2(0.6, 1.0), "r4": Vector2(0.82, 1.0)}
+const CRUSH_REACH := 0.75 ## m from a site at which a hit still crushes it by 1/e
+var _bonnet: Node3D ## the bonnet's hinge (null: a model without a Bonnet)
 var _bonnet_parts: Array = [] ## [piece, the body mesh whose visibility it copies, or null]
 var _bonnet_state := 0 ## 0 shut, 1 popped, 2 thrown off
-var _bonnet_popped_at := 0.0 ## the front dent when it popped
+var _panels := {} ## panel name -> {hinge, parts: [[piece, src]], state: 0 fitted / 1 loose / 2 gone, a, flap, t, box}
+var _glass := {} ## Windscreen / WindowL / WindowR / RearWindow -> MeshInstance3D
+var _glass_gone := {} ## the windows shattered
+var _crack := 0.0 ## the windscreen's crack (car_windscreen.gdshader)
+var _crack_at := Vector3.ZERO
+var _crack_shown := 0.0
+var _lamps_broken := Vector4.ZERO ## FL, FR, RL, RR
+var _crush := {} ## site -> how crushed it is (target)
+var _crush_shown := {}
+var _shape_idx: Array = [] ## [[mesh instance, {blend shape name: index}]] of everything that crumples
+var _scrapes: Array[Decal] = []
+var _hits_seen := -1
+var _wheel_lost := -1
+var _corner_drop := 0.0
+var _bend_shown := PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
 var _bonnet_flap := 0.0
 var _bonnet_ref := 0.0 ## recent forward speed, falling at most BONNET_REF_FALL
 var _bonnet_wind := 0.0 ## s driven above BONNET_WIND_V while popped
 var _bonnet_last := Vector3.ZERO
 var _bonnet_seen := false
-var _loose: Node3D ## a thrown bonnet and its landing plane
-var _loose_t := 0.0
+var _vel := Vector3.ZERO ## the visual's own velocity (m/s), from its motion
+var _loose: Array = [] ## [[Node3D holding a thrown part and its landing plane, age]]
+var _half := Vector2(0.8, 2.0) ## the shell's half width and half length
+var _decal_pins := {} ## a racing decal on a panel -> [panel name, its transform with the panel shut]
+var _nose := -2.0 ## the shell's front z
 var _fx_near := false ## this car shows effects: in a race, not a ghost, and the player or near the camera
 var _world: Node = null ## the RaceWorld this car races in (effects only there, not for menus or the ghost)
 var _fx_checked := false
@@ -277,8 +329,7 @@ func _build() -> void:
 		body_pivot.add_child(node)
 		livery_nodes[k] = node
 	martini_node = livery_nodes[2]
-	if sh.bonnet != null:
-		_build_bonnet(sh)
+	_build_damage(sh)
 
 	for spot in _wheel_spots:
 		var pivot := Node3D.new()
@@ -327,6 +378,7 @@ func _build() -> void:
 		_sill_decal_l = _aim_decal("SillDecalL", decal_mat, sh, aims.SillDecalL)
 		_sill_decal_r = _aim_decal("SillDecalR", decal_mat, sh, aims.SillDecalR)
 		_update_decals()
+		_pin_decals()
 		return
 	_door_decal_l = _add_decal("DoorDecalL", decal_mat, Vector3(-0.7408, 0.65, -0.02), Vector3(-0.9984, 0.0568, -0.0008), Vector3.UP)
 	_door_decal_r = _add_decal("DoorDecalR", decal_mat, Vector3(0.7408, 0.65, -0.02), Vector3(0.9984, 0.0568, -0.0008), Vector3.UP)
@@ -337,6 +389,7 @@ func _build() -> void:
 	_sill_decal_l = _add_decal("SillDecalL", decal_mat, Vector3(-0.7415, 0.385, 0.25), Vector3(-0.998, -0.065, 0.003), Vector3.UP)
 	_sill_decal_r = _add_decal("SillDecalR", decal_mat, Vector3(0.7415, 0.385, 0.25), Vector3(0.998, -0.065, 0.003), Vector3.UP)
 	_update_decals()
+	_pin_decals()
 
 ## A decal on the car's body where a ray from aim.from along aim.dir meets it (the Body mesh's triangles), reading along aim.up.
 func _aim_decal(label: String, mat: StandardMaterial3D, sh: Dictionary, aim: Dictionary) -> MeshInstance3D:
@@ -352,12 +405,17 @@ func _aim_decal(label: String, mat: StandardMaterial3D, sh: Dictionary, aim: Dic
 		n = -n
 	return _add_decal(label, mat, hit.position, n, aim.up)
 
-## The Body's triangles plus the Bonnet's (cut out of it), for rays at the car's skin.
+## The Body's triangles plus the panels' (the bonnet, doors, bumpers and boot cut out of it), for rays at the car's skin.
 static func body_tri(sh: Dictionary) -> TriangleMesh:
-	if sh.get("bonnet") == null:
+	var panels: Dictionary = sh.get("panels", {})
+	if panels.is_empty():
 		return (sh.shell as Mesh).generate_triangle_mesh()
 	var faces: PackedVector3Array = (sh.shell as Mesh).get_faces()
-	faces.append_array((sh.bonnet as Mesh).get_faces())
+	for k in panels:
+		faces.append_array((panels[k].mesh as Mesh).get_faces())
+	var glass: Dictionary = sh.get("glass", {}) # (the sunstrip sits on the windscreen)
+	for k in glass:
+		faces.append_array((glass[k] as Mesh).get_faces())
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = faces
@@ -365,35 +423,112 @@ static func body_tri(sh: Dictionary) -> TriangleMesh:
 	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return m.generate_triangle_mesh()
 
-func _build_bonnet(sh: Dictionary) -> void:
-	var mesh: Mesh = sh.bonnet
-	var box := mesh.get_aabb()
-	var hinge := Vector3(0.0, box.end.y, box.end.z) # its rear edge, under the windscreen (front is -Z)
-	_bonnet = Node3D.new()
-	_bonnet.name = "BonnetHinge"
-	_bonnet.position = hinge
-	body_pivot.add_child(_bonnet)
-	var panel := MeshInstance3D.new()
-	panel.name = "Bonnet"
-	panel.mesh = mesh
-	panel.position = -hinge
-	panel.set_surface_override_material(sh.bonnet_paint, paint_material)
-	_bonnet.add_child(panel)
-	_bonnet_parts = [[panel, null]]
-	for k in sh.bonnet_parts:
-		var src: MeshInstance3D = stripes_node if k == "Stripes" else body_pivot.get_node(NodePath(k))
-		var piece := MeshInstance3D.new()
-		piece.name = "Bonnet" + k
-		piece.mesh = sh.bonnet_parts[k]
-		piece.position = -hinge
-		piece.material_override = src.material_override
-		piece.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		piece.visible = src.visible
-		_bonnet.add_child(piece)
-		_bonnet_parts.append([piece, src])
+## The loose panels on their hinges, the glass, and the list of everything that crumples.
+func _build_damage(sh: Dictionary) -> void:
+	var box: AABB = (sh.shell as Mesh).get_aabb()
+	_half = Vector2(box.size.x * 0.5, box.size.z * 0.5)
+	_nose = box.position.z
+	var parts: Dictionary = sh.get("panels", {})
+	for name in PANELS:
+		if parts.has(name):
+			_build_panel(name, parts[name])
+	if _panels.has("Bonnet"):
+		_bonnet = _panels.Bonnet.hinge
+		_bonnet_parts = _panels.Bonnet.parts
+	for name in GLASS:
+		var m: Mesh = (sh.get("glass", {}) as Dictionary).get(name)
+		if m == null:
+			continue
+		var g := MeshInstance3D.new()
+		g.name = name
+		g.mesh = m
+		g.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var holder: Node3D = body_pivot
+		# a hatchback's rear window is in its tailgate: it lifts with it
+		if name == "RearWindow" and _panels.has("Boot"):
+			var bb: AABB = _panels.Boot.box
+			var gb := m.get_aabb()
+			if gb.position.z >= bb.position.z - 0.03 and gb.end.y <= bb.end.y + 0.05:
+				holder = _panels.Boot.hinge
+				g.position = -holder.position
+				_panels.Boot.parts.append([g, null])
+		holder.add_child(g)
+		_glass[name] = g
+	if _glass.has("Windscreen"):
+		var wb: AABB = (_glass.Windscreen as MeshInstance3D).mesh.get_aabb()
+		_crack_at = Vector3(0.0, wb.position.y + wb.size.y * 0.35, wb.position.z + wb.size.z * 0.35)
+	_shape_idx.clear()
+	var meshes: Array = [_shell, _details_node, stripes_node] + livery_nodes.values()
+	for name in _panels:
+		for p in _panels[name].parts:
+			meshes.append(p[0])
+	meshes.append_array(_glass.values())
+	for mi in meshes:
+		var idx := {}
+		for k in DENT_KEYS:
+			var i: int = (mi as MeshInstance3D).find_blend_shape_by_name("dent_" + k)
+			if i >= 0:
+				idx["dent_" + k] = i
+		for k in CRUSH_SITES:
+			var i: int = (mi as MeshInstance3D).find_blend_shape_by_name("crush_" + k)
+			if i >= 0:
+				idx["crush_" + k] = i
+		if not idx.is_empty():
+			_shape_idx.append([mi, idx])
 
-## Pops, flaps, throws or refits the bonnet from the car's front dent; the car's velocity is the visual's own motion.
-func _update_bonnet(car: RaceCar, dt: float) -> void:
+## One panel under its hinge: the Body's piece in this car's paint, its Details piece, and its stripe and livery pieces
+## showing with those meshes.
+func _build_panel(name: String, part: Dictionary) -> void:
+	var mesh: Mesh = part.mesh
+	var box := mesh.get_aabb()
+	var top: Vector3 = part.get("top", Vector3(0.0, box.end.y, box.end.z))
+	var hinge_at := Vector3(0.0, box.end.y, box.end.z) # the bonnet: its rear edge, under the windscreen (front is -Z)
+	match name:
+		"DoorL":
+			hinge_at = Vector3(box.position.x, box.get_center().y, box.position.z) # its leading edge
+		"DoorR":
+			hinge_at = Vector3(box.end.x, box.get_center().y, box.position.z)
+		"BumperF", "BumperR":
+			hinge_at = Vector3(box.end.x, box.end.y, box.get_center().z) # set again at the end that stays on when it sags
+		"Boot":
+			hinge_at = Vector3(0.0, top.y, top.z) # its top, at the roof (a tailgate) or the rear screen (a boot lid)
+	var hinge := Node3D.new()
+	hinge.name = name + "Hinge"
+	hinge.position = hinge_at
+	body_pivot.add_child(hinge)
+	var panel := MeshInstance3D.new()
+	panel.name = name
+	panel.mesh = mesh
+	panel.position = -hinge_at
+	panel.set_surface_override_material(int(part.paint), paint_material)
+	hinge.add_child(panel)
+	var pieces: Array = [[panel, null]]
+	var given: Dictionary = part.pieces
+	for k in PANEL_PIECES:
+		if not given.has(k):
+			continue
+		var piece := MeshInstance3D.new()
+		piece.name = name + k
+		piece.mesh = given[k]
+		piece.position = -hinge_at
+		piece.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var src: MeshInstance3D = null
+		if k == "Details":
+			piece.set_instance_shader_parameter("plate_id", float(posmod(car_number * 5 + 3, PLATE_ROWS)))
+		else:
+			src = stripes_node if k == "Stripes" else body_pivot.get_node(NodePath(k))
+			piece.material_override = src.material_override
+			piece.visible = src.visible
+		hinge.add_child(piece)
+		pieces.append([piece, src])
+	_panels[name] = {"hinge": hinge, "parts": pieces, "state": 0, "a": 0.0, "flap": randf() * TAU, "t": 0.0, "box": box,
+		"end": 1.0}
+
+func _panel_state(name: String) -> int:
+	return int(_panels[name].state) if _panels.has(name) else 0
+
+## The damage for this frame: new impacts, the dents, the panels on their hinges, the wheels.
+func _update_damage(car: RaceCar, dt: float) -> void:
 	_sync_bonnet_parts()
 	var pos := global_position if is_inside_tree() else position
 	var vel := (pos - _bonnet_last) / maxf(dt, 1e-3) if _bonnet_seen and dt > 0.0 else Vector3.ZERO
@@ -402,112 +537,520 @@ func _update_bonnet(car: RaceCar, dt: float) -> void:
 		_bonnet_ref = 0.0
 	_bonnet_last = pos
 	_bonnet_seen = true
-	var front: float = float(car.dents.get("front", 0.0))
+	_vel = vel
 	var fwd := maxf(0.0, vel.dot(-global_basis.z if is_inside_tree() else -basis.z))
 	_bonnet_ref = maxf(_bonnet_ref - BONNET_REF_FALL * dt, fwd)
 	var crash := _bonnet_ref - fwd
-	_bonnet_wind = _bonnet_wind + dt if _bonnet_state == 1 and fwd > BONNET_WIND_V else 0.0
-	if _bonnet_state != 0 and front < 0.05:
-		_refit_bonnet()
-	elif _bonnet_state == 0 and front >= BONNET_POP and not _ghost:
-		_bonnet_state = 1
-		_bonnet_popped_at = front
-		_show_livery()
-		if crash >= BONNET_RIP_DV:
-			_throw_bonnet(vel)
-	elif _bonnet_state == 1 and (crash >= BONNET_TEAR_DV or _bonnet_wind > BONNET_WIND_T):
-		_throw_bonnet(vel)
-	if _bonnet_state == 1:
-		# lifted off its catch: the wind under it lifts it further and it flutters, faster and wider with speed
-		var k := clampf(vel.length() / 30.0, 0.0, 1.0)
-		_bonnet_flap += dt * (8.0 + 16.0 * k)
-		var lift := 0.08 + 0.2 * k * k + (0.02 + 0.07 * k) * sin(_bonnet_flap) * (0.6 + 0.4 * sin(_bonnet_flap * 0.37))
-		_bonnet.rotation.x = lerpf(_bonnet.rotation.x, lift, minf(1.0, dt * 14.0))
-	if is_instance_valid(_loose):
-		_loose_t += dt
-		var body := _loose.get_child(1) as Node3D
-		if _loose_t > BONNET_LIFE or body.global_position.distance_to(pos) > BONNET_REACH:
-			_loose.queue_free()
-			_loose = null
+	var dents: Dictionary = car.dents
+	var total := 0.0
+	for k in DENT_KEYS:
+		total += float(dents.get(k, 0.0))
+	if total < 0.05 and car.wheel_off < 0:
+		if _damaged():
+			_repair()
+		_hits_seen = car.hit_count
+	elif not _ghost:
+		if _hits_seen < 0 or car.hit_count < _hits_seen:
+			_hits_seen = car.hit_count
+		var fresh := mini(car.hit_count - _hits_seen, car.hit_log.size())
+		for i in range(car.hit_log.size() - fresh, car.hit_log.size()):
+			_take_hit(car.hit_log[i])
+		_hits_seen = car.hit_count
+		_from_dents(dents)
+	# the bonnet: popped by the front dent, torn off by the crash itself or by the wind
+	if _panels.has("Bonnet") and not _ghost:
+		var b: Dictionary = _panels.Bonnet
+		var front: float = float(dents.get("front", 0.0))
+		if b.state == 0 and front >= BONNET_POP:
+			_loosen("Bonnet")
+			if crash >= BONNET_RIP_DV:
+				_throw("Bonnet", vel)
+		elif b.state == 1 and (crash >= BONNET_TEAR_DV or b.t > BONNET_WIND_T):
+			_throw("Bonnet", vel)
+	for name in _panels:
+		_move_panel(name, vel, fwd, dt)
+	_follow_decals()
+	# the wheels: one torn off, the others bent
+	if car.wheel_off >= 0 and _wheel_lost < 0 and car.wheel_off < steer_pivots.size():
+		_lose_wheel(car.wheel_off, vel)
+	elif car.wheel_off < 0 and _wheel_lost >= 0:
+		steer_pivots[_wheel_lost].visible = true
+		_wheel_lost = -1
+	_corner_drop = move_toward(_corner_drop, 1.0 if _wheel_lost >= 0 else 0.0, dt * 4.0)
+	for i in mini(4, wheels.size()):
+		var bend: float = car.wheel_bend[i] if i < car.wheel_bend.size() else 0.0
+		if absf(bend - _bend_shown[i]) > 0.01:
+			_bend_shown[i] = bend
+			var tyre := wheels[i].get_child(0) as Node3D
+			# tilted on the spinning hub: the camber and toe wobble round as the wheel turns
+			tyre.rotation = Vector3(0.0, (PI if _wheel_spots[i].x < 0.0 else 0.0) + 0.06 * bend, 0.1 * bend)
+	_show_crush(dt)
+	var i := 0
+	while i < _loose.size():
+		_loose[i][1] += dt
+		var node: Node3D = _loose[i][0]
+		var body := node.get_child(1) as Node3D if is_instance_valid(node) and node.get_child_count() > 1 else null
+		if body == null or _loose[i][1] > PART_LIFE or body.global_position.distance_to(pos) > PART_REACH:
+			if is_instance_valid(node):
+				node.queue_free()
+			_loose.remove_at(i)
+		else:
+			i += 1
 
-## Tears the bonnet off: a copy goes flying as a RigidBody3D (box, BONNET_MASS) with the car's velocity, a kick up and
-## back and a tumble about its hinge, onto a plane at the car's ground height (the tracks and the map have no physics
-## floor); the hinge on the car is hidden.
-func _throw_bonnet(vel: Vector3) -> void:
-	_bonnet_state = 2
-	_bonnet.visible = false
+## A wheel gone: that corner of the body down on its hub.
+func _apply_corner_drop() -> void:
+	if _corner_drop <= 0.0 or _wheel_lost < 0:
+		return
+	var spot: Vector3 = _wheel_spots[_wheel_lost]
+	var drop := _wheel_radius * 0.55 * _corner_drop
+	body_pivot.rotation.x += drop / _wheelbase * (-1.0 if spot.z < 0.0 else 1.0) # nose (tail) down
+	body_pivot.rotation.z += drop / (absf(spot.x) * 2.0) * (1.0 if spot.x < 0.0 else -1.0) # that side down
+	body_pivot.position.y = minf(body_pivot.position.y, -drop * 0.5)
+
+## One impact (RaceCar.hit_log: right, ahead, closing speed), in the visual's frame: the crumple round it, a scrape, and
+## whatever it breaks there.
+func _take_hit(h: Vector3) -> void:
+	var dv := h.z
+	if dv < 2.0:
+		return
+	var across := clampf(h.x / maxf(_half.x, 0.1), -1.3, 1.3)
+	var along := clampf(0.5 - 0.5 * h.y / maxf(_half.y, 0.1), -0.1, 1.1) # 0 nose .. 1 tail
+	var front_back := absf(h.y) / _half.y > absf(h.x) / _half.x
+	var zone := ("front" if h.y > 0.0 else "rear") if front_back else ("right" if h.x > 0.0 else "left")
+	var x := clampf((dv - 3.0) / 6.7, 0.0, 2.0)
+	var add := x * x * 1.6
+	for k in CRUSH_SITES:
+		var site: Vector2 = CRUSH_SITES[k]
+		var d := Vector2((across - site.y) * _half.x, (along - site.x) * _half.y * 2.0)
+		var w := exp(-d.length_squared() / (CRUSH_REACH * CRUSH_REACH))
+		if w > 0.05:
+			_crush[k] = minf(1.0, float(_crush.get(k, 0.0)) + add * w)
+	if dv >= SCRAPE_DV:
+		_scrape(zone, across, along, dv)
+	match zone:
+		"front", "rear":
+			var end := 0 if zone == "front" else 2
+			if dv >= LAMP_DV:
+				if across < 0.25:
+					_break_lamp(end, h)
+				if across > -0.25:
+					_break_lamp(end + 1, h)
+			var bumper := "BumperF" if zone == "front" else "BumperR"
+			if _panels.has(bumper):
+				var st := _panel_state(bumper)
+				if dv >= BUMPER_DROP_DV or (st == 1 and dv >= BUMPER_SAG_DV):
+					_throw(bumper, _vel)
+				elif st == 0 and dv >= BUMPER_SAG_DV:
+					_sag(bumper, across)
+			if zone == "front":
+				if dv >= 9.0:
+					if _crack < 0.05:
+						_crack_at.x = clampf(h.x * 0.5, -0.45, 0.45)
+					_crack = maxf(_crack, 0.35 + (dv - 9.0) / 12.0)
+			else:
+				if dv >= BOOT_POP_DV and _panel_state("Boot") == 0:
+					_loosen("Boot")
+				if dv >= WINDOW_DV + 3.0: # (laminated or set deep in the tailgate: it takes more)
+					_shatter("RearWindow")
+		"left", "right":
+			var door := "DoorL" if zone == "left" else "DoorR"
+			if _panels.has(door):
+				var db: AABB = _panels[door].box
+				var z := lerpf(_nose, _nose + _half.y * 2.0, along)
+				if z > db.position.z - 0.3 and z < db.end.z + 0.3:
+					if dv >= DOOR_TEAR_DV:
+						_throw(door, _vel)
+					elif dv >= DOOR_AJAR_DV and _panel_state(door) == 0:
+						_loosen(door)
+			if dv >= WINDOW_DV:
+				_shatter("WindowL" if zone == "left" else "WindowR")
+			if dv >= LAMP_DV + 2.0 and (along < 0.12 or along > 0.88): # a side swipe at a corner takes its lamp
+				_break_lamp((0 if along < 0.5 else 2) + (1 if zone == "right" else 0), h)
+
+## What the dents alone break (a car dented without impacts noted: many small knocks, a probe).
+func _from_dents(dents: Dictionary) -> void:
+	var front: float = float(dents.get("front", 0.0))
+	var rear: float = float(dents.get("rear", 0.0))
+	_crack = maxf(_crack, smoothstep(0.3, 1.0, front) * 0.9) # a spider web; frosting over takes a hard blow (_take_hit)
+	if front >= LAMP_DENT:
+		_break_lamp(0, Vector3.ZERO)
+		_break_lamp(1, Vector3.ZERO)
+	if rear >= LAMP_DENT:
+		_break_lamp(2, Vector3.ZERO)
+		_break_lamp(3, Vector3.ZERO)
+	if rear >= BONNET_POP and _panel_state("Boot") == 0:
+		_loosen("Boot")
+	for b in [["BumperF", front], ["BumperR", rear]]:
+		if b[1] >= BUMPER_SAG_DENT and _panel_state(b[0]) == 0:
+			_sag(b[0], 0.0)
+	for side in ["left", "right"]:
+		var d: float = float(dents.get(side, 0.0))
+		var door := "DoorL" if side == "left" else "DoorR"
+		if d >= DOOR_AJAR_DENT and _panel_state(door) == 0:
+			_loosen(door)
+		if d >= WINDOW_DENT:
+			_shatter("WindowL" if side == "left" else "WindowR")
+	if _glass.has("Windscreen") and _crack != _crack_shown:
+		_crack_shown = _crack
+		(_glass.Windscreen as MeshInstance3D).set_instance_shader_parameter("crack", _crack)
+		(_glass.Windscreen as MeshInstance3D).set_instance_shader_parameter("crack_at", _crack_at)
+
+func _damaged() -> bool:
+	for name in _panels:
+		if _panels[name].state != 0:
+			return true
+	return not _glass_gone.is_empty() or _crack > 0.0 or _lamps_broken != Vector4.ZERO or not _crush.is_empty() \
+		or not _scrapes.is_empty() or _wheel_lost >= 0
+
+## Everything back on and whole (a repaired or reset car).
+func _repair() -> void:
+	for name in _panels:
+		var p: Dictionary = _panels[name]
+		p.state = 0
+		p.a = 0.0
+		p.t = 0.0
+		(p.hinge as Node3D).visible = true
+		(p.hinge as Node3D).rotation = Vector3.ZERO
+	for name in _glass:
+		(_glass[name] as Node3D).visible = true
+	_glass_gone.clear()
+	_crack = 0.0
+	_crack_shown = 0.0
+	if _glass.has("Windscreen"):
+		(_glass.Windscreen as MeshInstance3D).set_instance_shader_parameter("crack", 0.0)
+	_lamps_broken = Vector4.ZERO
+	if is_instance_valid(_details_node):
+		_details_node.set_instance_shader_parameter("lamp_broken", _lamps_broken)
+	_lamp_sig = Vector4(-1.0, -1.0, -1.0, -1.0)
+	_crush.clear()
+	for d in _scrapes:
+		d.queue_free()
+	_scrapes.clear()
+	for l in _loose:
+		if is_instance_valid(l[0]):
+			l[0].queue_free()
+	_loose.clear()
+	_bonnet_state = 0
+	_follow_decals()
 	_show_livery()
+
+## Off its catch or hinge: the bonnet and the boot lid lift, a door swings ajar.
+func _loosen(name: String) -> void:
+	if not _panels.has(name) or _panels[name].state != 0:
+		return
+	_panels[name].state = 1
+	_panels[name].t = 0.0
+	if name == "Bonnet":
+		_bonnet_state = 1
+		_show_livery()
+
+## A bumper's end torn off its clips: it hangs from the end away from the blow (across: where it was struck).
+func _sag(name: String, across: float) -> void:
+	if not _panels.has(name) or _panels[name].state != 0:
+		return
+	var p: Dictionary = _panels[name]
+	var box: AABB = p.box
+	var keep := -1.0 if across > 0.0 else 1.0 # the end that stays on
+	if absf(across) < 0.1:
+		keep = 1.0 if randf() < 0.5 else -1.0
+	p.end = keep
+	var hinge := p.hinge as Node3D
+	hinge.position = Vector3(box.end.x if keep > 0.0 else box.position.x, box.end.y, box.get_center().z)
+	for q in p.parts:
+		(q[0] as Node3D).position = -hinge.position
+	_loosen(name)
+
+## A loose panel on its hinge: lifted and fluttering in the wind (bonnet, boot lid), swinging ajar (doors), hanging off one
+## end and bouncing (bumpers). A popped bonnet or an ajar door at motorway speed is torn off by the wind, a sagging bumper
+## dragged along drops.
+func _move_panel(name: String, vel: Vector3, fwd: float, dt: float) -> void:
+	var p: Dictionary = _panels[name]
+	if p.state != 1:
+		return
+	var hinge := p.hinge as Node3D
+	var k := clampf(vel.length() / 30.0, 0.0, 1.0)
+	p.flap = float(p.flap) + dt * (8.0 + 16.0 * k)
+	var flap: float = p.flap
+	p.t = float(p.t) + dt if fwd > BONNET_WIND_V or (name.begins_with("Bumper") and fwd > 28.0) else 0.0
+	match name:
+		"Bonnet":
+			var lift := 0.08 + 0.2 * k * k + (0.02 + 0.07 * k) * sin(flap) * (0.6 + 0.4 * sin(flap * 0.37))
+			hinge.rotation.x = lerpf(hinge.rotation.x, lift, minf(1.0, dt * 14.0))
+		"Boot":
+			var lift := 0.22 + 0.1 * k + (0.03 + 0.05 * k) * sin(flap * 0.8) * (0.6 + 0.4 * sin(flap * 0.29))
+			hinge.rotation.x = lerpf(hinge.rotation.x, -lift, minf(1.0, dt * 10.0))
+		"DoorL", "DoorR":
+			# ajar: it swings with the car's motion, the wind pressing it back towards the frame at speed
+			var open := 0.42 * (1.0 - 0.6 * k) + 0.07 * sin(flap * 0.6) * (0.4 + 0.6 * k)
+			var sgn := -1.0 if name == "DoorL" else 1.0
+			hinge.rotation.y = lerpf(hinge.rotation.y, sgn * open, minf(1.0, dt * 6.0))
+			if p.t > BONNET_WIND_T:
+				_throw(name, vel)
+		"BumperF", "BumperR":
+			var box: AABB = p.box
+			var drop := asin(clampf((box.position.y - 0.04) / maxf(box.size.x, 0.5), 0.02, 0.4)) # its free end just off the road
+			var sag := drop * (0.8 + 0.2 * sin(flap * 1.3) * k)
+			hinge.rotation.z = lerpf(hinge.rotation.z, sag * float(p.end), minf(1.0, dt * 10.0))
+			if p.t > BUMPER_DROP_T:
+				_throw(name, vel)
+	if name == "Bonnet" and p.t > BONNET_WIND_T:
+		_throw(name, vel)
+
+## Tears a panel off: a copy goes flying as a RigidBody3D (a box the panel's size, PART_MASS) with the car's velocity and a
+## kick (a bonnet up and back with a tumble, a door out to its side, a bumper just drops), onto a plane at the car's ground
+## height (the tracks and the map have no physics floor); the panel on the car is hidden.
+func _throw(name: String, vel: Vector3) -> void:
+	if not _panels.has(name) or _panels[name].state == 2:
+		return
+	var p: Dictionary = _panels[name]
+	p.state = 2
+	var hinge := p.hinge as Node3D
+	hinge.visible = false
+	if name == "Bonnet":
+		_bonnet_state = 2
+	_show_livery()
+	if name.begins_with("Door"):
+		_shatter("WindowL" if name == "DoorL" else "WindowR")
 	if not is_inside_tree() or get_parent() == null:
 		return
-	if is_instance_valid(_loose):
-		_loose.queue_free()
 	var speed := vel.length()
 	var back := global_basis.z.normalized() # the car's rear
 	var side := global_basis.x.normalized()
-	_loose = Node3D.new()
-	_loose.name = "LooseBonnet"
-	_loose.top_level = true
-	get_parent().add_child(_loose)
+	var box: AABB = (p.parts[0][0] as MeshInstance3D).mesh.get_aabb()
+	var body := _loose_body(PART_MASS.get(name, 10.0), hinge.global_transform)
+	var col := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(maxf(box.size.x, 0.06), maxf(box.size.y * 0.35, 0.06), maxf(box.size.z, 0.06))
+	col.shape = shape
+	col.position = box.get_center() - hinge.position
+	body.add_child(col)
+	var copy := hinge.duplicate() as Node3D
+	copy.transform = Transform3D.IDENTITY
+	copy.visible = true
+	body.add_child(copy)
+	match name:
+		"DoorL", "DoorR":
+			var out := side * (-1.0 if name == "DoorL" else 1.0)
+			body.linear_velocity = vel * 0.85 + out * (2.5 + 0.08 * speed) + Vector3.UP * (1.5 + 0.03 * speed)
+			body.angular_velocity = global_basis.y * randf_range(-4.0, 4.0) + back * randf_range(-3.0, 3.0)
+		"BumperF", "BumperR":
+			body.linear_velocity = vel * 0.7 + Vector3.UP * 0.8
+			body.angular_velocity = back * randf_range(-2.0, 2.0) + global_basis.y * randf_range(-1.5, 1.5)
+		_:
+			body.linear_velocity = vel * 0.9 + Vector3.UP * (3.0 + 0.08 * speed) + back * (1.5 + 0.05 * speed) + side * randf_range(-1.0, 1.0)
+			body.angular_velocity = side * (5.0 + 0.12 * speed) + global_basis.y * randf_range(-2.0, 2.0) + back * randf_range(-1.5, 1.5)
+	if _fx_ok():
+		FxParticles.burst(self, "debris", hinge.global_position, 12, _fx_level())
+
+## A RigidBody3D for a part thrown off at xf, with a landing plane at the car's ground height, kept in _loose.
+func _loose_body(mass: float, xf: Transform3D) -> RigidBody3D:
+	var holder := Node3D.new()
+	holder.name = "LoosePart"
+	holder.top_level = true
+	get_parent().add_child(holder)
 	var ground := StaticBody3D.new()
 	ground.collision_layer = BONNET_LAYER
 	ground.collision_mask = 0
 	var plane := CollisionShape3D.new()
 	plane.shape = WorldBoundaryShape3D.new()
 	ground.add_child(plane)
-	_loose.add_child(ground)
+	holder.add_child(ground)
 	ground.global_position = global_position
 	var body := RigidBody3D.new()
-	body.mass = BONNET_MASS
+	body.mass = mass
 	body.collision_layer = BONNET_LAYER
 	body.collision_mask = BONNET_LAYER
 	body.linear_damp = 0.5 # a light panel catches the air
 	body.angular_damp = 0.6
-	var box := (_bonnet_parts[0][0] as MeshInstance3D).mesh.get_aabb()
+	holder.add_child(body)
+	body.global_transform = xf
+	_loose.append([holder, 0.0])
+	return body
+
+## The wheel at this corner torn off: it bounces away and that corner drops onto its hub.
+func _lose_wheel(i: int, vel: Vector3) -> void:
+	_wheel_lost = i
+	var pivot := steer_pivots[i]
+	pivot.visible = false
+	if not is_inside_tree() or get_parent() == null:
+		return
+	var body := _loose_body(WHEEL_MASS, pivot.global_transform)
+	var bounce := PhysicsMaterial.new()
+	bounce.bounce = 0.45
+	bounce.friction = 0.8
+	body.physics_material_override = bounce
+	body.linear_damp = 0.05
+	body.angular_damp = 0.1
 	var col := CollisionShape3D.new()
-	var shape := BoxShape3D.new()
-	shape.size = Vector3(box.size.x, maxf(box.size.y * 0.35, 0.06), box.size.z)
+	var shape := CylinderShape3D.new()
+	shape.radius = _wheel_radius
+	shape.height = 0.2
 	col.shape = shape
-	col.position = box.get_center() - _bonnet.position
+	col.rotation.z = PI / 2.0 # its axle across the car
 	body.add_child(col)
-	_loose.add_child(body)
-	body.global_transform = _bonnet.global_transform
-	var copy := _bonnet.duplicate() as Node3D
+	var copy := pivot.duplicate() as Node3D
 	copy.transform = Transform3D.IDENTITY
 	copy.visible = true
 	body.add_child(copy)
-	body.linear_velocity = vel * 0.9 + Vector3.UP * (3.0 + 0.08 * speed) + back * (1.5 + 0.05 * speed) + side * randf_range(-1.0, 1.0)
-	body.angular_velocity = side * (5.0 + 0.12 * speed) + global_basis.y * randf_range(-2.0, 2.0) + back * randf_range(-1.5, 1.5)
-	_loose_t = 0.0
+	var out := global_basis.x.normalized() * (-1.0 if _wheel_spots[i].x < 0.0 else 1.0)
+	body.linear_velocity = vel * 0.8 + out * (3.0 + 0.1 * vel.length()) + Vector3.UP * 2.5
+	body.angular_velocity = global_basis.x * (vel.length() / _wheel_radius * 0.6) + global_basis.y * randf_range(-3.0, 3.0)
+	if _fx_ok():
+		FxParticles.burst(self, "sparks", pivot.global_position, 16, _fx_level())
 
-## The bonnet's stripe and livery pieces show with the body's.
+## A window shattered: gone, with a shower of glass.
+func _shatter(name: String) -> void:
+	if not _glass.has(name) or _glass_gone.has(name):
+		return
+	_glass_gone[name] = true
+	var g := _glass[name] as MeshInstance3D
+	g.visible = false
+	if _fx_ok():
+		var c := g.mesh.get_aabb().get_center()
+		FxParticles.burst(self, "glass", g.global_transform * c, 40, _fx_level())
+
+## Lamp i (0 FL, 1 FR, 2 RL, 3 RR) smashed: dark, its lens crazed (car_damage.gdshaderinc), a few shards.
+func _break_lamp(i: int, _h: Vector3) -> void:
+	if _lamps_broken[i] >= 1.0:
+		return
+	_lamps_broken[i] = 1.0
+	if is_instance_valid(_details_node):
+		_details_node.set_instance_shader_parameter("lamp_broken", _lamps_broken)
+	_lamp_sig = Vector4(-1.0, -1.0, -1.0, -1.0) # set_lamps works the light out again
+	if _fx_ok():
+		var spot := Vector3((-1.0 if i % 2 == 0 else 1.0) * _half.x * 0.7, 0.65, _nose if i < 2 else _nose + _half.y * 2.0)
+		FxParticles.burst(self, "glass", to_global(spot), 14, _fx_level())
+
+## 1 if the headlamp (front) or tail lamp on that side still works, 0 if it is smashed (the open world's beams follow it).
+func lamp_working(left: bool, front: bool) -> float:
+	return 1.0 - _lamps_broken[(0 if front else 2) + (0 if left else 1)]
+
+## Bare metal where the paint was scraped off: a decal on the skin at the blow, streaked along it.
+func _scrape(zone: String, across: float, along: float, dv: float) -> void:
+	if not is_instance_valid(body_pivot):
+		return
+	var d: Decal
+	if _scrapes.size() >= SCRAPES:
+		d = _scrapes.pop_front()
+	else:
+		d = Decal.new()
+		d.name = "Scrape"
+		d.texture_albedo = _shared_resources().scrape_albedo
+		d.texture_orm = _shared_resources().scrape_orm
+		d.cull_mask = 1 | CarReflections.CAR_LAYER # the car's own skin (and nothing far off: the box is thin)
+		d.normal_fade = 0.55 # not the crumpled facets turned away from the blow
+		d.upper_fade = 0.3
+		d.lower_fade = 0.3
+		d.distance_fade_enabled = true
+		d.distance_fade_begin = 40.0
+		d.distance_fade_length = 15.0
+		body_pivot.add_child(d)
+	_scrapes.append(d)
+	var length := clampf(0.3 + 0.04 * dv, 0.35, 1.1)
+	var z := lerpf(_nose, _nose + _half.y * 2.0, clampf(along, 0.0, 1.0))
+	var h := 0.45 + randf_range(-0.06, 0.12)
+	var out: Vector3
+	var from: Vector3
+	if zone == "left" or zone == "right":
+		out = Vector3(-1.0 if zone == "left" else 1.0, 0.0, 0.0)
+		from = Vector3(out.x * (_half.x + 1.0), h, z)
+	else:
+		out = Vector3(0.0, 0.0, -1.0 if zone == "front" else 1.0)
+		from = Vector3(clampf(across, -0.95, 0.95) * _half.x * 0.85, h - 0.05, _nose - 1.0 if zone == "front" else _nose + _half.y * 2.0 + 1.0)
+	# where the skin is there (the body's own triangles, as the racing decals are aimed), facing which way
+	var sh := _shared_resources(car_key)
+	if not sh.has("tri"):
+		sh["tri"] = body_tri(sh)
+	var at := from - out * 1.0
+	var y := out
+	var hit: Dictionary = (sh.tri as TriangleMesh).intersect_ray(from, -out) if sh.tri != null else {}
+	if not hit.is_empty():
+		at = hit.position
+		var n: Vector3 = hit.normal
+		if n.dot(out) < 0.0:
+			n = -n
+		y = (n + out).normalized() # (between the skin's normal and the blow's: no steep smear round a corner)
+	# a decal projects along its -Y: Y out of the skin, X along the streaks, Z up; its box reaches into the crumple
+	var zz := (Vector3.UP - y * y.dot(Vector3.UP)).normalized()
+	var xx := y.cross(zz).normalized()
+	d.transform = Transform3D(Basis(xx, y, zz).rotated(y, randf_range(-0.15, 0.15)), at - y * 0.08)
+	d.size = Vector3(length, 0.36, clampf(0.1 + 0.012 * dv, 0.12, 0.32))
+	d.modulate = Color(1, 1, 1, clampf(0.5 + 0.04 * dv, 0.55, 0.9))
+
+## Eases the crush_* blend shapes towards the crush, and the dent_* ones towards the car's dents.
+func _show_crush(dt: float) -> void:
+	var changed := false
+	for k in CRUSH_SITES:
+		var goal: float = float(_crush.get(k, 0.0))
+		var now: float = float(_crush_shown.get(k, 0.0))
+		if absf(goal - now) > 0.002:
+			_crush_shown[k] = move_toward(now, goal, maxf(dt, 0.001) * (6.0 if goal > now else 1.5)) # in fast, out slowly
+			changed = true
+	if not changed:
+		return
+	for e in _shape_idx:
+		var mi: MeshInstance3D = e[0]
+		var idx: Dictionary = e[1]
+		for k in CRUSH_SITES:
+			if idx.has("crush_" + k):
+				mi.set_blend_shape_value(idx["crush_" + k], float(_crush_shown.get(k, 0.0)))
+
+## The stripe and livery pieces of every panel show with the body's.
 func _sync_bonnet_parts() -> void:
-	for p in _bonnet_parts:
-		if p[1] != null and (p[0] as Node3D).visible != (p[1] as Node3D).visible:
-			(p[0] as Node3D).visible = (p[1] as Node3D).visible
+	for name in _panels:
+		for p in _panels[name].parts:
+			if p[1] != null and (p[0] as Node3D).visible != (p[1] as Node3D).visible:
+				(p[0] as Node3D).visible = (p[1] as Node3D).visible
 
-## Back on, shut (a repaired or reset car).
-func _refit_bonnet() -> void:
-	_bonnet_state = 0
-	_bonnet.visible = true
-	_bonnet.rotation = Vector3.ZERO
-	if is_instance_valid(_loose):
-		_loose.queue_free()
-	_loose = null
-	_show_livery()
+## The racing decals on a panel (door numbers, the bonnet plate) move with it.
+func _pin_decals() -> void:
+	_decal_pins.clear()
+	for e in [[_door_decal_l, "DoorL"], [_door_decal_r, "DoorR"], [_hood_decal, "Bonnet"]]:
+		if is_instance_valid(e[0]) and _panels.has(e[1]):
+			_decal_pins[e[0]] = [e[1], (e[0] as Node3D).transform]
+
+func _follow_decals() -> void:
+	for d in _decal_pins:
+		var pin: Array = _decal_pins[d]
+		var hinge := _panels[pin[0]].hinge as Node3D
+		(d as Node3D).transform = hinge.transform * Transform3D(Basis.IDENTITY, -hinge.position) * (pin[1] as Transform3D) \
+			if _panels[pin[0]].state == 1 else pin[1]
+
+func _fx_ok() -> bool:
+	return visible and not _ghost and (_fx_near or _world == null)
+
+func _fx_level() -> int:
+	return int(_world.quality) if is_instance_valid(_world) and "quality" in _world else fx_quality
 
 func _clear_bonnet() -> void:
-	if is_instance_valid(_loose):
-		_loose.queue_free()
-	_loose = null
+	for l in _loose:
+		if is_instance_valid(l[0]):
+			l[0].queue_free()
+	_loose.clear()
 	_bonnet = null
 	_bonnet_parts = []
 	_bonnet_state = 0
 	_bonnet_seen = false
+	_panels.clear()
+	_glass.clear()
+	_glass_gone.clear()
+	_crack = 0.0
+	_crack_shown = 0.0
+	_lamps_broken = Vector4.ZERO
+	_crush.clear()
+	_crush_shown.clear()
+	_shape_idx.clear()
+	_scrapes.clear()
+	_hits_seen = -1
+	_wheel_lost = -1
+	_corner_drop = 0.0
+	_bend_shown = PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
 
 func _exit_tree() -> void:
-	if is_instance_valid(_loose):
-		_loose.queue_free()
-		_loose = null
+	for l in _loose:
+		if is_instance_valid(l[0]):
+			l[0].queue_free()
+	_loose.clear()
 
 func _add_decal(label: String, mat: StandardMaterial3D, surface: Vector3, normal: Vector3, up: Vector3) -> MeshInstance3D:
 	var z := normal.normalized()
@@ -566,7 +1109,11 @@ func _show_livery() -> void:
 			d.visible = shown and livery not in WHITE_LIVERIES
 		for d in [_hood_decal, _sill_decal_l, _sill_decal_r]: # the Abarth shield and sill band sit where these go
 			d.visible = shown and livery < 2
-		_hood_decal.visible = _hood_decal.visible and _bonnet_state == 0 # it sits on the bonnet
+		_hood_decal.visible = _hood_decal.visible and _bonnet_state != 2 # it sits on the bonnet
+		for d in [_door_decal_l, _door_decal_r]:
+			var pin: Array = _decal_pins.get(d, [])
+			if not pin.is_empty() and _panel_state(pin[0]) == 2:
+				d.visible = false
 
 func _apply_finish() -> void:
 	var color := _base_paint()
@@ -595,13 +1142,12 @@ func _show_dents(target: Dictionary, dt: float) -> void:
 			changed = true
 	if not changed:
 		return
-	for mi in [_shell, _details_node, stripes_node] + livery_nodes.values() + _bonnet_parts.map(func(p): return p[0]):
-		if not is_instance_valid(mi):
-			continue
+	for e in _shape_idx:
+		var mi: MeshInstance3D = e[0]
+		var idx: Dictionary = e[1]
 		for k in _dents_shown:
-			var idx: int = mi.find_blend_shape_by_name("dent_" + k)
-			if idx >= 0:
-				mi.set_blend_shape_value(idx, _dents_shown[k])
+			if idx.has("dent_" + k):
+				mi.set_blend_shape_value(idx["dent_" + k], _dents_shown[k] * DENT_SCALE)
 
 ## Crash damage dulls and darkens the paint (scuffs, dirt and bent panels at a glance).
 func _apply_paint() -> void:
@@ -616,8 +1162,8 @@ func _apply_paint() -> void:
 		var lum := _base_paint().get_luminance()
 		var coat_scale: float = lerpf(1.15, 0.6, smoothstep(0.2, 0.8, lum)) * (1.0 - 0.85 * _damage_shown)
 		_shell.set_instance_shader_parameter("coat", coat_scale)
-		if not _bonnet_parts.is_empty():
-			(_bonnet_parts[0][0] as MeshInstance3D).set_instance_shader_parameter("coat", coat_scale)
+		for name in _panels: # the panels are painted with it
+			(_panels[name].parts[0][0] as MeshInstance3D).set_instance_shader_parameter("coat", coat_scale)
 
 ## Dress this car as the safety car: white with yellow stripes and an amber light bar on the roof.
 func make_safety_car() -> void:
@@ -730,12 +1276,14 @@ func set_lamps(night: float, braking := false, reversing := false) -> void:
 		return
 	var head := headlamp_level(night)
 	var tail := (0.4 + 0.35 * night) if braking else 0.08 * head # (lower by day and dusk: the sunlit lens is bright already and more clips red to orange)
-	var sig := Vector4(head, tail, 1.0 if braking else 0.0, 1.0 if reversing else 0.0)
+	var rear_ok := 1.0 if _lamps_broken.z < 1.0 or _lamps_broken.w < 1.0 else 0.0 # (one smashed lens hides its own bulb)
+	tail *= rear_ok
+	var sig := Vector4(head, tail, 1.0 if braking else 0.0, (1.0 if reversing else 0.0) + 2.0 * rear_ok)
 	if sig.is_equal_approx(_lamp_sig):
 		return
 	_lamp_sig = sig
 	tail_material.emission_energy_multiplier = tail * float((_fit.get("tail_lamp", {}) as Dictionary).get("energy", 1.0))
-	var bulb := (2.2 + 1.3 * night) if braking else (2.4 if reversing else 0.5 * head)
+	var bulb := ((2.2 + 1.3 * night) if braking else (2.4 if reversing else 0.5 * head)) * rear_ok
 	bulb_material.emission_energy_multiplier = bulb
 	bulb_material.emission = BULB_WHITE if reversing and not braking else BULB_RED
 	bulb_material.albedo_color = BULB_ON if bulb > 0.0 else BULB_OFF
@@ -800,8 +1348,8 @@ func sync(car: RaceCar, dt: float, curvature: float, night: float, ghost: bool) 
 		FxParticles.burst(self, "debris", global_position + Vector3(0.0, 0.35, 0.0), 14, q)
 		FxParticles.burst(self, "sparks", global_position + Vector3(0.0, 0.25, 0.0), 10, q)
 	_show_dents(car.dents, dt)
-	if _bonnet != null:
-		_update_bonnet(car, dt)
+	_update_damage(car, dt)
+	_apply_corner_drop()
 	if absf(hurt - _damage_shown) > 0.02:
 		_damage_shown = hurt
 		_apply_paint()
@@ -977,6 +1525,18 @@ static func _shared_resources(key := "stock") -> Dictionary:
 	var cabin: Mesh = meshes.get("Cabin", ArrayMesh.new())
 	var details: Mesh = meshes.get("Details", BoxMesh.new())
 
+	# the Details mesh and the panels' Details pieces cut from it (a bumper took the plate and the grille with it): the
+	# plastics, plates, grilles and chrome below are set on all of them
+	var dmeshes: Array = [details]
+	for name in PANELS:
+		if meshes.has(name + "Details"):
+			dmeshes.append(meshes[name + "Details"])
+	# the material each Details surface came with, by name, so the panels' Details pieces get what the Details mesh gets
+	var detail_slots := {}
+	for i in details.get_surface_count():
+		var dm := details.surface_get_material(i)
+		if dm:
+			detail_slots[dm.resource_name] = i
 	# Glass and headlights are the same on every car, so they live on the shared meshes.
 	var glass := StandardMaterial3D.new() # tinted dark and glossy, see-through face-on with Fresnel sky reflection at grazing angles
 	glass.resource_name = "Glass"
@@ -1049,19 +1609,18 @@ static func _shared_resources(key := "stock") -> Dictionary:
 		lens.set_shader_parameter("lamp_half", lamp_half)
 	# Unpainted plastic (bumpers, sills, trim, gaskets): the world's warm sun, ACES and the car's reflection probe lifted the
 	# glTF's dark grey to tan, so these get an explicit near-black, satin, low-specular material.
-	for pair in [[details, "Bumper", 0.21, 0.55], [details, "Trim", 0.10, 0.5], [details, "Gasket", 0.07, 0.8],
-			[shell, "Trim", 0.10, 0.5], [shell, "Gasket", 0.07, 0.8]]:
-		var plastic_surface := _surface(pair[0], pair[1])
-		if plastic_surface >= 0:
+	for pair in [[dmeshes, "Bumper", 0.21, 0.55], [dmeshes, "Trim", 0.10, 0.5], [dmeshes, "Gasket", 0.07, 0.8],
+			[[shell], "Trim", 0.10, 0.5], [[shell], "Gasket", 0.07, 0.8]]:
+		if _has_surface(pair[0], pair[1]):
 			var plastic := StandardMaterial3D.new()
 			plastic.resource_name = pair[1]
 			plastic.albedo_color = Color(pair[2] * 0.95, pair[2] * 0.97, pair[2])
 			plastic.roughness = pair[3]
 			plastic.metallic_specular = 0.22
-			(pair[0] as Mesh).surface_set_material(plastic_surface, plastic)
-	var plate_surface := _surface(details, "Plate")
-	if plate_surface >= 0:
+			_set_surfaces(pair[0], pair[1], plastic)
+	if _has_surface(dmeshes, "Plate"):
 		var plate := ShaderMaterial.new() # a Polish plate from the atlas on the bumpers (car_plate.gdshader)
+		plate.resource_name = "Plate"
 		plate.shader = load("res://shaders/car_plate.gdshader")
 		plate.set_shader_parameter("atlas", load("res://textures/car/plate_pl.png"))
 		plate.set_shader_parameter("rows", float(PLATE_ROWS))
@@ -1070,14 +1629,13 @@ static func _shared_resources(key := "stock") -> Dictionary:
 			plate.set_shader_parameter("y0_front", py.x)
 			plate.set_shader_parameter("y0_rear", py.y)
 			plate.set_shader_parameter("y_max", py.z)
-		details.surface_set_material(plate_surface, plate)
-	var grille_surface := _surface(details, "Grille")
-	if grille_surface >= 0:
+		_set_surfaces(dmeshes, "Plate", plate)
+	if _has_surface(dmeshes, "Grille"):
 		var grille := ShaderMaterial.new() # the air intake's black diamond mesh (car_grille.gdshader)
+		grille.resource_name = "Grille"
 		grille.shader = load("res://shaders/car_grille.gdshader")
-		details.surface_set_material(grille_surface, grille)
-	var chrome_surface := _surface(details, "Chrome")
-	if chrome_surface >= 0:
+		_set_surfaces(dmeshes, "Grille", grille)
+	if _has_surface(dmeshes, "Chrome"):
 		# satin-polished automotive chrome: crisp metallic trim without a blinding sun-glare bloom blob across grilles
 		var chrome := StandardMaterial3D.new()
 		chrome.resource_name = "Chrome"
@@ -1085,7 +1643,7 @@ static func _shared_resources(key := "stock") -> Dictionary:
 		chrome.metallic = 0.52
 		chrome.roughness = 0.44
 		chrome.metallic_specular = 0.12
-		details.surface_set_material(chrome_surface, chrome)
+		_set_surfaces(dmeshes, "Chrome", chrome)
 
 	# Soft dark ellipse under the car keeps it sitting on the road: a dense core under the floor (ambient
 	# occlusion) and a wide soft falloff past the sills and bumpers.
@@ -1108,13 +1666,40 @@ static func _shared_resources(key := "stock") -> Dictionary:
 	contact_mat.albedo_color = Color.WHITE
 	contact.material = contact_mat
 
-	var bonnet: Mesh = meshes.get("Bonnet")
-	var bonnet_parts := {}
-	for k in ["Stripes"] + LIVERY_MESHES.values():
-		if meshes.has("Bonnet" + k):
-			bonnet_parts[k] = meshes["Bonnet" + k]
-	var made := {"shell": shell, "details": details, "cabin": cabin, "bonnet": bonnet, "bonnet_parts": bonnet_parts,
-		"bonnet_paint": maxi(0, _surface(bonnet, "Paint")) if bonnet else 0,
+	# the loose panels (RaceCarVisual._build_panel) and the glass that breaks: dressed as the Body and the Details they
+	# were cut from
+	var panels := {}
+	for name in PANELS:
+		var pm: Mesh = meshes.get(name)
+		if pm == null:
+			continue
+		_dress_like(pm, shell, {})
+		var pieces := {}
+		for k in PANEL_PIECES:
+			if meshes.has(name + k):
+				pieces[k] = meshes[name + k]
+				if k == "Details":
+					_dress_like(pieces[k], details, detail_slots)
+				elif k != "Stripes":
+					var lm: Mesh = liveries.get(LIVERY_MESHES.find_key(k), null)
+					if lm:
+						_dress_like(pieces[k], lm, {})
+		panels[name] = {"mesh": pm, "paint": maxi(0, _surface(pm, "Paint")), "pieces": pieces, "top": _top_point(pm)}
+	var glass_meshes := {}
+	var screen := ShaderMaterial.new() # the windscreen cracks (car_windscreen.gdshader), with the glass's reflection
+	screen.shader = load("res://shaders/car_windscreen.gdshader")
+	screen.resource_name = "Glass"
+	screen.next_pass = glass.next_pass
+	for name in GLASS:
+		if meshes.has(name):
+			var gm: Mesh = meshes[name]
+			var gs := _surface(gm, "Glass")
+			if gs >= 0:
+				gm.surface_set_material(gs, screen if name == "Windscreen" else glass)
+			glass_meshes[name] = gm
+	var scrape: Array = common.get("scrape") if not common.is_empty() else _scrape_textures()
+	var made := {"shell": shell, "details": details, "cabin": cabin, "panels": panels, "glass": glass_meshes,
+		"scrape": scrape, "scrape_albedo": scrape[0], "scrape_orm": scrape[1],
 		"flakes": common.get("flakes") if not common.is_empty() else _flake_texture(), "peel": common.get("peel") if not common.is_empty() else _peel_texture(),
 		"coat": common.get("coat") if not common.is_empty() else _coat_material(), "puff": common.get("puff") if not common.is_empty() else _puff_mesh(),
 		"fx": common.get("fx") if not common.is_empty() else _fx_materials(), "stripes": meshes.get("Stripes", BoxMesh.new()), "liveries": liveries,
@@ -1125,6 +1710,63 @@ static func _shared_resources(key := "stock") -> Dictionary:
 	else:
 		_shared_cars[key] = made
 	return made
+
+static func _has_surface(list: Array, material_name: String) -> bool:
+	return list.any(func(m: Mesh) -> bool: return _surface(m, material_name) >= 0)
+
+## Sets mat on the surface named material_name (the glTF's material) of every mesh in list that has one.
+static func _set_surfaces(list: Array, material_name: String, mat: Material) -> void:
+	for m in list:
+		var i := _surface(m as Mesh, material_name)
+		if i >= 0:
+			(m as Mesh).surface_set_material(i, mat)
+
+## Gives a cut-out piece's surfaces the materials the mesh it came from has by now (by the glTF material's name; slots:
+## that mesh's surfaces by their original names, when its materials were replaced by unnamed ones).
+static func _dress_like(piece: Mesh, ref: Mesh, slots: Dictionary) -> void:
+	for i in piece.get_surface_count():
+		var m := piece.surface_get_material(i)
+		if m == null or m.resource_name == "" or m is ShaderMaterial: # (already dressed: a plate, a grille)
+			continue
+		var j: int = slots.get(m.resource_name, _surface(ref, m.resource_name))
+		if j >= 0 and j < ref.get_surface_count() and ref.surface_get_material(j):
+			piece.surface_set_material(i, ref.surface_get_material(j))
+
+## The highest point of a mesh (a tailgate hinges at its top).
+static func _top_point(mesh: Mesh) -> Vector3:
+	var best := Vector3(0.0, -INF, 0.0)
+	for v in mesh.get_faces():
+		if v.y > best.y:
+			best = v
+	return best
+
+## Bare metal scraped through the paint, for the scrape decals: [albedo (alpha: where the paint is gone), ORM (metallic)].
+## Streaks run along the texture's X (along the blow), ragged at the ends, with flakes of primer round them.
+static func _scrape_textures() -> Array:
+	const W := 128
+	const H := 64
+	var noise := FastNoiseLite.new()
+	noise.frequency = 0.08
+	noise.fractal_octaves = 3
+	var streak := FastNoiseLite.new()
+	streak.frequency = 0.02
+	var img := Image.create(W, H, false, Image.FORMAT_RGBA8)
+	var orm := Image.create(W, H, false, Image.FORMAT_RGBA8)
+	for y in H:
+		for x in W:
+			var u := (float(x) + 0.5) / W * 2.0 - 1.0
+			var v := (float(y) + 0.5) / H * 2.0 - 1.0
+			var lines := 0.5 + 0.5 * sin(float(y) * 1.9 + 6.0 * streak.get_noise_2d(x * 0.2, y * 3.0)) # scratches along X
+			var body := 1.0 - smoothstep(0.55, 1.0, sqrt(u * u * 0.8 + v * v * 1.2) + 0.35 * noise.get_noise_2d(x, y * 2.0))
+			var a := clampf(body * (0.55 + 0.45 * lines), 0.0, 1.0)
+			var rim := clampf(body * 4.0, 0.0, 1.0) * (1.0 - clampf(body * 1.6, 0.0, 1.0)) # primer round the bare patch
+			var metal := 0.4 + 0.16 * lines + 0.06 * noise.get_noise_2d(x * 3.0, y)
+			var c := Color(metal, metal * 1.01, metal * 1.04).lerp(Color(0.5, 0.48, 0.44), rim * 0.8)
+			img.set_pixel(x, y, Color(c.r, c.g, c.b, a))
+			orm.set_pixel(x, y, Color(1.0, lerpf(0.3, 0.6, 1.0 - lines) + rim * 0.3, 0.9 * (1.0 - rim), a))
+	img.generate_mipmaps()
+	orm.generate_mipmaps()
+	return [ImageTexture.create_from_image(img), ImageTexture.create_from_image(orm)]
 
 ## The mirror pass (shaders/car_coat.gdshader) over the paint, glass and lamp lenses: a crisp horizon and sun glint on top of
 ## the sky's soft radiance. Every one made here is kept in "env" so the world's sky, the sun and the night reach all of them.
@@ -1314,10 +1956,12 @@ func _sync_headlight_apron(head: float) -> void:
 		_beam_pool.lower_fade = 0.45
 		_beam_pool.normal_fade = 0.65 # horizontal road and verges only, never vertical walls or buildings
 		body_pivot.add_child(_beam_pool)
+	var working := 1.0 - 0.5 * (_lamps_broken.x + _lamps_broken.y) # smashed headlamps throw no light
+	on = on and working > 0.0
 	_near_beam.visible = on
-	_near_beam.light_energy = 2.6 * head if on else 0.0
+	_near_beam.light_energy = 2.6 * head * working if on else 0.0
 	_beam_pool.visible = on
-	_beam_pool.emission_energy = 0.78 * head if on else 0.0
+	_beam_pool.emission_energy = 0.78 * head * working if on else 0.0
 
 ## Shared twin-headlamp low-beam road pool texture (Decal.texture_emission): two overlapping cones flaring smoothly from
 ## just ahead of the front bumper out to ~36 m, with a soft ECE kerb reach on the right and soft Gaussian edges.

@@ -11,8 +11,18 @@ const VISUAL := preload("res://scripts/ui/race_car_visual.gd")
 
 ## mesh object -> material names its surfaces must carry (as the visual looks them up with _surface())
 const SURFACES := {
-	"Body": ["Paint", "Glass"],
-	"Details": ["Plate", "Taillight", "Headlight", "LampGlass", "TailGlass", "TailBulb"],
+	"Body": ["Paint"],
+	"Details": ["Taillight", "Headlight", "LampGlass", "TailGlass", "TailBulb"],
+	"BumperFDetails": ["Plate"], # the plates went with the bumpers (carkit.split_damage_parts)
+	"Windscreen": ["Glass"],
+	"WindowL": ["Glass"],
+	"WindowR": ["Glass"],
+	"RearWindow": ["Glass"],
+	"DoorL": ["Paint"],
+	"DoorR": ["Paint"],
+	"BumperF": ["Paint"],
+	"BumperR": ["Paint"],
+	"Boot": ["Paint"],
 }
 
 func check(ok: bool, what: String) -> void:
@@ -26,6 +36,7 @@ func run() -> Array:
 	_atlas()
 	_instances(parent)
 	_tint_isolation(parent)
+	_damage(parent)
 	parent.free()
 	completed = true
 	return errors
@@ -52,7 +63,7 @@ func _fresh_meshes() -> Dictionary:
 
 func _model() -> void:
 	var meshes := _fresh_meshes()
-	for obj in ["Body", "Details", "Stripes", "Wheel", "Cabin"] + VISUAL.LIVERY_MESHES.values():
+	for obj in ["Body", "Details", "Stripes", "Wheel", "Cabin"] + VISUAL.LIVERY_MESHES.values() + VISUAL.PANELS + VISUAL.GLASS:
 		check(meshes.has(obj), "seicento.glb lacks mesh object '%s'" % obj)
 	for obj in SURFACES:
 		if not meshes.has(obj):
@@ -66,10 +77,10 @@ func _model() -> void:
 		for n in dupes:
 			check(n == "" or dupes[n] == 1, "seicento.glb/%s has %d surfaces named '%s'; _surface() would pick only the first" % [obj, dupes[n], n])
 	# the plates stay plain white paper-ish: a tint on them (the menu's lavender) would come from code, not the model
-	if meshes.has("Details"):
-		var s := VISUAL._surface(meshes["Details"], "Plate")
+	if meshes.has("BumperFDetails"):
+		var s := VISUAL._surface(meshes["BumperFDetails"], "Plate")
 		if s >= 0:
-			var m := meshes["Details"].surface_get_material(s) as BaseMaterial3D
+			var m := meshes["BumperFDetails"].surface_get_material(s) as BaseMaterial3D
 			if m:
 				check(m.albedo_color.s < 0.12 and m.albedo_color.v > 0.8, "the Plate material is %s, not white" % m.albedo_color)
 	# the paint surface is the only one the visual tints per car; it must not be the glass or the plate
@@ -77,15 +88,16 @@ func _model() -> void:
 		var names := _surface_names(meshes["Body"])
 		var ps := names.find("Paint")
 		check(ps >= 0 and ps != names.find("Plate") and ps != names.find("Glass"), "Paint surface index clashes with another slot")
-	# dent blend shapes the visual animates exist on every mesh it drives
-	for obj in ["Body", "Details", "Stripes"]:
+	# dent and crush blend shapes the visual animates exist on every mesh it drives
+	for obj in ["Body", "Details", "Stripes"] + VISUAL.PANELS + VISUAL.GLASS:
 		if not meshes.has(obj):
 			continue
-		var found := false
+		var shapes := []
 		for i in meshes[obj].get_blend_shape_count():
-			if String(meshes[obj].get_blend_shape_name(i)).begins_with("dent_"):
-				found = true
-		check(found, "seicento.glb/%s has no dent_* blend shapes" % obj)
+			shapes.append(String(meshes[obj].get_blend_shape_name(i)))
+		check(shapes.has("dent_front"), "seicento.glb/%s has no dent_* blend shapes" % obj)
+		for k in VISUAL.CRUSH_SITES:
+			check(shapes.has("crush_" + k), "seicento.glb/%s has no crush_%s blend shape" % [obj, k])
 
 func _atlas() -> void:
 	var tex := load(VISUAL.DECALS_TEX_PATH) as Texture2D
@@ -221,3 +233,43 @@ func _tint_isolation(parent: Node3D) -> void:
 	check(a._shell.mesh == b._shell.mesh and a._details_node.mesh == b._details_node.mesh, "cars do not share the body and detail meshes")
 	a.free()
 	b.free()
+
+## Crash damage (RaceCarVisual._update_damage): impacts noted on the RaceCar crumple the crush_* shapes near them, a big
+## side hit throws the door and shatters that side's glass, a frontal one breaks the lamps on that side and cracks the
+## windscreen, and a repair (dents back to nothing) puts every panel, window and lamp back.
+func _damage(parent: Node3D) -> void:
+	for key in ["stock", "golf4"]:
+		var car: Node3D = VISUAL.new()
+		car.car_key = key
+		parent.add_child(car)
+		var rc := RaceCar.new()
+		rc.control = "free"
+		car.sync(rc, 1.0 / 60.0, 0.0, 0.0, false)
+		check(car._panels.size() == 6 and car._glass.size() == 4, "%s: %d panels and %d windows built, not 6 and 4" % [key, car._panels.size(), car._glass.size()])
+		var half: Vector2 = car._half
+		rc.note_hit(0.0, half.x, 16.0) # map frame: +y is the right with heading 0; a 58 km/h side hit mid-car
+		rc.dents["right"] = 1.0
+		rc.note_hit(half.y, -half.x * 0.8, 7.0) # the front-left corner at 25 km/h
+		rc.dents["front"] = 0.5
+		for i in 10:
+			car.sync(rc, 1.0 / 60.0, 0.0, 0.0, false)
+		check(car._panel_state("DoorR") == 2, "%s: a 58 km/h side hit left the right door on (state %d)" % [key, car._panel_state("DoorR")])
+		check(car._panel_state("DoorL") == 0, "%s: the left door came off a hit on the right" % key)
+		check(car._glass_gone.has("WindowR") and not car._glass_gone.has("WindowL"), "%s: the wrong windows broke (%s)" % [key, car._glass_gone.keys()])
+		check(car._lamps_broken.x == 1.0 and car._lamps_broken.y == 0.0, "%s: the front-left hit broke lamps %s" % [key, car._lamps_broken])
+		check(float(car._crush.get("r2", 0.0)) > 0.5 and float(car._crush.get("fl", 0.0)) > 0.2 and float(car._crush.get("l3", 0.0)) == 0.0,
+			"%s: the crush is not where the hits were (%s)" % [key, car._crush])
+		check(car._scrapes.size() == 2, "%s: %d scrapes for two hits" % [key, car._scrapes.size()])
+		check(car._panel_state("BumperF") == 1, "%s: the front corner hit left the bumper %d, not sagging" % [key, car._panel_state("BumperF")])
+		rc.wheel_bend[1] = 1.0
+		car.sync(rc, 1.0 / 60.0, 0.0, 0.0, false)
+		check(absf((car.wheels[1].get_child(0) as Node3D).rotation.z) > 0.05, "%s: a bent wheel does not wobble" % key)
+		rc.straighten()
+		car.sync(rc, 1.0 / 60.0, 0.0, 0.0, false)
+		var whole := true
+		for k in car._panels:
+			whole = whole and car._panels[k].state == 0 and (car._panels[k].hinge as Node3D).visible
+		check(whole and car._glass_gone.is_empty() and car._lamps_broken == Vector4.ZERO and car._scrapes.is_empty() and car._crush.is_empty(),
+			"%s: the repair did not put everything back" % key)
+		car.free()
+

@@ -2,6 +2,7 @@
 // metallic housing by day, catching warm reflected bounce light from the lit bulbs at night so the whole lamp unit
 // reads as an illuminated headlamp assembly rather than isolated white dots.
 shader_type spatial;
+#include "res://shaders/car_damage.gdshaderinc"
 
 instance uniform float lit : instance_index(2) = 0.0;
 uniform vec2 centre = vec2(0.55, 0.68);
@@ -35,5 +36,5 @@ void fragment() {
 	float spill = exp(-d2 * 1.65);
 	float ambient_fill = exp(-d2 * 0.42);
 	vec3 warm = mix(beam * vec3(1.0, 0.86, 0.64), beam, spill);
-	EMISSION = warm * lit * (0.17 * spill + 0.032 * ambient_fill) * (0.72 + 0.28 * nv);
+	EMISSION = warm * lit * (0.17 * spill + 0.032 * ambient_fill) * (0.72 + 0.28 * nv) * (1.0 - lamp_smashed(lp));
 }

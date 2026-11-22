@@ -3,6 +3,7 @@
 // front headlamps (lp.z < 0) at night so the whole lamp unit glows smoothly without affecting rear clear tail lenses.
 shader_type spatial;
 render_mode blend_mix, depth_draw_opaque, cull_back, specular_schlick_ggx;
+#include "res://shaders/car_damage.gdshaderinc"
 
 instance uniform float lit : instance_index(2) = 0.0;
 uniform vec2 centre = vec2(0.55, 0.68);
@@ -36,4 +37,12 @@ void fragment() {
 	CLEARCOAT = 1.0;
 	CLEARCOAT_ROUGHNESS = 0.0;
 	EMISSION = beam * lit * (0.13 * spill + 0.025 * fresnel) * is_front;
+	// smashed (car_damage.gdshaderinc): the cover is crazed white round its holes and the glow goes out
+	float smashed = lamp_smashed(lp);
+	if (smashed > 0.0) {
+		float cr = crack_lines(lp.xy + lp.z * 0.3, 34.0);
+		ALBEDO = mix(ALBEDO, vec3(0.92), cr * smashed);
+		ALPHA = mix(ALPHA, 0.75, cr * smashed);
+		EMISSION *= 1.0 - smashed;
+	}
 }

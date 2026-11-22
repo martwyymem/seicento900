@@ -1,7 +1,11 @@
 # Agent instructions
 
 > ⚠️ **MANDATORY INSTRUCTION FOR ALL AI AGENTS & MODELS**:
-> Every agent and model **MUST read [`TASKS.md`](TASKS.md) before planning or running any tasks**. `TASKS.md` is the authoritative bible and roadmap for all new game features (dynamic weathers, retro shaders, Polish & Tokyo city tracks, campaign mode, and streamlined menus). Always consult and align with `TASKS.md` before writing or modifying code.
+> Every agent and model **MUST read AND continuously update [`TASKS.md`](TASKS.md)** throughout every task. `TASKS.md` is the authoritative bible and live tracker for the project's shipped baseline, active work, follow-ups, and non-negotiable design rules.
+> - **When starting or changing scope:** add or update the item under `## Active Now` in `TASKS.md`.
+> - **As work progresses:** check off finished items, log newly discovered follow-ups or playtest items, and record any new design invariants as soon as they land.
+> - **Before every commit and release:** update `TASKS.md` in the same commit so it never falls behind `HEAD` (move shipped work into `## Shipped Baseline`).
+> - **Parallel subagents:** when multiple subagents share one checkout, the parent/coordinator updates `TASKS.md` so edits do not collide; a standalone or worktree agent updates `TASKS.md` directly.
 
 
 ## Current game
@@ -67,6 +71,11 @@ The cars after the Seicento are catalogue entries (`godot/scripts/data/car_catal
    rear/left/right` on `Body Details Stripes` and the liveries) and materials `Paint Glass Taillight TailBulb TailGlass Headlight LampGlass
    Plate Bumper Trim Gasket Grille` (Paint is the only surface tinted per car and only the Body mesh may carry it, so body-coloured mirrors
    and bumpers go in the Body loft, not in Details). Origin: on the ground midway between the axles, front towards -Z after export.
+   Crash damage: `sites = carkit.crush_sites(Body)` first, then `carkit.split_bonnet` and `carkit.split_damage_parts` (front door
+   stations, the boot lid's or tailgate's leading station) cut the loose panels `Bonnet DoorL DoorR BumperF BumperR Boot` (each with
+   `<panel>Details` and `<panel><livery>` pieces) and the glass `Windscreen WindowL WindowR RearWindow` out of the Body; every mesh but
+   Wheel and Cabin takes `add_damage_keys(ob, dent_delta, sites)` (dent_* plus the local crush_* keys), and the GLB goes through
+   `carkit.sparsify_glb`. `--wreck` renders the car crushed with a door open, the bumper sagging and the boot up; look at it.
 2. **Physics**: a spec script like [`golf4.gd`](godot/scripts/data/golf4.gd) (a duplicate of `seicento.tres` with `resource_name` set to
    the key: a non-empty name is what makes `Track.profile_for`, `Race` (brake_k) and the strategist treat it as another car) and
    measure it: `godot --headless --path godot -s tests/_car_probe.gd` prints 0-100, 400 m, top speed, braking from 100 km/h and

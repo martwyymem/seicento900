@@ -44,6 +44,11 @@ var hits: Array = [] ## [[x, y, closing speed]] since the reader last emptied it
 var in_water := false
 var water_t := 0.0
 var wants_respawn := false
+var respawn_reason := "" ## why: "water" or "wheel"
+var wheel_off_t := 0.0 ## s since a crash tore a wheel off (the car is put back on the road after WHEEL_RESET_T)
+const WHEEL_OFF_DV := 19.5 ## m/s (70 km/h) of a knock that tears off the wheel nearest it (RaceControl.WHEEL_OFF_DV) ...
+const WHEEL_BEND_DV := 11.0 ## ... and that bends it (it wobbles until the car is put back on the road)
+const WHEEL_RESET_T := 3.5
 var rev_lock := false ## set by place(): a brake already held (through a spawn or a respawn) selects reverse only once let go
 var odometer := 0.0
 var _contact_t := INF ## s since the last wall or car contact (the drift handling rests just after one)
@@ -86,7 +91,8 @@ func place(p: Vector2, heading: float) -> void:
 	car.vx = 0.0
 	car.vy = 0.0
 	car.yaw_rate = 0.0
-	car.dents = {"front": 0.0, "rear": 0.0, "left": 0.0, "right": 0.0} # put back on the road: straightened out
+	car.straighten() # put back on the road: straightened out, wheels and all
+	wheel_off_t = 0.0
 	car.gear = 0
 	car.rev = false
 	car.rpm = model.spec.idle_rpm
@@ -231,6 +237,14 @@ func wheel_surfaces() -> PackedInt32Array:
 
 ## One physics tick. Pedals 0..1, steer -1..1 (+ right).
 func step(dt: float, thr: float, brk: float, steer_in: float, shift_up := false, shift_down := false, handbrake := 0.0) -> void:
+	if car.wheel_off >= 0:
+		# a wheel gone: no drive, the corner grinds along on its hub, and a moment later the car is put back on the road
+		thr = 0.0
+		handbrake = maxf(handbrake, 0.6)
+		wheel_off_t += dt
+		if wheel_off_t > WHEEL_RESET_T and not wants_respawn:
+			wants_respawn = true
+			respawn_reason = "wheel"
 	var spec := model.spec
 	var mass := model.mass_with_fuel(car.fuel)
 	var ch := cos(car.heading)
@@ -434,6 +448,7 @@ func _water(dt: float) -> void:
 		water_t += dt
 		if water_t > WATER_RESPAWN:
 			wants_respawn = true
+			respawn_reason = "water"
 	else:
 		water_t = 0.0
 
@@ -786,6 +801,14 @@ func _dent(r: Vector2, closing: float) -> void:
 	var c := r.normalized().dot(f)
 	var side := "front" if c > 0.55 else ("rear" if c < -0.55 else ("right" if r.dot(Vector2(-f.y, f.x)) > 0.0 else "left"))
 	car.dents[side] = minf(1.0, float(car.dents[side]) + x * x * 3.0)
+	car.note_hit(r.x, r.y, closing)
+	if closing >= WHEEL_BEND_DV and not monster and car.wheel_off < 0:
+		var w := car.hit_wheel()
+		if closing >= WHEEL_OFF_DV:
+			car.wheel_off = w # it bounces away; the car limps on its brake disc until it is put back on the road
+			wheel_off_t = 0.0
+		else:
+			car.wheel_bend[w] = minf(1.0, car.wheel_bend[w] + (closing - WHEEL_BEND_DV) / (WHEEL_OFF_DV - WHEEL_BEND_DV))
 
 ## One car of the train [centre, heading, half length, half width, rail height, velocity] against the car's box:
 ## a separating-axis test over both boxes' axes finds the shallowest way out, the car is moved out along it and

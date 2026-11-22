@@ -271,6 +271,8 @@ func suspend() -> void:
 	if surface_fx:
 		surface_fx.stop_all()
 		surface_fx.silence(car_visual)
+	if builder and builder.festival:
+		builder.festival.stop_all()
 	if traffic:
 		traffic.clear()
 	hide()
@@ -633,8 +635,8 @@ func _apply_time() -> void:
 			m.set_shader_parameter("snow", snow)
 	# the beams with the lamp lenses (race_car_visual.gd set_lamps follows the same level)
 	var beams: float = CAR_VISUAL.headlamp_level(night)
-	for h in headlights:
-		h.light_energy = HEADLIGHT_ENERGY * beams
+	for h in headlights: # (a smashed headlamp throws no beam)
+		h.light_energy = HEADLIGHT_ENERGY * beams * car_visual.lamp_working(h.position.x < 0.0, true)
 		h.visible = beams > 0.0
 	# each pooled lamp fades out towards the farthest one's distance, so a lamp never snaps on or off as the pool
 	# moves from one to the next (_place_lamp_lights); the tarmac is dark, so its pool is mostly the decal's glow
@@ -936,6 +938,8 @@ func _live_sync() -> void:
 		active_event = -1
 		hud.hide_event()
 	_update_markers()
+	if builder and builder.festival and live:
+		builder.festival.sync_live_events(live.board)
 
 func _live_marker(e: Dictionary) -> Dictionary:
 	var lev := live.find(String(e.live)) if live else {}
@@ -2152,6 +2156,8 @@ func _process(delta: float) -> void:
 		_update_camera(delta)
 		if surface_fx:
 			surface_fx.silence(car_visual)
+		if builder and builder.festival:
+			builder.festival.silence()
 		hud.update_drive(drive.speed_kmh(), _gear_shown(), drive.car.rpm, drive.model.spec.limiter, Vector2(drive.car.x, drive.car.y), drive.car.heading, delta, drive.vz)
 		return
 	nitro_on = false
@@ -2179,7 +2185,7 @@ func _process(delta: float) -> void:
 		accumulator = 0.0
 	if drive.wants_respawn:
 		if not _reset_in_event():
-			hud.notify("BACK ON THE ROAD", "The Seicento doesn't swim", Color("#4aa3ff"))
+			hud.notify("BACK ON THE ROAD", "New wheel fitted" if drive.respawn_reason == "wheel" else "The Seicento doesn't swim", Color("#4aa3ff"))
 			drive.respawn()
 			snap_camera()
 	builder.update_crossings(delta)
@@ -2188,6 +2194,8 @@ func _process(delta: float) -> void:
 	_update_weather()
 	_apply_time()
 	_sync_car(delta)
+	if builder and builder.festival:
+		builder.festival.update(delta, car_visual.position, Vector3(drive.car.vx, drive.vz, drive.car.vy), night, true)
 	surface_fx.update(drive, car_visual, delta)
 	_update_camera(delta)
 	_update_skills(delta * _time_rate)
@@ -2311,6 +2319,58 @@ func _update_camera(delta: float) -> void:
 			camera.fov = lerpf(camera.fov, HudLayout.camera_fov_for(camera, 54.0 + smoothstep(10.0, 200.0, kmh) * 11.0 + fov_extra), 1.0 - exp(-delta * 3.0))
 	if weather_fx:
 		weather_fx.place(camera)
+	_update_beacon_labels()
+
+## Fades or hides world-space event beacon labels when the car is close enough that the gate/ring itself reads,
+## or when the label projects into the top HUD band (rear-view mirror, fans card, or event card).
+func _update_beacon_labels() -> void:
+	if builder == null or camera == null or viewport == null or drive == null:
+		return
+	var vp_size := Vector2(viewport.size)
+	if vp_size.x <= 1.0 or vp_size.y <= 1.0:
+		return
+	var car_p := Vector2(drive.car.x, drive.car.y)
+	var cam_p := camera.global_position
+	var screen_h := maxf(size.y, 1.0)
+	var mirror_v := (RearMirror.screen_bottom / screen_h) if RearMirror.screen_bottom > 0.0 else 0.0
+	var top_band := maxf(0.24, mirror_v + 0.07)
+	var card_up := hud != null and hud.card != null and hud.card.visible
+	for key in builder.beacon_nodes:
+		var node: Variant = builder.beacon_nodes[key]
+		if not is_instance_valid(node) or not (node as Node3D).visible:
+			continue
+		var bn := node as Node3D
+		var label := bn.get_node_or_null("Label") as Label3D
+		if label == null:
+			continue
+		var lpos := label.global_position
+		if camera.is_position_behind(lpos):
+			label.visible = false
+			continue
+		var is_cp := bool(label.get_meta("is_cp", false))
+		var d_car := Vector2(bn.position.x - car_p.x, bn.position.z - car_p.y).length()
+		var d_cam := cam_p.distance_to(lpos)
+		var a_dist := smoothstep(14.0, 26.0, d_car) * smoothstep(12.0, 22.0, d_cam) if is_cp \
+			else smoothstep(28.0, 46.0, d_car) * smoothstep(22.0, 38.0, d_cam)
+		var sp := camera.unproject_position(lpos)
+		var u := sp.x / vp_size.x
+		var v := sp.y / vp_size.y
+		if u < -0.15 or u > 1.15 or v < -0.05 or v > 1.08:
+			label.visible = false
+			continue
+		var band := top_band
+		if u < 0.36:
+			band = maxf(band, 0.30) # clear the top-left fans card
+		if card_up and u > 0.60:
+			band = maxf(band, 0.48) # clear the right-hand event card
+		var a_hud := smoothstep(band - 0.03, band + 0.07, v)
+		var alpha := a_dist * a_hud
+		label.visible = alpha > 0.02
+		if label.visible:
+			var bc: Color = label.get_meta("base_color", Color.WHITE)
+			var bo: Color = label.get_meta("base_outline", Color.BLACK)
+			label.modulate = Color(bc.r, bc.g, bc.b, bc.a * alpha)
+			label.outline_modulate = Color(bo.r, bo.g, bo.b, bo.a * alpha)
 
 # ================================================================================================ input
 

@@ -11,6 +11,14 @@ var is_player := false
 var stripes := false
 var dents := {"front": 0.0, "rear": 0.0, "left": 0.0, "right": 0.0} ## how crumpled each side of the body is, 0..1 (the model's dent_* blend shapes)
 var finish := 0 ## 0 gloss, 1 metallic flake, 2 Martini Racing, 3 Abarth, 4 Marlboro livery
+## Where the car was hit, for the visual only (RaceCarVisual crumples, scrapes and breaks the body there; nothing in the
+## sim reads it): the last few impacts, oldest first, as (metres right of the centre, metres ahead of it, closing m/s);
+## hit_count counts every impact noted (note_hit), so a reader can tell which are new.
+var hit_log: Array[Vector3] = []
+var hit_count := 0
+var hit_side := "" ## "left" / "right": the side the last impact landed on, for RaceControl.hurt's dents
+var wheel_off := -1 ## a wheel torn off in a huge crash (0 FL, 1 FR, 2 RL, 3 RR): only when that wrecks the car or in free roam
+var wheel_bend := PackedFloat32Array([0.0, 0.0, 0.0, 0.0]) ## how bent each wheel is, 0..1 (cosmetic: it wobbles as it turns)
 
 # ---- driver
 var skill := 1.0
@@ -161,3 +169,31 @@ var spin_t := -100.0 ## race clock of the last moment this car was out of contro
 var offences := 0 ## penalties and warnings for causing collisions, so repeat offenders pay more
 var repair_asked := false
 var uturn := false ## a bot facing the wrong way is driving itself round to face the right way again
+
+## Notes an impact for the visual: (ox, oy) is the contact point from the car's centre in the map frame, dv the closing
+## speed (m/s). Reads and changes nothing the simulation uses.
+func note_hit(ox: float, oy: float, dv: float) -> void:
+	if dv < 1.0:
+		return
+	var c := cos(heading)
+	var s := sin(heading)
+	var right := -ox * s + oy * c
+	var ahead := ox * c + oy * s
+	hit_log.append(Vector3(right, ahead, dv))
+	if hit_log.size() > 6:
+		hit_log.remove_at(0)
+	hit_count += 1
+	hit_side = "right" if right > 0.0 else "left"
+
+## The wheel nearest the last impact (0 FL, 1 FR, 2 RL, 3 RR), or -1 with none noted.
+func hit_wheel() -> int:
+	if hit_log.is_empty():
+		return -1
+	var h: Vector3 = hit_log[hit_log.size() - 1]
+	return (0 if h.y >= 0.0 else 2) + (1 if h.x > 0.0 else 0)
+
+## Straight again (a repair or a reset): the bent and lost wheels with the dents.
+func straighten() -> void:
+	dents = {"front": 0.0, "rear": 0.0, "left": 0.0, "right": 0.0}
+	wheel_off = -1
+	wheel_bend = PackedFloat32Array([0.0, 0.0, 0.0, 0.0])

@@ -4,6 +4,7 @@
 // (car_coat.gdshader) is added as the next pass.
 shader_type spatial;
 render_mode blend_mix, depth_draw_opaque, cull_back, specular_schlick_ggx;
+#include "res://shaders/car_damage.gdshaderinc"
 
 uniform vec3 tint : source_color = vec3(0.62, 0.012, 0.02);
 uniform float cell = 190.0; // prisms per metre
@@ -38,4 +39,13 @@ void fragment() {
 	// kept moderate and green-free: ACES compresses a bright red channel and lets the green through, so a strong glow
 	// read pumpkin orange at dusk (2026-11-21); the lens reads red and the bloom carries the brightness
 	EMISSION = vec3(1.0, 0.0, 0.004) * (glow * glow * inner * 0.85 + glow * 0.1) * glow_gain;
+	// smashed (car_damage.gdshaderinc): a dark, crazed lens over a dead bulb (opaque, so the lamp behind shows no glow)
+	float smashed = lamp_smashed(lp);
+	if (smashed > 0.0) {
+		float cr = crack_lines(lp.xy + lp.z * 0.3, 30.0);
+		ALBEDO = mix(ALBEDO, mix(tint * 0.25, vec3(0.75, 0.62, 0.62), cr), smashed);
+		ALPHA = mix(ALPHA, 0.97, smashed);
+		ROUGHNESS = mix(ROUGHNESS, 0.35, smashed);
+		EMISSION *= 1.0 - smashed;
+	}
 }

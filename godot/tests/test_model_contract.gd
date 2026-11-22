@@ -5,22 +5,27 @@ extends RefCounted
 var completed := false
 var errors: Array[String] = []
 
+## The loose panels and glass carkit.split_damage_parts cuts out of every car's Body (RaceCarVisual swings, throws and
+## breaks them): each panel carries Paint and the dent_* and crush_* blend shapes.
+const DAMAGE_PARTS := ["DoorL", "DoorR", "BumperF", "BumperR", "Boot", "Windscreen", "WindowL", "WindowR", "RearWindow"]
+const PANELS := ["Bonnet", "DoorL", "DoorR", "BumperF", "BumperR", "Boot"]
+
 ## model -> {"objects": names that must exist, "materials": names that must exist on some mesh}
 const CONTRACT := {
-	"res://models/seicento.glb": {"objects": ["Body", "Bonnet", "Details", "Stripes", "Wheel"], "materials": ["Paint", "Taillight", "Glass", "Headlight"]},
-	"res://models/golf4.glb": {"objects": ["Body", "Bonnet", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
+	"res://models/seicento.glb": {"objects": ["Body", "Bonnet"] + DAMAGE_PARTS + ["Details", "Stripes", "Wheel"], "materials": ["Paint", "Taillight", "Glass", "Headlight"]},
+	"res://models/golf4.glb": {"objects": ["Body", "Bonnet"] + DAMAGE_PARTS + ["Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
-	"res://models/logan.glb": {"objects": ["Body", "Bonnet", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
+	"res://models/logan.glb": {"objects": ["Body", "Bonnet"] + DAMAGE_PARTS + ["Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
-	"res://models/v50.glb": {"objects": ["Body", "Bonnet", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
+	"res://models/v50.glb": {"objects": ["Body", "Bonnet"] + DAMAGE_PARTS + ["Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
-	"res://models/i20.glb": {"objects": ["Body", "Bonnet", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
+	"res://models/i20.glb": {"objects": ["Body", "Bonnet"] + DAMAGE_PARTS + ["Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
-	"res://models/sandero.glb": {"objects": ["Body", "Bonnet", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
+	"res://models/sandero.glb": {"objects": ["Body", "Bonnet"] + DAMAGE_PARTS + ["Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
-	"res://models/focus.glb": {"objects": ["Body", "Bonnet", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
+	"res://models/focus.glb": {"objects": ["Body", "Bonnet"] + DAMAGE_PARTS + ["Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
-	"res://models/zafira.glb": {"objects": ["Body", "Bonnet", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
+	"res://models/zafira.glb": {"objects": ["Body", "Bonnet"] + DAMAGE_PARTS + ["Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
 	"res://models/town.glb": {"objects": ["Headframe", "ChurchSpire", "Streetlamp", "TrafficLight", "BusShelter", "LevelCrossing",
 		"FestivalStage", "FestivalArch", "Tent", "FlagPole", "CarHatch", "CarSedan", "CarVan", "Maluch"], "materials": ["Paint", "Lamp", "Banner"]},
@@ -139,16 +144,22 @@ func run() -> Array:
 		for want in CONTRACT[path].objects:
 			if not names.has(want):
 				errors.append("%s lacks object '%s'" % [path, want])
-		var bonnet := root.find_child("Bonnet", true, false) as MeshInstance3D
-		if bonnet and bonnet.mesh: # the bonnet is cut out of the Body and tinted with it: Paint on both (RaceCarVisual)
+		for panel_name in PANELS:
+			var panel := root.find_child(panel_name, true, false) as MeshInstance3D
+			if panel == null or panel.mesh == null:
+				continue
+			# cut out of the Body and tinted with it: Paint on both (RaceCarVisual), crumpling with it
 			var bm := []
-			for s in bonnet.mesh.get_surface_count():
-				var m: Material = bonnet.mesh.surface_get_material(s)
+			for s in panel.mesh.get_surface_count():
+				var m: Material = panel.mesh.surface_get_material(s)
 				bm.append(m.resource_name if m else "")
 			if not "Paint" in bm:
-				errors.append("%s/Bonnet has no Paint surface (%s)" % [path, bm])
-			if bonnet.mesh.get_blend_shape_count() == 0:
-				errors.append("%s/Bonnet has no dent_* blend shapes" % path)
+				errors.append("%s/%s has no Paint surface (%s)" % [path, panel_name, bm])
+			var shapes := []
+			for i in panel.mesh.get_blend_shape_count():
+				shapes.append(String(panel.mesh.get_blend_shape_name(i)))
+			if not shapes.has("dent_front") or not shapes.has("crush_fl") or not shapes.has("crush_r4"):
+				errors.append("%s/%s lacks the dent_* / crush_* blend shapes (%s)" % [path, panel_name, shapes])
 		for want in CONTRACT[path].materials:
 			if not mats.has(want):
 				errors.append("%s lacks material '%s'" % [path, want])

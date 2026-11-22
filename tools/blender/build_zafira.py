@@ -1297,10 +1297,13 @@ def main():
 		xs, ys, zs = [v.x for v in vs], [v.y for v in vs], [v.z for v in vs]
 		print("bbox %-5s Godot size=(%.4f, %.4f, %.4f) top_y=%.4f z_range=[%.4f, %.4f]" % (
 			name, max(xs) - min(xs), max(zs) - min(zs), max(ys) - min(ys), max(zs), -max(ys), -min(ys)))
+	sites = carkit.crush_sites(objs["Body"])
 	carkit.split_bonnet(objs, Y0, S_SCUTTLE, carkit.material("Trim"))
-	for name in [k for k in objs if k in ("Body", "Details", "Stripes", "Martini", "Abarth", "Marlboro") or k.startswith("Bonnet")]:
-		add_damage_keys(objs[name], dent_delta)
+	carkit.split_damage_parts(objs, Y0, FRONT_AXLE_S, REAR_AXLE_S, ARCH_R, S_DOOR, S_DECK, carkit.material("Trim"))
+	for name in carkit.keyed(objs):
+		add_damage_keys(objs[name], dent_delta, sites)
 	kit.export_glb(OUT_GLB, texcoords=False)
+	carkit.sparsify_glb(OUT_GLB)
 	if arg("--blend"):
 		bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(arg("--blend")))
 	if arg("--renders"):
@@ -1318,6 +1321,8 @@ def main():
 				bpy.context.scene.collection.objects.link(w)
 		objs["Wheel"].hide_render = True
 		out = os.path.abspath(arg("--renders"))
+		if "--wreck" in sys.argv:
+			carkit.pose_wreck(objs, sites)
 		render_all(cam, out)
 		if not view and "--no-liveries" not in sys.argv:
 			render_liveries(objs, cam, out)

@@ -82,6 +82,7 @@ kit.MATERIALS.update({
 	"DarkTrim": (srgb("#1a1c20"), 0.58, 0.05, {}),
 	"Tyre": (srgb("#131416"), 0.85, 0.0, {}),
 	"Plate": (srgb("#eeefe9"), 0.45, 0.0, {}),
+	"Spectator": ((1.0, 1.0, 1.0), 0.85, 0.0, {}),
 })
 
 UP = Vector((0, 0, 1))
@@ -750,21 +751,21 @@ def festival_stage():
 
 
 def flag_pole():
-	"""8 m pole with a tall feather flag (Banner) streaming towards +X, its face towards +Y."""
+	"""3.9 m festival feather flag on a cross-foot base (Banner streams towards +X, face towards +Y)."""
 	mb = MB()
 	for a in range(4):
 		ang = a * math.pi / 2 + math.pi / 4
-		bar(mb, (0, 0, 0.05), (0.55 * math.cos(ang), 0.55 * math.sin(ang), 0.05), 0.06, "Trim")
-	lathe_p(mb, [(0.0, 0.18), (0.12, 0.18), (0.16, 0.05)], 8, "Trim")
-	mb.tube((0, 0, 0.1), (0, 0, 6.6), 0.035, "Steel", segs=6, caps=False)
-	top = [Vector((0, 0, 6.6))]
+		bar(mb, (0, 0, 0.04), (0.38 * math.cos(ang), 0.38 * math.sin(ang), 0.04), 0.045, "Trim")
+	lathe_p(mb, [(0.0, 0.14), (0.10, 0.14), (0.14, 0.04)], 8, "Trim")
+	mb.tube((0, 0, 0.08), (0, 0, 3.15), 0.024, "Steel", segs=6, caps=False)
+	top = [Vector((0, 0, 3.15))]
 	for k in range(1, 7):
 		a = math.pi / 2 * k / 6
-		top.append(Vector((0.55 - 0.55 * math.cos(a), 0, 6.6 + 1.25 * math.sin(a))))
+		top.append(Vector((0.36 - 0.36 * math.cos(a), 0, 3.15 + 0.75 * math.sin(a))))
 	for a, b in zip(top, top[1:]):
-		mb.tube(a, b, 0.025, "Steel", segs=5, caps=False)
+		mb.tube(a, b, 0.018, "Steel", segs=5, caps=False)
 	# the flag runs along a spine (up the pole, then round the bent top), its width set by w(t)
-	spine = [Vector((0.04, 0, 1.6 + 5.0 * k / 8)) for k in range(8)] + [p + Vector((0.04, 0, 0)) for p in top]
+	spine = [Vector((0.03, 0, 0.85 + 2.30 * k / 8)) for k in range(8)] + [p + Vector((0.03, 0, 0)) for p in top]
 	lens = [0.0]
 	for a, b in zip(spine, spine[1:]):
 		lens.append(lens[-1] + (b - a).length)
@@ -772,8 +773,8 @@ def flag_pole():
 	for k, p in enumerate(spine):
 		t = lens[k] / lens[-1]
 		d = (spine[min(k + 1, len(spine) - 1)] - spine[max(k - 1, 0)]).normalized()
-		w = (0.62 + 0.4 * math.sin(min(1.0, t / 0.35) * math.pi / 2)) * (1.0 if t < 0.7 else max(0.05, 1 - (t - 0.7) / 0.3))
-		outerp.append(p + Vector((d.z, 0, -d.x)) * w + Vector((0, 0, -0.35 * (1 - t) if k == 0 else 0)))
+		w = (0.40 + 0.24 * math.sin(min(1.0, t / 0.35) * math.pi / 2)) * (1.0 if t < 0.7 else max(0.05, 1 - (t - 0.7) / 0.3))
+		outerp.append(p + Vector((d.z, 0, -d.x)) * w + Vector((0, 0, -0.20 * (1 - t) if k == 0 else 0)))
 	for k in range(len(spine) - 1):
 		mb.quad(spine[k], spine[k + 1], outerp[k + 1], outerp[k], "Banner", (0, 1, 0))
 	return mb
@@ -797,6 +798,255 @@ def tent():
 	for sx in (-0.9, 0.9):
 		for sy in (-0.3, 0.3):
 			bar(mb, (sx, sy, 0), (sx, sy, 0.72), 0.03, "Trim")
+	return mb
+
+
+def crowd_barrier():
+	"""2.5 m wide x 1.1 m tall galvanised festival pedestrian barrier with a sponsor banner skirt (Banner).
+	Origin centred on the ground; runs along X from -1.25 to +1.25, front facing +Y (Godot -Z)."""
+	mb = MB()
+	hw, H = 1.25, 1.1
+	# outer frame rails & splayed feet
+	bar(mb, (-hw, 0, 0.14), (hw, 0, 0.14), 0.04, "Steel")
+	bar(mb, (-hw, 0, H), (hw, 0, H), 0.045, "Steel")
+	for sx in (-1, 1):
+		x = sx * (hw - 0.03)
+		bar(mb, (x, 0, 0.12), (x, 0, H), 0.042, "Steel")
+		# splayed legs sitting on the ground
+		bar(mb, (x - sx * 0.12, -0.28, 0.02), (x - sx * 0.12, 0.28, 0.02), 0.045, "Steel")
+		bar(mb, (x - sx * 0.12, -0.22, 0.02), (x - sx * 0.12, 0.0, 0.16), 0.035, "Steel")
+		bar(mb, (x - sx * 0.12, 0.22, 0.02), (x - sx * 0.12, 0.0, 0.16), 0.035, "Steel")
+	# vertical pickets visible at edges/back
+	for k in range(7):
+		x = -hw + 0.22 + k * (2.0 * hw - 0.44) / 6.0
+		bar(mb, (x, 0, 0.15), (x, 0, H - 0.02), 0.022, "Steel")
+	# festival sponsor skirt wrapped over the frame (tintable Banner)
+	cube(mb, (-hw + 0.06, -0.028, 0.22), (hw - 0.06, 0.028, H - 0.05), "Banner")
+	return mb
+
+
+def inflatable_arch():
+	"""Chunky Forza Horizon style inflatable race arch: 13.4 m clear inner width (legs at +-7.2 m),
+	7.2 m top height (5.6 m underside clearance). Curved inflated tube in Banner (tintable) with Trim bases."""
+	mb = MB()
+	lx = 7.2
+	h_leg = 5.4
+	r_tube = 0.82
+	segs = 8
+	# build a smooth arch spine from left foot -> left shoulder -> crown -> right shoulder -> right foot
+	spine = [
+		(-lx, 0.0, 0.2),
+		(-lx, 0.0, 2.8),
+		(-lx, 0.0, h_leg - 0.3),
+		(-lx + 0.55, 0.0, h_leg + 0.85),
+		(-lx + 1.8, 0.0, h_leg + 1.45),
+		(0.0, 0.0, h_leg + 1.65),
+		(lx - 1.8, 0.0, h_leg + 1.45),
+		(lx - 0.55, 0.0, h_leg + 0.85),
+		(lx, 0.0, h_leg - 0.3),
+		(lx, 0.0, 2.8),
+		(lx, 0.0, 0.2),
+	]
+	radii = [0.92, 0.86, 0.82, 0.84, 0.86, 0.90, 0.86, 0.84, 0.82, 0.86, 0.92]
+	rings = []
+	for idx, p in enumerate(spine):
+		pv = Vector(p)
+		if idx == 0:
+			t = (Vector(spine[1]) - pv).normalized()
+		elif idx == len(spine) - 1:
+			t = (pv - Vector(spine[-2])).normalized()
+		else:
+			t = (Vector(spine[idx + 1]) - Vector(spine[idx - 1])).normalized()
+		# cross-section lies in plane spanned by Y and (Y x t)
+		v_y = Vector((0, 1, 0))
+		v_in = v_y.cross(t).normalized()
+		r = radii[idx]
+		ring_pts = []
+		for k in range(segs):
+			a = 2.0 * math.pi * k / segs + math.pi / segs
+			ring_pts.append(pv + (v_in * math.cos(a) * r + v_y * math.sin(a) * r * 0.82))
+		rings.append(ring_pts)
+	ids = [[mb.vert(p) for p in row] for row in rings]
+	for i in range(len(rings) - 1):
+		c_mid = (Vector(spine[i]) + Vector(spine[i + 1])) * 0.5
+		for k in range(segs):
+			k2 = (k + 1) % segs
+			mb.face([ids[i][k], ids[i][k2], ids[i + 1][k2], ids[i + 1][k]], "Banner", lambda q, c=c_mid: q - c)
+	# heavy ballast feet, side blowers, wrapped racing bands & branded sponsor leg panels
+	for sx in (-1, 1):
+		cube(mb, (sx * lx - 1.05, -0.95, 0.0), (sx * lx + 1.05, 0.95, 0.28), "Trim", skip=("-z",))
+		cube(mb, (sx * (lx + 0.85), -0.4, 0.0), (sx * (lx + 1.5), 0.4, 0.65), "Trim", skip=("-z",))
+		# contrasting white & dark racing collar stripes wrapping the inflatable legs
+		for z0, z1, mat_b in ((0.55, 0.82, "Sign"), (0.82, 1.02, "Trim"), (4.15, 4.40, "Trim"), (4.40, 4.72, "Sign")):
+			rb = 0.88 if z0 < 1.5 else 0.85
+			band_lo = [mb.vert(Vector((sx * lx + math.cos(2 * math.pi * k / segs + math.pi / segs) * rb,
+				math.sin(2 * math.pi * k / segs + math.pi / segs) * rb * 0.82, z0))) for k in range(segs)]
+			band_hi = [mb.vert(Vector((sx * lx + math.cos(2 * math.pi * k / segs + math.pi / segs) * rb,
+				math.sin(2 * math.pi * k / segs + math.pi / segs) * rb * 0.82, z1))) for k in range(segs)]
+			cm = Vector((sx * lx, 0.0, (z0 + z1) * 0.5))
+			for k in range(segs):
+				k2 = (k + 1) % segs
+				mb.face([band_lo[k], band_lo[k2], band_hi[k2], band_hi[k]], mat_b, lambda q, c=cm: q - c)
+		# branded sponsor badge plates on both faces of each leg (white panel + dark bars + red stripe + lettering)
+		for sy in (-1, 1):
+			y = sy * 0.77
+			y1 = y + sy * 0.014
+			y2 = y + sy * 0.026
+			ax_u = (-1, 0, 0) if sy > 0 else (1, 0, 0)
+			mb.quad((sx * lx - 0.56, y, 1.25), (sx * lx + 0.56, y, 1.25),
+				(sx * lx + 0.56, y, 3.75), (sx * lx - 0.56, y, 3.75), "Sign", (0, sy, 0))
+			mb.quad((sx * lx - 0.56, y1, 3.35), (sx * lx + 0.56, y1, 3.35),
+				(sx * lx + 0.56, y1, 3.75), (sx * lx - 0.56, y1, 3.75), "Trim", (0, sy, 0))
+			mb.quad((sx * lx - 0.56, y1, 1.25), (sx * lx + 0.56, y1, 1.25),
+				(sx * lx + 0.56, y1, 1.55), (sx * lx - 0.56, y1, 1.55), "Trim", (0, sy, 0))
+			mb.quad((sx * lx - 0.56, y1, 2.96), (sx * lx + 0.56, y1, 2.96),
+				(sx * lx + 0.56, y1, 3.24), (sx * lx - 0.56, y1, 3.24), "Red", (0, sy, 0))
+			kit.text_mesh(mb, "FEST", (sx * lx, y2, 2.48), 0.34, "Trim", axis_u=ax_u, axis_v=(0, 0, 1))
+			kit.text_mesh(mb, "1100", (sx * lx, y2, 1.92), 0.30, "Red", axis_u=ax_u, axis_v=(0, 0, 1))
+	# top header banner plaque: high-contrast dark fascia, white racing borders, chequered trim & SEICENTO FEST lettering
+	for sy in (-1, 1):
+		y = sy * 0.79
+		y1 = y + sy * 0.016
+		y2 = y + sy * 0.032
+		ax_u = (-1, 0, 0) if sy > 0 else (1, 0, 0)
+		mb.quad((-4.6, y, h_leg + 0.96), (4.6, y, h_leg + 0.96), (4.6, y, h_leg + 2.24), (-4.6, y, h_leg + 2.24), "Sign", (0, sy, 0))
+		mb.quad((-4.42, y1, h_leg + 1.12), (4.42, y1, h_leg + 1.12),
+			(4.42, y1, h_leg + 2.08), (-4.42, y1, h_leg + 2.08), "Trim", (0, sy, 0))
+		# chequered racing strip along the bottom edge of the header plaque
+		cq = 0.44
+		cn = 20
+		cx0 = -cn * cq * 0.5
+		for k in range(cn):
+			cm_mat = "Sign" if k % 2 == 0 else "Trim"
+			mb.quad((cx0 + k * cq, y2, h_leg + 0.98), (cx0 + (k + 1) * cq, y2, h_leg + 0.98),
+				(cx0 + (k + 1) * cq, y2, h_leg + 1.16), (cx0 + k * cq, y2, h_leg + 1.16), cm_mat, (0, sy, 0))
+		kit.text_mesh(mb, "SEICENTO FEST", (0.0, y2, h_leg + 1.64), 0.72, "Sign", axis_u=ax_u, axis_v=(0, 0, 1))
+	for x in (-3.2, 0.0, 3.2):
+		mb.quad((x - 0.25, -0.18, h_leg + 0.74), (x + 0.25, -0.18, h_leg + 0.74),
+			(x + 0.25, 0.18, h_leg + 0.74), (x - 0.25, 0.18, h_leg + 0.74), "Lamp", (0, 0, -1))
+	return mb
+
+
+def merch_stall():
+	"""4.4 x 2.6 m festival food / merch booth: dark frame, timber counter facing +Y (Godot -Z),
+	sloped tintable Banner awning, Sign menu fascia, and warm Lamp counter strip for night."""
+	mb = MB()
+	hw, hd = 2.2, 1.3
+	H_back, H_front = 2.65, 3.05
+	# floor deck & rear/side enclosure
+	cube(mb, (-hw, -hd, 0.0), (hw, hd, 0.10), "Trim", skip=("-z",))
+	cube(mb, (-hw, -hd, 0.10), (hw, -hd + 0.10, H_back), "Trim")
+	for sx in (-1, 1):
+		x0, x1 = sorted((sx * (hw - 0.10), sx * hw))
+		cube(mb, (x0, -hd, 0.10), (x1, hd - 0.35, 1.05), "Trim")
+		bar(mb, (sx * (hw - 0.06), hd - 0.08, 0.10), (sx * (hw - 0.06), hd - 0.08, H_front - 0.1), 0.07, "Steel")
+		bar(mb, (sx * (hw - 0.06), -hd + 0.06, 0.10), (sx * (hw - 0.06), -hd + 0.06, H_back), 0.07, "Steel")
+	# front counter (wood top + Banner apron)
+	cube(mb, (-hw + 0.06, hd - 0.55, 0.10), (hw - 0.06, hd - 0.10, 0.96), "Banner")
+	cube(mb, (-hw + 0.02, hd - 0.62, 0.96), (hw - 0.02, hd + 0.12, 1.04), "Wood")
+	# back menu signboard
+	mb.quad((-1.7, -hd + 0.12, 1.45), (1.7, -hd + 0.12, 1.45), (1.7, -hd + 0.12, 2.35), (-1.7, -hd + 0.12, 2.35), "Sign", (0, 1, 0))
+	# sloped festival roof & front valance (Banner)
+	mb.quad((-hw - 0.22, -hd - 0.18, H_back), (hw + 0.22, -hd - 0.18, H_back),
+		(hw + 0.22, hd + 0.45, H_front), (-hw - 0.22, hd + 0.45, H_front), "Banner", (0, -0.15, 1))
+	# roof fascia valance + signboard header
+	cube(mb, (-hw - 0.22, hd + 0.40, H_front - 0.36), (hw + 0.22, hd + 0.47, H_front + 0.02), "Banner")
+	cube(mb, (-hw + 0.15, hd + 0.46, H_front - 0.28), (hw - 0.15, hd + 0.50, H_front - 0.04), "Sign")
+	# warm glowing strip under the awning for night atmosphere
+	mb.quad((-hw + 0.25, hd - 0.25, H_front - 0.38), (hw - 0.25, hd - 0.25, H_front - 0.38),
+		(hw - 0.25, hd + 0.10, H_front - 0.38), (-hw + 0.25, hd + 0.10, H_front - 0.38), "Lamp", (0, 0, -1))
+	return mb
+
+
+def sponsor_flag():
+	"""3.3 m angled festival feather flag on a weighted base (origin at pole foot, flag streams +X)."""
+	mb = MB()
+	lathe_p(mb, [(0.0, 0.20), (0.07, 0.20), (0.10, 0.04)], 8, "Trim")
+	mb.tube((0, 0, 0.06), (0, 0, 2.68), 0.022, "Steel", segs=6, caps=False)
+	top = [Vector((0, 0, 2.68))]
+	for k in range(1, 6):
+		a = math.pi / 2 * k / 5
+		top.append(Vector((0.32 - 0.32 * math.cos(a), 0, 2.68 + 0.62 * math.sin(a))))
+	for a, b in zip(top, top[1:]):
+		mb.tube(a, b, 0.016, "Steel", segs=5, caps=False)
+	spine = [Vector((0.025, 0, 0.72 + 1.96 * k / 6)) for k in range(6)] + [p + Vector((0.025, 0, 0)) for p in top]
+	lens = [0.0]
+	for a, b in zip(spine, spine[1:]):
+		lens.append(lens[-1] + (b - a).length)
+	outerp = []
+	for k, p in enumerate(spine):
+		t = lens[k] / lens[-1]
+		d = (spine[min(k + 1, len(spine) - 1)] - spine[max(k - 1, 0)]).normalized()
+		w = (0.36 + 0.20 * math.sin(min(1.0, t / 0.35) * math.pi / 2)) * (1.0 if t < 0.7 else max(0.05, 1.0 - (t - 0.7) / 0.3))
+		outerp.append(p + Vector((d.z, 0, -d.x)) * w + Vector((0, 0, -0.16 * (1.0 - t) if k == 0 else 0)))
+	for k in range(len(spine) - 1):
+		mb.quad(spine[k], spine[k + 1], outerp[k + 1], outerp[k], "Banner", (0, 1, 0))
+	return mb
+
+
+def _spectator_limb(mb, a, b, r0, r1, col_a, col_b, segs=5):
+	"""Tapered low-poly limb segment from a to b with per-end vertex colour encoding (part, anim, side)."""
+	a, b = Vector(a), Vector(b)
+	axis = (b - a).normalized()
+	helper = Vector((0, 1, 0)) if abs(axis.y) < 0.9 else Vector((1, 0, 0))
+	u = axis.cross(helper).normalized()
+	v = axis.cross(u)
+	ra = [mb.vert(a + (u * math.cos(2 * math.pi * k / segs) + v * math.sin(2 * math.pi * k / segs)) * r0, col_a) for k in range(segs)]
+	rb = [mb.vert(b + (u * math.cos(2 * math.pi * k / segs) + v * math.sin(2 * math.pi * k / segs)) * r1, col_b) for k in range(segs)]
+	mid = (a + b) * 0.5
+	for k in range(segs):
+		k2 = (k + 1) % segs
+		mb.face([ra[k], ra[k2], rb[k2], rb[k]], "Spectator", lambda q: (q - mid) - axis * (q - mid).dot(axis))
+	mb.face(ra, "Spectator", -axis)
+	mb.face(rb, "Spectator", axis)
+
+
+def spectator(pose="stand"):
+	"""Low-poly standing festival spectator (~1.76 m tall, facing +Y -> Godot -Z).
+	Vertex colour encodes shader channels:
+	  R: body part (0.0 shirt, 0.25 skin, 0.50 trousers/shoes, 0.75 hair/cap, 1.0 phone screen)
+	  G: animation weight (0.0 feet/hips, 0.35 torso/head, 0.65..1.0 waving arms/hands)
+	  B: lateral side (0.0 left arm, 0.5 centre body, 1.0 right arm)."""
+	mb = MB()
+	# legs (hip z=0.86 down to ground z=0.0)
+	leg_spread = 0.14 if pose == "cheer" else 0.12
+	for sx in (-1, 1):
+		_spectator_limb(mb, (sx * leg_spread, 0.0, 0.0), (sx * 0.11, 0.0, 0.86), 0.078, 0.095,
+			(0.50, 0.0, 0.5), (0.50, 0.05, 0.5), segs=5)
+	# torso (shirt: waist z=0.84 to shoulders z=1.43, slightly chunky silhouette for mid-range readability)
+	mb.box((-0.23, -0.125, 0.84), (0.23, 0.135, 1.43), "Spectator", col=(0.0, 0.30, 0.5))
+	# head (skin: z=1.45..1.69) and hair/cap crown (z=1.62..1.76)
+	mb.box((-0.115, -0.115, 1.45), (0.115, 0.115, 1.69), "Spectator", col=(0.25, 0.42, 0.5))
+	mb.box((-0.122, -0.122, 1.62), (0.122, 0.13, 1.76), "Spectator", col=(0.75, 0.45, 0.5))
+	# cap brim forward (+Y)
+	mb.box((-0.105, 0.09, 1.61), (0.105, 0.20, 1.645), "Spectator", col=(0.75, 0.45, 0.5))
+	# arms per pose
+	if pose == "cheer":
+		# both arms raised high in a V cheer
+		for sx in (-1, 1):
+			side_b = 0.0 if sx < 0 else 1.0
+			sh = (sx * 0.24, 0.0, 1.38)
+			el = (sx * 0.39, 0.08, 1.69)
+			hd = (sx * 0.45, 0.14, 1.98)
+			_spectator_limb(mb, sh, el, 0.068, 0.056, (0.0, 0.45, side_b), (0.0, 0.78, side_b), segs=5)
+			_spectator_limb(mb, el, hd, 0.054, 0.048, (0.25, 0.82, side_b), (0.25, 1.0, side_b), segs=5)
+	elif pose == "wave":
+		# left arm relaxed/bent, right arm raised high waving or holding a glowing phone
+		_spectator_limb(mb, (-0.24, 0.0, 1.37), (-0.30, 0.05, 1.06), 0.066, 0.054, (0.0, 0.35, 0.0), (0.0, 0.45, 0.0), segs=5)
+		_spectator_limb(mb, (-0.30, 0.05, 1.06), (-0.26, 0.12, 0.84), 0.052, 0.046, (0.25, 0.45, 0.0), (0.25, 0.50, 0.0), segs=5)
+		_spectator_limb(mb, (0.24, 0.0, 1.38), (0.37, 0.12, 1.66), 0.068, 0.056, (0.0, 0.48, 1.0), (0.0, 0.80, 1.0), segs=5)
+		_spectator_limb(mb, (0.37, 0.12, 1.66), (0.39, 0.22, 1.92), 0.052, 0.048, (0.25, 0.84, 1.0), (0.25, 1.0, 1.0), segs=5)
+		# smartphone / lightstick in raised right hand (R=1.0 glows softly at night)
+		mb.box((0.35, 0.21, 1.90), (0.43, 0.25, 2.02), "Spectator", col=(1.0, 1.0, 1.0))
+	else:
+		# standing casually, elbows slightly bent ready to clap/cheer
+		for sx in (-1, 1):
+			side_b = 0.0 if sx < 0 else 1.0
+			sh = (sx * 0.24, 0.0, 1.37)
+			el = (sx * 0.29, 0.05, 1.06)
+			hd = (sx * 0.25, 0.18, 1.14)
+			_spectator_limb(mb, sh, el, 0.066, 0.054, (0.0, 0.35, side_b), (0.0, 0.55, side_b), segs=5)
+			_spectator_limb(mb, el, hd, 0.052, 0.046, (0.25, 0.60, side_b), (0.25, 0.80, side_b), segs=5)
 	return mb
 
 
@@ -1441,6 +1691,8 @@ PIECES = {
 	"Headframe": headframe, "ChurchSpire": church_spire, "Streetlamp": streetlamp, "StreetlampPark": streetlamp_park,
 	"TrafficLight": traffic_light, "BusShelter": bus_shelter, "Billboard": billboard, "FestivalArch": festival_arch,
 	"FestivalStage": festival_stage, "FlagPole": flag_pole, "Tent": tent,
+	"CrowdBarrier": crowd_barrier, "InflatableArch": inflatable_arch, "MerchStall": merch_stall, "SponsorFlag": sponsor_flag,
+	"SpectatorStand": lambda: spectator("stand"), "SpectatorCheer": lambda: spectator("cheer"), "SpectatorWave": lambda: spectator("wave"),
 	"CarHatch": lambda: car(CAR_HATCH), "CarSedan": lambda: car(CAR_SEDAN), "CarVan": real_van,
 	"Maluch": real_maluch,
 	"Bench": bench, "Fence": fence, "LevelCrossing": level_crossing,
@@ -1448,7 +1700,7 @@ PIECES = {
 	"TrainCab": lambda: en57(True), "TrainCar": lambda: en57(False),
 }
 KEEP_ORIGIN = {"LevelCrossingBoom", "TrainCab", "TrainCar"}  # pivots: neither grounded nor centred
-NOT_CENTRED = {"Fence", "LevelCrossing", "Streetlamp", "StreetlampPark", "TrafficLight", "FlagPole"}
+NOT_CENTRED = {"Fence", "LevelCrossing", "Streetlamp", "StreetlampPark", "TrafficLight", "FlagPole", "SponsorFlag"}
 CARS = {"CarHatch", "CarSedan", "CarVan", "Maluch"}
 
 
@@ -1514,10 +1766,19 @@ def main():
 	# festival
 	preview_copy(objs["FestivalStage"], (0, 120, 0), tints=ban)
 	preview_copy(objs["FestivalArch"], (0, 148, 0), tints=ban2)
+	preview_copy(objs["InflatableArch"], (0, 162, 0), tints={"Banner": "#00b4d8"})
 	for k, x in enumerate((-14, -8, 8, 14)):
 		preview_copy(objs["Tent"], (x, 140, 0), tints=ban if k % 2 else ban2)
+	for k, x in enumerate((-13, -7, 7, 13)):
+		preview_copy(objs["MerchStall"], (x, 154, 0), tints=ban2 if k % 2 else ban)
 	for k, x in enumerate((-11, -5, 5, 11)):
 		preview_copy(objs["FlagPole"], (x, 152, 0), tints=ban2 if k % 2 else ban)
+	for k, x in enumerate((-9, -3, 3, 9)):
+		preview_copy(objs["SponsorFlag"], (x, 166, 0), tints={"Banner": "#ffd166" if k % 2 else "#ff3366"})
+	for k in range(6):
+		preview_copy(objs["CrowdBarrier"], (-6.25 + k * 2.5, 158, 0), tints=ban if k % 2 else ban2)
+	for k, nm in enumerate(("SpectatorStand", "SpectatorCheer", "SpectatorWave", "SpectatorStand", "SpectatorCheer", "SpectatorWave")):
+		preview_copy(objs[nm], (-5.0 + k * 2.0, 156.8, 0))
 	preview_copy(objs["Billboard"], (22, 138, 0), rot=-0.6, tints={"Banner": "#2a7de1"})
 	# street
 	Y = 250

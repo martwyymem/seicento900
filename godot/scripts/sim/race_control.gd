@@ -18,6 +18,8 @@ const G := 9.81 ## gravity, m/s²
 const SECTOR_LEN := 200.0 ## roughly one marshal post per 200 m
 const DMG_FLOOR := 3.0 ## m/s of impact a car shrugs off (nudges, scrapes, kerb strikes)
 const DMG_SPAN := 6.7 ## further m/s that wreck it in one hit (still a 9.7 m/s wreck point)
+const WHEEL_BEND_DV := 11.0 ## m/s (40 km/h): a hit this hard bends the wheel nearest it (cosmetic: it wobbles) ...
+const WHEEL_OFF_DV := 19.5 ## ... and this hard (70 km/h) tears it off, which retires a car with mechanical damage on
 const REPAIR_TIME := 24.0 ## s of pit work to straighten a car on the verge of being wrecked
 const REPAIR_AT := 0.3 ## damage at which a team calls the car in for repairs
 const YELLOW_PACE := [1.0, 0.9, 0.72] ## bots' pace in a clear / yellow / double-yellow sector
@@ -137,27 +139,36 @@ func hurt(car: RaceCar, dv: float, into_barrier := false, f := 0.0) -> bool:
 		return false
 	var x := (dv - DMG_FLOOR) / DMG_SPAN
 	var add := x * x
+	var wheel := car.hit_wheel() if dv >= WHEEL_BEND_DV else -1
 	if not race.mechanical_damage:
-		# circuit races: the same hit dents and scuffs every car, and costs none of them anything
+		# circuit races: the same hit dents and scuffs every car, and costs none of them anything (a wheel only bends)
 		var cside := Service.zone(f)
 		if cside == "side":
-			cside = "left" if (car.id + int(car.scuff * 997.0)) % 2 == 0 else "right"
+			cside = car.hit_side if car.hit_side != "" else ("left" if (car.id + int(car.scuff * 997.0)) % 2 == 0 else "right")
 		car.dents[cside] = minf(1.0, float(car.dents[cside]) + add * 3.0)
 		car.scuff = minf(1.0, car.scuff + add)
+		if wheel >= 0:
+			car.wheel_bend[wheel] = minf(1.0, car.wheel_bend[wheel] + (dv - WHEEL_BEND_DV) / (WHEEL_OFF_DV - WHEEL_BEND_DV))
 		return false
 	var before := car.damage
 	var parts_before: Dictionary = car.parts.duplicate()
 	car.damage = minf(1.0, car.damage + add)
 	var side := Service.zone(f)
-	if side == "side":
-		side = "left" if (car.id + int(car.damage * 997.0)) % 2 == 0 else "right" # no RNG draw: the sim stays reproducible
+	if side == "side": # the side it was hit on (the dents are only drawn), else a pick without an RNG draw
+		side = car.hit_side if car.hit_side != "" else ("left" if (car.id + int(car.damage * 997.0)) % 2 == 0 else "right")
 	car.dents[side] = minf(1.0, float(car.dents[side]) + add * 3.0)
 	Service.spread(car, car.damage - before, f)
 	if add > 0.02:
 		car.dmg_pull = clampf(car.dmg_pull + (race.rng.next() - 0.5) * 0.12 * add, -0.05, 0.05)
 	if car.damage >= 1.0:
+		if wheel >= 0 and dv >= WHEEL_OFF_DV:
+			car.wheel_off = wheel # a crash this hard (it wrecks the car anyway) tears the wheel off
 		wreck(car, dv, into_barrier)
+		if car.wheel_off >= 0:
+			car.dnf_reason = "Lost a wheel"
 		return true
+	if wheel >= 0:
+		car.wheel_bend[wheel] = minf(1.0, car.wheel_bend[wheel] + (dv - WHEEL_BEND_DV) / (WHEEL_OFF_DV - WHEEL_BEND_DV))
 	if car.is_player and add > 0.004:
 		var hint := " — box for repairs" if car.damage >= REPAIR_AT and race.s.mode == "race" else ""
 		log_rc("%s hit: %s damaged. Car now %d%% damaged%s" % [Service.zone(f).capitalize(), _hurt_parts(car, parts_before), roundi(car.damage * 100.0), hint], "bad")
@@ -209,7 +220,7 @@ func repaired(car: RaceCar) -> void:
 	car.damage = 0.0
 	car.scuff = 0.0
 	car.dmg_pull = 0.0
-	car.dents = {"front": 0.0, "rear": 0.0, "left": 0.0, "right": 0.0}
+	car.straighten()
 	car.parts = {}
 	Service.sync(car)
 	car.repair_asked = false

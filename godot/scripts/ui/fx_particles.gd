@@ -17,6 +17,8 @@ const PRESETS := {
 	"kickup_grit": {"amount": 24, "life": 0.8, "color": Color(0.62, 0.58, 0.5, 0.9), "speed": Vector2(3.0, 7.0), "up": 0.3, "gravity": 11.0, "drag": 1.8, "scale": Vector2(0.04, 0.075), "grow": 1.0, "spread": 22.0, "inherit": 0.3, "soft": 0.06},
 	"kickup_snow": {"amount": 30, "life": 1.0, "color": Color(0.92, 0.95, 1.0, 0.72), "speed": Vector2(0.25, 0.7), "up": 0.35, "gravity": 0.3, "drag": 0.6, "scale": Vector2(0.12, 0.2), "grow": 1.5, "spread": 20.0, "inherit": 0.2},
 	"sparks": {"amount": 22, "life": 0.45, "color": Color(1.0, 0.58, 0.18, 0.95), "speed": Vector2(5.0, 12.0), "up": 0.18, "gravity": 18.0, "drag": 0.4, "scale": Vector2(0.025, 0.055), "grow": 0.35, "spread": 55.0, "emission": true},
+	# a smashed window or lamp: bright little shards that fly out, glint and drop (emissive so they glint in shade)
+	"glass": {"amount": 40, "life": 0.9, "color": Color(0.78, 0.88, 0.92, 0.9), "speed": Vector2(2.0, 6.5), "up": 0.5, "gravity": 14.0, "drag": 0.5, "scale": Vector2(0.012, 0.03), "grow": 0.8, "spread": 75.0, "soft": 0.05, "emission": true, "box": Vector3(0.3, 0.12, 0.3)},
 	"debris": {"amount": 18, "life": 0.85, "color": Color(0.56, 0.49, 0.39, 0.9), "speed": Vector2(3.0, 9.0), "up": 0.55, "gravity": 13.0, "drag": 0.7, "scale": Vector2(0.04, 0.11), "grow": 0.55, "spread": 65.0},
 	# tyre smoke (a drift, wheelspin, a lock-up): thick billows off both rear tyres that swell to 4-6 m, rise slowly,
 	# hang about for seconds and drift off downwind ("wind": m/s2 sideways in the world; "box": the emission half

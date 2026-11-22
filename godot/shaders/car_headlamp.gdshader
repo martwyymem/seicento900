@@ -3,6 +3,7 @@
 // uniform "lit" (RaceCarVisual.set_lamps: 0 off, 3.6 full). On twin-bowl cars (twin_bowl = 1) the 3D concave bowl
 // normals drive the reflector shading; on the Seicento (twin_bowl = 0) the dish centres smoothly on "centre".
 shader_type spatial;
+#include "res://shaders/car_damage.gdshaderinc"
 
 instance uniform float lit : instance_index(2) = 0.0;
 uniform vec2 centre = vec2(0.40, 0.640);
@@ -41,5 +42,9 @@ void fragment() {
 	float strength = mix(single_emit, bowl_emit, twin_bowl);
 	float core_hot = mix(single_dish, pow(nv, 2.2), twin_bowl);
 	vec3 lit_col = mix(beam * vec3(1.0, 0.90, 0.72), vec3(1.0, 0.98, 0.94), core_hot * 0.75);
-	EMISSION = lit_col * lit * strength;
+	// smashed (car_damage.gdshaderinc): the bulb is out and the bowl dull, scratched and dirty
+	float smashed = lamp_smashed(lp);
+	ALBEDO = mix(ALBEDO, vec3(0.12, 0.12, 0.13) + 0.25 * crack_lines(lp.xy, 30.0), smashed * 0.8);
+	ROUGHNESS = mix(ROUGHNESS, 0.6, smashed);
+	EMISSION = lit_col * lit * strength * (1.0 - smashed);
 }
