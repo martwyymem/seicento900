@@ -24,7 +24,12 @@ Everything from the original Pillars 1–9, Phases 0–4 core roadmap, and `0.5.
 
 ## Active Now — Next Release (In Flight)
 
-- [ ] **Next Up technical follow-ups** (below), worked through in parallel by sub-agents.
+- [x] Satnav aerial `.import` settings tracked in git (`!data/world/brzeszcze_map.png.import` in `godot/.gitignore`).
+- [ ] Open-world map geometry & visual sweep (Opus sub-agent, in flight).
+- [ ] Street track polish: Bór guardrails vs open verges, Bór far horizon, urban ground shading audit (Opus sub-agent, in flight).
+- [ ] README refresh (Gemini 4 Neon, in flight).
+- [ ] Night-rain High/Ultra frame time on GP: re-measure once the machine is idle (after the agents above finish).
+- [ ] Cold open-world load optimization: after the geometry sweep lands (same loader/baker code).
 
 ---
 
@@ -32,7 +37,7 @@ Everything from the original Pillars 1–9, Phases 0–4 core roadmap, and `0.5.
 
 Items surfaced by recent releases (`0.5.0`–`0.5.2-hotfix3`) and remaining loose ends:
 
-- [ ] **Track aerial satnav `.import` settings in git:** `godot/data/world/brzeszcze_map.png.import` (mipmaps + VRAM compression: ~60 MB → ~20 MB VRAM, eliminates zoomed-out road shimmer) is currently ignored by `godot/.gitignore`, so fresh clones and non-Mac builds lose those settings. Un-ignore that file (or configure import defaults) and commit it.
+- [x] **Track aerial satnav `.import` settings in git:** `godot/data/world/brzeszcze_map.png.import` (mipmaps + VRAM compression: ~60 MB → ~20 MB VRAM, eliminates zoomed-out road shimmer) is currently ignored by `godot/.gitignore`, so fresh clones and non-Mac builds lose those settings. Un-ignore that file (or configure import defaults) and commit it.
 - [ ] **Open-world map geometry & visual sweep:**
   - Clean up the 7 remaining surveyed OSM buildings protruding 0–1.4 m into street end segments and the 1 parking-aisle sample ending inside a shop front.
   - Windowed visual verification in motion (batch when windowed runs are OK): grass dense/sparse LOD hand-over, overhead building-passage lintels/roofs, street-track braking boards, and aerial satnav map zoom/pan.

@@ -5,3 +5,5 @@
 assets/sky/
 assets/textures/
 assets/models/
+# the satnav aerial needs its mipmaps and VRAM compression on every clone and build host
+!data/world/brzeszcze_map.png.import
