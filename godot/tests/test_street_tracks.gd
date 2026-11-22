@@ -55,5 +55,15 @@ func run() -> Array:
 			check("the church keeps its mapped size", absf(float(lm[3]) - 49.7) < 1.0 and absf(float(lm[4]) - 23.2) < 1.0)
 	check("wilamowice has the church landmark", found)
 	check("surroundings knows the church's nominal size", FileAccess.get_file_as_string("res://scripts/ui/surroundings.gd").contains("\"WilamowiceChurch\": Vector2("))
+	# street stages also get 100/200/300 m braking boards before sharp corners (user, 2026-11-22)
+	var rw: Node3D = (load("res://scripts/ui/race_world.gd") as GDScript).new()
+	Engine.get_main_loop().root.add_child(rw)
+	rw.set_track(Race.get_track("goliath"))
+	var furn: Node = rw.track_root.get_node_or_null("Furniture")
+	var b100 := furn.get_node_or_null("BrakeBoard_100") as MultiMeshInstance3D if furn else null
+	var b200 := furn.get_node_or_null("BrakeBoard_200") as MultiMeshInstance3D if furn else null
+	check("goliath places 100 m and 200 m braking boards", b100 != null and b100.multimesh.instance_count > 0
+		and b200 != null and b200.multimesh.instance_count > 0)
+	rw.free()
 	completed = true
 	return errors

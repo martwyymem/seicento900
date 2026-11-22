@@ -81,7 +81,7 @@ const DRIFT_PER_KM := [115.0, 460.0, 1150.0]
 ## bot/pace 1.46 town, 1.29 S1 sprint).
 ## Acceleration is fitted to each car's measured S1 drag and sprint runs against the Seicento anchor; grip and braking
 ## are the town tarmac's share of the probe's figures.
-const PACE := {"stock": [38.0, 2.4, 8.4, 7.4], "golf4": [47.5, 2.7, 7.6, 6.9], "logan": [45.0, 2.9, 7.4, 6.9], "v50": [58.5, 3.4, 7.6, 7.4], "i20": [50.0, 3.0, 7.5, 7.1], "sandero": [48.3, 3.0, 7.4, 6.9], "focus": [58.3, 3.5, 7.9, 7.2], "zafira": [54.7, 2.8, 7.3, 7.1], "hypercar": [96.0, 9.0, 13.5, 10.7]}
+const PACE := {"stock": [38.0, 2.4, 8.4, 7.4], "golf4": [47.5, 2.7, 7.6, 6.9], "logan": [45.0, 2.9, 7.4, 6.9], "v50": [58.5, 3.4, 7.6, 7.4], "i20": [50.0, 3.0, 7.5, 7.1], "sandero": [48.3, 3.0, 7.4, 6.9], "focus": [58.3, 3.5, 7.9, 7.2], "zafira": [54.7, 2.8, 7.3, 7.1], "hypercar": [96.0, 9.0, 13.5, 12.0]}
 ## The car's own standing start on the map's S1 (the drag_kilometre mission's line), full throttle with the automatic
 ## box (FreeCar), measured with tests/_pace_probe.gd (2026-11-21): seconds over 402 m and 1000 m. A drag field
 ## (StreetRivals) is calibrated against these (scaled by grip_k via pace_time when wet).

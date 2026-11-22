@@ -141,10 +141,10 @@ func _check_race_minimap(errors: Array[String]) -> void:
 		var ahead_edge := xf * (car + fwd * (z_fast * yfrac))
 		if absf(ahead_edge.y) > 0.05 or absf(ahead_edge.x - sz.x * 0.5) > 0.05:
 			errors.append("point %.0f m ahead should land at top centre (h=%.2f), got %s" % [z_fast * yfrac, h, ahead_edge])
-		for off in [Vector2(150, 0), Vector2(-80, 220), Vector2(400, -350)]:
-			var p := car + off
+		for off: Vector2 in [Vector2(150, 0), Vector2(-80, 220), Vector2(400, -350)]:
+			var p: Vector2 = car + off
 			var via_fn := MapMarker.mini_xy_offset(p, car, h, radius, sz, yfrac)
-			var via_xf := xf * p
+			var via_xf: Vector2 = xf * p
 			if not _near(via_fn, via_xf, 0.02):
 				errors.append("mini_xform mismatch at h=%.2f off=%s: %s vs %s" % [h, off, via_xf, via_fn])
 	# Ribbon culling drops far segments while keeping local points with clean overlap

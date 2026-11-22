@@ -112,7 +112,8 @@ func _beta(rig) -> float:
 func _stability(m: CarModel) -> void:
 	var stock := CarModel.new().spec
 	check("the stock Seicento keeps the shared defaults", stock.aero_front == 0.55 and stock.aero_rear == 0.45 and stock.steer_fast == 1.0
-		and stock.reverse_power == 1.0 and stock.esc_grip == 1.0 and stock.esc_aero == 0.0)
+		and stock.reverse_power == 1.0 and stock.esc_grip == 1.0 and stock.esc_aero == 0.0
+		and stock.brake_front_grip == 0.0 and stock.brake_rear_grip == 0.0 and stock.brake_stab == 0.0 and stock.abs_slip == 1.2)
 	var sp := m.spec
 	check("the downforce shares add up to 1", is_equal_approx(sp.aero_front + sp.aero_rear, 1.0))
 	var tarmac: int = Probe.S.surf_ids().asphalt
@@ -188,6 +189,29 @@ func _stability(m: CarModel) -> void:
 			go.take(rig)
 		check("%s: flat out from rest on full lock, then straight: no spin" % tag, go.max_beta < deg_to_rad(20.0) and _beta(rig) < deg_to_rad(1.0) and absf(rig.car.yaw_rate) < 0.15,
 			"(slide %.1f deg, end %.1f deg, yaw %.2f rad/s)" % [rad_to_deg(go.max_beta), rad_to_deg(_beta(rig)), rig.car.yaw_rate])
+	_goliath_keyboard(m)
+
+## Keyboard braking & steering taps on the narrow Goliath street track (user, 2026-11-22: brakes felt weak and
+## nudging steering under braking spun into the wall): must hit >= 2.2 g at 250 km/h, >= 1.5 g at 50 km/h, and
+## stay well under 12 deg slip with no spin on 0.1/0.25/0.5 s steering taps in both full and abs assist tiers.
+func _goliath_keyboard(m: CarModel) -> void:
+	var probe = Probe.new()
+	for assists in ["full", "abs"]:
+		var kr = probe._kb_rig(m, "race", assists, 300.0 / 3.6, "goliath")
+		var lg = probe._kb_brake(kr)
+		check("goliath/%s: brakes >= 2.2 g at 250 km/h" % assists, float(lg.dec.get(250.0, 0.0)) >= 2.2,
+			"(%.2f g)" % float(lg.dec.get(250.0, 0.0)))
+		check("goliath/%s: brakes >= 1.5 g at 50 km/h" % assists, float(lg.dec.get(50.0, 0.0)) >= 1.5,
+			"(%.2f g)" % float(lg.dec.get(50.0, 0.0)))
+		kr.race.dispose()
+		for tap in [0.1, 0.25, 0.5]:
+			for at in [0.0, -170.0]:
+				var kt = probe._kb_rig(m, "race", assists, 250.0 / 3.6, "goliath")
+				var lt = probe._kb_brake(kt, tap, at)
+				check("goliath/%s: %.2f s steer tap (at %.0f) under full braking does not spin" % [assists, tap, at],
+					lt.max_beta < deg_to_rad(12.0), "(beta %.1f deg, head %.1f deg)" % [rad_to_deg(lt.max_beta), rad_to_deg(lt.max_head)])
+				kt.race.dispose()
+	probe.free()
 
 func _peak_kw(m: CarModel) -> float:
 	var best := 0.0

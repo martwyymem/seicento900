@@ -87,6 +87,7 @@ var _drag := PackedFloat64Array([0, 0, 0, 0])
 var _cw := PackedFloat64Array([0, 0, 0, 0])
 var _dw := PackedFloat64Array([0, 0, 0, 0])
 var _esc := PackedFloat64Array([0, 0, 0, 0])
+var _brk_mul := PackedFloat64Array([1.0, 1.0, 1.0, 1.0])
 var _dW := PackedFloat64Array([0, 0, 0, 0])
 var _cd := PackedFloat64Array([0, 0, 0, 0])
 var _sd := PackedFloat64Array([0, 0, 0, 0])
@@ -196,7 +197,9 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 	var limiter := spec.limiter
 	var brake_f := spec.brake_front
 	var brake_r := spec.brake_rear
+	var ebd_f := spec.brake_front_grip
 	var ebd := spec.brake_rear_grip
+	var brake_stab := spec.brake_stab
 	var abs_slip := spec.abs_slip
 	var eng_i := spec.engine_inertia
 	var wheel_i := spec.wheel_inertia
@@ -258,6 +261,7 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 	var cw := _cw
 	var dw := _dw
 	var esc := _esc
+	var brk_mul := _brk_mul
 	var fz := ph.fz
 	var w := ph.w
 	var rho_a := ph.rho
@@ -363,12 +367,37 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 		var fr := 7.0 + 0.0022 * rpm
 		var te := thr * (car_model.torque_at(rpm) * power + fr) - fr
 
-		# ---- stability control: brake the outside front wheel when the car yaws faster than the steering asks
+		# ---- stability control: brake the outside front wheel when the car yaws faster than the steering asks;
+		# on cars with brake-by-wire YMC (CarSpec.brake_stab > 0), braking stability eases spin-side brake pressure
+		# instead of adding torque onto an already-braking outside wheel (which collapses its ABS on split-mu)
 		esc[0] = 0.0
 		esc[1] = 0.0
 		esc[2] = 0.0
 		esc[3] = 0.0
-		if esc_on and vx > 5.0 and hb_grip > 0.95:
+		if brake_stab > 0.0:
+			brk_mul[0] = 1.0
+			brk_mul[1] = 1.0
+			brk_mul[2] = 1.0
+			brk_mul[3] = 1.0
+			if (abs_on or esc_on) and brk > 0.05 and vx > 4.0 and hb_grip > 0.95:
+				var lim_b := env_mu * G * 1.1 / vx * (esc_grip + esc_aero * v2)
+				var target_b := clampf(vx * delta / wb, -lim_b, lim_b)
+				var beta_b := atan2(vy, vx)
+				var over_b := (r - target_b) - beta_b * 2.5
+				var band_b := 0.02 + 0.08 * absf(target_b)
+				if absf(over_b) > band_b and (absf(delta) < 0.01 or signf(over_b) == signf(r) or signf(over_b) == signf(-beta_b)):
+					var u := clampf((absf(over_b) - band_b) * brake_stab, 0.0, 1.0)
+					if over_b > 0.0:
+						brk_mul[1] = 1.0 - 0.9 * u
+						brk_mul[3] = 1.0 - u
+						if esc_on:
+							esc[0] = maxf(0.0, (1.0 - brk) * u) * brake_f * 0.7
+					else:
+						brk_mul[0] = 1.0 - 0.9 * u
+						brk_mul[2] = 1.0 - u
+						if esc_on:
+							esc[1] = maxf(0.0, (1.0 - brk) * u) * brake_f * 0.7
+		if esc_on and vx > 5.0 and hb_grip > 0.95 and not (brake_stab > 0.0 and brk > 0.05):
 			# reference: the neutral-steer yaw rate, capped at what the grip allows
 			var lim := env_mu * G * 1.1 / vx * (esc_grip + esc_aero * v2)
 			var target := clampf(vx * delta / wb, -lim, lim)
@@ -411,10 +440,16 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 			else:
 				abs_k[i] = minf(1.0, abs_k[i] + h * 10.0)
 			var bt := brake_f if i < 2 else brake_r
-			if ebd > 0.0 and i >= 2:
-				# brake-by-wire: the rear wheel brakes in proportion to the grip it has (CarSpec.brake_rear_grip)
-				bt = minf(brake_r, ebd * mu[i] * fzi * R)
-			var tb := (brk * bt + esc[i]) * abs_k[i] + (hb * brake_r * HB_TORQUE if i >= 2 else 0.0)
+			if (ebd_f > 0.0 and abs_on and i < 2) or (ebd > 0.0 and i >= 2):
+				# brake-by-wire: match the wheel's grip plus the torque needed to spin down the wheel and coupled flywheel
+				var spin_t := (wheel_i + (eng_i * ratio * ratio * p_clutch / n_driven if (i < 2 or awd) else 0.0)) * maxf(0.0, -ax_f) / R
+				if i < 2:
+					bt = minf(brake_f, ebd_f * mu[i] * fzi * R + spin_t)
+				else:
+					var r_lat := maxf(0.0, 1.0 - 1.5 * sy * sy)
+					bt = minf(brake_r, r_lat * (ebd * mu[i] * fzi * R + spin_t))
+			var brk_i := brk * brk_mul[i] if brake_stab > 0.0 else brk
+			var tb := (brk_i * bt + esc[i]) * abs_k[i] + (hb * brake_r * HB_TORQUE if i >= 2 else 0.0)
 			var roll := drag[i] * fzi * R
 			var w0 := 1.5
 			var sgn := clampf(wi / w0, -1.0, 1.0)

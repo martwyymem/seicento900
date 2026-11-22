@@ -44,8 +44,10 @@ extends Resource
 @export var clutch_capacity := 125.0 ## Nm
 @export var brake_front := 1250.0 ## Nm per wheel at full pedal
 @export var brake_rear := 130.0 ## rear drums behind a load-sensing valve
+@export var brake_front_grip := 0.0 ## brake-by-wire at the front (when ABS is on): over 0, caps each front wheel's brake torque to this share of its own grip (0 = plain brake_front + ABS)
 @export var brake_rear_grip := 0.0 ## brake-by-wire at the rear: over 0, each rear wheel gets at most this share of its own grip
-## (load times friction, so a light or grassy wheel gets less) as brake torque, up to brake_rear (0 = the plain brake_rear)
+## (load times friction, backed off under rear lateral slip) as brake torque, up to brake_rear (0 = the plain brake_rear)
+@export var brake_stab := 0.0 ## yaw stability under braking (YMC): over 0, eases spin-side brake pressure when yaw rate or sideslip overshoots the steering (0 = off)
 @export var abs_slip := 1.2 ## how far past the tyre's peak slip ratio the ABS lets a wheel go before it eases the pressure
 @export var roll_front := 0.6 ## front share of roll stiffness
 @export var roll_gradient := 0.11 ## body roll, rad per g

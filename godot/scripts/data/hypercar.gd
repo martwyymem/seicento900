@@ -31,13 +31,16 @@ static func spec() -> CarSpec:
 	s.wheel_inertia = 1.2
 	s.engine_inertia = 0.12
 	s.clutch_capacity = 900.0
-	# The brakes follow the tyres, as the Seicento's do: the rears ask for less than the grip they have left under full
-	# braking at any speed (0.84 of it at walking pace, a third at 300 km/h), so only the fronts ever work the ABS and the
-	# rear axle keeps its sideways grip. 3600/750 had both axles on the ABS at twice their grip, and a car braking from
-	# 200 km/h with the slightest yaw swapped ends (tests/_hypercar_feel_probe.gd). More than ~380 at the rear spins it
-	# with two wheels on the grass.
-	s.brake_front = 2400.0
-	s.brake_rear = 320.0
+	# Brake-by-wire (CarSpec.brake_front_grip / brake_rear_grip / brake_stab): the calipers are big enough for
+	# full downforce at 340 km/h, front ABS holds near peak grip without sawtooth chatter, rear EBD/CBC proportions
+	# each rear wheel to its own load and backs off under rear lateral slip so the tail keeps its sideways grip,
+	# and yaw-moment control (brake_stab) eases spin-side braking on steering taps and split-mu verges.
+	s.brake_front = 3400.0
+	s.brake_rear = 1600.0
+	s.brake_front_grip = 1.03
+	s.brake_rear_grip = 0.92
+	s.brake_stab = 9.0
+	s.abs_slip = 1.0
 	s.roll_gradient = 0.04
 	s.pitch_gradient = 0.02
 	s.susp_hz = 2.6
@@ -49,7 +52,8 @@ static func spec() -> CarSpec:
 	s.reverse_ratio = 3.2
 	s.reverse_power = 0.3 ## the brake held past a stop selects reverse: back up like the Seicento (23 km/h in 2.5 s), not at 65
 	s.steer_lock = 0.4
-	s.steer_fast = 0.5 ## a full key press asks the fronts for their peak slip at speed, not a third past it
+	s.steer_fast = 0.45 ## a full key press asks the fronts for their peak slip at speed, not a third past it
+	s.steer_fast_from = 22.0
 	s.esc_grip = 1.3 ## stability control knows the slicks and the wings (it took 1.1 g for the limit and braked a wheel in every fast bend)
 	s.esc_aero = 0.00017
 	s.grip_k = 1.75
