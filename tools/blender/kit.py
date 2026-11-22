@@ -307,17 +307,20 @@ class MB:
 
 
 def text_mesh(mb, text, origin, size, mat, axis_u=(1, 0, 0), axis_v=(0, 0, 1), align="CENTER", col=None,
-		depth=0.0, font=None):
+		depth=0.0, font=None, bold=0.0):
 	"""Flat (or extruded) lettering: a Blender text object converted to polygons and added to mb.
 	origin is the text's anchor (centre of the baseline row for align CENTER); the letters lie in the
-	plane of axis_u (reading direction) and axis_v (up), facing axis_u x axis_v."""
+	plane of axis_u (reading direction) and axis_v (up), facing axis_u x axis_v. bold grows every stroke's outline
+	by that many text units on each side (the default face is thin: hard to read from afar)."""
 	cu = bpy.data.curves.new("txt", "FONT")
 	cu.body = text
 	cu.size = size
 	cu.align_x = align
 	cu.align_y = "CENTER"
 	cu.extrude = depth / 2
-	cu.resolution_u = 2
+	if bold:
+		cu.offset = bold
+	cu.resolution_u = 5 if bold else 2
 	cu.fill_mode = "BOTH"
 	if font:
 		cu.font = bpy.data.fonts.load(font)

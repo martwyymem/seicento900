@@ -45,7 +45,7 @@ const BEATS := {
 	],
 	"act_3": [
 		["", "ACT III · GLOBAL LEGENDS. Late autumn 2004."],
-		["halina", "The factory track next, then a charter to Tokyo that Pan Zbyszek swears is real. I checked. It is real."],
+		["halina", "The factory track first. Then Monza, the Nürburgring and Le Mans, and a charter to Tokyo that Pan Zbyszek swears is real. I checked. It is real."],
 		["mirek", "Tokyo. I've never been further than Zakopane. Pack the spare plugs."],
 	],
 	"epilogue": [
@@ -160,6 +160,21 @@ const BEATS := {
 		["mirek", "Too much brake on Karbowa, too little time in the draft. Stay in the tow until it hurts."],
 		["kamil", "Not bad for a shopping car. That's not a compliment. Mostly."],
 	],
+	"stage_rewanz_brief": [["kamil", "Pszczyna again. At night, in the rain. My park, my rules, my rematch."]],
+	"stage_rewanz_before": [
+		["kamil", "You beat me here in the sunshine. Let's see you find the bridges in the dark with water on the setts."],
+		["ola", "The park lamps go off at ten. The castle's lit, though. Aim for the castle. Then don't hit it."],
+		["mirek", "New headlight bulbs, both sides. Wet setts at night: look further ahead than you think you can."],
+	],
+	"stage_rewanz_won": [
+		["kamil", "Twice. In my town. My father has gone home to tell the wisents himself."],
+		["ola", "Kamil just shook your hand. Properly, with eye contact. I've written down the time."],
+		["mirek", "Rain, dark, a bridge one car wide, and the car's still straight. Now I'm impressed."],
+	],
+	"stage_rewanz_miss": [
+		["kamil", "See? The park knows its own. Come back when you can drive by moonlight."],
+		["mirek", "You braked for the bridges by the lamps. There are no lamps. Count the trees instead."],
+	],
 	"stage_6_brief": [["ola", "Rain on the Soła and setts on Plebańska. My grandad's town. Drive nicely."]],
 	"stage_6_before": [
 		["ola", "Grandad Tadek used to fish under Most Piastowski. He says the river's in a mood today."],
@@ -199,10 +214,52 @@ const BEATS := {
 	],
 	"stage_8_won": [
 		["halina", "The engineers asked who tunes your car. I said a miner from Brzeszcze with a sink plunger. They wrote it down."],
-		["halina", "There's a race in Tokyo: midnight, the expressway ring. I've put your name forward. Pan Zbyszek is arranging the flight. Pray."],
+		["halina", "Next is Monza. The factory's people in Turin want to see the Polish Seicento in their park. Then the Ring, Le Mans, and Tokyo if Zbyszek has his way."],
 	],
 	"stage_8_miss": [
 		["halina", "Quick on the straight, slow through the West Turn. The car is not the problem. Again."],
+	],
+	"stage_monza_brief": [["halina", "Fiat's home crowd: the royal park, the Parabolica, and the men from Turin watching."]],
+	"stage_monza_before": [
+		["halina", "Turin heard about a Polish Seicento that beats its test drivers. They want it at Monza, among the Italians."],
+		["ola", "Rettifilo, Curva Grande, the Lesmos, Ascari, Parabolica. I practised saying them on the plane. Ola, the Italian."],
+		["kamil", "Cheap flight via Bergamo. Somebody has to keep you honest. And the pizza's good."],
+	],
+	"stage_monza_won": [
+		["halina", "A Polish Seicento on the Monza podium, in front of Turin. The man from Turin asked for your number. I gave him Mirek's."],
+		["mirek", "He rang. He speaks no Polish and I speak no Italian. We talked gearboxes for an hour."],
+	],
+	"stage_monza_miss": [
+		["halina", "Too early on the brakes into the Parabolica. It's a long corner: be patient and the exit pays you back."],
+		["ola", "The Italians waved at us as they went by. Nicely. That was the worst part."],
+	],
+	"stage_eifel_brief": [["ola", "Twenty kilometres, seventy-odd corners, one lap, fog in the forest. I've brought two notebooks."]],
+	"stage_eifel_before": [
+		["ola", "The Nordschleife: Flugplatz, Fuchsröhre, Adenauer Forst, the Karussell, Brünnchen, Pflanzgarten. One lap, no second go."],
+		["mirek", "Fog in the hills at half eight. Like the Andrzej shaft in October, only the hills are bigger."],
+		["halina", "I tested here in eighty-seven. The Karussell is concrete and it bites: drop into the banking and stay in it."],
+	],
+	"stage_eifel_won": [
+		["halina", "A podium on the Nordschleife, in fog, at the first try. My old team manager would have hired you on the spot."],
+		["ola", "My notebook got soaked in the Fuchsröhre. I read the last six kilometres from memory. Don't tell anyone."],
+	],
+	"stage_eifel_miss": [
+		["mirek", "Twenty kilometres is a long way to keep your head. It's never the fast corners. It's the one you forget."],
+		["ola", "We'll go again. I'll write bigger."],
+	],
+	"stage_lemans_brief": [["zbyszek", "LE MANS! At NIGHT! I've hired a coach, a flag and a man who can say Hunaudières!"]],
+	"stage_lemans_before": [
+		["zbyszek", "The Circuit de la Sarthe after dark! I promised the coach driver we'd be home by Tuesday!"],
+		["ola", "Dunlop bridge, Tertre Rouge, then the Mulsanne with its two chicanes, flat out in the dark. Then Arnage and the Porsche Curves."],
+		["mirek", "The longest you'll ever hold it flat. Watch the temperature, and brake when the board says, not when you feel it."],
+	],
+	"stage_lemans_won": [
+		["zbyszek", "BRZESZCZE AT LE MANS! The coach driver cried! He says he'll drive us to Tokyo next! He is NOT driving us to Tokyo!"],
+		["kamil", "I watched from the Dunlop bridge with a baguette. You passed three of them on the Mulsanne. I've lost my voice."],
+	],
+	"stage_lemans_miss": [
+		["ola", "The Porsche Curves at night are a different track. We'll learn them."],
+		["mirek", "You lost it in the dark, not on the straight. Pick out the braking boards early."],
 	],
 	"stage_9_brief": [["zbyszek", "TOKYO! Forty fans on the plane and a flag the size of a bedsheet!"]],
 	"stage_9_before": [
@@ -331,6 +388,60 @@ const BEATS := {
 		["halina", "Good start, soft middle. Keep it straight and let them chase you."],
 		["ola", "We'll get them. They write everything down; we just drive."],
 	],
+	"sprint_rajsko_brief": [["ola", "The Rajsko farm lads race the lanes to Wilczkowice on Saturdays. The harvest's in, so: tonight."]],
+	"sprint_rajsko_before": [
+		["ola", "Oświęcimska, Wilamowicka, Pszczyńska and back down Przemysłowa. Seven kilometres of lanes, ditches both sides."],
+		["mirek", "Tractors use these roads all day. Mind the mud on the corners, and the dog at number twelve."],
+	],
+	"sprint_rajsko_won": [
+		["ola", "The village gave you the harvest sheaf! It's mostly straw and a ribbon, but it's ours."],
+		["mirek", "The dog at number twelve chased you all the way to the line. You still beat it. Good."],
+	],
+	"sprint_rajsko_miss": [
+		["ola", "We spent the last kilometre behind a lad in a Polonez with no exhaust. Quicker next time. And deafer."],
+		["mirek", "Square junctions, narrow lanes: brake before the crossroads, not in them."],
+	],
+	"drift_kopalnia_brief": [["mirek", "The night shift wants the town sideways. I'm on that shift. I've seen nothing."]],
+	"drift_kopalnia_before": [
+		["mirek", "Midnight, the canteen steps, a thermos and twelve miners with score cards. Harder judges than the Góra lads."],
+		["ola", "Ofiar Oświęcimia, Przemysłowa, Leśna, the right angles round the shafts. Sideways into every one. Mirek, look away."],
+	],
+	"drift_kopalnia_won": [
+		["mirek", "Twelve cards went up and every one said ten. Well, one said 'Basia must never know'. Same thing."],
+		["ola", "The canteen lady gave you a bowl of żurek. That's the highest honour Brzeszcze has."],
+	],
+	"drift_kopalnia_miss": [
+		["mirek", "The lads say you went round the corners. Round. Like a bus. They want sideways."],
+		["ola", "Handbrake at the turn-in, throttle to hold it, and don't straighten up between corners or the combo's gone."],
+	],
+	"knockout_rajsko_brief": [["kamil", "Rajsko knockout. Eight cars, seven lines. I learnt a lot in the forest. Did you?"]],
+	"knockout_rajsko_before": [
+		["kamil", "Same rules as Mały Bór, more cars, my new springs. And Halina's test drivers, who read the rules in advance."],
+		["halina", "My drivers asked to race you again. I said yes. They've been pacing the ditches with a tape measure."],
+		["ola", "Seven sector lines. Never be last at any of them. Win the last one if you can."],
+	],
+	"knockout_rajsko_won": [
+		["kamil", "The final two again, you and me. And you again. I'm going to frame the gap. It's very small."],
+		["halina", "My drivers have filed a report. It says 'faster than the model predicted'. They are very upset."],
+	],
+	"knockout_rajsko_miss": [
+		["kamil", "Out before the final! Lucky for you I'm not taking bets today."],
+		["ola", "Last at the line by a mirror. A mirror! Again."],
+	],
+	"rally_zima_brief": [["ola", "Snow on the Rynek and a rally on the roads round town. Home stages, home crowd, frozen feet."]],
+	"rally_zima_before": [
+		["ola", "Kopalnia, Rajsko–Wilczkowice and Kolonia Stawowa, all in the snow. On the liaisons we drive like normal people, only slower."],
+		["mirek", "Winter tyres, a shovel in the boot and a flask of tea for the co-driver. That's the whole service plan."],
+		["zbyszek", "And the council is watching! Give them a show today and the Goliath gets its night. I can feel it!"],
+	],
+	"rally_zima_won": [
+		["zbyszek", "A WINTER PODIUM! The council chairman stood in the snow for an hour! He's thawing out now. He's smiling!"],
+		["ola", "Three stages in the snow and not one ditch. I'm having 'not one ditch' engraved on the trophy."],
+	],
+	"rally_zima_miss": [
+		["ola", "The snow won that one. It usually does. We'll go again when we've warmed up."],
+		["mirek", "In snow, slow is smooth and smooth is quick. Lift earlier and let the car come round."],
+	],
 }
 
 ## One-line phone messages, shown on the HUD banner when a stage or mission opens.
@@ -351,6 +462,14 @@ const RADIO := {
 	"open_knockout_bor": ["kamil", "Kamil here. Mały Bór, a knockout, my Golf against your Seicento. Unless you're scared."],
 	"open_rally_bor": ["ola", "Rajd Borów entries are open and I've entered us already. Obviously."],
 	"open_drag_kilometre": ["halina", "My test drivers want a standing kilometre on the S1 tonight. Bring your best gear change."],
+	"open_stage_rewanz": ["kamil", "Kamil. Pszczyna, Saturday night, in the rain. One rematch, same beacon on the DW933. Unless you're scared."],
+	"open_stage_monza": ["halina", "Monza, Fiat's home crowd. The flight leaves from Katowice: north on the S1 to the airport."],
+	"open_stage_eifel": ["ola", "The Nürburgring next! Night train west from Jawiszowice station. I've packed sandwiches for three countries."],
+	"open_stage_lemans": ["zbyszek", "LE MANS AT NIGHT! My coach leaves from the Fest at the stadium! Bring a jumper and your passport!"],
+	"open_sprint_rajsko": ["ola", "The Rajsko lads race their lanes on Saturday night. The beacon's on ul. Oświęcimska. Don't tell Basia."],
+	"open_drift_kopalnia": ["mirek", "The night shift wants a drift round the Kopalnia loop at midnight. Beacon's on Ofiar Oświęcimia. I saw nothing."],
+	"open_knockout_rajsko": ["kamil", "Kamil here. A knockout on the Rajsko lanes, eight cars. Bring your elbows."],
+	"open_rally_zima": ["ola", "Snow's come early and the Zimowy Rajd Brzeszcze is on. Entries are open, and I've entered us. Obviously."],
 }
 
 # ------------------------------------------------------------------ lookups
@@ -495,9 +614,9 @@ static func pending(prog: Dictionary, fans: int, near_festival := false) -> Arra
 		for c in cars:
 			_add(out, seen, "car_" + String(c))
 	var unlocked := int(prog.get("unlocked", 0))
-	if unlocked >= 4:
+	if unlocked >= first_of_act(2):
 		_add(out, seen, "act_2")
-	if unlocked >= 7:
+	if unlocked >= first_of_act(3):
 		_add(out, seen, "act_3")
 	if _won(prog, Campaign.STAGES.size() - 1):
 		_add(out, seen, "epilogue")
@@ -509,6 +628,13 @@ static func pending(prog: Dictionary, fans: int, near_festival := false) -> Arra
 		if Missions.is_unlocked(idx, prog) and not Missions.is_cleared(idx, prog):
 			_add(out, seen, "open_" + String(Missions.MISSIONS[k].id))
 	return out
+
+## The place in Campaign.STAGES of an act's first stage (its beat plays once the chain opens it).
+static func first_of_act(act: int) -> int:
+	for i in Campaign.STAGES.size():
+		if int(Campaign.STAGES[i].act) >= act:
+			return i
+	return Campaign.STAGES.size()
 
 static func _add(out: Array[String], seen: Array, key: String) -> void:
 	if has_beat(key) and not key in seen and not key in out:

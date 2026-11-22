@@ -643,12 +643,13 @@ func _missions_on_map(map: TownMap, errors: Array[String]) -> void:
 				if absf(L - float(ev.lap_length) * int(ev.laps)) > 30.0 or int(ev.laps) != int(m.opponents) or not ev.get("sectors", false):
 					errors.append("knockout: %.0f m for %d laps of %.0f m" % [L, int(ev.laps), float(ev.lap_length)])
 			"rally":
-				var on_map: int = Rally.event(String(m.rally)).stages.filter(func(sd): return not MapMissions.OFF_MAP.has(String(sd.track))).size()
+				var on_map: int = (Missions.rally_def(idx).stages as Array).filter(func(sd): return not MapMissions.OFF_MAP.has(String(sd.track))).size()
 				if (ev.stages as Array).size() != on_map or on_map < 2:
 					errors.append("rally mission has %d stages" % (ev.stages as Array).size())
 			"sprint":
-				if L < 8000.0 or L > 11000.0:
-					errors.append("S1 sprint on the map is %.0f m" % L)
+				var want := MapMissions.lap_length(String(m.track)) * int(m.get("laps", 1))
+				if absf(L - want) > 30.0 or (String(m.track) == "s1_sprint" and (L < 8000.0 or L > 11000.0)):
+					errors.append("sprint %s on the map is %.0f m (its laps are %.0f m)" % [m.id, L, want])
 		if m.kind in ["sprint", "drag"]:
 			_race_run(map, ev, errors)
 		elif m.kind == "knockout":

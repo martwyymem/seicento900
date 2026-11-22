@@ -110,14 +110,198 @@ func setup(town: TownMap, bld: TownBuilder) -> void:
 	_init_materials()
 	_load_hay_mesh()
 	_build_hub()
-	_build_main_road_dressing()
-	_build_busy_corners()
-	_build_event_gates()
+	var hit := builder._cached_festival()
+	if not hit.is_empty():
+		_restore_dressing(hit)
+	else:
+		var caching := builder.mesh_cache_dir != ""
+		var mark := _mark_dressing() if caching else {}
+		_build_main_road_dressing()
+		_build_busy_corners()
+		_build_event_gates()
+		if caching:
+			builder._store_meshes("festival", [_capture_dressing(mark)])
 	_commit_batches()
 	_build_fireworks()
 	_live_root = Node3D.new()
 	_live_root.name = "LiveEventDressing"
 	add_child(_live_root)
+
+
+func _mark_dressing() -> Dictionary:
+	var post_n := {}
+	for ck in map._post_cells:
+		post_n[ck] = (map._post_cells[ck] as PackedVector3Array).size()
+	var wall_n := {}
+	for ck in map._wall_cells:
+		wall_n[ck] = (map._wall_cells[ck] as PackedFloat32Array).size()
+	var bunt_m := {}
+	for c in _bunting_cells:
+		bunt_m[c] = (_bunting_cells[c] as MeshBatch).mark()
+	var bulb_m := {}
+	for c in _bulb_cells:
+		bulb_m[c] = (_bulb_cells[c] as MeshBatch).mark()
+	return {
+		"spec": [(_spec_xfs[0] as Array).size(), (_spec_xfs[1] as Array).size(), (_spec_xfs[2] as Array).size()],
+		"barrier": _barrier_xfs.size(),
+		"hay": _hay_xfs.size(),
+		"flag": _flag_xfs.size(),
+		"tall_flag": _tall_flag_xfs.size(),
+		"tent": _tent_xfs.size(),
+		"stall": _stall_xfs.size(),
+		"bench": _bench_xfs.size(),
+		"inf_arch": _inf_arch_xfs.size(),
+		"fest_arch": _fest_arch_xfs.size(),
+		"crowd": crowd_zones.size(),
+		"zones": _placed_zones.size(),
+		"arches": _placed_arches.size(),
+		"bunt": bunt_m,
+		"bulb": bulb_m,
+		"post": post_n,
+		"wall": wall_n,
+	}
+
+
+static func _capture_batch_cells(cells: Dictionary, marks: Dictionary) -> Array:
+	var out: Array = []
+	for c in cells:
+		var mb: MeshBatch = cells[c]
+		var m: Vector2i = marks.get(c, Vector2i.ZERO)
+		if mb.verts.size() == m.x and mb.indices.size() == m.y:
+			continue
+		out.append([
+			c, m.x,
+			mb.verts.slice(m.x),
+			mb.normals.slice(m.x),
+			mb.uvs.slice(m.x),
+			mb.colors.slice(m.x),
+			mb.indices.slice(m.y),
+		])
+	return out
+
+
+static func _restore_batch_cells(cells: Dictionary, recs: Array) -> void:
+	for rec in recs:
+		var c: Vector2i = rec[0]
+		var base_v: int = int(rec[1])
+		if not cells.has(c):
+			cells[c] = MeshBatch.new(false, true)
+		var mb: MeshBatch = cells[c]
+		var delta_v: int = mb.verts.size() - base_v
+		mb.verts.append_array(rec[2] as PackedVector3Array)
+		mb.normals.append_array(rec[3] as PackedVector3Array)
+		mb.uvs.append_array(rec[4] as PackedVector2Array)
+		mb.colors.append_array(rec[5] as PackedColorArray)
+		var inds: PackedInt32Array = rec[6]
+		if delta_v == 0:
+			mb.indices.append_array(inds)
+		else:
+			var n0: int = mb.indices.size()
+			mb.indices.resize(n0 + inds.size())
+			for k in inds.size():
+				mb.indices[n0 + k] = inds[k] + delta_v
+
+
+func _capture_dressing(mark: Dictionary) -> Dictionary:
+	var spec_xfs: Array = []
+	var spec_custom: Array = []
+	var spec_n: Array = mark["spec"]
+	for p_i in 3:
+		var n0: int = int(spec_n[p_i])
+		spec_xfs.append((_spec_xfs[p_i] as Array).slice(n0))
+		spec_custom.append((_spec_custom[p_i] as Array).slice(n0))
+	var post_n: Dictionary = mark["post"]
+	var post_delta: Array = []
+	for ck in map._post_cells:
+		var arr: PackedVector3Array = map._post_cells[ck]
+		var n0: int = int(post_n.get(ck, 0))
+		if arr.size() > n0:
+			post_delta.append([ck, arr.slice(n0)])
+	var wall_n: Dictionary = mark["wall"]
+	var wall_delta: Array = []
+	for ck in map._wall_cells:
+		var arr: PackedFloat32Array = map._wall_cells[ck]
+		var n0: int = int(wall_n.get(ck, 0))
+		if arr.size() > n0:
+			wall_delta.append([ck, arr.slice(n0)])
+	return {
+		"spec_xfs": spec_xfs,
+		"spec_custom": spec_custom,
+		"barrier_xfs": _barrier_xfs.slice(int(mark["barrier"])),
+		"barrier_cols": _barrier_cols.slice(int(mark["barrier"])),
+		"hay_xfs": _hay_xfs.slice(int(mark["hay"])),
+		"flag_xfs": _flag_xfs.slice(int(mark["flag"])),
+		"flag_cols": _flag_cols.slice(int(mark["flag"])),
+		"tall_flag_xfs": _tall_flag_xfs.slice(int(mark["tall_flag"])),
+		"tall_flag_cols": _tall_flag_cols.slice(int(mark["tall_flag"])),
+		"tent_xfs": _tent_xfs.slice(int(mark["tent"])),
+		"tent_cols": _tent_cols.slice(int(mark["tent"])),
+		"stall_xfs": _stall_xfs.slice(int(mark["stall"])),
+		"stall_cols": _stall_cols.slice(int(mark["stall"])),
+		"bench_xfs": _bench_xfs.slice(int(mark["bench"])),
+		"inf_arch_xfs": _inf_arch_xfs.slice(int(mark["inf_arch"])),
+		"inf_arch_cols": _inf_arch_cols.slice(int(mark["inf_arch"])),
+		"fest_arch_xfs": _fest_arch_xfs.slice(int(mark["fest_arch"])),
+		"fest_arch_cols": _fest_arch_cols.slice(int(mark["fest_arch"])),
+		"bunting": _capture_batch_cells(_bunting_cells, mark["bunt"] as Dictionary),
+		"bulbs": _capture_batch_cells(_bulb_cells, mark["bulb"] as Dictionary),
+		"crowd_zones": crowd_zones.slice(int(mark["crowd"])),
+		"placed_zones": PackedVector2Array(_placed_zones.slice(int(mark["zones"]))),
+		"placed_arches": PackedVector2Array(_placed_arches.slice(int(mark["arches"]))),
+		"stats": stats.duplicate(),
+		"posts": post_delta,
+		"walls": wall_delta,
+	}
+
+
+func _restore_dressing(data: Dictionary) -> void:
+	var sx: Array = data["spec_xfs"]
+	var sc: Array = data["spec_custom"]
+	for p_i in 3:
+		(_spec_xfs[p_i] as Array).append_array(sx[p_i] as Array)
+		(_spec_custom[p_i] as Array).append_array(sc[p_i] as Array)
+	_barrier_xfs.append_array(data["barrier_xfs"] as Array)
+	_barrier_cols.append_array(data["barrier_cols"] as Array)
+	_hay_xfs.append_array(data["hay_xfs"] as Array)
+	_flag_xfs.append_array(data["flag_xfs"] as Array)
+	_flag_cols.append_array(data["flag_cols"] as Array)
+	_tall_flag_xfs.append_array(data["tall_flag_xfs"] as Array)
+	_tall_flag_cols.append_array(data["tall_flag_cols"] as Array)
+	_tent_xfs.append_array(data["tent_xfs"] as Array)
+	_tent_cols.append_array(data["tent_cols"] as Array)
+	_stall_xfs.append_array(data["stall_xfs"] as Array)
+	_stall_cols.append_array(data["stall_cols"] as Array)
+	_bench_xfs.append_array(data["bench_xfs"] as Array)
+	_inf_arch_xfs.append_array(data["inf_arch_xfs"] as Array)
+	_inf_arch_cols.append_array(data["inf_arch_cols"] as Array)
+	_fest_arch_xfs.append_array(data["fest_arch_xfs"] as Array)
+	_fest_arch_cols.append_array(data["fest_arch_cols"] as Array)
+	_restore_batch_cells(_bunting_cells, data["bunting"] as Array)
+	_restore_batch_cells(_bulb_cells, data["bulbs"] as Array)
+	crowd_zones.append_array(data["crowd_zones"] as Array)
+	for p: Vector2 in (data["placed_zones"] as PackedVector2Array):
+		_placed_zones.append(p)
+	for p: Vector2 in (data["placed_arches"] as PackedVector2Array):
+		_placed_arches.append(p)
+	stats.merge(data["stats"] as Dictionary, true)
+	for rec in (data["posts"] as Array):
+		var ck: int = int(rec[0])
+		var add: PackedVector3Array = rec[1]
+		if map._post_cells.has(ck):
+			var cur: PackedVector3Array = map._post_cells[ck]
+			cur.append_array(add)
+			map._post_cells[ck] = cur
+		else:
+			map._post_cells[ck] = add.duplicate()
+	for rec in (data["walls"] as Array):
+		var ck: int = int(rec[0])
+		var add: PackedFloat32Array = rec[1]
+		if map._wall_cells.has(ck):
+			var cur: PackedFloat32Array = map._wall_cells[ck]
+			cur.append_array(add)
+			map._wall_cells[ck] = cur
+		else:
+			map._wall_cells[ck] = add.duplicate()
 
 
 func _ready() -> void:

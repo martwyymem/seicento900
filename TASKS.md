@@ -25,7 +25,8 @@ Everything from the original Pillars 1–9, Phases 0–4 core roadmap, and `0.5.
 ## Active Now — Next Release (In Flight)
 
 - [ ] Night-rain High/Ultra frame time on the GP circuit: re-measure on an idle machine (windowed; this thread).
-- [ ] Cold open-world load optimization: taken by the T3 thread "Complete Next Headless Tasks" (2026-11-22).
+- [x] Cold open-world load optimization (committed; suite + parity green): festival placement cache (warm 1.44 -> 0.91 s), parallel `_wall_edges` + per-chunk `_add_building` (release cold build 9.7 -> 6.0 s; debug capped at 2 threads, ~1 s); still running: faster cold `TownMap.load_map`. Taken by the T3 thread "Complete Next Headless Tasks" (2026-11-22). Measured cold 10.9 s / warm 1.6 s; worktree delegates: parallel `_building_meshes` (~6 s single-threaded, the cold critical path), festival placement cache (~0.65 s of every load), faster cold `TownMap.load_map` (~1.2 s).
+- [ ] Parallel worktree delegates from the same thread (2026-11-22, merged by it): weather/time-gated live events; longer campaign arc; car GLB size (9-11 MB each); headless playtest fixes (plate on dropped bumper, braking-board legibility, street-name plate after teleport, area banner over gate arches).
 
 ---
 
@@ -43,14 +44,15 @@ Items surfaced by recent releases (`0.5.0`–`0.5.2-hotfix3`) and remaining loos
   - Re-measure High/Ultra night-rain frame time on the GP circuit on an idle machine (last measured at 24/31 ms before the 0.5.2 minimap batching & LOD fixes).
 - [x] **Refresh `README.md`:** update the stale 2026-11-08 "What's being worked on" section, track/car counts (26 tracks / 9 cars), and controls table (`Space` is handbrake, not brake).
 - [x] **Per-car circuit hero stills (decided 2026-11-22: keep the cover fallback, no per-car stills):** races currently fall back to each car's open-world cover still; decide whether to render `hero_<track>_<car>.jpg` (`CAR=<key> tests/_loading_shots.gd`) or keep the cover fallback to avoid bloating release size.
+- [ ] **`tests/_mesh_fingerprint.gd` doesn't hash the buildings step's faces dict** (collision faces): add it so parallel-build changes are fully covered. `run_tests.gd` prints `ok` when a suite's `run()` hits a script error (seen with `_building_collision_probe.gd`): make the runner fail on that. An exported release pack's `OpenWorld.open()` stalls after "car and lights" when driven from an `override.cfg` probe scene (baseline too): check whether real exports are affected.
 - [ ] **Further cold open-world load optimization (optional; in progress in the T3 thread "Complete Next Headless Tasks"):** warm loads are ~2.4 s; cold loads (~9.1 s) spend ~2.9 s on street geometry and ~1.6 s on JSON parsing if we want to cut cold startup further.
 
 ---
 
 ## Next Content & Progression
 
-- [ ] **Expanded live-event variety:** add weather- and time-gated live event kinds on the open-world map (e.g. night-only street races, rain drift zones).
-- [ ] **Longer campaign progression arc:** expand the campaign structure beyond the current 10 stages + 7 map missions so all 7 unlockable cars (and future additions) sit on a fuller career curve. Cars stay mission rewards — never bought with fans.
+- [x] **Expanded live-event variety (merged 2026-11-22, uncommitted):** gated `night_race` (night >= 0.6, stays while >= 0.35), `rain_drift` (wetness >= 0.4 / 0.15, tiers 1.25x) and `fog_sprint` (fog >= 0.3 / 0.1) live events on sprint/drift mechanics; gate shown on card, marker and notices; fans 1.15-1.2x; `test_live_event_gates.gd`. Hail time attack skipped (hail ~5% of days, under a minute).
+- [x] **Longer campaign progression arc (merged 2026-11-22, uncommitted):** 14 stages + 11 map missions in three acts; the 7 cars unlock after stages 1, 3, 5, 6, 8, 9, 11 (each still from its original mission); new: Kamil's Rematch (Pszczyna night rain), Monza, Nordschleife (fog), Le Mans (night), Sprint przez Rajsko, Drift pod Szybem, Knockout w Rajsku, Zimowy Rajd Brzeszcze (snow rally). Saves carry `"arc": 2`; `Campaign.migrate` remaps old 10-stage saves by stage id without losing cars/missions. Campaign fans now ~390k (was ~252k, ends at fan level 9). Stage list stars only won stages; NEXT STAGE only when open.
 
 ---
 
@@ -59,7 +61,9 @@ Items surfaced by recent releases (`0.5.0`–`0.5.2-hotfix3`) and remaining loos
 Cannot be closed headless; collect feedback during real play sessions:
 
 - [ ] **Open-world/street look:** slightly bare grass band 25-35 m ahead at speed (dense/sparse LOD hand-over); the house passage reads like an open carport; braking-board numbers hard to read beyond 40 m; street-name plate may lag after a teleport; check Bielsko's outskirts still show grass between blocks.
-- [ ] **Damage & festival look:** jagged edges on torn-off panels up close; front plate on a dropped bumper; car GLBs grew to 9-11 MB each; area-name banner (e.g. SZCZOTKI) over arch lettering at some gates; blocky low-poly spectators.
+- [ ] **Playtest fixes to eye-check (merged 2026-11-22, headless-tested):** 1.5 m braking boards with bold 0.8-size digits readable at 100/200/300 m; area banner fades while a festival arch is behind it and returns after; street plate right after respawn / R-reset / dev teleport; front plate rides the dropped bumper (parenting verified on all 9 cars by `test_car_panel_plates.gd`).
+- [ ] **Rear plate straddles the bumper/boot cut** on Golf, Focus, Sandero (a torn boot takes part of it; Golf leaves a sliver on the body): move the cut in `tools/blender/carkit.py` `split_damage_parts` and rebuild those GLBs (coordinate with the GLB-size work).
+- [ ] **Damage & festival look:** jagged edges on torn-off panels up close; front plate on a dropped bumper; car GLBs now 5.1-6.3 MB (was 8.9-11.4; blend-shape deltas re-sparsified + KHR_mesh_quantization in `carkit.sparsify_glb`, merged 2026-11-22: check dents/crush still look the same); area-name banner (e.g. SZCZOTKI) over arch lettering at some gates; blocky low-poly spectators.
 
 - [ ] **Physical gamepad QA:** verify real controller feel, stick latch, `START`/`A`/`B`/`LB`/`RB`, confirm dialogs, and on-screen pad glyphs (only synthetic pad events have been tested).
 - [ ] **Driving & physics feel by hand:**
@@ -69,6 +73,8 @@ Cannot be closed headless; collect feedback during real play sessions:
 - [ ] **Event & world balance by hand:**
   - Map mission rival pace and side-contact feel.
   - Drift silver/gold medal tiers, drag rival balance, and sprint gold targets.
+  - New campaign arc: Nordschleife/Le Mans single laps in a stock 900 (long, P3/P2), Monza P2 after Tor Fiata, Kamil's Rematch night-rain setts and bridge visibility, town drift tiers on the real map, snow rally pace (`RALLY_PACE.hard` on snow), 8-car Rajsko knockout on narrow lanes, Kolonia off-road at medium, campaign-only fans nearing level 10.
+  - Gated live events: rain-drift 1.25x tiers, 1.15-1.2x fan bonus, short rain showers removing rain drifts quickly, night/fog card and beacon readability.
   - Free-roam dynamic weather frequency (showers, dawn fog, rare hail) and wet driving feel.
 
 ---

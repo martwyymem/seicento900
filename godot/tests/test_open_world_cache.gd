@@ -12,7 +12,7 @@ var completed := false
 ## (one folder per process: suites running at the same time, other agents' or a parallel CI job's, share user://)
 var DIR := "user://test_open_world_cache_%d" % OS.get_process_id()
 const STEPS := ["build_terrain", "build_water", "build_roads", "build_rail", "build_buildings", "build_trees", "build_fences"]
-const TAGS := ["terrain", "water", "streets", "rail", "buildings", "trees", "fences", "props"]
+const TAGS := ["terrain", "water", "streets", "rail", "buildings", "trees", "fences", "props", "festival"]
 const GROUPS := ["Terrain", "Water", "Streets", "Railway", "Buildings", "Trees", "Garden Fences"]
 
 func run() -> Array:
@@ -27,7 +27,7 @@ func run() -> Array:
 	_clean()
 	var cold := _build(map)
 	for tag in TAGS:
-		if tag != "props" and not FileAccess.file_exists((cold.builder as TownBuilder)._cache_path(tag)):
+		if not tag in ["props", "festival"] and not FileAccess.file_exists((cold.builder as TownBuilder)._cache_path(tag)):
 			errors.append("the cold build stored no %s cache" % tag)
 	if (cold.builder as TownBuilder).cache_log != ["terrain miss", "water miss", "streets miss", "rail miss", "buildings miss", "trees miss", "fences miss"]:
 		errors.append("a cold build logs %s" % [(cold.builder as TownBuilder).cache_log])
@@ -63,6 +63,7 @@ func run() -> Array:
 	if (warm.builder as TownBuilder).crossing_points != (cold.builder as TownBuilder).crossing_points:
 		errors.append("a warm build finds %d level crossings, a cold one %d" % [(warm.builder as TownBuilder).crossing_points.size(), (cold.builder as TownBuilder).crossing_points.size()])
 	_props(errors)
+	_festival(errors)
 	_stamps(map, cold.builder, errors)
 	# a different stamp (here the wall plan off) must not pick up these files
 	var other := TownBuilder.new(map, Node3D.new())
@@ -70,6 +71,8 @@ func run() -> Array:
 	other.wall_plan_enabled = false
 	if other._cache_path("buildings") == (cold.builder as TownBuilder)._cache_path("buildings"):
 		errors.append("the cache stamp ignores the wall plan")
+	if other._cache_path("festival") == (cold.builder as TownBuilder)._cache_path("festival"):
+		errors.append("the festival stamp ignores the wall plan")
 	if other._cache_path("terrain") != (cold.builder as TownBuilder)._cache_path("terrain"):
 		errors.append("the terrain's stamp depends on the wall plan")
 	if not other._cached_meshes("buildings").is_empty():
@@ -133,6 +136,78 @@ func _props(errors: Array[String]) -> void:
 	for b in builds:
 		(b.world as Node3D).free()
 
+## The festival dressing (main roads, busy corners, event gates): built on two maps of their own (it adds collision
+## walls and posts to the map) after the earlier steps, a warm build gives the same instances, bunting/string-light
+## meshes, stats, crowd zones, and collision walls/posts as the cold build that stored them.
+func _festival(errors: Array[String]) -> void:
+	var steps := STEPS + ["build_props", "build_landmarks"]
+	var maps: Array[TownMap] = []
+	var builds := []
+	for i in 2:
+		var m := TownMap.new()
+		if not m._load("brzeszcze"):
+			errors.append("the festival check could not load a map")
+			return
+		maps.append(m)
+		var world := Node3D.new()
+		var builder := TownBuilder.new(m, world)
+		builder.mesh_cache_dir = DIR
+		for step in steps:
+			builder.call(step)
+		builder.wait_for_stores()
+		var rows: Array = []
+		var fest := world.get_node_or_null("Landmarks/FestivalDressing")
+		if fest:
+			for n in fest.get_children():
+				rows.append(_describe(n))
+		builds.append({"world": world, "builder": builder, "rows": rows})
+	var cold: TownBuilder = builds[0].builder
+	var warm: TownBuilder = builds[1].builder
+	if cold.cache_log.slice(-1) != ["festival miss"] or warm.cache_log.slice(-1) != ["festival hit"]:
+		errors.append("the festival's cache logs %s then %s (festival miss, then festival hit expected)" % [cold.cache_log.slice(-1), warm.cache_log.slice(-1)])
+	if (builds[0].rows as Array).size() < 20:
+		errors.append("the cold build made %d festival nodes" % (builds[0].rows as Array).size())
+	elif builds[0].rows != builds[1].rows:
+		errors.append("the festival from the cache differs from the cold build's (%d nodes cold, %d warm, first difference at %d)" % [
+			(builds[0].rows as Array).size(), (builds[1].rows as Array).size(), _first_diff(builds[0].rows, builds[1].rows)])
+	var cf: FestivalDressing = cold.festival
+	var wf: FestivalDressing = warm.festival
+	if cf == null or wf == null:
+		errors.append("the festival dressing was not created")
+	else:
+		if cf.stats.get("spectators", 0) < 1000 or cf.stats.get("barriers", 0) < 100:
+			errors.append("the cold festival placed unexpectedly few props: %s" % [cf.stats])
+		if wf.stats != cf.stats:
+			errors.append("a warm festival's stats differ from the cold build's: %s vs %s" % [wf.stats, cf.stats])
+		if wf.crowd_zones != cf.crowd_zones:
+			errors.append("a warm festival's crowd_zones (%d) differ from the cold build's (%d)" % [wf.crowd_zones.size(), cf.crowd_zones.size()])
+		if wf._placed_zones != cf._placed_zones or wf._placed_arches != cf._placed_arches:
+			errors.append("a warm festival's placement guards differ from the cold build's")
+		if wf.festival_pos != cf.festival_pos or wf.festival_face != cf.festival_face:
+			errors.append("a warm festival's hub pose differs from the cold build's")
+	if warm.map._post_cells != cold.map._post_cells or warm.map._post_cells.keys() != cold.map._post_cells.keys():
+		errors.append("a warm festival build's collision posts differ from the cold build's")
+	if warm.map._wall_cells != cold.map._wall_cells or warm.map._wall_cells.keys() != cold.map._wall_cells.keys():
+		errors.append("a warm festival build's collision walls differ from the cold build's")
+	if warm._ranged.size() != cold._ranged.size():
+		errors.append("a warm festival build registers %d distance-ranged instances, a cold one %d" % [warm._ranged.size(), cold._ranged.size()])
+	if warm.night_materials.size() != cold.night_materials.size():
+		errors.append("a warm festival build registers %d night materials, a cold one %d" % [warm.night_materials.size(), cold.night_materials.size()])
+	var spec := TownBuilder.cache_spec("festival")
+	var map_roots: Array = ["_load"]
+	map_roots.append_array(spec.get("map_code", []))
+	var reached := CODE_HASH.reached(BUILDER, spec.code, MAP, map_roots)
+	for name in ["build_landmarks", "_build_festival", "build_props", "build_buildings", "build_roads"]:
+		if not name in reached.own:
+			errors.append("the festival's fingerprint misses %s" % name)
+	for name in ["in_play", "in_town", "walls_near", "posts_near", "add_wall", "add_post"]:
+		if not name in reached.map:
+			errors.append("the festival's fingerprint misses TownMap.%s" % name)
+	if "build_vegetation" in reached.own or "build_closures" in reached.own or "build_horizon" in reached.own:
+		errors.append("the festival's fingerprint covers steps it does not read")
+	for b in builds:
+		(b.world as Node3D).free()
+
 func _clean() -> void:
 	if DirAccess.dir_exists_absolute(DIR):
 		for f in DirAccess.get_files_at(DIR):
@@ -161,7 +236,7 @@ func _build(map: TownMap) -> Dictionary:
 static func _describe(n: Node) -> Array:
 	if n is MultiMeshInstance3D:
 		var mmi := n as MultiMeshInstance3D
-		return ["mm", mmi.multimesh.mesh.get_rid() != RID(), mmi.multimesh.instance_count, mmi.multimesh.use_colors,
+		return ["mm", mmi.multimesh.mesh.get_rid() != RID(), mmi.multimesh.instance_count, mmi.multimesh.use_colors, mmi.multimesh.use_custom_data,
 			mmi.material_override != null, mmi.visibility_range_end, mmi.cast_shadow, mmi.multimesh.buffer.size(), _md5(mmi.multimesh.buffer.to_byte_array()), String(mmi.name) if not String(mmi.name).begins_with("@") else ""]
 	if n is MeshInstance3D:
 		var mi := n as MeshInstance3D
@@ -175,6 +250,8 @@ static func _describe(n: Node) -> Array:
 	return ["node", n.get_class()]
 
 static func _md5(bytes: PackedByteArray) -> String:
+	if bytes.is_empty():
+		return ""
 	var ctx := HashingContext.new()
 	ctx.start(HashingContext.HASH_MD5)
 	ctx.update(bytes)

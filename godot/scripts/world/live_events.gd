@@ -8,6 +8,12 @@
 ##   offroad   a race on a route that is mostly gravel and dirt
 ##   drift     a twisty stretch, solo, scored in drift points (DriftScore) against tiers per km
 ##   rally     one special stage on loose or twisty roads, from a standing start against the crews' times
+## and three weather- and time-gated variants of those (VARIANTS), made only while the world is in their state:
+##   night_race  a sprint, only after dark (night factor >= 0.6, lamps on); leaves at first light
+##   rain_drift  a drift zone, only on wet roads (road wetness >= 0.4, i.e. in or just after a shower)
+##   fog_sprint  a sprint in the dawn fog (fog >= 0.3)
+## Each is its base kind's event (same route, field, scoring and run code) with a `variant` and a `gate` on it; the
+## board drops it when the gate closes (with hysteresis, and never one being raced).
 ## (the old speed zones folded into the drags, which now take the straight main roads, and the trailblazers into the
 ## sprints: neither fitted a race against a field.)
 ##
@@ -26,7 +32,8 @@ const KINDS := ["sprint", "drag", "knockout", "offroad", "drift", "rally"]
 const KIND_WEIGHTS := [0.26, 0.16, 0.14, 0.15, 0.14, 0.15]
 ## Names by mission kind (and, for older callers, by the run's own kind).
 const KIND_NAMES := {"sprint": "SPRINT", "drag": "DRAG RACE", "knockout": "KNOCKOUT", "offroad": "OFF-ROAD", "drift": "DRIFT",
-	"rally": "RALLY", "race": "RACE", "drift_zone": "DRIFT"}
+	"rally": "RALLY", "race": "RACE", "drift_zone": "DRIFT", "night_race": "NIGHT RACE", "rain_drift": "RAIN DRIFT",
+	"fog_sprint": "FOG SPRINT"}
 const COLORS := {"sprint": Color("#ff3d8b"), "drag": Color("#ffd23f"), "knockout": Color("#ff8a3d"), "offroad": Color("#c9a061"),
 	"drift": Color("#7dff6a"), "rally": Color("#4ad8ff")}
 const RIVALS := {"sprint": Vector2i(5, 7), "drag": Vector2i(3, 3), "knockout": Vector2i(3, 5), "offroad": Vector2i(4, 5),
@@ -36,6 +43,21 @@ const DIFFICULTY_WEIGHTS := [0.35, 0.45, 0.20] ## easy, medium, hard (Campaign.L
 const DIFF_FANS := {"easy": 0.8, "medium": 1.0, "hard": 1.35}
 const TIER_NAMES := ["", "BRONZE", "SILVER", "GOLD"]
 const TIER_COLORS := [Color("#ff5a4a"), Color("#d08a4a"), Color("#d8dde6"), Color("#ffcc33")]
+## Gated variants: base kind, the world state it needs (set_world: night, wet, fog, rain, hail, 0..1), the level it
+## spawns at (`open`) and the lower one it stays up to (`keep`, so dusk or a drying road does not flicker it away),
+## its card text, its colour, its fan bonus and its drift tiers' factor (a slick road slides easily).
+const VARIANTS := {
+	"night_race": {"base": "sprint", "gate": "night", "open": 0.6, "keep": 0.35, "name": "NIGHT RACE", "tag": "NIGHT ONLY",
+		"until": "first light", "color": Color("#8f7bff"), "fan_k": 1.2, "tier_k": 1.0,
+		"blurb": "Nobody races this one in daylight. The lamps are on, the squares are empty and somebody has chalked a start line under a streetlight. Point to point through the town against the night crews, every checkpoint in order."},
+	"rain_drift": {"base": "drift", "gate": "wet", "open": 0.4, "keep": 0.15, "name": "RAIN DRIFT", "tag": "WET ROADS ONLY",
+		"until": "the road dries", "color": Color("#4aa8ff"), "fan_k": 1.15, "tier_k": 1.25,
+		"blurb": "The lads only film when the tarmac is wet and shining. Come in sideways and keep it there to the end; the road lets go easily today, so the stars ask for a little more."},
+	"fog_sprint": {"base": "sprint", "gate": "fog", "open": 0.3, "keep": 0.1, "name": "FOG SPRINT", "tag": "FOG ONLY",
+		"until": "the fog lifts", "color": Color("#b8c4cc"), "fan_k": 1.2, "tier_k": 1.0,
+		"blurb": "Dawn fog lies on the town and the early crews are out in it. Point to point through the town; you can see two lamp posts ahead and no more."},
+}
+const VARIANT_PICK := 0.55 ## chance a new event is a gated variant when one's gate is open and none of that variant stands on the board
 const MAX_LIVE := 4
 const SPAWN_MIN := 280.0 ## m from the car
 const SPAWN_MAX := 1500.0
@@ -98,6 +120,9 @@ var clock_h := 0.0 ## game hours since the board was started (expiry runs on it)
 var last_result: Dictionary = {}
 var last_begin: Dictionary = {} ## the last run begun: {ev, car} (RESTART runs it again)
 var stats: Dictionary = {} ## WorldProgress.live (OpenWorld hands it over): the missed tries per kind ease the field
+## The world's state the gated variants read (OpenWorld.set_world every frame): night 0..1, wet 0..1 (the road's
+## wetness), rain, fog, hail. Dry noon is all zeros, so no variant stands on the board then.
+var world := {"night": 0.0, "wet": 0.0, "rain": 0.0, "fog": 0.0, "hail": 0.0}
 var _serial := 0
 var _refill_t := 0.0
 
@@ -116,13 +141,22 @@ func update(dt_real: float, dt_hours: float, player: Vector2, avoid: PackedVecto
 		var ev: Dictionary = board[k]
 		if is_running() and run.ev == ev:
 			continue
-		if clock_h >= float(ev.expires) or (ev.pos as Vector2).distance_to(player) > DESPAWN:
+		if clock_h >= float(ev.expires) or (ev.pos as Vector2).distance_to(player) > DESPAWN or not gate_holds(ev):
 			board.remove_at(k)
 	_refill_t -= dt_real
 	if is_running() or (_refill_t > 0.0 and not fill):
 		return added
 	_refill_t = REFILL
 	var want := MAX_LIVE - board.size() if fill else mini(1, MAX_LIVE - board.size())
+	if want <= 0 and not open_variants().is_empty():
+		# a full board of plain events makes room for a gated one whose moment has come (the soonest to expire goes)
+		var soon := -1
+		for k in board.size():
+			if not board[k].has("variant") and (soon < 0 or float(board[k].expires) < float(board[soon].expires)):
+				soon = k
+		if soon >= 0:
+			board.remove_at(soon)
+			want = 1
 	for i in want:
 		var ev := generate(player, avoid)
 		if not ev.is_empty():
@@ -132,8 +166,11 @@ func update(dt_real: float, dt_hours: float, player: Vector2, avoid: PackedVecto
 
 ## One new event somewhere round `player`, clear of the board and of `avoid`: {} after a few failed tries.
 func generate(player: Vector2, avoid: PackedVector2Array, kind := "") -> Dictionary:
+	if kind != "" and VARIANTS.has(kind) and not variant_open(kind):
+		return {} # a gated kind is made only while the world is in its state
 	for attempt in 16:
-		var k := kind if kind != "" else _pick_kind()
+		var vk := kind if kind != "" else _pick_kind()
+		var k: String = String(VARIANTS[vk].base) if VARIANTS.has(vk) else vk
 		var start := _road_point(player, k)
 		if start.is_empty() or not _clear(start.pos, avoid):
 			continue
@@ -150,10 +187,55 @@ func generate(player: Vector2, avoid: PackedVector2Array, kind := "") -> Diction
 			"rally":
 				ev = _make_rally(start)
 		if not ev.is_empty():
+			if vk != k:
+				_apply_variant(ev, vk)
 			return ev
 	return {}
 
+## The variant's own keys on its base kind's event: its name for the cards and the HUD, its gate, colour, fans and tiers.
+func _apply_variant(ev: Dictionary, vk: String) -> void:
+	var v: Dictionary = VARIANTS[vk]
+	ev["variant"] = vk
+	ev["gate"] = String(v.gate)
+	ev["color"] = v.color
+	ev["fan_k"] = float(v.fan_k)
+	ev["tier_k"] = float(v.tier_k)
+
+## The world's state for the gates (night, wet, rain, fog, hail, 0..1); missing keys read 0.
+func set_world(state: Dictionary) -> void:
+	for k in world:
+		world[k] = clampf(float(state.get(k, 0.0)), 0.0, 1.0)
+
+## Whether a variant's world state holds now to spawn one (`open`).
+func variant_open(vk: String) -> bool:
+	return VARIANTS.has(vk) and float(world.get(String(VARIANTS[vk].gate), 0.0)) >= float(VARIANTS[vk].open)
+
+## Whether an event's gate still holds (`keep`, below its spawn level so a fading gate does not flicker); true for
+## an ungated event. An event being raced is the caller's to keep.
+func gate_holds(ev: Dictionary) -> bool:
+	var vk := String(ev.get("variant", ""))
+	if vk == "" or not VARIANTS.has(vk):
+		return true
+	return float(world.get(String(VARIANTS[vk].gate), 0.0)) >= float(VARIANTS[vk].keep)
+
+## The variants whose gate is open and none of which stands on the board.
+func open_variants() -> Array:
+	var out := []
+	for vk in VARIANTS:
+		if variant_open(vk) and not _on_board(vk):
+			out.append(vk)
+	return out
+
+func _on_board(vk: String) -> bool:
+	for ev in board:
+		if String(ev.get("variant", "")) == vk:
+			return true
+	return false
+
 func _pick_kind() -> String:
+	var open := open_variants()
+	if not open.is_empty() and rng.randf() < VARIANT_PICK:
+		return String(open[rng.randi() % open.size()])
 	var r := rng.randf()
 	for i in KINDS.size():
 		r -= KIND_WEIGHTS[i]
@@ -401,11 +483,15 @@ func ease_field(ev: Dictionary) -> void:
 	var base := String(ev.get("base_difficulty", ev.get("difficulty", "medium")))
 	var at := maxi(Campaign.LEVELS.find(base), 0)
 	var all = stats.get("fails", {})
-	var f := int((all as Dictionary).get(mk, 0)) if all is Dictionary else 0
+	var f := int((all as Dictionary).get(stat_kind(ev), 0)) if all is Dictionary else 0
 	var eased := mini(f / Campaign.FAILS_PER_EASE, at) if Missions.eases(mk) else 0
 	ev["difficulty"] = Campaign.LEVELS[at - eased]
 	ev["eased"] = eased
 	ev["fails"] = f
+
+## The key an event's tries and clears are counted under (WorldProgress.live): its variant, else its mission kind.
+static func stat_kind(ev: Dictionary) -> String:
+	return String(ev.get("variant", ev.get("mkind", ev.get("kind", ""))))
 
 ## A drift's point tiers [bronze, silver, gold] (a mission's own, or per km); [] for a race.
 func tiers_for(ev: Dictionary, _car_key := "stock") -> Array:
@@ -413,7 +499,8 @@ func tiers_for(ev: Dictionary, _car_key := "stock") -> Array:
 		return ev.mission_tiers
 	if String(ev.kind) == "drift_zone":
 		var km := float(ev.length) / 1000.0
-		return [DRIFT_PER_KM[0] * km, DRIFT_PER_KM[1] * km, DRIFT_PER_KM[2] * km]
+		var k := float(ev.get("tier_k", 1.0))
+		return [DRIFT_PER_KM[0] * km * k, DRIFT_PER_KM[1] * km * k, DRIFT_PER_KM[2] * km * k]
 	return []
 
 ## What the event asks for: as Missions.target_text words a mission's.
@@ -434,7 +521,8 @@ func target_text(ev: Dictionary, car_key := "stock") -> String:
 ## a quarter more for each place better than the target (as FanLevels.stage_reward), a share for a miss, a quarter
 ## for an event cleared before.
 static func reward(ev: Dictionary, pos: int, success: bool, first_clear: bool) -> int:
-	var base := FANS_PER_KM * clampf(float(ev.get("length", 0.0)) / 1000.0, 1.5, 5.0) * float(DIFF_FANS.get(String(ev.get("difficulty", "medium")), 1.0))
+	var base := FANS_PER_KM * clampf(float(ev.get("length", 0.0)) / 1000.0, 1.5, 5.0) * float(DIFF_FANS.get(String(ev.get("difficulty", "medium")), 1.0)) \
+		* float(ev.get("fan_k", 1.0)) # a gated event (night, rain, fog) pays a fifth more
 	if not success:
 		return int(base * FanLevels.FAIL_SHARE / 10.0) * 10
 	var beat := clampf(float(int(ev.get("target", 3)) - pos), 0.0, 3.0)
@@ -1044,7 +1132,17 @@ static func stars_text(tiers: Array) -> String:
 
 ## The mission kind's name ("DRAG RACE") of an event.
 static func kind_name(ev: Dictionary) -> String:
-	return String(KIND_NAMES.get(String(ev.get("mkind", ev.get("kind", ""))), "EVENT"))
+	return String(KIND_NAMES.get(String(ev.get("variant", ev.get("mkind", ev.get("kind", "")))), "EVENT"))
+
+## "NIGHT ONLY" for a gated event ("" for a plain one): shown on the board's card, the map and the HUD.
+static func gate_tag(ev: Dictionary) -> String:
+	var vk := String(ev.get("variant", ""))
+	return String(VARIANTS[vk].tag) if VARIANTS.has(vk) else ""
+
+## "NIGHT ONLY · gone at first light" for a gated event, "" otherwise.
+static func gate_line(ev: Dictionary) -> String:
+	var vk := String(ev.get("variant", ""))
+	return "%s · gone when %s" % [VARIANTS[vk].tag, VARIANTS[vk].until] if VARIANTS.has(vk) else ""
 
 const BLURB := {
 	"sprint": "Somebody chalked a start line on the road. Point to point through the town against the local crews, every checkpoint gate in order, the roads closed while it runs.",
@@ -1094,8 +1192,10 @@ func card(ev: Dictionary, car_key: String, fans_level := 0) -> Array:
 		best = " · Best P%d" % int(ev.best_pos)
 	if int(ev.get("best_tier", 0)) > 0:
 		best += " %s" % "★".repeat(int(ev.best_tier))
-	var body := "%s\n\n%s · %s · %s · live for about %d more min\nTarget: %s%s\nTargets fixed to start weather · up to %s fans on a first clear (fan level %d)" % [
-		BLURB.get(String(ev.get("mkind", "")), ""), length_text(ev), surface_text(ev), field_text(ev), maxi(mins, 1),
+	var blurb := String(VARIANTS[String(ev.variant)].blurb) if VARIANTS.has(String(ev.get("variant", ""))) else String(BLURB.get(String(ev.get("mkind", "")), ""))
+	var gate := gate_line(ev)
+	var body := "%s\n\n%s%s · %s · %s · live for about %d more min\nTarget: %s%s\nTargets fixed to start weather · up to %s fans on a first clear (fan level %d)" % [
+		blurb, ("%s\n" % gate) if gate != "" else "", length_text(ev), surface_text(ev), field_text(ev), maxi(mins, 1),
 		target_text(ev, car_key), best, OpenWorldHud._thousands(reward(ev, 1, true, true)), fans_level]
 	return ["LIVE %s MISSION" % kind_name(ev), String(ev.title), body, "ENTER / B  ▸  START EVENT HERE ON THE MAP"]
 

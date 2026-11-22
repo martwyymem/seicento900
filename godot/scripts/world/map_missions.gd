@@ -114,7 +114,7 @@ static func event(index: int) -> Dictionary:
 			ev.sectors = true
 			ev.lap_length = lap_length(key) / maxf(int(m.laps), 1)
 		"rally":
-			var re := Rally.event(String(m.rally))
+			var re := Missions.rally_def(index)
 			for sd in re.get("stages", []):
 				if OFF_MAP.has(String(sd.track)):
 					continue

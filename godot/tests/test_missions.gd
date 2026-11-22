@@ -17,6 +17,8 @@ func run() -> Array:
 	var saved_file := Campaign.save_file
 	Campaign.save_file = TEST_SAVE
 	_saves(errors)
+	_arc(errors)
+	_migration(errors)
 	Campaign.save_file = saved_file
 	_drift_unit(errors)
 	_knockout(errors)
@@ -43,15 +45,17 @@ func _data(errors: Array[String]) -> void:
 		ids[m.id] = true
 		if not m.kind in Missions.KINDS:
 			errors.append("%s: unknown kind %s" % [tag, m.kind])
-		if int(m.after) < 0 or int(m.after) >= Campaign.STAGES.size() or Campaign.STAGES[int(m.after)].get("fan_lock", false):
-			errors.append("%s: waits for stage %d, which is not a stage the chain clears" % [tag, int(m.after)])
+		var after := Campaign.index_of(String(m.after))
+		if after < 0 or Campaign.STAGES[after].get("fan_lock", false) or Missions.after_index(Missions.BASE + k) != after:
+			errors.append("%s: waits for stage %s, which is not a stage the chain clears" % [tag, m.after])
 		if Track.load_def(String(m.track)) == null:
 			errors.append("%s: no track %s" % [tag, m.track])
 		if not m.has("reward_car") or (String(m.reward_car) != "" and (not CarCatalog.is_key(String(m.reward_car)) or String(m.reward_car) in ["stock", "hypercar"])):
 			errors.append("%s: reward_car must be there, empty or a catalogue car won by missions" % tag)
 		if m.kind == "rally":
-			if Rally.event(String(m.rally)).is_empty():
-				errors.append("%s: no rally event %s" % [tag, m.rally])
+			var rd := Missions.rally_def(Missions.BASE + k)
+			if rd.is_empty() or (rd.get("stages", []) as Array).is_empty() or String(rd.get("name", "")) == "":
+				errors.append("%s: no rally event %s" % [tag, m.get("rally", "")])
 		elif m.kind == "drift":
 			var t: Array = m.tiers
 			if t.size() != 3 or not (int(t[0]) > 0 and int(t[0]) < int(t[1]) and int(t[1]) < int(t[2])):
@@ -163,6 +167,151 @@ func _saves(errors: Array[String]) -> void:
 	if prog.has("missions") or Missions.is_cleared(ko, prog):
 		errors.append("save: reset left mission progress: %s" % prog)
 	DirAccess.remove_absolute(SaveData.path(TEST_SAVE))
+
+## The career arc: every car the missions award is won by exactly one mission on the stage chain, in the planned
+## order and spread along it; the chain's difficulty never steps down; and a save cleared event by event from
+## nothing (stages in order, each mission once it opens) wins every stage before the finale and every car.
+const CAR_ORDER := ["sandero", "i20", "golf4", "logan", "zafira", "v50", "focus"] ## the order the career hands them out
+
+func _arc(errors: Array[String]) -> void:
+	var chain := Campaign.STAGES.filter(func(st): return not st.get("fan_lock", false)).size()
+	if Campaign.STAGES.size() < 14 or Missions.MISSIONS.size() < 11:
+		errors.append("arc: %d stages and %d missions, the longer arc has 14 and 11" % [Campaign.STAGES.size(), Missions.MISSIONS.size()])
+	var car_at := {} # car -> the chain place of the stage its mission waits for
+	for k in Missions.MISSIONS.size():
+		var car := String(Missions.MISSIONS[k].get("reward_car", ""))
+		if car == "":
+			continue
+		if car_at.has(car):
+			errors.append("arc: %s is awarded twice" % car)
+		car_at[car] = Missions.after_index(Missions.BASE + k)
+	for key in CarCatalog.KEYS:
+		if key != "stock" and key != "hypercar" and not car_at.has(key):
+			errors.append("arc: %s is not won by any mission" % key)
+	var order := car_at.keys()
+	order.sort_custom(func(a, b): return int(car_at[a]) < int(car_at[b]))
+	if order != CAR_ORDER:
+		errors.append("arc: cars unlock in the order %s, not %s" % [order, CAR_ORDER])
+	var places: Array = order.map(func(c): return int(car_at[c]))
+	for i in range(1, places.size()):
+		if int(places[i]) <= int(places[i - 1]):
+			errors.append("arc: two cars open after the same stage (%s)" % [places])
+	if int(places[0]) > 1 or int(places[-1]) < chain / 2 or int(places[-1]) >= chain - 1:
+		errors.append("arc: the cars should start straight away and run on past mid-career, short of the last stage (%s of %d)" % [places, chain])
+	var prev := 0
+	for i in chain:
+		var lv := Campaign.LEVELS.find(String(Campaign.STAGES[i].difficulty))
+		if lv < prev:
+			errors.append("arc: stage %d (%s) is easier than the one before" % [i + 1, Campaign.STAGES[i].id])
+		prev = maxi(prev, lv)
+		var target := int(Campaign.STAGES[i].target_pos)
+		if String(Campaign.STAGES[i].grid) != ("pole" if target == 1 else "p%d" % target):
+			errors.append("arc: stage %s does not start in its target slot" % Campaign.STAGES[i].id)
+	for a in [1, 2, 3]:
+		if not Campaign.STAGES.any(func(st): return int(st.act) == a):
+			errors.append("arc: no stage in act %d" % a)
+	# play it through from nothing
+	Campaign.reset_progress()
+	for round_ in chain + Missions.MISSIONS.size():
+		var prog := Campaign.load_progress()
+		var moved := false
+		var u := int(prog.get("unlocked", 0))
+		if u < chain and not String(Campaign.STAGES[u].trophy) in prog.get("trophies", []):
+			Campaign.record_result(u, 1)
+			moved = true
+		for k in Missions.MISSIONS.size():
+			var idx := Missions.BASE + k
+			if Missions.is_unlocked(idx) and not Missions.is_cleared(idx):
+				Missions.record(idx, {"pos": 1, "success": true, "tier": 3, "score": 99999, "time": 30.0})
+				moved = true
+		if not moved:
+			break
+	var done := Campaign.load_progress()
+	for i in chain:
+		if not String(Campaign.STAGES[i].trophy) in done.get("trophies", []):
+			errors.append("arc: stage %s was never reached" % Campaign.STAGES[i].id)
+	for k in Missions.MISSIONS.size():
+		if not Missions.is_cleared(Missions.BASE + k, done):
+			errors.append("arc: mission %s was never opened" % Missions.MISSIONS[k].id)
+	var cars: Array = done.get("cars", [])
+	for c in CAR_ORDER:
+		if not c in cars or not CarCatalog.unlocked(c):
+			errors.append("arc: %s is not won by playing the career through" % c)
+	if int(done.get("unlocked", 0)) != chain - 1 or Campaign.is_unlocked(Campaign.STAGES.size() - 1, 0) != FanLevels.dev_unlock:
+		errors.append("arc: the chain ends at %d and the finale must still wait for fans" % int(done.get("unlocked", 0)))
+	Campaign.reset_progress()
+
+## A save from the first, ten-stage arc (no "arc" key: stage indices in the old order) loads onto this arc: the
+## same stages open and won, results and failed tries on the same stages, cars and missions kept, missions it had
+## open still open, the stages new to the arc before its furthest stage open to race; written back it stays put.
+func _migration(errors: Array[String]) -> void:
+	var old_trophies := []
+	for id in ["stage_1", "stage_2", "stage_3", "stage_4", "stage_5", "stage_6"]:
+		old_trophies.append(String(Campaign.STAGES[Campaign.index_of(id)].trophy))
+	var cars := ["sandero", "i20", "zafira", "focus", "golf4"]
+	# old index 6 is stage_7 (Kraków): open and failed twice, old 5 (Oświęcim) won at P2
+	Campaign.save_progress({"unlocked": 6, "best_pos": {"0": 1, "4": 2, "5": 2, "6": 5}, "fails": {"6": 2}, "trophies": old_trophies,
+		"cars": cars, "missions": {"drag_quarter": {"cleared": true, "best": 1}, "knockout_bor": {"cleared": true, "best": 2},
+		"rally_bor": {"fails": 1, "tries": 1}}, "story": {"seen": ["intro", "stage_1_won"]}, "car": {"used": 3}})
+	var prog := Campaign.load_progress()
+	var krakow := Campaign.index_of("stage_7")
+	var oswiecim := Campaign.index_of("stage_6")
+	if int(prog.get("arc", 0)) != Campaign.ARC or int(prog.unlocked) != krakow:
+		errors.append("migration: arc %s, unlocked %s (want %d)" % [prog.get("arc"), prog.get("unlocked"), krakow])
+	if _ints(prog.best_pos) != {"0": 1, "4": 2, str(oswiecim): 2, str(krakow): 5} or _ints(prog.fails) != {str(krakow): 2}:
+		errors.append("migration: best_pos %s, fails %s" % [prog.best_pos, prog.fails])
+	if prog.cars != cars or prog.story.seen != ["intro", "stage_1_won"] or int(prog.car.used) != 3 or prog.trophies != old_trophies:
+		errors.append("migration: cars, story, carried car or trophies changed: %s" % prog)
+	for c in cars:
+		if not CarCatalog.unlocked(c):
+			errors.append("migration: %s lost" % c)
+	var st := Campaign.get_stage(krakow)
+	if int(st.fails) != 2 or int(st.eased) != 1:
+		errors.append("migration: Kraków's failed tries did not follow it (%d fails, eased %d)" % [int(st.fails), int(st.eased)])
+	var rewanz := Campaign.index_of("stage_rewanz")
+	if not Campaign.is_unlocked(rewanz) or String(Campaign.STAGES[rewanz].trophy) in prog.trophies:
+		errors.append("migration: the new stage behind the old frontier should be open and not won")
+	if Campaign.is_unlocked(krakow + 1):
+		errors.append("migration: a stage past the old frontier opened")
+	# the old arc had every mission up to rally_bor open: all stay open, even the ones this arc moved later
+	for id in ["drag_quarter", "sprint_s1", "drift_babudy", "offroad_kolonia", "knockout_bor", "rally_bor", "sprint_rajsko", "drift_kopalnia"]:
+		if not Missions.is_unlocked(Missions.index_of(id), prog):
+			errors.append("migration: %s should be open" % id)
+	for id in ["drag_kilometre", "knockout_rajsko", "rally_zima"]:
+		if Missions.is_unlocked(Missions.index_of(id), prog):
+			errors.append("migration: %s should still be locked" % id)
+	if not Missions.is_cleared(Missions.index_of("knockout_bor"), prog) or int(Missions.progress(prog, Missions.index_of("rally_bor")).fails) != 1:
+		errors.append("migration: mission results changed: %s" % prog.missions)
+	# written back (any campaign write saves the migrated form) it loads the same, and the chain goes on from there
+	Campaign.save_progress(prog)
+	var back := Campaign.load_progress()
+	if int(back.unlocked) != krakow or _ints(back.best_pos) != _ints(prog.best_pos) or _ints(back.fails) != _ints(prog.fails) \
+			or back.cars != prog.cars or not bool(back.missions.drift_babudy.open):
+		errors.append("migration: a migrated save does not load back as itself: %s" % back)
+	Campaign.record_result(krakow, 1)
+	if int(Campaign.load_progress().unlocked) != Campaign.index_of("stage_8"):
+		errors.append("migration: winning Kraków should open Tor Fiata")
+	# the dev menu's "open everything" (old unlocked 9, the Goliath) is still everything
+	Campaign.save_progress({"unlocked": 9, "best_pos": {}, "trophies": []})
+	if int(Campaign.load_progress().unlocked) != Campaign.STAGES.size() - 1:
+		errors.append("migration: an old open-everything save should open the whole chain")
+	# a save from this arc is not touched
+	Campaign.save_progress({"unlocked": 6, "best_pos": {"6": 1}, "trophies": [], "arc": Campaign.ARC})
+	prog = Campaign.load_progress()
+	if int(prog.unlocked) != 6 or _ints(prog.best_pos) != {"6": 1}:
+		errors.append("migration: a current save was remapped: %s" % prog)
+	Campaign.reset_progress()
+	prog = Campaign.load_progress()
+	if int(prog.unlocked) != 0 or int(prog.get("arc", 0)) != Campaign.ARC or prog.has("missions") or not (prog.trophies as Array).is_empty():
+		errors.append("migration: reset should leave an empty save of this arc: %s" % prog)
+	DirAccess.remove_absolute(SaveData.path(TEST_SAVE))
+
+## A save's {key: number} with the numbers as ints (JSON reads every number back as a float).
+func _ints(d: Dictionary) -> Dictionary:
+	var out := {}
+	for k in d:
+		out[String(k)] = int(d[k])
+	return out
 
 func _drift_unit(errors: Array[String]) -> void:
 	var d := DriftScore.new()
@@ -404,7 +553,12 @@ func _field_race(errors: Array[String], kind: String, track: String, opp: int, e
 ## The drift mission's tiers against a scripted driver (road follower, handbrake flicks into the bends, throttle
 ## through): it reaches bronze, and gold stays out of its reach.
 func _drift_driver(errors: Array[String]) -> void:
-	var idx := Missions.index_of("drift_babudy")
+	for k in Missions.MISSIONS.size():
+		if String(Missions.MISSIONS[k].kind) == "drift":
+			_drift_run(errors, Missions.BASE + k)
+
+## The scripted drift driver on one drift mission: bronze within reach, gold not.
+func _drift_run(errors: Array[String], idx: int) -> void:
 	var m: Dictionary = Missions.get_def(idx)
 	var st := _settings_for(String(m.track), 1, 0)
 	st.mission = "drift"
@@ -437,14 +591,14 @@ func _drift_driver(errors: Array[String]) -> void:
 	var tiers: Array = m.tiers
 	var score := race.drift.total() if race.drift else 0
 	var tier := DriftScore.tier(score, tiers)
-	print("    drift calibration: scripted driver %d points (bronze %d, gold %d), best combo %d, lost %d, %.0f s" % [
-		score, int(tiers[0]), int(tiers[2]), race.drift.best_combo, race.drift.lost, race.race_time])
+	print("    drift calibration (%s): scripted driver %d points (bronze %d, gold %d), best combo %d, lost %d, %.0f s" % [
+		m.id, score, int(tiers[0]), int(tiers[2]), race.drift.best_combo, race.drift.lost, race.race_time])
 	if race.phase != "finished" or not race.player.finished:
-		errors.append("drift: the scripted run did not finish the %.0f m" % float(m.finish_distance))
+		errors.append("drift %s: the scripted run did not finish the %.0f m" % [m.id, float(m.finish_distance)])
 	if score < int(tiers[0]) or tier < 1:
-		errors.append("drift: the scripted driver scored %d, short of bronze %d" % [score, int(tiers[0])])
+		errors.append("drift %s: the scripted driver scored %d, short of bronze %d" % [m.id, score, int(tiers[0])])
 	if score >= int(tiers[2]):
-		errors.append("drift: the scripted driver reached gold (%d): gold is trivial" % score)
+		errors.append("drift %s: the scripted driver reached gold (%d): gold is trivial" % [m.id, score])
 	race.dispose()
 
 ## Every mission's beacon stands inside the play area, on a road, and apart from the stage beacons.

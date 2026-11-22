@@ -21,7 +21,8 @@ const WORLD := preload("res://scripts/ui/race_world.gd")
 ## Campaign track -> the map spot its beacon stands at (tools/build_open_world.py names the spots)
 const STAGE_SPOTS := {"wilamowice": "exit_wilamowice", "brzeszcze": "industrial_sprint", "bor": "bor_stage",
 	"pszczyna": "exit_pszczyna", "bielsko": "exit_bielsko", "oswiecim": "exit_oswiecim", "krakow": "station",
-	"fiat": "exit_tychy", "tokyo": "festival", "goliath": "festival"}
+	"fiat": "exit_tychy", "tokyo": "festival", "goliath": "festival", "monza": "exit_tychy", "nordschleife": "station",
+	"lemans": "festival"} ## a stage's own "note" says where a shared spot takes it (Campaign.STAGES)
 const SPOT_NOTE := {"exit_wilamowice": "South on the S1 towards Wilamowice", "industrial_sprint": "ul. Dworcowa by KWK Brzeszcze",
 	"bor_stage": "ul. Bór, Brzeszcze-Bór", "exit_pszczyna": "West on the DW933 to Pszczyna",
 	"exit_bielsko": "South on ul. Bielska to Bielsko-Biała", "exit_oswiecim": "East on the DW933 to Oświęcim",
@@ -824,7 +825,7 @@ func _update_markers() -> void:
 			list.append(_live_marker(e))
 			continue
 		var st: Dictionary = Campaign.get_stage(e.stage)
-		var info := "%s · %s · %s" % [e.title, SPOT_NOTE.get(e.spot, ""), "Done" if e.done else ("Open" if e.open else "Locked")]
+		var info := "%s · %s · %s" % [e.title, String(st.get("note", SPOT_NOTE.get(e.spot, ""))), "Done" if e.done else ("Open" if e.open else "Locked")]
 		list.append({"pos": e.pos, "color": e.color, "label": "%d. %s" % [e.stage + 1, String(st.track).capitalize()], "info": info})
 	if wp_on and wp_poi == "":
 		list.append({"pos": wp_pos, "color": OpenWorldHud.PURPLE, "label": "WAYPOINT", "kind": "waypoint", "info": "Your waypoint"})
@@ -874,6 +875,7 @@ func _live_open() -> void:
 	if live == null:
 		live = LiveEvents.new(map)
 	live.stats = progress.live # the missed tries per kind ease the next field
+	live.set_world(live_world())
 	if live.is_running():
 		live.abandon()
 	_after_run()
@@ -942,11 +944,17 @@ func _live_sync() -> void:
 	if builder and builder.festival and live:
 		builder.festival.sync_live_events(live.board)
 
+## The world's state the gated live events (night race, rain drift, fog sprint) read: night, road wetness, rain, fog, hail.
+func live_world() -> Dictionary:
+	return {"night": night, "wet": wet, "rain": rain, "fog": fog, "hail": hail}
+
 func _live_marker(e: Dictionary) -> Dictionary:
 	var lev := live.find(String(e.live)) if live else {}
 	var info := String(e.title)
 	if not lev.is_empty():
 		info += " · %s" % live.target_text(lev, CarCatalog.key_at(progress.car_class))
+		if LiveEvents.gate_tag(lev) != "":
+			info += " · %s" % LiveEvents.gate_tag(lev)
 	return {"pos": e.pos, "color": e.color, "label": "LIVE %s" % LiveEvents.kind_name(lev) if not lev.is_empty() else "LIVE EVENT",
 		"info": info, "kind": "live"}
 
@@ -968,7 +976,7 @@ func _begin_live_ev(lev: Dictionary) -> void:
 	live.stats = progress.live
 	lev["mu"] = drive.mu # the free-roam weather's grip: the rivals' pace (and so the medals) run on it, as a mission's do
 	_start_run(lev)
-	hud.notify("LIVE %s" % LiveEvents.kind_name(lev), String(lev.title), lev.color)
+	hud.notify("LIVE %s" % LiveEvents.kind_name(lev), ("%s · %s" % [lev.title, LiveEvents.gate_tag(lev)]) if LiveEvents.gate_tag(lev) != "" else String(lev.title), lev.color)
 
 ## A mission run (a campaign one from MapMissions.event or a live one) put on the map: the field lined up on the
 ## grid, the car in its slot, the traffic cleared off the closed roads, the checkpoint beacon and the GPS.
@@ -1136,6 +1144,7 @@ func _gate_posts(g: Dictionary, col: Color, h: float) -> Node3D:
 func _update_live(delta: float) -> void:
 	if live == null:
 		return
+	live.set_world(live_world())
 	var cp := Vector2(drive.car.x, drive.car.y)
 	if live.is_running():
 		var car := drive.car
@@ -1182,7 +1191,8 @@ func _update_live(delta: float) -> void:
 	for lev in added:
 		var d := (lev.pos as Vector2).distance_to(cp)
 		if d < LiveEvents.ANNOUNCE:
-			hud.notify("NEW LIVE EVENT", "%s · %s · %d m" % [LiveEvents.kind_name(lev), lev.title, int(d)], lev.color)
+			var tag := LiveEvents.gate_tag(lev)
+			hud.notify("NEW LIVE EVENT", "%s · %s · %d m%s" % [LiveEvents.kind_name(lev), lev.title, int(d), (" · " + tag) if tag != "" else ""], lev.color)
 	if _live_ids() != before:
 		_live_sync()
 
@@ -1203,7 +1213,7 @@ func _live_finished() -> void:
 	var rec := live.settle(res)
 	var tier := int(rec.tier)
 	var name := LiveEvents.kind_name(lev)
-	progress.record_live(String(lev.get("mkind", lev.get("kind", ""))), tier)
+	progress.record_live(LiveEvents.stat_kind(lev), tier)
 	_after_run()
 	var target := live.target_text(lev, CarCatalog.key_at(progress.car_class))
 	if bool(rec.success):
@@ -1606,6 +1616,10 @@ func snap_camera() -> void:
 	cam_vel_dir = Vector2(f.x, f.z)
 	_chase_cam = null # snaps to the car's new spot
 	look.reset()
+	# every site that moves the car (spawn, respawn, event reset, dev teleport) snaps the camera: the street plate and
+	# the area banner catch up now, not at their next 0.5 s / 1.5 s check
+	_update_street_name()
+	_area_t = 0.0
 
 func _check_events() -> void:
 	if live and live.is_running():
@@ -1645,7 +1659,7 @@ func _check_events() -> void:
 		return
 	var st: Dictionary = Campaign.get_stage(ev.stage)
 	var target := "Win the race" if int(st.target_pos) == 1 else "Finish P%d or better" % int(st.target_pos)
-	var body := "%s\n\n%s · %d laps · %s · %d rivals (%s)\nTarget: %s · Trophy: %s\nFan level %d recommended (you are level %d) · up to %s fans on a first clear" % [st.desc, SPOT_NOTE.get(ev.spot, ""),
+	var body := "%s\n\n%s · %d laps · %s · %d rivals (%s)\nTarget: %s · Trophy: %s\nFan level %d recommended (you are level %d) · up to %s fans on a first clear" % [st.desc, String(st.get("note", SPOT_NOTE.get(ev.spot, ""))),
 		int(st.laps), String(st.weather).capitalize(), int(st.opponents), String(st.difficulty).capitalize(), target, st.trophy,
 		FanLevels.stage_level(int(ev.stage)), FanLevels.level(progress.fans),
 		OpenWorldHud._thousands(FanLevels.stage_reward(int(ev.stage), 1, int(st.target_pos), true))]
@@ -1755,7 +1769,7 @@ func _check_discovery() -> void:
 			hud.set_summary(Poi.summary(pois, progress, progress.roads.size(), map.road_pts.size()))
 			if progress.roads.size() % 50 == 0:
 				hud.notify("ROADS DRIVEN  %d / %d" % [progress.roads.size(), map.road_pts.size()], "Every street of Brzeszcze, one at a time")
-		hud.set_street(street_label(map.road_name[ri]))
+		_update_street_name()
 	var found := Poi.discover_near(pois, progress, cp)
 	for p in found:
 		var c: Array = Poi.counts(pois, progress)[Poi.LANDMARK]
@@ -1770,6 +1784,12 @@ func _check_discovery() -> void:
 			_clear_poi_route()
 	if not found.is_empty():
 		_update_markers()
+
+## The street plate for the road under the car. _check_discovery runs it every 0.5 s and snap_camera (every teleport,
+## respawn and event reset) runs it at once, so the plate never shows the street the car was moved from.
+func _update_street_name() -> void:
+	if hud != null and not drive.road.is_empty():
+		hud.set_street(street_label(map.road_name[int(drive.road.road)]))
 
 ## How a street is signed: "ul. Dworcowa", "Rondo NSZZ Solidarność", the S1, the DW933.
 static func street_label(name: String) -> String:
@@ -2321,6 +2341,70 @@ func _update_camera(delta: float) -> void:
 	if weather_fx:
 		weather_fx.place(camera)
 	_update_beacon_labels()
+	_update_area_hold(delta)
+
+## The area banner (SZCZOTKI ...) is 2D, the arches' lettering over the road is 3D: at a gate the two landed on top of each
+## other. While the banner is up and an overhead arch is on screen behind it, the banner hides (OpenWorldHud.set_area_hold)
+## and comes back when the arch has passed.
+const ARCH_BANNER_RANGE := 120.0 ## m: arches further off are too small to clash
+const ARCH_HEIGHT := 5.5 ## m: where an arch's lettering is
+const ARCH_HALF_WIDTH := 7.0 ## m: how far its lettering reaches to the side
+var _arch_pts: Array[Vector3] = []
+var _arch_scan_t := 0.0
+
+func _update_area_hold(delta: float) -> void:
+	if hud == null or camera == null or builder == null or viewport == null:
+		return
+	var label := hud.area_label
+	if label == null or label.text == "" or label.modulate.a < 0.02:
+		hud.set_area_hold(false)
+		return
+	_arch_scan_t -= delta
+	if _arch_scan_t <= 0.0:
+		_arch_scan_t = 1.0 # (the live events' arches come and go)
+		_arch_pts.clear()
+		if builder.festival != null:
+			_collect_arches(builder.festival, 0)
+	var vp_size := Vector2(viewport.size)
+	if vp_size.x <= 1.0 or vp_size.y <= 1.0:
+		return
+	var to_screen := size / vp_size
+	var font := label.get_theme_font("font")
+	var tw := font.get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, label.get_theme_font_size("font_size")).x
+	var rect := label.get_global_rect()
+	var banner := Rect2(rect.get_center().x - tw * 0.5, rect.position.y, tw, rect.size.y)
+	var cam_p := camera.global_position
+	var hold := false
+	for pt in _arch_pts:
+		var d := cam_p.distance_to(pt)
+		if d > ARCH_BANNER_RANGE or camera.is_position_behind(pt):
+			continue
+		var sp := camera.unproject_position(pt) * to_screen
+		var reach := absf(camera.unproject_position(pt + camera.global_basis.x * ARCH_HALF_WIDTH).x * to_screen.x - sp.x)
+		if arch_behind_banner(banner, sp, reach):
+			hold = true
+			break
+	hud.set_area_hold(hold)
+
+## Whether an arch whose lettering is centred at screen point `sp`, reaching `reach` px to each side (and as much up and
+## down), is behind the banner's rect (a margin round it).
+static func arch_behind_banner(banner: Rect2, sp: Vector2, reach: float) -> bool:
+	return banner.grow(40.0).intersects(Rect2(sp - Vector2(reach, reach * 0.5), Vector2(reach * 2.0, reach)))
+
+## The points over the festival's overhead arches (its Inflatable / Festival / Live arch MultiMeshes), into _arch_pts.
+func _collect_arches(n: Node, depth: int) -> void:
+	if n is MultiMeshInstance3D:
+		var nm := String(n.name)
+		if nm.begins_with("InflatableArches") or nm.begins_with("FestivalArches") or nm.begins_with("LiveArches"):
+			var mm := (n as MultiMeshInstance3D).multimesh
+			if mm != null:
+				var xf := (n as Node3D).global_transform
+				for i in mm.instance_count:
+					_arch_pts.append(xf * mm.get_instance_transform(i).origin + Vector3.UP * ARCH_HEIGHT)
+		return
+	if depth < 2:
+		for c in n.get_children():
+			_collect_arches(c, depth + 1)
 
 ## Fades or hides world-space event beacon labels when the car is close enough that the gate/ring itself reads,
 ## or when the label projects into the top HUD band (rear-view mirror, fans card, or event card).

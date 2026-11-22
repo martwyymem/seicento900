@@ -6,6 +6,7 @@ class_name TownMap
 extends RefCounted
 
 const CELL := 12.0 ## metres: spatial hash cell for road segments
+const PAVE_PARTS := 3 ## slices of the pavement runs cut side by side on load (_cut_pavements)
 const BCELL := 16.0 ## metres: spatial hash cell for building edges and trees
 const CLASS_RANK := {"motorway": 9, "trunk": 9, "primary": 8, "secondary": 7, "tertiary": 6, "motorway_link": 6,
 	"trunk_link": 6, "primary_link": 6, "secondary_link": 5, "tertiary_link": 5, "unclassified": 4, "residential": 4,
@@ -157,6 +158,27 @@ func _snapshot_vars() -> Array[String]:
 			names.append(p.name)
 	return names
 
+## A map sharing every member of this one (the same containers, so what it adds to a dictionary or array lands here
+## too), except a copy of the road_halves() cache and a carriageway cache of its own: for a thread that reads the
+## roads while this one goes on.
+func _view() -> TownMap:
+	var v := TownMap.new()
+	for n in _snapshot_vars():
+		v.set(n, get(n))
+	v._halves = _halves.duplicate()
+	v._road_polys = {}
+	return v
+
+## A share of the load on a worker thread. High priority: the open world loads the map from a high-priority task of
+## its own, and low-priority tasks get only a fraction of the pool's threads.
+static func _task(work: Callable) -> int:
+	return WorkerThreadPool.add_task(work, true, "TownMap load")
+
+func _merge_halves(view: TownMap) -> void:
+	for ri: int in view._halves:
+		if not _halves.has(ri):
+			_halves[ri] = view._halves[ri]
+
 ## Fills every member from the snapshot of this bake; false if there is none (or it does not read back).
 func _load_snapshot(map_key: String, dir: String) -> bool:
 	var path := _snapshot_path(map_key, dir)
@@ -225,15 +247,44 @@ func _from_raw() -> bool:
 	tnx = int(t.nx)
 	tny = int(t.ny)
 	th = PackedFloat32Array(t.h)
+	# the obstacles' independent parts run on worker threads while the roads, buildings and pavements build: each task
+	# writes only its own members, in the same order as the serial _load_obstacles(), and reads only what is final
+	var posts_task := _task(func() -> void:
+		_load_posts()
+		_load_rail_banks()) # (from the bake and the ground alone)
+	var fences: Array = raw.get("fences", [])
+	var doubled := {}
+	var doubled_task := _task(func() -> void: doubled.merge(doubled_fences(fences)))
+	var buildings_task := _task(_load_buildings)
+	var bed_rings := []
+	var rings_task := _task(func() -> void:
+		_load_water_rings()
+		bed_rings.append_array(_bed_rings()))
 	_load_roads()
-	_load_buildings()
-	_build_pavements()
-	_load_obstacles()
+	WorkerThreadPool.wait_for_task_completion(rings_task)
+	var water_task := _task(_build_bed_mask.bind(bed_rings)) # (the roads keep their banks)
+	WorkerThreadPool.wait_for_task_completion(buildings_task)
+	_mark_pavements()
 	_load_rails()
+	# the fences, and the bridges' parapets and piers, are cut and placed where streets run (road_at) while the
+	# pavements' shapes are cut: each on a view of this map whose road_halves() cache is its own. What a view adds to
+	# that cache joins ours afterwards, in the order it was added, where nothing before it in the serial order (the
+	# pavements; for the bridges also the fences and tunnels) added it first, so the cache ends as the serial build
+	# leaves it
+	WorkerThreadPool.wait_for_task_completion(doubled_task)
+	WorkerThreadPool.wait_for_task_completion(posts_task) # (no member a view copies may still be growing)
+	var fence_view := _view()
+	var fences_task := _task(fence_view._load_fences.bind(fences, doubled))
+	var bridge_view := _view()
+	var bridges_task := _task(bridge_view._build_bridge_solids)
+	_cut_pavements()
+	WorkerThreadPool.wait_for_task_completion(fences_task)
+	_merge_halves(fence_view)
+	WorkerThreadPool.wait_for_task_completion(water_task)
 	_load_tunnels()
-	_load_rail_banks()
 	_add_tunnel_walls()
-	_build_bridge_solids()
+	WorkerThreadPool.wait_for_task_completion(bridges_task)
+	_merge_halves(bridge_view)
 	areas = raw.get("areas", [])
 	places = raw.get("places", [])
 	spots = raw.get("spots", {})
@@ -347,7 +398,7 @@ func _load_roads() -> void:
 			var cy1 := int(floor((maxf(a.y, bb.y) + half) / CELL))
 			for cx in range(cx0, cx1 + 1):
 				for cy in range(cy0, cy1 + 1):
-					var ck := _cell_key(cx, cy)
+					var ck := (cx + 4096) * 8192 + (cy + 4096) # _cell_key, inlined
 					if not _seg_cells.has(ck):
 						_seg_cells[ck] = PackedInt32Array()
 					_seg_cells[ck].append(sid)
@@ -376,6 +427,19 @@ func _load_roads() -> void:
 ## with every carriageway and every earlier pavement cut out, so no two pavement shapes overlap. TownBuilder
 ## draws these same shapes and kerb_at() answers from them.
 func _build_pavements() -> void:
+	_mark_pavements()
+	_cut_pavements()
+
+## Which streets have pavements (road_pave): all road_at() needs of them (level_extra), before their shapes are cut.
+func _mark_pavements() -> void:
+	way_joins()
+	road_pave.resize(road_pts.size())
+	for ri in road_pts.size():
+		var pts := road_pts[ri]
+		var n := pts.size()
+		road_pave[ri] = 1 if n >= 2 and _has_pavement(ri, pts[n / 2]) else 0
+
+func _cut_pavements() -> void:
 	var node_width := {}
 	var node_roads := {}
 	for ri in road_pts.size():
@@ -384,18 +448,16 @@ func _build_pavements() -> void:
 			node_width[nid] = maxf(float(node_width.get(nid, 0.0)), road_w[ri])
 			node_roads[nid] = int(node_roads.get(nid, 0)) + 1
 	var joins := way_joins()
-	road_pave.resize(road_pts.size())
 	pave_polys.clear()
 	_pave_rects.clear()
 	_pave_cells.clear()
 	_road_polys.clear()
+	var runs := [] # [road, its points from i0 on, i0] per run of street between junctions
 	for ri in road_pts.size():
 		var pts := road_pts[ri]
 		var n := pts.size()
-		road_pave[ri] = 0
-		if n < 2 or not _has_pavement(ri, pts[n / 2]):
+		if road_pave[ri] == 0:
 			continue
-		road_pave[ri] = 1
 		var s := PackedFloat32Array()
 		s.resize(n)
 		for i in range(1, n):
@@ -418,9 +480,32 @@ func _build_pavements() -> void:
 			while j + 1 < n and jd[j + 1] >= PAVE_GAP:
 				j += 1
 			if j > i:
-				_add_pavement_run(ri, pts.slice(i, j + 1), i)
+				runs.append([ri, pts.slice(i, j + 1), i])
 			i = j + 1
+	# each run's band less the carriageways near it is the run's own business: worked out in PAVE_PARTS slices side
+	# by side (the slices after the first on views of this map, whose road_halves() caches join ours afterwards in
+	# slice order: the order one run after another leaves it), then placed one after another, each cut by those before
+	var per := ceili(runs.size() / float(PAVE_PARTS))
+	var cuts: Array[Array] = []
+	var views: Array[TownMap] = []
+	var tasks := PackedInt64Array()
+	for part in PAVE_PARTS:
+		cuts.append([])
+		if part > 0:
+			views.append(_view())
+			tasks.append(_task(views[part - 1]._cut_runs.bind(runs, part * per, mini((part + 1) * per, runs.size()), cuts[part])))
+	_cut_runs(runs, 0, mini(per, runs.size()), cuts[0])
+	for k in tasks.size():
+		WorkerThreadPool.wait_for_task_completion(tasks[k])
+		_merge_halves(views[k])
+	for part_cuts in cuts:
+		for cut: Array in part_cuts:
+			_place_pavement(cut)
 	_road_polys.clear()
+
+func _cut_runs(runs: Array, from: int, to: int, out: Array) -> void:
+	for k in range(from, to):
+		out.append(_pavement_cut(runs[k][0], runs[k][1], runs[k][2]))
 
 func _carriageway(ri: int) -> Array:
 	if not _road_polys.has(ri):
@@ -555,6 +640,11 @@ static func _despike(poly: PackedVector2Array) -> PackedVector2Array:
 	return out
 
 func _add_pavement_run(ri: int, run: PackedVector2Array, i0 := 0) -> void:
+	_place_pavement(_pavement_cut(ri, run, i0))
+
+## The pavement band along a run of street ri, less its own and every other carriageway near it: [pieces, the run's
+## grown bounds], or [] if nothing is left.
+func _pavement_cut(ri: int, run: PackedVector2Array, i0: int) -> Array:
 	var half := road_w[ri] * 0.5
 	var pieces: Array = []
 	# the carriageway cut overshoots the run's ends (square caps): a butt cap would end exactly on the band's own
@@ -582,7 +672,7 @@ func _add_pavement_run(ri: int, run: PackedVector2Array, i0 := 0) -> void:
 			cur = _subtract(cur, ip)
 		pieces.append_array(cur)
 	if pieces.is_empty():
-		return
+		return []
 	var rect := Rect2(run[0], Vector2.ZERO)
 	for q in run:
 		rect = rect.expand(q)
@@ -604,7 +694,14 @@ func _add_pavement_run(ri: int, run: PackedVector2Array, i0 := 0) -> void:
 				for cp in _carriageway(r2):
 					if _bounds_of(cp).intersects(rect):
 						pieces = _subtract(pieces, cp)
-	# pavements already placed: they own what they cover
+	return [pieces, rect]
+
+## Places one _pavement_cut(): less the pavements already placed (they own what they cover).
+func _place_pavement(cut: Array) -> void:
+	if cut.is_empty():
+		return
+	var pieces: Array = cut[0]
+	var rect: Rect2 = cut[1]
 	var owners := {}
 	for cx in range(int(floor(rect.position.x / CELL)), int(floor(rect.end.x / CELL)) + 1):
 		for cy in range(int(floor(rect.position.y / CELL)), int(floor(rect.end.y / CELL)) + 1):
@@ -1263,34 +1360,50 @@ func _load_buildings() -> void:
 		bld_rect.append(r)
 		for cx in range(int(floor(r.position.x / BCELL)), int(floor(r.end.x / BCELL)) + 1):
 			for cy in range(int(floor(r.position.y / BCELL)), int(floor(r.end.y / BCELL)) + 1):
-				var ck := _cell_key(cx, cy)
+				var ck := (cx + 4096) * 8192 + (cy + 4096) # _cell_key, inlined
 				if not _bld_cells.has(ck):
 					_bld_cells[ck] = PackedInt32Array()
 				_bld_cells[ck].append(bi)
 
+## Trees, lamps, fences and water, one after the other (_from_raw runs the same parts side by side).
 func _load_obstacles() -> void:
-	var trees: Array = raw.get("trees", [])
-	for k in range(0, trees.size(), 3):
-		add_post(Vector2(trees[k], trees[k + 1]), TREE_RADIUS)
-	# only what TownBuilder draws is solid: a doubled segment (a second panel row 0.8 m off a longer one) or a sliver
-	# is not drawn
+	_load_posts()
 	var walls: Array = raw.get("fences", [])
-	var doubled := doubled_fences(walls)
+	_load_fences(walls, doubled_fences(walls))
+	_load_water()
+
+func _load_posts() -> void:
+	var trees: Array = raw.get("trees", [])
+	for k in range(0, trees.size(), 3): # (add_post, inlined: a quarter of a million calls)
+		var p := Vector2(trees[k], trees[k + 1])
+		var ck := (int(floor(p.x / BCELL)) + 4096) * 8192 + (int(floor(p.y / BCELL)) + 4096)
+		if not _post_cells.has(ck):
+			_post_cells[ck] = PackedVector3Array()
+		_post_cells[ck].append(Vector3(p.x, p.y, TREE_RADIUS))
+	var lamps := _flat(raw.get("lamps", []))
+	for p in lamps:
+		add_post(p, 0.16)
+
+## Only what TownBuilder draws is solid: a doubled segment (a second panel row 0.8 m off a longer one, `doubled` from
+## doubled_fences) or a sliver is not drawn.
+func _load_fences(walls: Array, doubled: Dictionary) -> void:
 	for wi in walls.size():
 		if doubled.has(wi):
 			continue
 		var wall: Array = walls[wi]
 		var style := int(wall[4]) if wall.size() > 4 else 0
+		var a := Vector2(wall[0], wall[1])
+		var b := Vector2(wall[2], wall[3])
 		if style == 4:
-			add_wall(Vector2(wall[0], wall[1]), Vector2(wall[2], wall[3]), 0.12) # a closure stands across its road
+			add_wall(a, b, 0.12) # a closure stands across its road
 			continue
-		if Vector2(wall[0], wall[1]).distance_to(Vector2(wall[2], wall[3])) < 0.35:
+		if a.distance_to(b) < 0.35:
 			continue # too short to draw a panel or a bush for
-		for piece: Array in fence_pieces(Vector2(wall[0], wall[1]), Vector2(wall[2], wall[3])):
-			add_wall(piece[0], piece[1], 0.48 if style == 2 else 0.12)
-	var lamps := _flat(raw.get("lamps", []))
-	for p in lamps:
-		add_post(p, 0.16)
+		var thick := 0.48 if style == 2 else 0.12
+		for piece: Array in fence_pieces(a, b):
+			add_wall(piece[0], piece[1], thick)
+
+func _load_water_rings() -> void:
 	for a in raw.get("areas", []):
 		if a[0] != "water":
 			continue
@@ -1305,6 +1418,10 @@ func _load_obstacles() -> void:
 		water_rings.append(ring)
 		water_rects.append(r)
 		water_level.append(lo - WATER_DROP) # the lowest the surface lies (it follows the ground: water_surface())
+
+## The water rings, then the bed under them.
+func _load_water() -> void:
+	_load_water_rings()
 	_build_bed_mask()
 
 ## A pond's or river's surface at a map point: WATER_DROP under the ground, so it follows the ground's slope (the baked
@@ -1319,17 +1436,84 @@ func water_surface(x: float, y: float) -> float:
 ## water's edge with no dry pit outside it and no wall inside it. Roads (not bridges) keep the ground within BANK_HOLD of
 ## their edge (or their embankment's foot) and sink to the bed over the next BED_STEP: a dyke or a lakeside road keeps
 ## its bank, drawn and driven. TownBuilder sinks exactly these vertices, and terrain() reads them back.
-func _build_bed_mask() -> void:
+## `rings`: what _bed_rings() answers (_from_raw works that out on a thread of its own while the roads load), or [].
+func _build_bed_mask(rings: Array = []) -> void:
+	var nx := int(extent.size.x / BED_STEP) + 1
+	var ny := int(extent.size.y / BED_STEP) + 1
+	if rings.is_empty():
+		rings = _bed_rings()
+	var depth: PackedFloat64Array = rings[0]
+	var has_depth: PackedByteArray = rings[1]
+	var depth_keys: PackedInt32Array = rings[2]
+	# roads keep their banks
+	const COARSE := 8 # vertices per side of the cells that say where any water is
+	var cnx := (nx - 1) / COARSE + 1
+	var cny := (ny - 1) / COARSE + 1
+	var wet := PackedByteArray()
+	wet.resize(cnx * cny)
+	wet.fill(0)
+	for kk in depth_keys:
+		wet[kk / nx / COARSE * cnx + kk % nx / COARSE] = 1
+	for sid in _seg_road.size():
+		var ri := _seg_road[sid]
+		if road_bridge[ri] == 1:
+			continue
+		var i := _seg_i[sid]
+		var a := road_pts[ri][i]
+		var b := road_pts[ri][i + 1]
+		var zs := road_z[ri]
+		var raise := 0.0 if zs.is_empty() else maxf(zs[i], zs[i + 1])
+		var keep := road_w[ri] * 0.5 + raise * EMBANKMENT + BANK_HOLD
+		var lo := a.min(b) - Vector2.ONE * (keep + BED_STEP) - extent.position
+		var hi := a.max(b) + Vector2.ONE * (keep + BED_STEP) - extent.position
+		var any_wet := false
+		for cj in range(maxi(floori(lo.y / BED_STEP / COARSE), 0), mini(floori(hi.y / BED_STEP / COARSE), cny - 1) + 1):
+			for ci in range(maxi(floori(lo.x / BED_STEP / COARSE), 0), mini(floori(hi.x / BED_STEP / COARSE), cnx - 1) + 1):
+				if wet[cj * cnx + ci] == 1:
+					any_wet = true
+		if not any_wet:
+			continue
+		for j in range(maxi(int(ceil(lo.y / BED_STEP)), 0), mini(int(floor(hi.y / BED_STEP)), ny - 1) + 1):
+			for ii in range(maxi(int(ceil(lo.x / BED_STEP)), 0), mini(int(floor(hi.x / BED_STEP)), nx - 1) + 1):
+				var kk := j * nx + ii
+				if has_depth[kk] == 0:
+					continue
+				var p := extent.position + Vector2(ii, j) * BED_STEP
+				var d := p.distance_to(Geometry2D.get_closest_point_to_segment(p, a, b))
+				var f := clampf((d - keep) / BED_STEP, 0.0, 1.0)
+				depth[kk] = depth[kk] * f
+	for kk in depth_keys:
+		if depth[kk] > 0.01:
+			bed_mask[kk] = depth[kk]
+
+## The bed's depth from the water rings alone, before the roads keep their banks: [depth per vertex, 1 per vertex that
+## has one, those vertices in the order they got it].
+func _bed_rings() -> Array:
 	var nx := int(extent.size.x / BED_STEP) + 1
 	var ny := int(extent.size.y / BED_STEP) + 1
 	var full := WATER_DROP + POND_DEPTH
 	var reach := WATER_DROP / BANK_SLOPE # m outside the outline where the bank reaches the ground
-	var depth := {}
+	# grids over every vertex, not dictionaries (a dictionary entry per vertex is most of the time): depth 0 and the
+	# distance INF stand for "none", and the *_keys lists keep the order vertices first get a value in, so bed_mask
+	# lists its vertices in the same order as ever
+	var depth := PackedFloat64Array()
+	depth.resize(nx * ny)
+	depth.fill(0.0)
+	var has_depth := PackedByteArray()
+	has_depth.resize(nx * ny)
+	has_depth.fill(0)
+	var depth_keys := PackedInt32Array()
+	var near := PackedFloat64Array() # this ring's outline's distance (INF where it is not near); reset after each ring
+	near.resize(nx * ny)
+	near.fill(INF)
+	var inside := PackedByteArray() # 1: inside this ring; reset after each ring
+	inside.resize(nx * ny)
+	inside.fill(0)
 	for k in water_rings.size():
 		var ring := water_rings[k]
 		var r := water_rects[k]
 		# the vertices inside the ring, row by row
-		var inside := {}
+		var inside_keys := PackedInt32Array()
 		var j0 := maxi(int(ceil((r.position.y - extent.position.y) / BED_STEP)), 0)
 		var j1 := mini(int(floor((r.end.y - extent.position.y) / BED_STEP)), ny - 1)
 		for j in range(j0, j1 + 1):
@@ -1345,9 +1529,12 @@ func _build_bed_mask() -> void:
 				var i0 := maxi(int(ceil((xs[m] - extent.position.x) / BED_STEP)), 0)
 				var i1 := mini(int(floor((xs[m + 1] - extent.position.x) / BED_STEP)), nx - 1)
 				for i in range(i0, i1 + 1):
-					inside[j * nx + i] = true
+					var kk := j * nx + i
+					if inside[kk] == 0:
+						inside[kk] = 1
+						inside_keys.append(kk)
 		# distance to the outline of the vertices near it (in or out)
-		var near := {}
+		var near_keys := PackedInt32Array()
 		var span := maxf(reach, full / BANK_SLOPE)
 		for e in ring.size():
 			var a := ring[e]
@@ -1359,55 +1546,32 @@ func _build_bed_mask() -> void:
 					var p := extent.position + Vector2(i, j) * BED_STEP
 					var d := p.distance_to(Geometry2D.get_closest_point_to_segment(p, a, b))
 					var kk := j * nx + i
-					if d < float(near.get(kk, INF)):
+					if d < near[kk]:
+						if near[kk] == INF:
+							near_keys.append(kk)
 						near[kk] = d
-		for kk in inside:
-			var s: float = near.get(kk, INF)
+		for kk in inside_keys:
+			var s: float = near[kk]
 			var dep := minf(full, WATER_DROP + s * BANK_SLOPE)
-			if dep > float(depth.get(kk, 0.0)):
+			if dep > depth[kk]:
+				if has_depth[kk] == 0:
+					has_depth[kk] = 1
+					depth_keys.append(kk)
 				depth[kk] = dep
-		for kk in near:
-			if inside.has(kk):
+		for kk in near_keys:
+			if inside[kk] == 1:
 				continue
-			var dep := WATER_DROP - float(near[kk]) * BANK_SLOPE
-			if dep > float(depth.get(kk, 0.0)):
+			var dep := WATER_DROP - near[kk] * BANK_SLOPE
+			if dep > depth[kk]:
+				if has_depth[kk] == 0:
+					has_depth[kk] = 1
+					depth_keys.append(kk)
 				depth[kk] = dep
-	# roads keep their banks
-	const COARSE := 8 # vertices per side of the cells that say where any water is
-	var wet := {}
-	for kk: int in depth:
-		wet[Vector2i(kk % nx / COARSE, kk / nx / COARSE)] = true
-	for sid in _seg_road.size():
-		var ri := _seg_road[sid]
-		if road_bridge[ri] == 1:
-			continue
-		var i := _seg_i[sid]
-		var a := road_pts[ri][i]
-		var b := road_pts[ri][i + 1]
-		var zs := road_z[ri]
-		var raise := 0.0 if zs.is_empty() else maxf(zs[i], zs[i + 1])
-		var keep := road_w[ri] * 0.5 + raise * EMBANKMENT + BANK_HOLD
-		var lo := a.min(b) - Vector2.ONE * (keep + BED_STEP) - extent.position
-		var hi := a.max(b) + Vector2.ONE * (keep + BED_STEP) - extent.position
-		var any_wet := false
-		for cj in range(floori(lo.y / BED_STEP / COARSE), floori(hi.y / BED_STEP / COARSE) + 1):
-			for ci in range(floori(lo.x / BED_STEP / COARSE), floori(hi.x / BED_STEP / COARSE) + 1):
-				if wet.has(Vector2i(ci, cj)):
-					any_wet = true
-		if not any_wet:
-			continue
-		for j in range(maxi(int(ceil(lo.y / BED_STEP)), 0), mini(int(floor(hi.y / BED_STEP)), ny - 1) + 1):
-			for ii in range(maxi(int(ceil(lo.x / BED_STEP)), 0), mini(int(floor(hi.x / BED_STEP)), nx - 1) + 1):
-				var kk := j * nx + ii
-				if not depth.has(kk):
-					continue
-				var p := extent.position + Vector2(ii, j) * BED_STEP
-				var d := p.distance_to(Geometry2D.get_closest_point_to_segment(p, a, b))
-				var f := clampf((d - keep) / BED_STEP, 0.0, 1.0)
-				depth[kk] = float(depth[kk]) * f
-	for kk in depth:
-		if float(depth[kk]) > 0.01:
-			bed_mask[kk] = depth[kk]
+		for kk in inside_keys:
+			inside[kk] = 0
+		for kk in near_keys:
+			near[kk] = INF
+	return [depth, has_depth, depth_keys]
 
 ## Height of the vertex (i, j) of the drawn terrain mesh (TownBuilder draws exactly this).
 func bed_vertex(i: int, j: int, nx: int) -> float:
@@ -1588,6 +1752,12 @@ static func doubled_fences(walls: Array) -> Dictionary:
 			order.append([len, wi])
 	order.sort_custom(func(x: Array, y: Array) -> bool: return x[0] > y[0])
 	var skip := {}
+	var kept_a := PackedVector2Array() # each kept segment's ends and direction, by index
+	var kept_b := PackedVector2Array()
+	var kept_t := PackedVector2Array()
+	kept_a.resize(walls.size())
+	kept_b.resize(walls.size())
+	kept_t.resize(walls.size())
 	for entry: Array in order:
 		var wi: int = entry[1]
 		var w: Array = walls[wi]
@@ -1597,15 +1767,17 @@ static func doubled_fences(walls: Array) -> Dictionary:
 		var t := d / ln
 		var n := Vector2(-t.y, t.x)
 		var mid := a + d * 0.5
-		var cell := Vector2i(floori(mid.x / 6.0), floori(mid.y / 6.0))
+		var cell := (floori(mid.x / 6.0) + 100000) * 200000 + floori(mid.y / 6.0) + 100000 # 6 m cells, by an int key
 		var covered := false
 		for dx in range(-1, 2):
 			for dy in range(-1, 2):
-				for oi: int in cells.get(cell + Vector2i(dx, dy), []):
-					var o: Array = walls[oi]
-					var oa := Vector2(float(o[0]), float(o[1]))
-					var ob := Vector2(float(o[2]), float(o[3]))
-					var ot := (ob - oa) / maxf(oa.distance_to(ob), 1e-3)
+				var kept = cells.get(cell + dx * 200000 + dy)
+				if kept == null:
+					continue
+				for oi: int in kept:
+					var oa := kept_a[oi]
+					var ob := kept_b[oi]
+					var ot := kept_t[oi]
 					if absf(t.cross(ot)) > 0.1:
 						continue
 					if absf((oa - a).dot(n)) > 0.8 or absf((ob - a).dot(n)) > 0.8:
@@ -1614,12 +1786,22 @@ static func doubled_fences(walls: Array) -> Dictionary:
 					var s1 := clampf((ob - a).dot(t), 0.0, ln)
 					if absf(s1 - s0) > ln * 0.8:
 						covered = true
+						break
+				if covered:
+					break
+			if covered:
+				break
 		if covered:
 			skip[wi] = true
 		else:
 			if not cells.has(cell):
-				cells[cell] = []
+				cells[cell] = PackedInt32Array()
 			cells[cell].append(wi)
+			var ka := Vector2(float(w[0]), float(w[1]))
+			var kb := Vector2(float(w[2]), float(w[3]))
+			kept_a[wi] = ka
+			kept_b[wi] = kb
+			kept_t[wi] = (kb - ka) / maxf(ka.distance_to(kb), 1e-3)
 	return skip
 
 ## The stretches of fence a-b that stand off every street's carriageway, [[a, b], ...] ([[a, b]] when it touches none):
@@ -1692,12 +1874,16 @@ func add_post(p: Vector2, radius: float) -> void:
 func add_wall(a: Vector2, b: Vector2, half_thickness: float) -> void:
 	var lo := a.min(b) - Vector2.ONE * half_thickness
 	var hi := a.max(b) + Vector2.ONE * half_thickness
+	var rec := PackedFloat32Array([a.x, a.y, b.x, b.y, half_thickness])
+	var cy0 := int(floor(lo.y / BCELL))
+	var cy1 := int(floor(hi.y / BCELL))
 	for cx in range(int(floor(lo.x / BCELL)), int(floor(hi.x / BCELL)) + 1):
-		for cy in range(int(floor(lo.y / BCELL)), int(floor(hi.y / BCELL)) + 1):
-			var ck := _cell_key(cx, cy)
+		for cy in range(cy0, cy1 + 1):
+			var ck := (cx + 4096) * 8192 + (cy + 4096) # _cell_key, inlined
 			if not _wall_cells.has(ck):
-				_wall_cells[ck] = PackedFloat32Array()
-			_wall_cells[ck].append_array(PackedFloat32Array([a.x, a.y, b.x, b.y, half_thickness]))
+				_wall_cells[ck] = rec.duplicate()
+			else:
+				_wall_cells[ck].append_array(rec)
 
 ## Wall segments in the cells overlapping a circle around p. A wall can occur in several cells.
 func walls_near(p: Vector2, r: float) -> Array[PackedFloat32Array]:

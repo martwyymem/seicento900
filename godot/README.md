@@ -278,16 +278,19 @@ extract because its source imagery is large and costly to fetch for this build.
 - **Stages are beacons where they really start**: the industrial sprint on ul. Dworcowa by KWK Brzeszcze, the
   Bór stage on ul. Bór. The away venues sit on the real roads out of town: Pszczyna west on the DW933, Oświęcim
   east, Bielsko-Biała south on ul. Bielska, Wilamowice down the S1 and Tychy's Fiat track up it. Kraków is the
-  train from Brzeszcze Jawiszowice station and Tokyo the festival. Pull into a beacon, read the briefing card
+  train from Brzeszcze Jawiszowice station and Tokyo the festival; Monza flies from Katowice (up the S1), the
+  Nordschleife is the night train from the station and Le Mans Pan Zbyszek's coach from the festival. Pull into a beacon, read the briefing card
   and press Enter. The results bring the car back to the beacon, through the service area if it is damaged.
-- **Missions** (`scripts/sim/missions.gd`) sit beside the ten stages: a quarter-mile and a standing-kilometre
-  drag race on the S1, the S1 Sprint, a drift attack in Babudy, an off-road race at Kolonia Stawowa, the Bór
-  knockout and Rajd Borów. Each opens once a stage is cleared and is a cyan beacon at its route's real start line,
+- **Missions** (`scripts/sim/missions.gd`) sit beside the fourteen stages: a quarter-mile and a standing-kilometre
+  drag race on the S1, the S1 Sprint and the Rajsko sprint, drift attacks in Babudy and round the Kopalnia loop, an
+  off-road race at Kolonia Stawowa, the Bór and Rajsko knockouts, Rajd Borów and the snowy Zimowy Rajd Brzeszcze.
+  The seven that award a car are spaced about every second stage along the career. Each opens once a stage is cleared and is a cyan beacon at its route's real start line,
   snapped onto the map's roads at load. A mission is campaign index `Missions.BASE + k`, so `Campaign.get_stage`
   and the campaign flow take it like a stage; a rally mission runs through the rally flow on a rally of its own,
   never saved over the menu's. The race rules are per-event `RaceSettings` (`knockout`, `finish_distance`,
   `loose_spans`, `drift_score` with `DriftScore`, `mission` for the HUD's mission plate). Progress is
-  `campaign.json["missions"]`. `tests/test_missions.gd` covers it; `tests/_missions_probe.gd` measures the races.
+  `campaign.json["missions"]`; a save from the old ten-stage arc (no `"arc"` key) is remapped by stage id when it
+  loads (`Campaign.migrate`). `tests/test_missions.gd` covers it; `tests/_missions_probe.gd` measures the races.
 - **Driving** uses the race's own tyre-model physics (`FreeCar`, `scripts/world/free_car.gd`) on the town's
   surfaces (asphalt, setts, gravel tracks, grass). It rides the ground heights and the bridge decks and
   embankments. Buildings, trees, lamp posts and parked cars are solid, the ponds can't be driven through, and

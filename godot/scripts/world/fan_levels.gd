@@ -10,7 +10,8 @@ const TITLES := ["Local Hopeful", "Street Regular", "Town Favourite", "Silesian 
 	"National Name", "Poland's Pride", "Fest Icon", "Seicento Legend"]
 static var dev_unlock := false ## the dev menu (§ + 1) unlocks everything the top level would
 
-const STAGE_BASE := 3000 ## fans for clearing stage 1, times the stage's number for the later ones
+const STAGE_BASE := 3000 ## fans for clearing stage 1; the last stage pays CAREER_SPAN times as much, the ones between in step
+const CAREER_SPAN := 10.0 ## (with the ten-stage arc that was exactly STAGE_BASE times the stage's number)
 const REPEAT_SHARE := 0.25 ## a stage that was cleared before pays this much again
 const FAIL_SHARE := 0.1 ## the crowd still cheers a try that missed the objective
 
@@ -41,15 +42,18 @@ static func progress(fans: int) -> float:
 	var hi: int = THRESHOLDS[lv]
 	return clampf(float(fans - lo) / float(hi - lo), 0.0, 1.0)
 
-## The level a campaign stage (0-based) is meant for: the first two share level 1, then one level per stage.
+## The level a campaign stage (0-based) is meant for: the chain's stages climb from level 1 to the level below the
+## top in step with their place on the career (the ten-stage arc's first two shared level 1, then one each).
 static func stage_level(stage_idx: int) -> int:
 	if stage_idx >= 0 and stage_idx < Campaign.STAGES.size() and Campaign.STAGES[stage_idx].get("fan_lock", false):
 		return THRESHOLDS.size()
-	return clampi(stage_idx, 1, THRESHOLDS.size())
+	var chain_last := maxi(Campaign.STAGES.filter(func(st): return not st.get("fan_lock", false)).size() - 1, 1)
+	return clampi(int(round(float(stage_idx) * float(THRESHOLDS.size() - 2) / float(chain_last))), 1, THRESHOLDS.size() - 1)
 
 ## Fans a campaign result pays. pos: finishing place (999 for a retirement), target: the place the stage asks for.
 static func stage_reward(stage_idx: int, pos: int, target: int, first_clear: bool) -> int:
-	var base := float(STAGE_BASE * (stage_idx + 1))
+	var last := maxi(Campaign.STAGES.size() - 1, 1)
+	var base := float(STAGE_BASE) * (1.0 + (CAREER_SPAN - 1.0) * float(clampi(stage_idx, 0, last)) / float(last))
 	if pos > target:
 		return int(base * FAIL_SHARE)
 	var beat := clampf(float(target - pos), 0.0, 3.0) # each place better than asked adds a quarter

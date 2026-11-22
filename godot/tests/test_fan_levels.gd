@@ -37,6 +37,15 @@ func run() -> Array:
 		campaign_total += FanLevels.stage_reward(i, int(Campaign.STAGES[i].target_pos), int(Campaign.STAGES[i].target_pos), true)
 	check("clearing the campaign reaches a high level but not the top", FanLevels.level(campaign_total) >= 6 and not FanLevels.is_max(campaign_total),
 		"(%d fans, level %d)" % [campaign_total, FanLevels.level(campaign_total)])
+	# the whole career (every stage and mission at its target) comes close to the top level but stays short: the
+	# Goliath and the Hypercar still want fans from the open world on top (fans are for fun, the cars are mission prizes)
+	var career := campaign_total
+	for k in Missions.MISSIONS.size():
+		var idx := Missions.BASE + k
+		var tgt := 3 if String(Missions.MISSIONS[k].kind) == "drift" else int(Missions.as_stage(idx).target_pos)
+		career += Missions.reward(idx, {"success": true, "pos": tgt}, true)
+	check("the whole career at its targets ends a level short of the top", FanLevels.level(career) == FanLevels.THRESHOLDS.size() - 1,
+		"(%d fans, level %d)" % [career, FanLevels.level(career)])
 	completed = true
 	return errors
 

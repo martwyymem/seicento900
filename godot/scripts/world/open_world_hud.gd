@@ -126,6 +126,8 @@ var _card_a := 0.0 ## its fade, 0..1
 var _street := ""
 var _street_t := 0.0
 var _area_t := 0.0
+var _area_hold := false ## an overhead arch is on screen behind the banner (OpenWorld._update_area_hold): the banner waits
+var _area_hide := 0.0 ## the banner's fade for that, 0 shown .. 1 hidden
 var _clock := 0.0
 
 func _ready() -> void:
@@ -534,6 +536,8 @@ func update_drive(kmh: float, g: int, r: float, r_max: float, pos: Vector2, head
 	if _area_t > 0.0:
 		_area_t -= dt
 		area_label.modulate.a = clampf(minf(_area_t, 3.2 - _area_t) * 2.0, 0.0, 1.0)
+	_area_hide = move_toward(_area_hide, 1.0 if _area_hold else 0.0, dt * 5.0)
+	area_label.self_modulate.a = 1.0 - _area_hide # (self_modulate: the layout reads modulate.a to know the banner is up)
 	_fit_card()
 	_tick_fans(dt)
 	_update_motion(kmh, pos, heading, dt, vz)
@@ -628,6 +632,11 @@ func show_area(name: String) -> void:
 	area_label.text = name.to_upper()
 	_area_t = 3.2
 	_layout()
+
+## Hides the area banner while something in the 3D view (a festival arch's lettering) sits behind it; its 3.2 s keep
+## running, so it is back, faded in, when the arch has passed (or skipped when it was all over by then).
+func set_area_hold(hold: bool) -> void:
+	_area_hold = hold
 
 ## Keeps the free-floating labels inside the gaps between the panels at any canvas size (interface size,
 ## aspect ratio): the district name between the banners and the event card, the street and key help between

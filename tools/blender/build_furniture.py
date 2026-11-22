@@ -118,25 +118,30 @@ def marshal_post():
 	return mb
 
 
-DIGITS = {"100": "100", "200": "200", "300": "300"}
+BOARD_DIGITS = 0.8 # text size (m): the three digits span about 1.3 of the 1.5 m face
+BOARD_BOLD = 0.035 # outline growth per stroke side (m)
 
 
 def brake_board(label):
-	"""Braking board on two posts, showing label (e.g. "100")."""
+	"""Braking board on two posts, showing label (e.g. "100"). 1.5 m square (a real distance board is 1-1.5 m), the
+	digits bold and filling the face: the thin 0.62 m default-face digits on a 1.3 m board melted together beyond 40 m
+	(playtest 2026-11-22)."""
 	mb = MB()
-	w, h, z0 = 1.3, 1.3, 0.9
+	w, h, z0 = 1.5, 1.5, 0.9
 	mb.colour = srgb("#3a3f45")
-	for x in (-0.45, 0.45):
-		mb.box((x - 0.04, 0.02, 0), (x + 0.04, 0.1, z0 + h - 0.1), "SteelPaint", skip=("-z",))
+	for x in (-0.52, 0.52):
+		mb.box((x - 0.045, 0.02, 0), (x + 0.045, 0.1, z0 + h - 0.1), "SteelPaint", skip=("-z",))
 	mb.colour = (1, 1, 1)
 	mb.quad((-w / 2, 0, z0), (w / 2, 0, z0), (w / 2, 0, z0 + h), (-w / 2, 0, z0 + h), "Board", (0, -1, 0))
 	mb.colour = srgb("#141516")
 	mb.box((-w / 2 - 0.03, 0.0, z0 - 0.03), (w / 2 + 0.03, 0.04, z0 + h + 0.03), "Black", skip=("-y",))
-	# a black border and the distance in black
-	for a, b in (((-w / 2, z0), (w / 2, z0 + 0.06)), ((-w / 2, z0 + h - 0.06), (w / 2, z0 + h)),
-			((-w / 2, z0), (-w / 2 + 0.06, z0 + h)), ((w / 2 - 0.06, z0), (w / 2, z0 + h))):
-		mb.quad((a[0], -0.003, a[1]), (b[0], -0.003, a[1]), (b[0], -0.003, b[1]), (a[0], -0.003, b[1]), "Black", (0, -1, 0))
-	kit.text_mesh(mb, label, (0, -0.006, z0 + h * 0.5 - 0.26), 0.62, "Black", axis_u=(1, 0, 0), axis_v=(0, 0, 1))
+	# a thin black border and the distance in black
+	b = 0.05
+	for a, c in (((-w / 2, z0), (w / 2, z0 + b)), ((-w / 2, z0 + h - b), (w / 2, z0 + h)),
+			((-w / 2, z0), (-w / 2 + b, z0 + h)), ((w / 2 - b, z0), (w / 2, z0 + h))):
+		mb.quad((a[0], -0.003, a[1]), (c[0], -0.003, a[1]), (c[0], -0.003, c[1]), (a[0], -0.003, c[1]), "Black", (0, -1, 0))
+	kit.text_mesh(mb, label, (0, -0.006, z0 + h * 0.5), BOARD_DIGITS, "Black", axis_u=(1, 0, 0), axis_v=(0, 0, 1),
+		bold=BOARD_BOLD)
 	return mb
 
 

@@ -125,12 +125,13 @@ const MAP_PATH := "res://scripts/world/town_map.gd"
 const ROADSIDE_MODELS := "res://models/roadside.glb"
 var mesh_cache_dir := ""
 var _stamps := {} ## tag -> stamp
+var _file_md5 := {} ## path -> md5, shared across this builder's steps
 var cache_log: Array[String] = [] ## "tag hit" / "tag miss" per cached step, for the loading probe
 
 ## What each cached step reads. "data": sections of the baked map (TownMap.section_hash). "code": the function that
 ## builds its meshes (the cache holds that function's result, so nothing else of it counts). "files": other files it
 ## reads. "models": it reads which models town.glb and the landmarks hold. "plan": it reads wall_plan_enabled.
-## "map_code": the functions of TownMap it uses that CodeHash cannot see (none yet).
+## "map_code": the functions of TownMap it uses that CodeHash cannot see (used by festival, whose script is hashed as a file).
 static func cache_spec(tag: String) -> Dictionary:
 	match tag:
 		"terrain":
@@ -156,11 +157,50 @@ static func cache_spec(tag: String) -> Dictionary:
 				"trees", "fences", "garden_beds", "lamps", "signals", "stops", "level_crossings"],
 				"code": ["build_props", "build_roads", "build_rail", "build_tunnels", "build_buildings", "build_trees", "build_fences"],
 				"models": true, "plan": true, "files": [TOWN_MODELS, TRAFFIC_MODELS, LANDMARK_MODELS, ROADSIDE_MODELS, SURROUNDINGS.TREES_PATH]}
+		"festival":
+			# the festival dressing's placements (main roads, busy corners, event gates): they read the map's roads,
+			# nodes, buildings, water, rail, tunnels, play polygon, spots, mission tracks, and every wall/post stood by
+			# earlier steps (including earlier parts of build_landmarks and _build_hub)
+			var fest_files: Array = [
+				"res://scripts/world/festival_dressing.gd",
+				"res://scripts/world/map_missions.gd",
+				"res://scripts/sim/missions.gd",
+				"res://scripts/sim/rally.gd",
+				TOWN_MODELS, TRAFFIC_MODELS, LANDMARK_MODELS, ROADSIDE_MODELS, SURROUNDINGS.TREES_PATH,
+			]
+			fest_files.append_array(_mission_track_files())
+			return {"data": ["terrain", "extent", "areas", "waterways", "roads", "nodes", "rail", "tunnels", "buildings", "passages", "places",
+				"boundary", "play", "spots", "trees", "fences", "garden_beds", "lamps", "signals", "stops", "level_crossings"],
+				"code": ["build_landmarks", "build_props", "build_roads", "build_rail", "build_tunnels", "build_buildings", "build_trees", "build_fences"],
+				"map_code": ["in_play", "in_town", "road_at", "inside_building", "buildings_near", "water_at", "rail_distance",
+					"in_tunnel_cut", "decks_at", "walls_near", "posts_near", "along", "nearest_road", "kerb_at", "ground", "add_wall", "add_post"],
+				"models": true, "plan": true, "files": fest_files}
 	return {}
 
+## Track files read by MapMissions.event() when placing mission event gates in FestivalDressing.
+static func _mission_track_files() -> Array[String]:
+	var keys := {}
+	for m in Missions.MISSIONS:
+		var t := String(m.get("track", ""))
+		if t != "":
+			keys[String(MapMissions.OFF_MAP.get(t, t))] = true
+		if m.has("rally"):
+			var re := Rally.event(String(m.rally))
+			for sd in re.get("stages", []):
+				var st := String(sd.get("track", ""))
+				if st != "" and not MapMissions.OFF_MAP.has(st):
+					keys[st] = true
+	var out: Array[String] = []
+	var sorted := keys.keys()
+	sorted.sort()
+	for k in sorted:
+		out.append("res://data/tracks/%s.json" % k)
+		out.append("res://data/tracks/%s.tres" % k)
+	return out
+
 ## Sections of the baked map that no cached step reads (the test checks that every section is in one list or the other).
-const UNCACHED_SECTIONS := ["name", "origin", "bounds", "play", "closures", "nodes", "spots", "credits"]
-const CACHED_TAGS := ["terrain", "water", "streets", "rail", "buildings", "trees", "fences", "props"]
+const UNCACHED_SECTIONS := ["name", "origin", "bounds", "closures", "credits"]
+const CACHED_TAGS := ["terrain", "water", "streets", "rail", "buildings", "trees", "fences", "props", "festival"]
 
 func _stamp(tag: String) -> String:
 	if _stamps.has(tag):
@@ -169,11 +209,13 @@ func _stamp(tag: String) -> String:
 	var parts := PackedStringArray([MESH_CACHE_VERSION, tag, map.key])
 	for section in spec.data:
 		parts.append(map.section_hash(section))
-	var code := CODE_HASH.closure(SELF_PATH, spec.code if spec.code is Array else [spec.code], MAP_PATH, ["_load"])
+	var map_roots: Array = ["_load"]
+	map_roots.append_array(spec.get("map_code", []))
+	var code := CODE_HASH.closure(SELF_PATH, spec.code if spec.code is Array else [spec.code], MAP_PATH, map_roots)
 	parts.append(code)
-	parts.append(FileAccess.get_md5("res://scripts/world/mesh_batch.gd") if FileAccess.file_exists("res://scripts/world/mesh_batch.gd") else "-")
+	parts.append(_md5_file("res://scripts/world/mesh_batch.gd"))
 	for f in spec.get("files", []):
-		parts.append(FileAccess.get_md5(f) if FileAccess.file_exists(f) else "-")
+		parts.append(_md5_file(String(f)))
 	if spec.get("models", false):
 		var keys := models.keys()
 		keys.sort()
@@ -189,6 +231,11 @@ func _stamp(tag: String) -> String:
 			parts.append(str(FileAccess.get_modified_time(pck)))
 	_stamps[tag] = "|".join(parts).md5_text().substr(0, 16)
 	return _stamps[tag]
+
+func _md5_file(path: String) -> String:
+	if not _file_md5.has(path):
+		_file_md5[path] = FileAccess.get_md5(path) if FileAccess.file_exists(path) else "-"
+	return _file_md5[path]
 
 func _cache_path(tag: String) -> String:
 	if mesh_cache_dir == "":
@@ -1753,13 +1800,19 @@ func _wall_plan(skip := {}) -> Dictionary:
 	_cuts = {}
 	if not wall_plan_enabled:
 		return {"push": {}, "cuts": _cuts}
+	# every building's outline walls on WorkerThreadPool (_wall_edges only reads the map), gathered in building order
+	var todo := PackedInt32Array()
+	for bi in map.buildings.size():
+		if map.bld_rings[bi].size() >= 3 and not skip.has(bi):
+			todo.append(bi)
+	var walls: Array = []
+	walls.resize(todo.size())
+	_run_group(_wall_edges_task.bind(todo, walls), todo.size(), "Open world wall plan")
 	var edges: Array = []
 	var cells := {}
-	for bi in map.buildings.size():
-		var ring := map.bld_rings[bi]
-		if ring.size() < 3 or skip.has(bi):
-			continue
-		for we in _wall_edges(bi, ring):
+	for wi in todo.size():
+		var bi := todo[wi]
+		for we in walls[wi]:
 			var a: Vector2 = we[0]
 			var b: Vector2 = we[1]
 			var ln := a.distance_to(b)
@@ -1785,12 +1838,12 @@ func _wall_plan(skip := {}) -> Dictionary:
 	var done := {}
 	var ranges := {}
 	for cell: Vector2i in cells:
+		var near: Array = [] # edges sampled in this cell or one beside it (samples are 5 m apart, cells 10 m)
+		for dx in range(-1, 2):
+			for dy in range(-1, 2):
+				near.append_array(cells.get(cell + Vector2i(dx, dy), []))
 		for ei: int in cells[cell]:
 			var e: Array = edges[ei]
-			var near: Array = [] # edges sampled in this cell or one beside it (samples are 5 m apart, cells 10 m)
-			for dx in range(-1, 2):
-				for dy in range(-1, 2):
-					near.append_array(cells.get(cell + Vector2i(dx, dy), []))
 			for oi: int in near:
 				var o: Array = edges[oi]
 				if o[0] <= e[0] or (e[4] as Vector2).dot(o[4]) < 0.99:
@@ -1863,6 +1916,23 @@ func _wall_plan(skip := {}) -> Dictionary:
 			push[lower] = need
 	return {"push": push, "cuts": _cuts}
 
+## _wall_plan's task i: the outline walls of building todo[i], into walls[i].
+func _wall_edges_task(i: int, todo: PackedInt32Array, walls: Array) -> void:
+	var bi := todo[i]
+	walls[i] = _wall_edges(bi, map.bld_rings[bi])
+
+## Runs task(i) for every i below count on WorkerThreadPool and waits for it (serving the RenderingServer meanwhile on the
+## main thread, see _join_streets). The tasks may only read shared state and write their own slots. Threads as the
+## streets use them in a release build (see _street_start); a debug build's GDScript calls contend across threads, and
+## more than two there slowed the steps building beside it more than they saved (a cold open world, 12 cores).
+func _run_group(task: Callable, count: int, label: String) -> void:
+	if count == 0:
+		return
+	var threads := maxi(1, OS.get_processor_count() - 4)
+	if OS.is_debug_build():
+		threads = mini(threads, 2)
+	_join_streets(WorkerThreadPool.add_group_task(task, count, threads, true, label))
+
 ## Height of a plan edge's top above its point p (on the edge's line).
 func _edge_top(edge: Array, p: Vector2) -> float:
 	var f := clampf((p - (edge[1] as Vector2)).dot(edge[2]) / maxf(float(edge[3]), 1e-3), 0.0, 1.0)
@@ -1893,23 +1963,21 @@ func _parapet_covered(a: Vector2, b: Vector2, y_from: float, y_to: float, bi: in
 			return true
 	return false
 
-var _drawn_faces := {} ## bi -> the walls _wall drew for it (ax, ay, bx, by, outward nx, ny each), while _building_meshes runs
-var _lod2_drawn := {} ## bi -> true: its walls stand on the measured roof's outline, not on its OSM ring
-
 ## One wall a-b (map x, y) from y_lo up to the heights top_a (at a) and top_b (at b): quads standing `push` out of the
 ## plane, minus the stretches _wall_plan() cut. UV.x is metres from the wall's start, UV.y metres over `hi`; UV2 carries
 ## the seed, kind, the wall's length and (when the top is level) its height, which the shader turns into quoins and a
-## cornice (see building.gdshader).
-func _wall(mb: MeshBatch, a: Vector2, b: Vector2, y_lo: float, top_a: float, top_b: float, out: Vector3, color: Color, hi: float, seed: float, code: float, bi := -1, push := 0.0) -> void:
+## cornice (see building.gdshader). rec: the chunk's records (_building_meshes) that building bi's walls go in.
+func _wall(mb: MeshBatch, a: Vector2, b: Vector2, y_lo: float, top_a: float, top_b: float, out: Vector3, color: Color, hi: float, seed: float, code: float, bi := -1, push := 0.0, rec := {}) -> void:
 	var ln := a.distance_to(b)
 	if ln < 0.01:
 		return
-	if bi >= 0: # what the car meets (see _building_meshes): the wall's line, pushed out as drawn, and its outside
+	if bi >= 0 and not rec.is_empty(): # what the car meets (see _building_meshes): the wall's line, pushed out as drawn, and its outside
 		var o := Vector2(out.x, out.z).normalized()
 		var po := o * push
-		if not _drawn_faces.has(bi):
-			_drawn_faces[bi] = PackedFloat32Array()
-		_drawn_faces[bi].append_array(PackedFloat32Array([a.x + po.x, a.y + po.y, b.x + po.x, b.y + po.y, o.x, o.y]))
+		var drawn: Dictionary = rec.faces
+		if not drawn.has(bi):
+			drawn[bi] = PackedFloat32Array()
+		drawn[bi].append_array(PackedFloat32Array([a.x + po.x, a.y + po.y, b.x + po.x, b.y + po.y, o.x, o.y]))
 	var t := (b - a) / ln
 	var level := absf(top_a - top_b) < 0.05
 	var uv2 := Vector2(seed + (roundf((top_a - hi) * 10.0) if level else 0.0), code + 20.0 * minf(roundf(ln * 10.0), 4000.0))
@@ -1971,8 +2039,11 @@ func _wall(mb: MeshBatch, a: Vector2, b: Vector2, y_lo: float, top_a: float, top
 				continue
 			mb.flat_quad(Vector3(pa.x, y0a, pa.y) + po, Vector3(pb.x, y0b, pb.y) + po, Vector3(pb.x, y1b, pb.y) + po, Vector3(pa.x, y1a, pa.y) + po, out, color,
 				[Vector2(s0, y0a - hi), Vector2(s1, y0b - hi), Vector2(s1, y1b - hi), Vector2(s0, y1a - hi)], uv2)
-			if log_walls:
-				wall_log.append([bi, Vector2(pa.x, pa.y) + Vector2(po.x, po.z), Vector2(pb.x, pb.y) + Vector2(po.x, po.z), y0a, y0b, y1a, y1b, Vector2(out.x, out.z)])
+			if log_walls and not rec.is_empty():
+				var walls: Dictionary = rec.log
+				if not walls.has(bi):
+					walls[bi] = []
+				(walls[bi] as Array).append([bi, Vector2(pa.x, pa.y) + Vector2(po.x, po.z), Vector2(pb.x, pb.y) + Vector2(po.x, po.z), y0a, y0b, y1a, y1b, Vector2(out.x, out.z)])
 
 ## The outline walls of building bi as [a, b, outward unit normal on the map, absolute top height at a, at b]: the
 ## footprint's edges, or for a measured (LoD2) building the roof plane edges that no other plane shares, which is where
@@ -2182,24 +2253,29 @@ func _building_meshes() -> Array:
 		if (extra.has("lm") and has_model(String(extra.lm))) or shafts.hidden.has(bi):
 			not_drawn[bi] = true
 	var pushes := _wall_pushes(not_drawn)
-	_drawn_faces = {}
-	_lod2_drawn = {}
-	# the buildings of each 256 m chunk go into one mesh
-	var batches := {}
+	# the buildings of each 256 m chunk go into one mesh, in the order the buildings and then the passages first reach
+	# the chunks; each chunk is built on WorkerThreadPool (_building_task) into its own batch and records: faces
+	# (building -> the walls _wall drew for it: ax, ay, bx, by, outward nx, ny each), lod2 (building -> true: its walls
+	# stand on the measured roof's outline, not on its OSM ring) and log (building -> its wall_log entries)
+	var chunks: Array[Dictionary] = []
+	var at := {} # chunk -> index in chunks
+	var chunk_of := PackedInt32Array() # building -> index in chunks (-1: not drawn)
+	chunk_of.resize(map.buildings.size())
+	chunk_of.fill(-1)
 	for bi in map.buildings.size():
-		var b: Array = map.buildings[bi]
 		var ring := map.bld_rings[bi]
 		if ring.size() < 3 or not_drawn.has(bi):
 			continue
-		var extra: Dictionary = b[6] if b.size() > 6 and b[6] is Dictionary else {}
 		var centre := Vector2.ZERO
 		for p in ring:
 			centre += p
 		centre /= ring.size()
 		var c := _chunk_of(centre)
-		if not batches.has(c):
-			batches[c] = MeshBatch.new(true, true)
-		_add_building(batches[c], ring, String(b[0]), float(b[1]), String(b[3]), centre, extra, bi, float(pushes.get(bi, 0.0)))
+		if not at.has(c):
+			at[c] = chunks.size()
+			chunks.append({"batch": MeshBatch.new(true, true), "blds": [], "passages": [], "faces": {}, "lod2": {}, "log": {}})
+		chunk_of[bi] = at[c]
+		(chunks[at[c]].blds as Array).append([bi, centre])
 	for p: Dictionary in map.raw.get("passages", []):
 		var ring := TownMap._flat(p.get("ring", []))
 		if ring.size() < 3:
@@ -2209,21 +2285,40 @@ func _building_meshes() -> Array:
 			centre += q
 		centre /= ring.size()
 		var c := _chunk_of(centre)
-		if not batches.has(c):
-			batches[c] = MeshBatch.new(true, true)
-		_add_passage(batches[c], ring, p, centre)
+		if not at.has(c):
+			at[c] = chunks.size()
+			chunks.append({"batch": MeshBatch.new(true, true), "blds": [], "passages": [], "faces": {}, "lod2": {}, "log": {}})
+		(chunks[at[c]].passages as Array).append([ring, p, centre])
+	_run_group(_building_task.bind(chunks, pushes), chunks.size(), "Open world buildings")
 	var built: Array = []
-	for c in batches:
-		built.append((batches[c] as MeshBatch).commit())
+	for ch: Dictionary in chunks:
+		built.append((ch.batch as MeshBatch).commit())
 	# where the walls stand on the measured roof's outline (slid onto the footprint by the baker, up to 4 m), the car
-	# meets those walls, not the OSM ring: the faces go last in the step's result (and its cache)
+	# meets those walls, not the OSM ring: the faces go last in the step's result (and its cache), in building order
 	var faces := {}
-	for bi: int in _lod2_drawn:
-		faces[bi] = _drawn_faces.get(bi, PackedFloat32Array())
+	for bi in chunk_of.size():
+		if chunk_of[bi] < 0:
+			continue
+		var ch: Dictionary = chunks[chunk_of[bi]]
+		if (ch.lod2 as Dictionary).has(bi):
+			faces[bi] = (ch.faces as Dictionary).get(bi, PackedFloat32Array())
+		if log_walls:
+			wall_log.append_array((ch.log as Dictionary).get(bi, []))
 	built.append(faces)
-	_drawn_faces = {}
-	_lod2_drawn = {}
 	return built
+
+## Building task i (_building_meshes): chunk i's buildings in index order, then its passages, into its own batch and
+## records. It reads only the map, the wall plan (_cuts) and the pushes.
+func _building_task(i: int, chunks: Array, pushes: Dictionary) -> void:
+	var ch: Dictionary = chunks[i]
+	var mb: MeshBatch = ch.batch
+	for e: Array in ch.blds:
+		var bi: int = e[0]
+		var b: Array = map.buildings[bi]
+		var extra: Dictionary = b[6] if b.size() > 6 and b[6] is Dictionary else {}
+		_add_building(mb, map.bld_rings[bi], String(b[0]), float(b[1]), String(b[3]), e[1], extra, bi, float(pushes.get(bi, 0.0)), ch)
+	for e: Array in ch.passages:
+		_add_passage(mb, e[0], e[1], e[2])
 
 ## The baked detail textures (tools/build_building_textures.py) building.gdshader multiplies onto its facades and roofs.
 static func apply_building_textures(mat: ShaderMaterial) -> void:
@@ -2298,7 +2393,7 @@ static func ring_area(ring: PackedVector2Array) -> float:
 		a += p.x * q.y - q.x * p.y
 	return a * 0.5
 
-func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height: float, roof_shape: String, centre: Vector2, extra: Dictionary = {}, bi := -1, push := 0.0) -> void:
+func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height: float, roof_shape: String, centre: Vector2, extra: Dictionary = {}, bi := -1, push := 0.0, rec := {}) -> void:
 	var r := ring.duplicate()
 	# counter-clockwise seen from above (x east, z south) means negative shoelace area here
 	if ring_area(r) > 0.0:
@@ -2345,8 +2440,9 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 		# (a tall wall with no gable over it): build the OSM walls and a roof of our own instead
 		var mark := mb.mark()
 		if _lod2_cover(roof_surfaces, r) >= LOD2_MIN_COVER \
-				and _add_lod2_roof(mb, roof_surfaces, hi, base, roof, wall, uv2_roof, uv2_wall, bi, push):
-			_lod2_drawn[bi] = true
+				and _add_lod2_roof(mb, roof_surfaces, hi, base, roof, wall, uv2_roof, uv2_wall, bi, push, rec):
+			if not rec.is_empty():
+				(rec.lod2 as Dictionary)[bi] = true
 			return
 		mb.rollback(mark) # a roof given up half way leaves nothing behind
 		roof_surfaces = [] # unusable planes: the OSM walls and a roof of our own
@@ -2364,7 +2460,7 @@ func _add_building(mb: MeshBatch, ring: PackedVector2Array, kind: String, height
 		# r runs clockwise on the map (negative shoelace area), so the outside is always on this side of a-b; the
 		# centre of a concave (L, U, T) footprint can lie outside it and would turn walls inward, culled from outside
 		var out := Vector3(-(b.y - a.y), 0.0, b.x - a.x).normalized()
-		_wall(mb, a, b, base, eave, eave, out, wall, hi, seed, float(code), bi, push)
+		_wall(mb, a, b, base, eave, eave, out, wall, hi, seed, float(code), bi, push, rec)
 	if pitched and roof_surfaces.is_empty():
 		var cen: Vector2 = rect[0]
 		var ax: Vector2 = rect[1]
@@ -2498,7 +2594,7 @@ static func _lod2_cover(faces: Array, ring: PackedVector2Array) -> float:
 ## A measured (GUGiK LoD2) roof: each plane triangulated in its own plane, and walls from the ground up to
 ## every roof edge that no other plane shares, so the walls meet the eaves and gables of the roof exactly.
 ## False if the planes are unusable (the caller builds the OSM walls and roof instead).
-func _add_lod2_roof(mb: MeshBatch, faces: Array, hi: float, base: float, roof: Color, wall: Color, uv2_roof: Vector2, uv2_wall: Vector2, bi := -1, push := 0.0) -> bool:
+func _add_lod2_roof(mb: MeshBatch, faces: Array, hi: float, base: float, roof: Color, wall: Color, uv2_roof: Vector2, uv2_wall: Vector2, bi := -1, push := 0.0, rec := {}) -> bool:
 	var polys: Array[PackedVector3Array] = []
 	for face in faces:
 		if not face is Array or face.size() < 9:
@@ -2580,7 +2676,7 @@ func _add_lod2_roof(mb: MeshBatch, faces: Array, hi: float, base: float, roof: C
 			for run in _open_runs(polys, pi, a, b, Vector2(out.x, out.z), boxes):
 				var p0 := a.lerp(b, float(run[0]))
 				var p1 := a.lerp(b, float(run[1]))
-				_wall(mb, Vector2(p0.x, p0.z), Vector2(p1.x, p1.z), base, p0.y, p1.y, out, wall, hi, uv2_wall.x, uv2_wall.y, bi, push)
+				_wall(mb, Vector2(p0.x, p0.z), Vector2(p1.x, p1.z), base, p0.y, p1.y, out, wall, hi, uv2_wall.x, uv2_wall.y, bi, push, rec)
 	return true
 
 ## Clear ceiling height (m above sea level) of a building passage: shared by _add_passage() (upper facade bottom) and
@@ -2611,7 +2707,7 @@ static func _is_passage_cut_edge(a: Vector2, b: Vector2, out2: Vector2, sides: A
 	return false
 
 ## One exterior wall quad of an overhead passage bridge block (starts at y_lo = y_clear, above the street, so it adds
-## no ground-level collision face to _drawn_faces and no entry to wall_log). Same UV / UV2 layout as _wall().
+## no ground-level collision face to the faces _wall records and no entry to wall_log). Same UV / UV2 layout as _wall().
 static func _passage_wall(mb: MeshBatch, a: Vector2, b: Vector2, y_lo: float, top_a: float, top_b: float, out: Vector3, color: Color, hi: float, seed: float, code: float) -> void:
 	var ln := a.distance_to(b)
 	if ln < 0.01 or (top_a < y_lo + 0.01 and top_b < y_lo + 0.01):
@@ -4059,6 +4155,13 @@ func _build_festival(group: Node3D) -> void:
 	festival.setup(map, self)
 	festival_pos = festival.festival_pos
 	group.add_child(festival)
+
+## What the last warm run kept of the festival dressing's placements (main roads, busy corners, event gates), {} on a miss.
+func _cached_festival() -> Dictionary:
+	var hit := _cached_meshes("festival")
+	if hit.is_empty() or not hit[0] is Dictionary:
+		return {}
+	return hit[0]
 
 func _tint_banner(inst: MeshInstance3D, mat: Material) -> void:
 	var mesh := inst.mesh

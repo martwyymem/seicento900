@@ -856,10 +856,17 @@ def split_bonnet(objs, y0, s_rear, floor_mat, s_front=0.04, up=0.55, frac=0.84, 
 	return ob
 
 
-def sparsify_glb(path, eps=2e-4):
-	"""Rewrites the GLB's dense morph-target accessors (Blender's exporter writes the NORMAL deltas dense, though a crush
-	moves a few hundred of a panel's vertices) as sparse ones holding only the deltas over eps, and packs the buffer.
-	Godot reads sparse accessors as the same blend shapes; the crush_* keys made a car's GLB four times the size without."""
+def sparsify_glb(path, eps_pos=5e-4, eps_nrm=8e-3, quantize=True):
+	"""Rewrites the GLB's morph-target accessors as sparse ones and packs the buffer. Blender's exporter writes every
+	crush_*/dent_* delta dense (POSITION and NORMAL, VEC3 float) though a crush moves a few hundred of a panel's vertices,
+	and a few of its own sparse ones with 32-bit indices; the keys made a car's GLB four times the size without.
+	Each target accessor is decoded to its dense deltas, deltas under eps_pos (POSITION, metres) or eps_nrm (NORMAL, unit
+	vector components; 0.008 is about half a degree of shading) are dropped, and what is left is stored sparse with the
+	smallest index type when that is smaller than dense, or left out (no bufferView = all zero) when nothing moves.
+	The value arrays are normalized int16 for POSITION (KHR_mesh_quantization, steps of 0.00003 m) and normalized int8 for
+	NORMAL (steps of 0.008, under half a degree) where every delta is within 1, and float otherwise (a normal flipped by a
+	crumple can reach 2). Each sparse index and value array keeps a bufferView of its own with exactly its size, because
+	Godot's importer rejects a sparse part whose view is larger. Godot reads sparse accessors as the same blend shapes."""
 	import json
 	import struct
 	with open(path, "rb") as fh:
@@ -869,73 +876,124 @@ def sparsify_glb(path, eps=2e-4):
 	blen = struct.unpack("<I", data[20 + jlen:24 + jlen])[0]
 	bin_ = data[28 + jlen:28 + jlen + blen]
 	acc, views = j["accessors"], j["bufferViews"]
-	chunks = []  # new buffer contents, as (bytes) per view index
-	new_views = []
 
-	def view_bytes(vi):
+	def view_bytes(vi, off, n):
 		v = views[vi]
-		return bin_[v.get("byteOffset", 0):v.get("byteOffset", 0) + v["byteLength"]]
+		start = v.get("byteOffset", 0) + off
+		return bin_[start:start + n]
 
-	def add_view(blob, target=None):
-		new_views.append({"buffer": 0, "byteLength": len(blob), **({"target": target} if target else {})})
-		chunks.append(blob)
-		return len(new_views) - 1
-	remap = {}
-	made = set()  # accessors made sparse here (their views are new already)
-	targets = set()
+	def dense_deltas(a):
+		"""[(x, y, z)] floats of a VEC3 float target accessor (zeros when it has no bufferView), with sparse applied."""
+		n = a["count"]
+		if "bufferView" in a:
+			vals = list(struct.unpack("<%df" % (3 * n), view_bytes(a["bufferView"], a.get("byteOffset", 0), 12 * n)))
+		else:
+			vals = [0.0] * (3 * n)
+		sp = a.get("sparse")
+		if sp:
+			c = sp["count"]
+			ctype = {5121: ("B", 1), 5123: ("H", 2), 5125: ("I", 4)}[sp["indices"]["componentType"]]
+			ib = sp["indices"]
+			vb = sp["values"]
+			idx = struct.unpack("<%d%s" % (c, ctype[0]), view_bytes(ib["bufferView"], ib.get("byteOffset", 0), c * ctype[1]))
+			sv = struct.unpack("<%df" % (3 * c), view_bytes(vb["bufferView"], vb.get("byteOffset", 0), 12 * c))
+			for k, i in enumerate(idx):
+				vals[3 * i:3 * i + 3] = sv[3 * k:3 * k + 3]
+		return vals
+
+	pairs = []  # per morph target: {attribute: accessor index} (POSITION, NORMAL)
 	for m in j["meshes"]:
 		for p in m["primitives"]:
-			for t in p.get("targets", []):
-				targets.update(t.values())
-	for ai, a in enumerate(acc):
-		if ai in targets and "bufferView" in a and "sparse" not in a and a["componentType"] == 5126 and a["type"] == "VEC3" \
-				and views[a["bufferView"]].get("byteStride", 12) == 12:
-			raw = view_bytes(a["bufferView"])[a.get("byteOffset", 0):a.get("byteOffset", 0) + 12 * a["count"]]
-			vals = struct.unpack("<%df" % (3 * a["count"]), raw)
-			idx = [i for i in range(a["count"]) if max(abs(vals[3 * i]), abs(vals[3 * i + 1]), abs(vals[3 * i + 2])) > eps]
-			if len(idx) * 16 < a["count"] * 12:
-				del a["bufferView"]
-				a.pop("byteOffset", None)
-				if not idx:  # glTF wants at least one sparse entry: a zero one
-					idx = [0]
-				iv = add_view(struct.pack("<%dI" % len(idx), *idx))
-				vv = add_view(b"".join(struct.pack("<3f", *vals[3 * i:3 * i + 3]) for i in idx))
-				a["sparse"] = {"count": len(idx), "indices": {"bufferView": iv, "componentType": 5125}, "values": {"bufferView": vv}}
-				made.add(ai)
-				lo = [min(vals[3 * i + k] for i in idx) for k in range(3)]
-				hi = [max(vals[3 * i + k] for i in idx) for k in range(3)]
-				if "min" in a:
-					a["min"], a["max"] = [min(x, 0.0) for x in lo], [max(x, 0.0) for x in hi]
+			pairs += p.get("targets", [])
+	fresh = []  # bytes of the views made here, referred to as bufferView -1 - index until they are packed
+
+	def put(raw):
+		fresh.append(bytes(raw))
+		return -len(fresh)
+	done = set()
+	for t in pairs:
+		ok = {}
+		for kind, ai in t.items():
+			a = acc[ai]
+			if ai in done or a["componentType"] != 5126 or a["type"] != "VEC3" \
+					or ("bufferView" in a and views[a["bufferView"]].get("byteStride", 12) != 12):
 				continue
+			ok[kind] = ai
+		if not ok:
+			continue
+		n = acc[next(iter(ok.values()))]["count"]
+		vals = {kind: dense_deltas(acc[ai]) for kind, ai in ok.items()}
+		eps = {"POSITION": eps_pos, "NORMAL": eps_nrm}
+		moved = {kind: {i for i in range(n) if max(abs(v[3 * i]), abs(v[3 * i + 1]), abs(v[3 * i + 2])) > eps.get(kind, eps_pos)}
+			for kind, v in vals.items()}
+		# POSITION and NORMAL of one target move the same vertices, so they share one index array (the union)
+		both = sorted(set().union(*moved.values()))
+		isz, ict, ifmt = (1, 5121, "B") if n <= 256 else (2, 5123, "H") if n <= 65536 else (4, 5125, "I")
+		iview = put(struct.pack("<%d%s" % (len(both), ifmt), *both)) if both else None
+		for kind, ai in ok.items():
+			done.add(ai)
+			a = acc[ai]
+			v = vals[kind]
+			for key in ("bufferView", "byteOffset", "sparse", "min", "max"):
+				a.pop(key, None)
+			idx = both if moved[kind] else []
+			if not idx:
+				continue  # no bufferView: all zero
+			keep = moved[kind]
+			sv = [v[3 * i + k] if i in keep else 0.0 for i in idx for k in range(3)]
+			quant = quantize and max(abs(x) for x in sv) <= 1.0
+			per = (3 if kind == "NORMAL" else 6) if quant else 12  # bytes of a value
+			if len(idx) * (isz + per) >= n * 12:  # nearly everything moves, and not quantizable: dense floats
+				raw = b"".join(struct.pack("<3f", *v[3 * i:3 * i + 3]) if i in keep else bytes(12) for i in range(n))
+				a["bufferView"] = put(raw)
+				continue
+			if quant:  # normalized int8 (NORMAL) or int16 (POSITION), 3 per value
+				bits, fmt, ct = (127.0, "b", 5120) if kind == "NORMAL" else (32767.0, "h", 5122)
+				voff = put(struct.pack("<%d%s" % (len(sv), fmt), *[int(round(x * bits)) for x in sv]))
+				a["componentType"] = ct
+				a["normalized"] = True
+			else:
+				voff = put(struct.pack("<%df" % len(sv), *sv))
+				if kind == "POSITION":
+					a["min"] = [min(0.0, min(sv[k::3])) for k in range(3)]
+					a["max"] = [max(0.0, max(sv[k::3])) for k in range(3)]
+			a["sparse"] = {"count": len(idx), "indices": {"bufferView": iview, "componentType": ict}, "values": {"bufferView": voff}}
 	# every view still referenced keeps its bytes (accessors, sparse parts, images), in a fresh packed buffer
-	used = []
-	for ai, a in enumerate(acc):
-		if "bufferView" in a:
-			used.append(("acc", a))
-		if "sparse" in a and ai not in made:  # Blender's own sparse accessors
-			used.append(("idx", a["sparse"]["indices"]))
-			used.append(("val", a["sparse"]["values"]))
-	for im in j.get("images", []):
-		if "bufferView" in im:
-			used.append(("img", im))
-	for kind, ob in used:
+	chunks = []
+	new_views = []
+	remap = {}
+
+	def use(ob):
 		vi = ob["bufferView"]
 		if vi not in remap:
-			v = dict(views[vi])
-			blob = view_bytes(vi)
-			v.pop("byteOffset", None)
-			v.pop("buffer", None)
-			new_views.append({"buffer": 0, **v})
-			chunks.append(blob)
+			if vi < 0:
+				bb = fresh[-1 - vi]
+				new_views.append({"buffer": 0, "byteLength": len(bb)})
+			else:
+				v = dict(views[vi])
+				v.pop("byteOffset", None)
+				v.pop("buffer", None)
+				bb = view_bytes(vi, 0, v["byteLength"])
+				new_views.append({"buffer": 0, **v})
+			chunks.append(bb)
 			remap[vi] = len(new_views) - 1
 		ob["bufferView"] = remap[vi]
+	owners = [a for a in acc if "bufferView" in a] + [im for im in j.get("images", []) if "bufferView" in im]
+	for a in acc:
+		sp = a.get("sparse")
+		if sp:
+			owners += [sp["indices"], sp["values"]]
+	for ob in owners:
+		use(ob)
+	if any(a.get("normalized") for a in acc):
+		j["extensionsUsed"] = sorted(set(j.get("extensionsUsed", [])) | {"KHR_mesh_quantization"})
 	out = bytearray()
-	for v, blob in zip(new_views, chunks):
+	for v, bb in zip(new_views, chunks):
 		while len(out) % 4:
 			out.append(0)
 		v["byteOffset"] = len(out)
-		v["byteLength"] = len(blob)
-		out += blob
+		v["byteLength"] = len(bb)
+		out += bb
 	while len(out) % 4:
 		out.append(0)
 	j["bufferViews"] = new_views

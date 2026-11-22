@@ -1,10 +1,12 @@
-## Campaign missions: the events beside the ten stages (Campaign.STAGES) that are not plain lap races: a sprint,
-## a knockout, a rally, drag races, a drift attack and an off-road race. Each opens once a stage is cleared, so they
-## spread over the three acts, and each is a beacon in the open world at the real place it starts (the route's own
+## Campaign missions: the events beside the stages (Campaign.STAGES) that are not plain lap races: sprints,
+## knockouts, rallies, drag races, drift attacks and an off-road race. Each opens once a stage is cleared, so they
+## spread over the three acts, and the seven that award a car are spaced along the career about every second stage
+## (cars are only ever won here, never bought). Each is a beacon in the open world at the real place it starts (the route's own
 ## start line, worked out from the track at load). A mission is addressed by a campaign index of BASE + its place
 ## in MISSIONS, so Campaign.get_stage / is_unlocked / record_result and the game's campaign flow take it like a stage.
-## Progress lives in campaign.json under "missions" ({id: {cleared, best, fails, tier, time}}); RESET CAMPAIGN
-## clears it with the rest.
+## Progress lives in campaign.json under "missions" ({id: {cleared, best, fails, tier, time, open}}); RESET CAMPAIGN
+## clears it with the rest. "open" is set by Campaign.migrate on a mission an older arc's save already had open.
+## New missions go on the end of MISSIONS (BASE + k is a mission's index; the order of play is `after`).
 class_name Missions
 extends RefCounted
 
@@ -16,12 +18,13 @@ const COLOR := Color("#3fd6e6") ## a mission's beacon (stages are orange, gold o
 const DONE_COLOR := Color("#9fe8c8")
 const ACT_NAMES := ["Act I: Silesian Grassroots", "Act II: Regional Championship", "Act III: Global Legends"]
 
-## id, kind, title, after (the stage, 0-based, that must be cleared first), track, laps, opponents, difficulty,
+## id, kind, title, after (the id of the stage that must be cleared first), track, laps, opponents, difficulty,
 ## weather, start_hour, target (a place; drift: tiers [bronze, silver, gold] points), at (m after the start line
 ## where the beacon stands), reward_car (a car key won on the first clear; filled in with the car catalogue).
+## A rally names a Rally event (rally) or carries its own stages (rally_name, rally_stages: Rally.EVENTS' stage form).
 const MISSIONS := [
 	{
-		"id": "drag_quarter", "kind": "drag", "after": 0, "act": 1,
+		"id": "drag_quarter", "kind": "drag", "after": "stage_1", "act": 1,
 		"title": "Ćwierć Mili na S1",
 		"track": "s1_sprint", "finish_distance": 402.0, "laps": 1, "opponents": 3, "difficulty": "easy",
 		"weather": "dry", "start_hour": 21.5, "target": 1, "at": 150.0,
@@ -30,7 +33,7 @@ const MISSIONS := [
 		"tip": "A Seicento has nothing to spare: wait for the green, keep it straight, and with the manual box change up a little before the limiter: the automatic gets there first otherwise.",
 	},
 	{
-		"id": "sprint_s1", "kind": "sprint", "after": 1, "act": 1,
+		"id": "sprint_s1", "kind": "sprint", "after": "stage_3", "act": 1,
 		"title": "S1 Sprint",
 		"track": "s1_sprint", "laps": 1, "opponents": 7, "difficulty": "easy",
 		"weather": "dry", "start_hour": 11.0, "target": 3, "at": 0.0,
@@ -39,7 +42,7 @@ const MISSIONS := [
 		"tip": "The turn-rounds at each end are the only real corners: brake early there, then tuck into a slipstream and hold it all the way.",
 	},
 	{
-		"id": "drift_babudy", "kind": "drift", "after": 2, "act": 1,
+		"id": "drift_babudy", "kind": "drift", "after": "stage_7", "act": 2,
 		"title": "Drift w Babudach",
 		"track": "babudy_gora", "laps": 1, "opponents": 0, "difficulty": "easy", "finish_distance": 2600.0,
 		"weather": "dry", "start_hour": 17.5, "tiers": [450, 1800, 4500], "at": 0.0,
@@ -48,16 +51,16 @@ const MISSIONS := [
 		"tip": "Flick the handbrake (Space) as you turn in, catch it on the throttle, and let the next bend take the slide over before the combo banks.",
 	},
 	{
-		"id": "offroad_kolonia", "kind": "offroad", "after": 3, "act": 2,
+		"id": "offroad_kolonia", "kind": "offroad", "after": "stage_eifel", "act": 3,
 		"title": "Kolonia Stawowa Off-Road",
-		"track": "kolonia_stawowa", "laps": 1, "opponents": 5, "difficulty": "easy",
+		"track": "kolonia_stawowa", "laps": 1, "opponents": 5, "difficulty": "medium",
 		"weather": "dry", "start_hour": 13.5, "target": 3, "at": 0.0,
 		"trophy": "Fishpond Mud Cup", "reward_car": "focus",
 		"desc": "Six cars wheel to wheel on the dykes and forest tracks between the Kolonia Stawowa fishponds: 6 km of gravel and dirt, a hairpin on ul. Oświęcimska and the Bronisław bridge. Finish on the podium and take home the sponsor's Ford Focus 1.5 EcoBoost.",
 		"tip": "Loose roads punish a late brake twice: slow down early, turn in gently and let the car settle before you get back on the power.",
 	},
 	{
-		"id": "knockout_bor", "kind": "knockout", "after": 4, "act": 2,
+		"id": "knockout_bor", "kind": "knockout", "after": "stage_5", "act": 2,
 		"title": "Bór Knockout",
 		"track": "bor", "laps": 5, "opponents": 5, "difficulty": "medium",
 		"weather": "dry", "start_hour": 15.5, "target": 2, "at": 0.0,
@@ -66,7 +69,7 @@ const MISSIONS := [
 		"tip": "The sector lines are the only places that matter: never be last when the leader reaches one, even if it costs you the lead.",
 	},
 	{
-		"id": "rally_bor", "kind": "rally", "after": 5, "act": 2,
+		"id": "rally_bor", "kind": "rally", "after": "stage_rewanz", "act": 2,
 		"title": "Rajd Borów",
 		"track": "bor", "rally": "bor", "opponents": 9, "difficulty": "medium",
 		"weather": "fog", "start_hour": 8.5, "target": 3,
@@ -75,13 +78,55 @@ const MISSIONS := [
 		"tip": "A rally is won on the stages you don't crash on: drive at nine tenths, listen to the co-driver and keep the car whole for the service.",
 	},
 	{
-		"id": "drag_kilometre", "kind": "drag", "after": 7, "act": 3,
+		"id": "drag_kilometre", "kind": "drag", "after": "stage_8", "act": 3,
 		"title": "Kilometr na S1",
 		"track": "s1_sprint", "finish_distance": 1000.0, "laps": 1, "opponents": 3, "difficulty": "hard",
 		"weather": "dry", "start_hour": 23.0, "target": 1, "at": 400.0,
 		"trophy": "Standing Kilometre Crown", "reward_car": "v50",
 		"desc": "The factory test drivers heard about the quarter mile. Now it is a standing kilometre against three of them, flat out until the Seicento runs out of gears. Beat them and Halina hands over the keys to the test team's chase car, a Volvo V50 2.4i.",
 		"tip": "Over a kilometre the slipstream comes back into it: get away first, then stay in the middle of your lane so nobody gets your tow.",
+	},
+	# ---- added with the longer arc (2026-11-22): trophies only, no car
+	{
+		"id": "sprint_rajsko", "kind": "sprint", "after": "stage_2", "act": 1,
+		"title": "Sprint przez Rajsko",
+		"track": "rajsko_wilczkowice", "laps": 1, "opponents": 5, "difficulty": "easy",
+		"weather": "dry", "start_hour": 19.0, "target": 3, "at": 0.0,
+		"trophy": "Rajsko Harvest Sheaf", "reward_car": "",
+		"desc": "With the harvest in, the Rajsko farm lads race the lanes to Wilczkowice and back on a Saturday evening: ul. Oświęcimska, Wilamowicka, Pszczyńska and home down Przemysłowa, 7.2 km between the fields and the ditches with six cars. A podium earns the village's harvest sheaf.",
+		"tip": "The lanes are narrow and the junctions square: brake before the crossroads, not in them, and keep two wheels out of the ditch.",
+	},
+	{
+		"id": "drift_kopalnia", "kind": "drift", "after": "stage_4", "act": 1,
+		"title": "Drift pod Szybem",
+		"track": "brzeszcze", "laps": 1, "opponents": 0, "difficulty": "easy", "finish_distance": 2800.0,
+		"weather": "dry", "start_hour": 23.5, "tiers": [900, 3500, 8800], "at": 0.0,
+		"trophy": "Canteen Steps Scorecard", "reward_car": "",
+		"desc": "After the night shift the miners want to see the town sideways: 2.8 km of the Kopalnia loop at midnight, ul. Ofiar Oświęcimia, Przemysłowa and Leśna round the shafts, judged on angle and speed by the men on the canteen steps. Link the slides and the score multiplies; a kerb or a lamppost ends the combo.",
+		"tip": "The town's corners are right angles: flick it in on the handbrake (Space), hold it on the throttle, and don't straighten up between corners.",
+	},
+	{
+		"id": "knockout_rajsko", "kind": "knockout", "after": "stage_monza", "act": 3,
+		"title": "Knockout w Rajsku",
+		"track": "rajsko_wilczkowice", "laps": 7, "opponents": 7, "difficulty": "hard",
+		"weather": "dry", "start_hour": 16.0, "target": 2, "at": 0.0,
+		"trophy": "Rajsko Last Lane Standing", "reward_car": "",
+		"desc": "Eight cars on one lap of the Rajsko–Wilczkowice lanes cut into seven sectors, the last car out at every line. Halina's factory test drivers have entered, so has Kamil, so has half of Pszczyna. Make the final two.",
+		"tip": "With eight cars the first sectors are a brawl: stay out of the ditch and off last place, and save the attack for the final sector.",
+	},
+	{
+		"id": "rally_zima", "kind": "rally", "after": "stage_9", "act": 3,
+		"title": "Zimowy Rajd Brzeszcze",
+		"track": "brzeszcze", "rally_name": "Zimowy Rajd Brzeszcze", "opponents": 9, "difficulty": "hard",
+		"weather": "snow", "start_hour": 9.0, "target": 3,
+		"rally_stages": [
+			{"name": "Brzeszcze Kopalnia", "track": "brzeszcze", "from": 0.0, "to": 0.0, "surface": "tarmac", "weather": "snow", "hour": 9.0, "service": 0},
+			{"name": "Rajsko–Wilczkowice", "track": "rajsko_wilczkowice", "baked": true, "surface": "dirt", "weather": "snow", "hour": 10.5, "service": 0},
+			{"name": "Kolonia Stawowa", "track": "kolonia_stawowa", "baked": true, "surface": "gravel", "weather": "snow", "hour": 12.0, "service": 0},
+		],
+		"trophy": "Winter Crew Crown", "reward_car": "",
+		"desc": "Home from Tokyo, and the snow came early. Three special stages on the roads round town in the snow: the Kopalnia loop through Brzeszcze, the Rajsko–Wilczkowice lanes and the Kolonia Stawowa dykes, with the liaisons between driven yourself. Ola reads the notes, and a podium makes you the winter's crew.",
+		"tip": "Snow takes half your grip: brake in a straight line and early, turn in slowly, and let the car settle before the power goes back on.",
 	},
 ]
 
@@ -108,15 +153,31 @@ static func progress(prog: Dictionary, index: int) -> Dictionary:
 	var p = all.get(String(get_def(index).id), {})
 	return p if p is Dictionary else {}
 
-## Whether the stage a mission waits for is cleared (its trophy won, or the chain already past it).
+## The place in Campaign.STAGES of the stage a mission waits for.
+static func after_index(index: int) -> int:
+	return maxi(Campaign.index_of(String(get_def(index).after)), 0)
+
+## The mission's rally: {name, stages} (Rally.EVENTS' form) from its own rally_stages, or the Rally event it names;
+## {} for a mission that is not a rally.
+static func rally_def(index: int) -> Dictionary:
+	var m: Dictionary = get_def(index)
+	if String(m.kind) != "rally":
+		return {}
+	if m.has("rally_stages"):
+		return {"key": String(m.id), "name": String(m.get("rally_name", m.title)), "stages": m.rally_stages}
+	return Rally.event(String(m.get("rally", "")))
+
+## Whether the stage a mission waits for is cleared (its trophy won, or the chain already past it), or an older
+## arc's save had the mission open already (Campaign.migrate).
 static func is_unlocked(index: int, prog: Dictionary = {}) -> bool:
 	if not is_mission(index):
 		return false
 	if prog.is_empty():
 		prog = Campaign.load_progress()
-	var after := int(get_def(index).after)
+	var after := after_index(index)
 	var trophies: Array = prog.get("trophies", [])
-	return int(prog.get("unlocked", 0)) > after or String(Campaign.STAGES[after].trophy) in trophies
+	return int(prog.get("unlocked", 0)) > after or String(Campaign.STAGES[after].trophy) in trophies \
+		or bool(progress(prog, index).get("open", false))
 
 static func is_cleared(index: int, prog: Dictionary = {}) -> bool:
 	if prog.is_empty():
@@ -143,7 +204,7 @@ static func as_stage(index: int) -> Dictionary:
 		"weather": m.weather, "time_of_day": float(m.start_hour), "start_hour": float(m.start_hour), "wear_mult": 1.0,
 		"fuel_mult": 1.0, "opponents": int(m.opponents), "base_difficulty": base, "difficulty": Campaign.LEVELS[at - eased],
 		"eased": eased, "fails": fails, "target_pos": int(m.get("target", 3)), "grid": "pole" if m.kind == "drag" else "p%d" % (int(m.opponents) / 2 + 1),
-		"trophy": m.trophy, "desc": m.desc, "tip": m.tip, "after": int(m.after), "reward_car": m.get("reward_car", ""),
+		"trophy": m.trophy, "desc": m.desc, "tip": m.tip, "after": after_index(index), "reward_car": m.get("reward_car", ""),
 		"finish_distance": float(m.get("finish_distance", 0.0)), "tiers": m.get("tiers", []), "rally": m.get("rally", ""),
 	}
 	if m.kind == "knockout":
@@ -173,7 +234,7 @@ static func length_text(index: int) -> String:
 		"knockout":
 			return "%d sectors, one car out per sector" % int(m.laps)
 		"rally":
-			var ev := Rally.event(String(m.rally))
+			var ev := rally_def(index)
 			var on_map: int = ev.get("stages", []).filter(func(sd): return not MapMissions.OFF_MAP.has(String(sd.track))).size()
 			return "%d special stages and the liaisons between" % on_map
 	return "%d lap%s" % [int(m.laps), "" if int(m.laps) == 1 else "s"]
@@ -233,7 +294,7 @@ static func beacon_pose(index: int) -> Array:
 	var key := String(m.track)
 	var at := float(m.get("at", 0.0))
 	if String(m.kind) == "rally":
-		var ev := Rally.event(String(m.rally))
+		var ev := rally_def(index)
 		if not ev.is_empty():
 			var sd: Dictionary = ev.stages[0]
 			key = String(sd.track)
@@ -277,7 +338,7 @@ static func card(index: int, fans_level: int) -> Array:
 	var prog := Campaign.load_progress()
 	var p := progress(prog, index)
 	var tr_key := String(MapMissions.OFF_MAP.get(String(m.track), m.track)) # as raced on the map
-	var tr_name := Track.load_def(tr_key).display_name if String(m.kind) != "rally" else String(Rally.event(String(m.rally)).get("name", ""))
+	var tr_name := Track.load_def(tr_key).display_name if String(m.kind) != "rally" else String(rally_def(index).get("name", ""))
 	var field := "solo" if int(m.opponents) == 0 else "%d rivals (%s)" % [int(m.opponents), String(m.difficulty).capitalize()]
 	var best := ""
 	if String(m.kind) == "drift" and int(p.get("best", 0)) > 0:

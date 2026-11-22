@@ -29,8 +29,8 @@ detail under **Options**.
 
 - **Campaign:** free-roam open-world Brzeszcze (plus Jawiszowice, Wola, Rajsko, east Góra and the S1 corridor),
   with mine headframes, 13 underpasses, level crossings, an EN57 train, cycling traffic lights, an aerial
-  satnav map, 9 speed traps, 27 discoverable landmarks, 7 map-only campaign missions, dynamic Forza-style live
-  events, and 10 fan levels unlocking playful modifiers (including Nitrous and Monster Truck).
+  satnav map, 9 speed traps, 27 discoverable landmarks, a 14-stage career with 11 map-only missions (the 7 cars are
+  won there), dynamic Forza-style live events, and 10 fan levels unlocking playful modifiers (including Nitrous and Monster Truck).
 - **Modes:** Quick Race (lap or timed endurance against AI), Rally, Time Trial (per-car records and ghosts),
   and customizable Championship with F1-style points and saved standings.
 - **26 tracks (21 circuits & street tracks + 5 rally stages):** 11 circuits (Nürburgring GP, Nordschleife,

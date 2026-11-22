@@ -11,16 +11,21 @@ const GAP := 0.3
 class Recorder extends TownBuilder:
 	var walls := {} ## bi -> PackedVector2Array of a, b pairs (pushed out as drawn)
 	var lod2 := {}
-	func _wall(mb: MeshBatch, a: Vector2, b: Vector2, y_lo: float, top_a: float, top_b: float, out: Vector3, color: Color, hi: float, seed: float, code: float, bi := -1, push := 0.0) -> void:
+	var _lock := Mutex.new() ## _building_meshes builds its chunks on several threads at once
+	func _wall(mb: MeshBatch, a: Vector2, b: Vector2, y_lo: float, top_a: float, top_b: float, out: Vector3, color: Color, hi: float, seed: float, code: float, bi := -1, push := 0.0, rec := {}) -> void:
 		var o := Vector2(out.x, out.z) * push
+		_lock.lock()
 		if not walls.has(bi):
 			walls[bi] = PackedVector2Array()
 		walls[bi].append_array(PackedVector2Array([a + o, b + o]))
-		super(mb, a, b, y_lo, top_a, top_b, out, color, hi, seed, code, bi, push)
-	func _add_lod2_roof(mb: MeshBatch, faces: Array, hi: float, base: float, roof: Color, wall: Color, uv2_roof: Vector2, uv2_wall: Vector2, bi := -1, push := 0.0) -> bool:
-		var ok := super(mb, faces, hi, base, roof, wall, uv2_roof, uv2_wall, bi, push)
+		_lock.unlock()
+		super(mb, a, b, y_lo, top_a, top_b, out, color, hi, seed, code, bi, push, rec)
+	func _add_lod2_roof(mb: MeshBatch, faces: Array, hi: float, base: float, roof: Color, wall: Color, uv2_roof: Vector2, uv2_wall: Vector2, bi := -1, push := 0.0, rec := {}) -> bool:
+		var ok := super(mb, faces, hi, base, roof, wall, uv2_roof, uv2_wall, bi, push, rec)
 		if ok:
+			_lock.lock()
 			lod2[bi] = true
+			_lock.unlock()
 		return ok
 
 func _initialize() -> void:

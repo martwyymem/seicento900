@@ -2266,7 +2266,7 @@ func _dev_entries() -> Array:
 
 ## Dev entries for the campaign: open every stage and mission, give the cars missions award, clear or forget missions.
 func _dev_campaign_entries(add: Callable) -> void:
-	add.call("CAMPAIGN", "Open every stage and mission (all ten stages cleared up to the last)", func() -> void:
+	add.call("CAMPAIGN", "Open every stage and mission (the whole chain open up to the last stage)", func() -> void:
 		var prog := Campaign.load_progress()
 		prog["unlocked"] = maxi(int(prog.get("unlocked", 0)), Campaign.STAGES.size() - 1)
 		Campaign.save_progress(prog)
@@ -5091,7 +5091,7 @@ func _show_results() -> void:
 			primary = _button(next_label, ACCENT)
 			primary.pressed.connect(_start_race)
 	elif is_campaign_mode:
-		if campaign_cleared and campaign_stage_index < CampaignData.STAGES.size() - 1:
+		if campaign_cleared and campaign_stage_index < CampaignData.STAGES.size() - 1 and CampaignData.is_unlocked(campaign_stage_index + 1, _fan_total()):
 			primary = _button("NEXT STAGE ▸", ACCENT)
 			primary.pressed.connect(func() -> void:
 				campaign_stage_index += 1
@@ -5099,8 +5099,8 @@ func _show_results() -> void:
 				_apply_campaign_stage(campaign_stage_index)
 				_start_race()
 			)
-		elif campaign_cleared:
-			primary = _button("RACE THE FINALE AGAIN ▸", ACCENT)
+		elif campaign_cleared: # the finale, or a stage whose next one is still locked (the Goliath opens on fans)
+			primary = _button("RACE THE FINALE AGAIN ▸" if campaign_stage_index >= CampaignData.STAGES.size() - 1 else "RACE AGAIN ▸", ACCENT)
 			primary.pressed.connect(_start_race)
 		else:
 			primary = _button("RETRY STAGE ▸", ACCENT)
@@ -5552,8 +5552,9 @@ func _populate_campaign_stages() -> void:
 		var st: Dictionary = CampaignData.STAGES[i]
 		var fan_lock: bool = st.get("fan_lock", false)
 		var is_un := CampaignData.is_unlocked(i, _fan_total()) if fan_lock else i <= unlocked
-		var completed: bool = (st.trophy in trophies) or (best_pos.has(str(i)) and int(best_pos[str(i)]) <= int(st.target_pos)) or (i < unlocked and not fan_lock)
-		var prefix := "★ " if completed else ("▶ " if (i == unlocked or fan_lock) and is_un else "🔒 ")
+		# (won, not just passed: a stage new to the arc behind an older save's furthest stage is open, not done)
+		var completed: bool = (st.trophy in trophies) or (best_pos.has(str(i)) and int(best_pos[str(i)]) <= int(st.target_pos))
+		var prefix := "★ " if completed else ("▶ " if is_un else "🔒 ")
 		campaign_stage_picker.add_item("%s%s" % [prefix, st.title])
 		campaign_stage_picker.set_item_disabled(i, not is_un)
 	# the missions are not in the list: they are raced on the open-world map only, from their beacons

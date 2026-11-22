@@ -72,9 +72,12 @@ const SUITES := [
 	"res://tests/test_missions.gd",
 	"res://tests/test_story.gd",
 	"res://tests/test_live_events.gd",
+	"res://tests/test_live_event_gates.gd",
 	"res://tests/test_mission_weather.gd",
 	"res://tests/test_world_weather.gd",
-	"res://tests/test_street_rivals.gd"
+	"res://tests/test_street_rivals.gd",
+	"res://tests/test_car_panel_plates.gd",
+	"res://tests/test_playtest_fixes.gd"
 ]
 
 const SURROUNDINGS := preload("res://scripts/ui/surroundings.gd")

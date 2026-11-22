@@ -1,5 +1,8 @@
-## Campaign mode ("The Seicento Odyssey"): a 10-stage racing career tracing a grassroots Polish racer's journey
-## from Silesian village lanes to Tokyo and home to Brzeszcze for the Goliath. The story told round it is Story.
+## Campaign mode ("The Seicento Odyssey"): a 14-stage racing career tracing a grassroots Polish racer's journey
+## from Silesian village lanes through Monza, the Nürburgring, Le Mans and Tokyo, and home to Brzeszcze for the
+## Goliath. The map missions beside the stages (Missions) award the cars. The story told round it is Story.
+## The save (campaign.json) indexes stages by their place in STAGES; "arc" says which layout it was written for, and
+## a save from the first, ten-stage arc is mapped onto this one by stage id when it loads (migrate).
 class_name Campaign
 extends RefCounted
 
@@ -108,10 +111,30 @@ const STAGES := [
 		"tip": "Use the draft up the long Armii Krajowej drag, then brake hard for Rondo Fieldorfa at the top: the descent to Karpacka comes at you fast."
 	},
 	{
+		"id": "stage_rewanz",
+		"act": 2,
+		"act_name": "Act II: Regional Championship",
+		"title": "Stage 6: Kamil's Rematch",
+		"track": "pszczyna",
+		"laps": 2,
+		"weather": "wet",
+		"time_of_day": 21.5,
+		"start_hour": 21.5,
+		"wear_mult": 2.0,
+		"fuel_mult": 1.0,
+		"opponents": 7,
+		"difficulty": "medium",
+		"target_pos": 2,
+		"grid": "p2",
+		"trophy": "Pszczyna Moonlight Cup",
+		"desc": "Kamil wants his town back. The castle park again, but on a Saturday night in the rain: wet setts on Piastowska and the Rynek, the park lamps off after ten, the narrow bridges between the ponds lit only by your headlights. A smaller field, all of them Kamil's friends.",
+		"tip": "In the dark the bridges arrive before you see them: pick your braking points off the castle lights and the trees, and keep it straight on the wet setts."
+	},
+	{
 		"id": "stage_6",
 		"act": 2,
 		"act_name": "Act II: Regional Championship",
-		"title": "Stage 6: Riverbank Grand Prix",
+		"title": "Stage 7: Riverbank Grand Prix",
 		"track": "oswiecim",
 		"laps": 2,
 		"weather": "wet",
@@ -131,7 +154,7 @@ const STAGES := [
 		"id": "stage_7",
 		"act": 2,
 		"act_name": "Act II: Regional Championship",
-		"title": "Stage 7: The Royal Crown",
+		"title": "Stage 8: The Royal Crown",
 		"track": "krakow",
 		"laps": 2,
 		"weather": "dry",
@@ -151,7 +174,7 @@ const STAGES := [
 		"id": "stage_8",
 		"act": 3,
 		"act_name": "Act III: Global Legends",
-		"title": "Stage 8: Proving Grounds Trial",
+		"title": "Stage 9: Proving Grounds Trial",
 		"track": "fiat",
 		"laps": 6,
 		"weather": "dry",
@@ -168,10 +191,73 @@ const STAGES := [
 		"tip": "The slipstream is strongest on the kilometre-long back straight: time your pass before the West Turn, a long, flat 185° right-hander."
 	},
 	{
+		"id": "stage_monza",
+		"act": 3,
+		"act_name": "Act III: Global Legends",
+		"title": "Stage 10: Temple of Speed",
+		"track": "monza",
+		"laps": 2,
+		"weather": "dry",
+		"time_of_day": 11.0,
+		"start_hour": 11.0,
+		"wear_mult": 2.0,
+		"fuel_mult": 1.0,
+		"opponents": 11,
+		"difficulty": "medium",
+		"target_pos": 2,
+		"grid": "p2",
+		"trophy": "Parabolica Laurel",
+		"note": "North on the S1 to Katowice airport: the flight to Milan",
+		"desc": "Fiat's home crowd. The factory's people in Turin heard about the Polish Seicento and want it at the Autodromo in the royal park at Monza: the Rettifilo chicane, Curva Grande, the two Lesmos, Ascari and the long Parabolica onto the straight.",
+		"tip": "Monza is all straights and chicanes: brake hard and straight for the Rettifilo, then be patient through the Parabolica: a late apex is a fast exit and a tow down the straight."
+	},
+	{
+		"id": "stage_eifel",
+		"act": 3,
+		"act_name": "Act III: Global Legends",
+		"title": "Stage 11: The Green Hell",
+		"track": "nordschleife",
+		"laps": 1,
+		"weather": "fog",
+		"time_of_day": 8.5,
+		"start_hour": 8.5,
+		"wear_mult": 1.0,
+		"fuel_mult": 1.0,
+		"opponents": 11,
+		"difficulty": "hard",
+		"target_pos": 3,
+		"grid": "p3",
+		"trophy": "Eifel Forest Medal",
+		"note": "Brzeszcze Jawiszowice station: the night train west to the Eifel",
+		"desc": "One lap of the Nürburgring Nordschleife in the morning fog: twenty kilometres through the Eifel forests, from Hatzenbach and Flugplatz down the Fuchsröhre, through Adenauer Forst, the Karussell and Brünnchen, over Pflanzgarten and home up the Döttinger Höhe.",
+		"tip": "Learn it as a string of short stages: the Karussell's concrete banking wants you in it and staying in it, and the Döttinger Höhe is the one place to use the tow."
+	},
+	{
+		"id": "stage_lemans",
+		"act": 3,
+		"act_name": "Act III: Global Legends",
+		"title": "Stage 12: Through the Night",
+		"track": "lemans",
+		"laps": 1,
+		"weather": "dry",
+		"time_of_day": 22.5,
+		"start_hour": 22.5,
+		"wear_mult": 1.0,
+		"fuel_mult": 1.0,
+		"opponents": 11,
+		"difficulty": "hard",
+		"target_pos": 2,
+		"grid": "p2",
+		"trophy": "Mulsanne Night Lantern",
+		"note": "Seicento Fest at the KS Górnik stadium: Pan Zbyszek's coach to Le Mans",
+		"desc": "The Circuit de la Sarthe after dark: under the Dunlop bridge, through Tertre Rouge onto the Mulsanne straight and its two chicanes, Mulsanne corner, Indianapolis and Arnage, then the Porsche Curves and the Ford chicanes home. Thirteen kilometres by headlight.",
+		"tip": "The Mulsanne is the longest you will ever hold it flat: take the tow, and brake by the boards for Mulsanne corner, not by feel. The Porsche Curves at night are where the lap is lost."
+	},
+	{
 		"id": "stage_9",
 		"act": 3,
 		"act_name": "Act III: Global Legends",
-		"title": "Stage 9: Midnight Showdown",
+		"title": "Stage 13: Midnight Showdown",
 		"track": "tokyo",
 		"laps": 1,
 		"weather": "dry",
@@ -191,7 +277,7 @@ const STAGES := [
 		"id": "stage_10",
 		"act": 4,
 		"act_name": "Finale: Seicento Legend",
-		"title": "Stage 10: The Goliath",
+		"title": "Stage 14: The Goliath",
 		"track": "goliath",
 		"laps": 1,
 		"weather": "dry",
@@ -206,22 +292,34 @@ const STAGES := [
 		"trophy": "The Goliath Crown",
 		"car_class": "hypercar",
 		"fan_lock": true,
+		"note": "Seicento Fest at the KS Górnik stadium: the Goliath's grid",
 		"desc": "The homecoming, and Pan Zbyszek's dream come true. One lap, 27 km, the whole of Brzeszcze closed for the night: the town, the S1 flat out, the villages and the Bór ponds, and back down the east side. Twelve Hypercar Seicentos in AF Corse yellow, and you on pole with eleven Legends behind you for 27 km.",
 		"tip": "The S1 is where races are won: 340 km/h, then the hardest stop of the lap into the junction. Save the tyres in town."
 	}
 ]
 
+## The stage layout a save was written for: 1 (no "arc" key) is the first, ten-stage arc; 2 is this one.
+const ARC := 2
+## The first arc's stages in their old order: a save without "arc" keys unlocked, best_pos and fails by these places.
+const ARC1_ORDER := ["stage_1", "stage_2", "stage_3", "stage_4", "stage_5", "stage_6", "stage_7", "stage_8", "stage_9", "stage_10"]
+## The stage (its place in ARC1_ORDER) each first-arc mission waited for: a mission an old save had open stays open.
+const ARC1_MISSION_AFTER := {"drag_quarter": 0, "sprint_s1": 1, "drift_babudy": 2, "offroad_kolonia": 3, "knockout_bor": 4,
+	"rally_bor": 5, "drag_kilometre": 7}
+
+static func empty_progress() -> Dictionary:
+	return {"unlocked": 0, "best_pos": {}, "trophies": [], "arc": ARC}
+
 static func load_progress() -> Dictionary:
 	var path := SaveData.read_path(save_file)
 	if not FileAccess.file_exists(path):
-		return {"unlocked": 0, "best_pos": {}, "trophies": []}
+		return empty_progress()
 	var f := FileAccess.open(path, FileAccess.READ)
 	if not f:
-		return {"unlocked": 0, "best_pos": {}, "trophies": []}
+		return empty_progress()
 	var json = JSON.parse_string(f.get_as_text())
 	if json is Dictionary:
-		return json
-	return {"unlocked": 0, "best_pos": {}, "trophies": []}
+		return migrate(json)
+	return empty_progress()
 
 static func save_progress(data: Dictionary) -> void:
 	var path := SaveData.path(save_file)
@@ -231,7 +329,58 @@ static func save_progress(data: Dictionary) -> void:
 
 ## Wipes the campaign: unlocked stages, results, trophies, failed tries and the carried car.
 static func reset_progress() -> void:
-	save_progress({"unlocked": 0, "best_pos": {}, "trophies": []})
+	save_progress(empty_progress())
+
+## A stage's place in STAGES by its id, -1 when there is none.
+static func index_of(id: String) -> int:
+	for i in STAGES.size():
+		if String(STAGES[i].id) == id:
+			return i
+	return -1
+
+## A save from an older arc, in this arc's terms (a save already on it comes back as it is). The ten-stage arc's
+## stages keep their ids, so the stage indices (unlocked, best_pos, fails) are mapped through them: the furthest
+## stage it had open stays the furthest open, and the stages new to this arc before it are open to race. Trophies,
+## missions, cars, the story and the carried car are keyed by name and carry over untouched; a mission that was
+## open stays open (its "open" flag) even where this arc opens it later. Saved back with "arc" the next time the
+## campaign writes the file.
+static func migrate(prog: Dictionary) -> Dictionary:
+	if int(prog.get("arc", 1)) >= ARC:
+		return prog
+	var out := prog.duplicate(true)
+	var old_unlocked := clampi(int(prog.get("unlocked", 0)), 0, ARC1_ORDER.size() - 1)
+	out["unlocked"] = maxi(_arc1_index(old_unlocked), 0)
+	for field: String in ["best_pos", "fails"]:
+		var src = prog.get(field, {})
+		if not src is Dictionary:
+			continue
+		var dst := {}
+		for k in (src as Dictionary):
+			var at: int = _arc1_index(int(String(k))) if String(k).is_valid_int() else -1
+			if at >= 0:
+				dst[str(at)] = src[k]
+		out[field] = dst
+	var trophies: Array = prog.get("trophies", []) if prog.get("trophies", []) is Array else []
+	var all = out.get("missions", {})
+	if not all is Dictionary:
+		all = {}
+	for id: String in ARC1_MISSION_AFTER:
+		var after: int = ARC1_MISSION_AFTER[id]
+		var was_open := int(prog.get("unlocked", 0)) > after or String(STAGES[_arc1_index(after)].trophy) in trophies
+		if was_open:
+			var p: Dictionary = (all.get(id, {}) as Dictionary).duplicate() if all.get(id, {}) is Dictionary else {}
+			p["open"] = true
+			all[id] = p
+	if not (all as Dictionary).is_empty():
+		out["missions"] = all
+	out["arc"] = ARC
+	return out
+
+## Where a first-arc stage index is in STAGES now (-1 for none).
+static func _arc1_index(old: int) -> int:
+	if old < 0 or old >= ARC1_ORDER.size():
+		return -1
+	return index_of(ARC1_ORDER[old])
 
 const LEVELS := ["easy", "medium", "hard", "alien"]
 const FAILS_PER_EASE := 1 ## failed tries on a stage before its field drops one difficulty level
