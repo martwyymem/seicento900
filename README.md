@@ -27,60 +27,78 @@ detail under **Options**.
 
 ## What's in the game
 
-- **Campaign:** drive around an open-world Brzeszcze, with its mine headframes, streets, level crossings and a
-  train. To start a stage, drive to its beacon.
-- **Quick race:** lap or timed endurance races against up to a full grid of AI drivers. With 0 opponents
-  it becomes a time trial against your own ghost.
-- **Championship:** a calendar of rounds with F1-style points and saved standings.
-- **19 tracks:** Nürburgring GP, Nordschleife, Monaco, Indianapolis, Le Mans, Monza, Silverstone,
-  Spa-Francorchamps, Suzuka, Zandvoort, Fiat Track and the Tokyo C1 Expressway, plus the Polish stages
-  Bielsko-Biała, Kraków, Oświęcim, Wilamowice, Brzeszcze, Pszczyna and Bór.
-- **Racing:** tyre wear, fuel, pit stops planned by a strategist, damage, stewards' penalties, yellow flags
-  and a safety car, slipstreaming, and AI drivers that learn how you drive.
-- **Conditions:** day and night, rain and other weather, and eight camera views.
+- **Campaign:** free-roam open-world Brzeszcze (plus Jawiszowice, Wola, Rajsko, east Góra and the S1 corridor),
+  with mine headframes, 13 underpasses, level crossings, an EN57 train, cycling traffic lights, an aerial
+  satnav map, 9 speed traps, 27 discoverable landmarks, 7 map-only campaign missions, dynamic Forza-style live
+  events, and 10 fan levels unlocking playful modifiers (including Nitrous and Monster Truck).
+- **Modes:** Quick Race (lap or timed endurance against AI), Rally, Time Trial (per-car records and ghosts),
+  and customizable Championship with F1-style points and saved standings.
+- **26 tracks (21 circuits & street tracks + 5 rally stages):** 11 circuits (Nürburgring GP, Nordschleife,
+  Monaco, Indianapolis, Le Mans, Monza, Silverstone, Spa-Francorchamps, Suzuka, Zandvoort, Fiat Track), 8
+  real-OSM city and street loops (Tokyo C1 + Hamarikyu Spiral, Bielsko-Biała, Kraków, Oświęcim, Wilamowice,
+  Brzeszcze Kopalnia, Pszczyna, Bór), The Goliath (27 km) and S1 Sprint (9.6 km), plus 5 Brzeszcze-area
+  point-to-point rally stages (Mały Bór, Kolonia Stawowa, Babudy–Góra, Rajsko–Wilczkowice, Lipowiec–Kobylec).
+- **9 playable cars:** Stock Seicento 900, Hypercar Seicento (AF Corse #83, AWD), and 7 mission-reward cars
+  (VW Golf IV, Dacia Logan, Volvo V50 2.4i, Hyundai i20, Dacia Sandero, Ford Focus Mk3.5, Opel Zafira B) with
+  real-car physics specs, factory paint palettes and a Garage turntable.
+- **Racing & driving feel:** tyre wear, fuel, pit stops planned by a strategist, stewards' penalties, yellow
+  flags and a safety car, slipstreaming, AI drivers that learn how you drive, per-car racing-line braking zones,
+  and a drift overhaul (billowing tyre smoke, darker skid trails, camera swing/roll, drift score/chain panel and
+  player drift assist).
+- **Visuals & conditions:** day and night, dynamic weather (dry, wet, snow, hail, fog, variable) in races and
+  free roam, 6 retro post-process styles, a Gran Turismo-style rear-view mirror, and Camera & Screen Effects
+  (bloom, lens flare, speed FOV, radial speed blur).
+- **Damage & festival (unreleased on `main`):** hinged and detachable body panels (bonnet, doors, bumpers,
+  boot/tailgate), bending and detaching wheels, spider-web windscreen cracks and shattering side/rear glass,
+  per-lamp breakage, localised crush deformation and scraped bare metal; plus Brzeszcze dressed as a sports
+  festival with spectator crowds behind barriers, bunting, string lights, inflatable SEICENTO FEST arches,
+  stalls, flags, hay bales and night fireworks.
 
 ## What's being worked on
 
-Last updated 2026-11-08. The full task list is in [`TASKS.md`](TASKS.md); the port status is in
+Last updated 2026-11-22. The full task list is in [`TASKS.md`](TASKS.md); the port status is in
 [`godot/README.md`](godot/README.md).
 
-**Now (Phase 2: driving feel and look)**
+**Active now (next release)**
 
-- Surface handling: gravel, dirt, tarmac and wet tarmac should each drive differently, and dirt must not beat tarmac.
-  Open-world surface feedback has landed; grip tuning continues.
-- Graphics mood pass: a night-rain circuit and a golden-hour open world, aiming at the reference look.
-- Leftover city details: tram rails in Kraków and the Wilamowice church.
-- Handbrake and drift feel, tuned by driving.
-- Traffic variants and cycling traffic lights were finished on 2026-11-08.
+- Open-world map geometry & visual sweep: cleaning up the remaining protruding OSM buildings and running
+  windowed visual checks (grass LODs, building passages, street-track braking boards, aerial satnav zoom/pan).
+- Street track polish: Bór guardrails vs open verges, Bór far horizon, and an urban ground-shading audit.
+- Performance follow-ups: re-measuring High/Ultra night-rain frame time on the GP circuit and optional cold
+  open-world load optimization.
 
-**Next**
+**Next up**
 
-- Event variety in the campaign: sprint, knockout, rally, drag, drift and off-road events.
-- Rally stages and new routes cut from the open-world map, and discoverable points of interest on the map.
-- Remaining city tracks: Brzeszcze, Oświęcim and Tokyo.
-- Campaign progression: new cars (Volvo V50, Hyundai i20, VW Golf 4, Dacia Logan and Sandero, Ford Focus, Opel
-  Zafira B) are won by beating campaign missions. Fans are easter eggs, not a currency.
+- Deciding on per-car circuit loading hero stills vs the open-world cover fallback.
+- Expanded live-event variety (weather- and time-gated events) and a longer campaign progression arc (cars
+  stay mission rewards, never bought with fans).
+- Playtest and feel tuning: damage/festival visual polish, physical gamepad QA, and driving/event balance.
 
 ## Controls
 
 Keyboard and gamepad both work. Press **H** during a race to show the controls on screen.
 
-| Key | Action |
-|---|---|
-| W / ↑ | Accelerate |
-| S / ↓ / Space | Brake / reverse |
-| A D / ← → | Steer |
-| Q / E | Shift down / up (manual gearbox) |
-| C | Change camera |
-| P | Request a pit stop |
-| R / Backspace | Reset the car onto the track |
-| V | Flag speed limiter |
-| L / G | Show the racing line / ghost car |
-| F1 | Cycle the retro graphics styles |
-| M | Mute |
-| Esc | Pause |
+| Keyboard | Gamepad | Action |
+|---|---|---|
+| `W` / `↑` | `RT` | Accelerate |
+| `S` / `↓` | `LT` | Brake / reverse |
+| `Space` | `A` | Handbrake |
+| `A` `D` / `←` `→` | `Left Stick` | Steer |
+| `Q` / `E` | `LB` / `RB` | Shift down / up (manual gearbox) |
+| `Shift` | `L3` | Nitrous (when modifier is active) |
+| `B` | `R3` / `Right Stick` | Look behind / free camera look |
+| `C` | `Y` (open world) | Change camera |
+| `R` / `Backspace` | `Back` (race) / `X` (open world) | Reset car onto the road / last gate |
+| `P` / `T` | `Y` (race / TT) | Request pit stop / restart Time Trial |
+| `[` `]` / `-` `=` / `F` / `Shift+R` | `X` (fuel mix) | Pit tyre / fuel / fuel mix / replan strategy |
+| `L` / `G` / `V` / `O` | — | Racing line / ghost car / speed limiter / autopilot (race) |
+| `M` or `Tab` / `G` / `Enter` / `T` | `Back` / `D-pad ↑` / `B` | Open-world map / GPS / start event / advance time |
+| `F1` | — | Cycle retro graphics styles |
+| `H` / `M` (race) | — | Toggle controls help / mute |
+| `Esc` | `Start` | Pause |
 
-Menus use the arrow keys, Enter and Esc, or the gamepad's d-pad, A and B.
+Menus use the arrow keys or `WASD`, `Enter`, `Esc` (`Q`/`E` for tabs), or the gamepad's D-pad / left stick,
+`A`, `B`, `LB`/`RB` and `Start`.
 
 ## Running from source
 

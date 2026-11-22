@@ -27,7 +27,7 @@ Everything from the original Pillars 1–9, Phases 0–4 core roadmap, and `0.5.
 - [x] Satnav aerial `.import` settings tracked in git (`!data/world/brzeszcze_map.png.import` in `godot/.gitignore`).
 - [ ] Open-world map geometry & visual sweep (Opus sub-agent, in flight).
 - [ ] Street track polish: Bór guardrails vs open verges, Bór far horizon, urban ground shading audit (Opus sub-agent, in flight).
-- [ ] README refresh (Gemini 4 Neon, in flight).
+- [x] README refreshed (Gemini 4 Neon): current status, 26 tracks / 9 cars, controls table checked against the key handling (Space = handbrake), keyboard + gamepad.
 - [ ] Night-rain High/Ultra frame time on GP: re-measure once the machine is idle (after the agents above finish).
 - [ ] Cold open-world load optimization: after the geometry sweep lands (same loader/baker code).
 
@@ -45,7 +45,7 @@ Items surfaced by recent releases (`0.5.0`–`0.5.2-hotfix3`) and remaining loos
   - Decide guardrails vs open verges on rural street stages (e.g. Bór currently lines both sides of the whole lap with guardrails) and add far-horizon data for Bór.
   - Audit ground shading between urban buildings on non-city street tracks (city themes such as Tokyo use grey paving `CITY_GROUND`; verify other urban Polish stages don't show bright meadow grass between blocks).
   - Re-measure High/Ultra night-rain frame time on the GP circuit on an idle machine (last measured at 24/31 ms before the 0.5.2 minimap batching & LOD fixes).
-- [ ] **Refresh `README.md`:** update the stale 2026-11-08 "What's being worked on" section, track/car counts (26 tracks / 9 cars), and controls table (`Space` is handbrake, not brake).
+- [x] **Refresh `README.md`:** update the stale 2026-11-08 "What's being worked on" section, track/car counts (26 tracks / 9 cars), and controls table (`Space` is handbrake, not brake).
 - [ ] **Per-car circuit hero stills (decide):** races currently fall back to each car's open-world cover still; decide whether to render `hero_<track>_<car>.jpg` (`CAR=<key> tests/_loading_shots.gd`) or keep the cover fallback to avoid bloating release size.
 - [ ] **Further cold open-world load optimization (optional):** warm loads are ~2.4 s; cold loads (~9.1 s) spend ~2.9 s on street geometry and ~1.6 s on JSON parsing if we want to cut cold startup further.
 
