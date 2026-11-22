@@ -148,6 +148,7 @@ var start_hour := 14.0
 var rng: SimUtil.Rng
 var rules := {}
 var clock := 0.0
+var _player_wall_t := -INF ## clock at the player's last barrier contact (the drift handling rests just after one)
 var green_at := INF
 var lights_out_at := 0.0
 var phase := "countdown" ## countdown | racing | finished
@@ -1927,6 +1928,8 @@ func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float,
 	# the car helps the player hold a slide, as far as the driving aids allow
 	env.drift_assist = 0.0 if not car.is_player else (DRIFT_ASSIST_FULL if assists == "full" else (DRIFT_ASSIST_ABS if assists == "abs" else 0.0))
 	env.rear_grip = 1.0
+	# the player's drift handling (Physics.DH_*), not while a barrier is shoving the car; the AI keeps its own physics
+	env.drift_handling = Physics.player_drift_handling if car.is_player and clock - _player_wall_t > Physics.DH_CONTACT_HOLD else 0.0
 	if car.is_player and not mods.is_empty():
 		_apply_mods(car, env, input, dt)
 	cp.step(car, _ctl, env, dt)
@@ -2271,6 +2274,8 @@ func barrier_contact(car: RaceCar, mass: float) -> void:
 		car.y -= ny * pen * side
 		car.d -= pen * side
 		var h := phys.barrier_hit(car, nx * side, ny * side, rx, ry, mass)
+		if car.is_player and h > 0.0:
+			_player_wall_t = clock
 		if h > hit:
 			hit = h
 			hit_f = (ch * nx + sh * ny) * side

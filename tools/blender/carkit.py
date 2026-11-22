@@ -429,6 +429,95 @@ def add_damage_keys(ob, delta_fn):
 			sk.data[i].co = v.co + delta_fn(key, v.co)
 
 
+def split_bonnet(objs, y0, s_rear, floor_mat, s_front=0.04, up=0.55, frac=0.84, recess=0.07, decals=("Stripes", "Martini", "Abarth", "Marlboro")):
+	"""Cuts the bonnet panel out of objs["Body"] into objs["Bonnet"] (its Paint faces, the same vertices, so no seam or
+	z-fighting while it is shut), leaves a dark recessed engine bay (floor_mat) under it in the Body, and moves the stripe
+	and livery faces lying on the bonnet into objs["Bonnet" + name]. s = y0 - y is metres from the nose; the bonnet is the
+	upward-facing paint between s_front and s_rear (the scuttle) within frac of the shell's half width there. The game's
+	RaceCarVisual hinges it at its rear edge and can throw it off. Call before add_damage_keys (the pieces take the same
+	dent_* keys, so they crumple with the Body)."""
+	body = objs["Body"]
+	me = body.data
+	paint = next(i for i, m in enumerate(me.materials) if m.name == "Paint")
+	region = [v.co for v in me.vertices if s_front < y0 - v.co.y < s_rear]
+	half = max(abs(c.x) for c in region)
+	top = max(c.z for c in region)
+	bm = bmesh.new()
+	bm.from_mesh(me)
+	bm.faces.ensure_lookup_table()
+
+	def on_bonnet(f):
+		c = f.calc_center_median()
+		return (f.material_index == paint and f.normal.z > up and s_front < y0 - c.y < s_rear and abs(c.x) < frac * half
+			and c.z > top - 0.3)
+	sel = [f.index for f in bm.faces if on_bonnet(f)]
+	if not sel:
+		raise RuntimeError("split_bonnet found no bonnet faces")
+	keep = set(sel)
+	# the bonnet: a copy of the Body with everything else deleted
+	bb = bm.copy()
+	bb.faces.ensure_lookup_table()
+	bmesh.ops.delete(bb, geom=[f for f in bb.faces if f.index not in keep], context="FACES")
+	tree = BVHTree.FromBMesh(bb)
+	bon = bpy.data.meshes.new("Bonnet")
+	bb.to_mesh(bon)
+	bb.free()
+	for m in me.materials:
+		bon.materials.append(m)
+	ob = bpy.data.objects.new("Bonnet", bon)
+	bpy.context.scene.collection.objects.link(ob)
+	objs["Bonnet"] = ob
+	# the Body: the bonnet's faces pushed down into a recess with walls, in the bay's dark material
+	if floor_mat.name not in [m.name for m in me.materials if m]:
+		me.materials.append(floor_mat)
+	fi = [m.name if m else "" for m in me.materials].index(floor_mat.name)
+	before = set(bm.faces)
+	faces = [bm.faces[i] for i in sel]
+	ret = bmesh.ops.extrude_face_region(bm, geom=faces, use_keep_orig=False)
+	moved = [g for g in ret["geom"] if isinstance(g, bmesh.types.BMVert)]
+	bmesh.ops.translate(bm, vec=Vector((0.0, 0.0, -recess)), verts=moved)
+	for f in bm.faces:
+		if f not in before or any(v in moved for v in f.verts):
+			f.material_index = fi
+			f.smooth = False
+	bm.to_mesh(me)
+	bm.free()
+	me.update()
+	# stripes and liveries that lie on the bonnet go with it
+	for name in decals:
+		dob = objs.get(name)
+		if dob is None:
+			continue
+		dm = bmesh.new()
+		dm.from_mesh(dob.data)
+		on = set()
+		for f in dm.faces:
+			c = f.calc_center_median()
+			loc, _, _, dist = tree.ray_cast(c + Vector((0.0, 0.0, 0.05)), Vector((0.0, 0.0, -1.0)), 0.12)
+			if loc is not None and abs(dist - 0.05) < 0.03:
+				on.add(f.index)
+		if not on:
+			dm.free()
+			continue
+		part = dm.copy()
+		part.faces.ensure_lookup_table()
+		bmesh.ops.delete(part, geom=[f for f in part.faces if f.index not in on], context="FACES")
+		dm.faces.ensure_lookup_table()
+		bmesh.ops.delete(dm, geom=[f for f in dm.faces if f.index in on], context="FACES")
+		dm.to_mesh(dob.data)
+		dm.free()
+		pm = bpy.data.meshes.new("Bonnet" + name)
+		part.to_mesh(pm)
+		part.free()
+		for m in dob.data.materials:
+			pm.materials.append(m)
+		pob = bpy.data.objects.new("Bonnet" + name, pm)
+		bpy.context.scene.collection.objects.link(pob)
+		objs["Bonnet" + name] = pob
+	print("bonnet: %d faces, %s" % (len(sel), ", ".join(k for k in objs if k.startswith("Bonnet"))))
+	return ob
+
+
 def setup_preview(paint, size=(1200, 800)):
 	"""kit's preview scene (40 m grey ground), with the Paint tint set to the livery colour."""
 	cam = kit.setup_preview(size=size, ground=40.0, ground_colour=(0.25, 0.25, 0.25))
@@ -440,6 +529,11 @@ def setup_preview(paint, size=(1200, 800)):
 def render_views(cam, out_dir, views, aim_default):
 	"""views: {name: (eye, lens_deg, aim or None)}; names side, side_l, front, rear and top render orthographic."""
 	os.makedirs(out_dir, exist_ok=True)
+	for ob in bpy.data.objects:  # the bonnet's stripe and livery pieces show with their parent mesh
+		if ob.name.startswith("Bonnet") and ob.name[6:] in bpy.data.objects:
+			ob.hide_render = bpy.data.objects[ob.name[6:]].hide_render
+		if ob.name.startswith("Bonnet") and "--no-bonnet" in sys.argv:  # a look at the engine bay under it
+			ob.hide_render = True
 	for name, (pos, lens_deg, aim) in views.items():
 		cam.location = pos
 		target = Vector(aim) if aim else Vector(aim_default)

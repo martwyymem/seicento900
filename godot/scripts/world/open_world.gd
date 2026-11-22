@@ -181,12 +181,21 @@ func _ready() -> void:
 	add_child(view)
 	hud = OpenWorldHud.new()
 	add_child(hud)
+	_add_view_fx()
 	hud.pause_action.connect(_pause_action)
 	hud.waypoint_picked.connect(_set_waypoint)
 	story = StoryDirector.attach(self)
 	hud.map_accept.connect(_map_accept)
 	hud.nav.filters_changed.connect(_map_filters_changed)
 	hide()
+
+## Rear-view mirror and lens flare (scripts/ui/rear_mirror.gd, lens_flare.gd).
+func _add_view_fx() -> void:
+	var mirror := RearMirror.new()
+	add_child(mirror)
+	# own_world_3d: viewport.world_3d itself is null, so the mirror rendered the race scene's world
+	mirror.setup(viewport.find_world_3d(), func() -> Node3D:
+		return car_visual if visible and not paused and is_instance_valid(car_visual) else null)
 
 static func available() -> bool:
 	return FileAccess.file_exists("res://data/world/%s.json" % MAP_KEY)
@@ -459,6 +468,7 @@ func _build_environment() -> void:
 	env.ambient_light_color = Color(0.82, 0.78, 0.72)
 	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 	SceneMood.base(env)
+	viewport.add_child(SpeedBlur.new()) # inside the 3D view, so it blurs the picture and not the HUD
 	env.ssao_enabled = true
 	env.ssr_max_steps = 48
 	env.ssr_fade_in = 0.12
@@ -1812,6 +1822,11 @@ var nitro := 1.0 ## CarMods' Nitrous: the bottle, 0..1
 var nitro_on := false ## the boost button is held
 var _drift_t := 0.0 ## seconds the current slide has lasted
 var _drift_paid := 0.0
+const DRIFT_BANK_SHARE := 0.5 ## share of a banked free-roam drift combo paid into the skill chain
+var _drift_view := DriftScore.new() ## free-roam drifts scored for the drift meter; a banked combo pays into the skill chain
+var _drift_clock := 0.0
+var drift_cam := DriftStyle.new() ## the chase camera's swing and roll through a drift
+var _skids: SkidTrail
 
 func _update_skills(dt: float) -> void:
 	var car := drive.car
@@ -1820,7 +1835,7 @@ func _update_skills(dt: float) -> void:
 		var vel_h := atan2(car.vy, car.vx)
 		var slip := absf(wrapf(vel_h - car.heading, -PI, PI))
 		if slip > 0.26 and slip < 1.9:
-			_skill(dt * v * 3.6 * slip * 6.0, "DRIFT")
+			_skill(dt * DriftScore.rate(v, slip), "DRIFT") # deep and fast slides pay more (DriftScore.rate)
 			_drift_t += dt
 			if _drift_t > 1.0 and absf(_drift_t - _drift_paid) >= 1.0:
 				_drift_paid = floorf(_drift_t) # every second of a held slide adds to the chain's multiplier
@@ -1841,15 +1856,19 @@ func _update_skills(dt: float) -> void:
 		_skill_event(250.0 + rel * 10.0, "NEAR MISS")
 	traffic.near_misses.clear()
 	var crashed := false
+	var sliding := DriftStyle.amount(absf(DriftStyle.slip_angle(car.vx, car.vy, car.heading)), v) > 0.2
 	for h in drive.hits:
 		if float(h[2]) > 6.0:
 			crashed = true
+		if sliding and float(h[2]) > 0.9: # a kerb or a wall touched mid-drift
+			FxParticles.burst(car_visual, "sparks", Vector3(float(h[0]), car_visual.position.y + 0.25, float(h[1])), 12, quality)
 	drive.hits.clear()
 	for h in traffic.hits:
 		if float(h[2]) > 6.0:
 			crashed = true
 	traffic.hits.clear()
 	_crashed_frame = crashed
+	_update_drift_style(dt, v, crashed) # before the chain banks: a drift combo banking now joins the chain
 	if crashed and chain_points > 0.0:
 		var lost := int(chain_points * chain_mult)
 		if lost >= 1: # a chain of less than one fan ends quietly (no "0 fans" banner)
@@ -1867,6 +1886,37 @@ func _update_skills(dt: float) -> void:
 		chain_mult = 1.0
 	var shown := int(chain_points * chain_mult)
 	hud.set_chain(shown, "%s  ×%.1f" % [chain_label, chain_mult] if shown > 0 else "")
+
+## The drift meter (a live drift zone's own score, else free-roam drifts for show) and the rear tyres' skid marks.
+func _update_drift_style(dt: float, v: float, crashed: bool) -> void:
+	var car := drive.car
+	var slip := 0.0 if drive.airborne else DriftStyle.slip_angle(car.vx, car.vy, car.heading)
+	_drift_clock += dt
+	var ds: DriftScore = null
+	if live and not live.run.is_empty():
+		ds = live.run.get("drift")
+	if ds == null:
+		var before := _drift_view.event_t
+		_drift_view.step(v, absf(slip), false, crashed, dt, _drift_clock)
+		ds = _drift_view
+		if _drift_view.event_t != before and _drift_view.last_event == "BANKED":
+			# a banked drift combo (its held seconds and linked corners multiplied in) goes into the skill chain
+			# on top of the slide's own points, so a drift held and linked through the bends pays far more
+			# than gripping round them
+			var pts := _drift_view.event_points
+			_skill_event(pts * DRIFT_BANK_SHARE, String(DriftStyle.LABELS[DriftStyle.label_index(pts)][1]))
+	hud.drift_meter.feed(ds, dt)
+	if _skids == null or not is_instance_valid(_skids):
+		_skids = SkidTrail.new()
+		car_visual.get_parent().add_child(_skids)
+	var k := maxf(DriftStyle.amount(absf(slip), v), clampf((car.slip - 0.42) / 0.5, 0.0, 1.0) if v > 3.0 else 0.0)
+	if k > 0.15 and not drive.airborne and not drive.in_water and not SurfaceFeedback.KICK_ORDER.has(SurfaceFeedback.kick_surface(drive.wheel_surfaces())):
+		var fit := CarCatalog.visual(String(car_visual.car_key))
+		var hr := float(fit.get("half_track_rear", 0.65))
+		var z := float((fit.fx_axle as Vector3).z)
+		_skids.lay(car_visual.to_global(Vector3(-hr, 0.0, z)), car_visual.to_global(Vector3(hr, 0.0, z)), k)
+	else:
+		_skids.lift()
 
 ## Nitrous: the held button opens the bottle for extra engine output until it runs dry; skills refill it.
 func _update_nitro(dt: float) -> void:
@@ -2215,11 +2265,16 @@ func _update_camera(delta: float) -> void:
 	var want_dir := Vector2(f.x, f.z)
 	if v.length() > 4.0 and car.speed > 0.0:
 		want_dir = want_dir.lerp(v.normalized(), 0.45).normalized()
+	# and further through a drift, round to the car's side (DriftStyle), settling back behind it afterwards
+	drift_cam.update_camera(car.vx, car.vy, car.heading, delta, look.cut, car.yaw_rate / 4.0)
+	want_dir = want_dir.rotated(drift_cam.swing * 0.6 + drift_cam.lead)
+	var drift_up := Vector3.UP.rotated(Vector3(want_dir.x, 0.0, want_dir.y), drift_cam.roll)
 	# turned through the angle, not lerped: a lerp between near-opposite directions passes through zero, and the
 	# normalised zero put the camera straight over the car looking down (a respawn facing the other way)
 	cam_vel_dir = Vector2.from_angle(lerp_angle(cam_vel_dir.angle(), want_dir.angle(), 1.0 - exp(-delta * 4.0)))
 	var d3 := Vector3(cam_vel_dir.x, 0.0, cam_vel_dir.y)
 	var kmh := absf(car.speed) * 3.6
+	var fov_extra := GfxFx.update(kmh, delta)
 	look.update(delta, not paused and not hud.map_open)
 	# swung round the car, the chase camera looks along the view and, more and more, at the car itself
 	var view := look.turn(d3)
@@ -2230,15 +2285,15 @@ func _update_camera(delta: float) -> void:
 			cam_off = cam_off.lerp(target - p, 1.0 - exp(-delta * 6.0))
 			cam_pos = p + cam_off
 			camera.position = _clear_of_walls(p, look.orbit(p, cam_pos), delta, look.cut)
-			camera.look_at((p + view * 5.0 * cos(look.pitch) + Vector3.UP * 1.0).lerp(p + Vector3.UP * 0.8, at_car), Vector3.UP)
-			camera.fov = HudLayout.camera_fov_for(camera, 58.0 + smoothstep(10.0, 200.0, kmh) * 10.0)
+			camera.look_at((p + view * 5.0 * cos(look.pitch) + Vector3.UP * 1.0).lerp(p + Vector3.UP * 0.8, at_car), drift_up)
+			camera.fov = HudLayout.camera_fov_for(camera, 58.0 + smoothstep(10.0, 200.0, kmh) * 10.0 + fov_extra)
 		2:
 			camera.global_transform = car_visual.global_transform * Transform3D(Basis(), Vector3(0.0, 1.22, -0.35))
 			camera.rotate_object_local(Vector3.RIGHT, deg_to_rad(-2.0))
 			if look.active(): # the driver turns their head
 				camera.rotate_object_local(Vector3.UP, -look.yaw)
 				camera.rotate_object_local(Vector3.RIGHT, -look.pitch)
-			camera.fov = HudLayout.camera_fov_for(camera, 78.0 + kmh * 0.05)
+			camera.fov = HudLayout.camera_fov_for(camera, 78.0 + kmh * 0.05 + fov_extra)
 		_:
 			# close in, Forza style: the offset from the car is what eases (a lerp of the world position trailed the
 			# car by speed / rate, 7 m more at 180 km/h, and with 8 m of boom and an 84 deg view the car was a dot,
@@ -2252,8 +2307,8 @@ func _update_camera(delta: float) -> void:
 			var spot := _clear_of_walls(p, look.orbit(p, cam_pos), delta, look.cut)
 			spot.y = maxf(spot.y, map.ground(spot.x, spot.z) + 0.8)
 			camera.position = spot
-			camera.look_at((p + view * 4.0 * cos(look.pitch) + Vector3.UP * 0.95).lerp(p + Vector3.UP * 0.8, at_car), Vector3.UP)
-			camera.fov = lerpf(camera.fov, HudLayout.camera_fov_for(camera, 54.0 + smoothstep(10.0, 200.0, kmh) * 11.0), 1.0 - exp(-delta * 3.0))
+			camera.look_at((p + view * 4.0 * cos(look.pitch) + Vector3.UP * 0.95).lerp(p + Vector3.UP * 0.8, at_car), drift_up)
+			camera.fov = lerpf(camera.fov, HudLayout.camera_fov_for(camera, 54.0 + smoothstep(10.0, 200.0, kmh) * 11.0 + fov_extra), 1.0 - exp(-delta * 3.0))
 	if weather_fx:
 		weather_fx.place(camera)
 
@@ -2282,10 +2337,7 @@ func _read_input(dt: float) -> void:
 	handbrake = 1.0 if Input.is_physical_key_pressed(KEY_SPACE) else 0.0
 	nitro_on = nitro_on or Input.is_physical_key_pressed(KEY_SHIFT)
 	var st := (1.0 if right else 0.0) - (1.0 if left else 0.0)
-	var back := st == 0.0 or signf(st) != signf(steer)
-	var kmh := drive.speed_kmh()
-	var rate := 4.4 if kmh < 40.0 else lerpf(4.4, 2.6, clampf((kmh - 40.0) / 80.0, 0.0, 1.0))
-	steer = move_toward(steer, st, (8.0 if back else rate) * dt)
+	steer = Physics.key_steer(steer, st, drive.speed_kmh(), drive.phys.rear_slide(drive.car), dt) # counter-steer comes fast
 	throttle = move_toward(throttle, 1.0 if up else 0.0, 6.0 * dt)
 	brake = move_toward(brake, 1.0 if down else 0.0, 8.0 * dt)
 

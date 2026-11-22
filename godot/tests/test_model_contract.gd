@@ -7,20 +7,20 @@ var errors: Array[String] = []
 
 ## model -> {"objects": names that must exist, "materials": names that must exist on some mesh}
 const CONTRACT := {
-	"res://models/seicento.glb": {"objects": ["Body", "Details", "Stripes", "Wheel"], "materials": ["Paint", "Taillight", "Glass", "Headlight"]},
-	"res://models/golf4.glb": {"objects": ["Body", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
+	"res://models/seicento.glb": {"objects": ["Body", "Bonnet", "Details", "Stripes", "Wheel"], "materials": ["Paint", "Taillight", "Glass", "Headlight"]},
+	"res://models/golf4.glb": {"objects": ["Body", "Bonnet", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
-	"res://models/logan.glb": {"objects": ["Body", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
+	"res://models/logan.glb": {"objects": ["Body", "Bonnet", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
-	"res://models/v50.glb": {"objects": ["Body", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
+	"res://models/v50.glb": {"objects": ["Body", "Bonnet", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
-	"res://models/i20.glb": {"objects": ["Body", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
+	"res://models/i20.glb": {"objects": ["Body", "Bonnet", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
-	"res://models/sandero.glb": {"objects": ["Body", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
+	"res://models/sandero.glb": {"objects": ["Body", "Bonnet", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
-	"res://models/focus.glb": {"objects": ["Body", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
+	"res://models/focus.glb": {"objects": ["Body", "Bonnet", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
-	"res://models/zafira.glb": {"objects": ["Body", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
+	"res://models/zafira.glb": {"objects": ["Body", "Bonnet", "Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
 	"res://models/town.glb": {"objects": ["Headframe", "ChurchSpire", "Streetlamp", "TrafficLight", "BusShelter", "LevelCrossing",
 		"FestivalStage", "FestivalArch", "Tent", "FlagPole", "CarHatch", "CarSedan", "CarVan", "Maluch"], "materials": ["Paint", "Lamp", "Banner"]},
@@ -139,6 +139,16 @@ func run() -> Array:
 		for want in CONTRACT[path].objects:
 			if not names.has(want):
 				errors.append("%s lacks object '%s'" % [path, want])
+		var bonnet := root.find_child("Bonnet", true, false) as MeshInstance3D
+		if bonnet and bonnet.mesh: # the bonnet is cut out of the Body and tinted with it: Paint on both (RaceCarVisual)
+			var bm := []
+			for s in bonnet.mesh.get_surface_count():
+				var m: Material = bonnet.mesh.surface_get_material(s)
+				bm.append(m.resource_name if m else "")
+			if not "Paint" in bm:
+				errors.append("%s/Bonnet has no Paint surface (%s)" % [path, bm])
+			if bonnet.mesh.get_blend_shape_count() == 0:
+				errors.append("%s/Bonnet has no dent_* blend shapes" % path)
 		for want in CONTRACT[path].materials:
 			if not mats.has(want):
 				errors.append("%s lacks material '%s'" % [path, want])

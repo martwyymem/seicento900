@@ -66,10 +66,12 @@ const UNPAVED_RALLY := 0.35 ## ... of a rally stage (or a twisty one, RALLY_TWIS
 const RALLY_TWIST := 1.6 ## rad per km
 const VERGE := 2.5 ## m beyond the map's road edge a sliding car may run before it counts as off the road (the lanes
 ## are 3-5 m wide: a race track's 0.8 m (DriftScore.OFF_ROAD) would lose every combo on them)
-## Points per km of a drift, bronze / silver / gold: the Babudy drift mission's per km (300/1200/3000 on 2.6 km).
+## Points per km of a drift, bronze / silver / gold: the Babudy drift mission's per km (450/1800/4500 on 2.6 km).
 ## Measured 2026-11-14 with tests/_live_audit.gd's sliding driver (handbrake taps, counter-steer; STYLE=flick/hard):
 ## 270-376 points on Babudy, so bronze is a plain sliding run, silver about three times that, gold for the few.
-const DRIFT_PER_KM := [115.0, 460.0, 1150.0]
+## Raised x1.5 on 2026-11-22 with DriftScore's angle, speed and linked-corner bonuses (a deep, fast, linked run pays
+## up to about 2.4x what it did; a tidy one about the same).
+const DRIFT_PER_KM := [172.5, 690.0, 1725.0]
 ## Reference driving per car (CarCatalog key): top speed m/s, standing acceleration m/s², grip m/s², braking m/s².
 ## Measured with tests/_car_probe.gd and tests/_pace_probe.gd (2026-11-21): Seicento 137 km/h, 0.96 g (anchor);
 ## Golf IV 171 km/h, 0.86 g, 100-0 in 39.3 m; Logan 162 km/h, 0.84 g, 100-0 in 39.1 m; hypercar 346 km/h;

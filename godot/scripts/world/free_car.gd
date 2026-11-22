@@ -46,6 +46,7 @@ var water_t := 0.0
 var wants_respawn := false
 var rev_lock := false ## set by place(): a brake already held (through a spawn or a respawn) selects reverse only once let go
 var odometer := 0.0
+var _contact_t := INF ## s since the last wall or car contact (the drift handling rests just after one)
 var surface := Physics.SURF_TRACK ## under the car's centre
 var road := {} ## the road under the car's centre ({} off road)
 var tilt := Basis() ## the ground's slope under the car, for the visual
@@ -85,6 +86,7 @@ func place(p: Vector2, heading: float) -> void:
 	car.vx = 0.0
 	car.vy = 0.0
 	car.yaw_rate = 0.0
+	car.dents = {"front": 0.0, "rear": 0.0, "left": 0.0, "right": 0.0} # put back on the road: straightened out
 	car.gear = 0
 	car.rev = false
 	car.rpm = model.spec.idle_rpm
@@ -283,6 +285,8 @@ func step(dt: float, thr: float, brk: float, steer_in: float, shift_up := false,
 	env.drift_assist = Race.DRIFT_ASSIST_FULL if assists == "full" else (Race.DRIFT_ASSIST_ABS if assists == "abs" else 0.0)
 	if drift_king:
 		env.drift_assist = 1.0
+	_contact_t += dt
+	env.drift_handling = Physics.player_drift_handling if _contact_t > Physics.DH_CONTACT_HOLD else 0.0 # the player's drift handling (Physics.DH_*)
 	var px := car.x
 	var py := car.y
 	car.px = px
@@ -728,6 +732,7 @@ func _impact(n: Vector2, r: Vector2, share: float) -> float:
 	var closing := maxf(cg_in, -vp.dot(n))
 	if closing <= 0.0:
 		return 0.0
+	_contact_t = 0.0
 	# a scrape (under SCRAPE_V) does not bounce, a knock does a little, a big hit hardly
 	var e := lerpf(WALL_BOUNCE_SOFT, WALL_BOUNCE_HARD, clampf((closing - 3.0) / (WALL_HARD_V - 3.0), 0.0, 1.0)) * smoothstep(0.3, SCRAPE_V, closing)
 	var dvn := maxf(cg_in, 0.0) * (1.0 + e) * share
@@ -768,7 +773,19 @@ func _impact(n: Vector2, r: Vector2, share: float) -> float:
 	car.heading += nudge
 	if closing > 1.0:
 		hits.append([car.x + r.x, car.y + r.y, closing])
+	_dent(r, closing)
 	return closing
+
+## Crumples the side of the body a knock of `closing` m/s at contact point r lands on (RaceCar.dents, which the visual
+## shows and which pop and tear off the bonnet), on RaceControl.hurt's scale: nothing under 3 m/s, a full dent at 9.7.
+func _dent(r: Vector2, closing: float) -> void:
+	if closing <= 3.0 or r.length_squared() < 1e-6:
+		return
+	var x := (closing - 3.0) / 6.7
+	var f := Vector2.from_angle(car.heading)
+	var c := r.normalized().dot(f)
+	var side := "front" if c > 0.55 else ("rear" if c < -0.55 else ("right" if r.dot(Vector2(-f.y, f.x)) > 0.0 else "left"))
+	car.dents[side] = minf(1.0, float(car.dents[side]) + x * x * 3.0)
 
 ## One car of the train [centre, heading, half length, half width, rail height, velocity] against the car's box:
 ## a separating-axis test over both boxes' axes finds the shallowest way out, the car is moved out along it and
@@ -835,6 +852,7 @@ func _train_push(tc: Array, mass: float) -> void:
 	car.vx -= tv.x
 	car.vy -= tv.y
 	var hit := phys.barrier_hit(car, -n.x, -n.y, rr.x, rr.y, mass)
+	_contact_t = 0.0
 	var tspeed := tv.length()
 	if tspeed > 1.0 and n.dot(tv) > 0.7 * tspeed:
 		# the cab's front: fling the car off the line to the side it is already on, and spin it

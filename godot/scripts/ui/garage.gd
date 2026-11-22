@@ -354,7 +354,7 @@ func _build_preview() -> void:
 	e.ambient_light_color = Color("#b8c8ee")
 	e.ambient_light_energy = 0.52
 	e.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	e.glow_enabled = true
+	e.glow_enabled = GfxFx.bloom
 	e.glow_intensity = 0.7
 	e.glow_bloom = 0.25
 	e.glow_hdr_threshold = 1.0

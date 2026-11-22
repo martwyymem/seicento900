@@ -34,6 +34,7 @@ from mathutils import Matrix, Vector
 from mathutils.bvhtree import BVHTree
 
 sys.path.insert(0, os.path.dirname(__file__))
+import carkit
 import kit
 from kit import arg, lerp, newell
 
@@ -1435,16 +1436,21 @@ def main():
 	for name, ob in (("Body", objs[0]), ("Details", objs[1]), ("Stripes", objs[2]), ("Wheel", objs[3]), ("Cabin", objs[4]),
 			("Martini", objs[5]), ("Abarth", objs[6]), ("Marlboro", objs[7])):
 		print("%-8s %6d tris" % (name, sum(len(p.vertices) - 2 for p in ob.data.polygons)))
+	named = {"Body": objs[0], "Stripes": objs[2], "Martini": objs[5], "Abarth": objs[6], "Marlboro": objs[7]}
+	carkit.split_bonnet(named, Y0, S_SCUTTLE, material("Trim"))
+	bonnet = [ob for k, ob in named.items() if k.startswith("Bonnet")]
 	for i in (0, 1, 2, 5, 6, 7):
 		add_damage_keys(objs[i])
+	for ob in bonnet:
+		add_damage_keys(ob)
 	os.makedirs(os.path.dirname(OUT_GLB), exist_ok=True)
 	kit.export_glb(OUT_GLB, texcoords=False)
 	if arg("--blend"):
 		bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(arg("--blend")))
 	if arg("--renders"):
 		if "--damage" in sys.argv:
-			for i in (0, 1, 2, 5, 6, 7):
-				for kb in objs[i].data.shape_keys.key_blocks[1:]:
+			for ob in [objs[i] for i in (0, 1, 2, 5, 6, 7)] + bonnet:
+				for kb in ob.data.shape_keys.key_blocks[1:]:
 					kb.value = 0.8 if kb.name != "dent_left" else 0.0
 		# --martini, --abarth or --marlboro previews that livery instead of the twin stripes
 		view = next((k for k in ("martini", "abarth", "marlboro") if "--" + k in sys.argv), "")
@@ -1459,6 +1465,8 @@ def main():
 				w.scale.x = sx
 				bpy.context.scene.collection.objects.link(w)
 		objs[3].hide_render = True
+		for ob in bonnet:  # the bonnet's stripe and livery pieces show with their parent mesh (--no-bonnet: the bay under it)
+			ob.hide_render = "--no-bonnet" in sys.argv or (ob.name != "Bonnet" and bpy.data.objects[ob.name[6:]].hide_render)
 		render_views(cam, os.path.abspath(arg("--renders")))
 
 

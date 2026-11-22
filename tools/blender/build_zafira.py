@@ -1297,7 +1297,8 @@ def main():
 		xs, ys, zs = [v.x for v in vs], [v.y for v in vs], [v.z for v in vs]
 		print("bbox %-5s Godot size=(%.4f, %.4f, %.4f) top_y=%.4f z_range=[%.4f, %.4f]" % (
 			name, max(xs) - min(xs), max(zs) - min(zs), max(ys) - min(ys), max(zs), -max(ys), -min(ys)))
-	for name in ("Body", "Details", "Stripes", "Martini", "Abarth", "Marlboro"):
+	carkit.split_bonnet(objs, Y0, S_SCUTTLE, carkit.material("Trim"))
+	for name in [k for k in objs if k in ("Body", "Details", "Stripes", "Martini", "Abarth", "Marlboro") or k.startswith("Bonnet")]:
 		add_damage_keys(objs[name], dent_delta)
 	kit.export_glb(OUT_GLB, texcoords=False)
 	if arg("--blend"):

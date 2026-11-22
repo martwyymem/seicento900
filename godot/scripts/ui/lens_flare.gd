@@ -33,6 +33,7 @@ const ELEMENTS := [
 	[HEX, 2.15, 0.055, Color(0.15, 0.11, 0.07)],
 ]
 
+const GAIN := 1.8 ## the whole flare's brightness (it read too faint at 1)
 static var _textures: Array[Texture2D] = []
 
 var source: Node = null ## what it reads (camera, sky material, night, race weather); the parent when unset (the race world)
@@ -59,7 +60,7 @@ func _ready() -> void:
 	_canvas.visible = false
 
 func _process(delta: float) -> void:
-	var want := _target()
+	var want := _target() if GfxFx.lens_flare else 0.0
 	strength += (want - strength) * (1.0 - exp(-(6.0 if want < strength else 3.0) * delta))
 	var on := strength > 0.01
 	_canvas.visible = on
@@ -124,6 +125,7 @@ func _draw_flare() -> void:
 		var h: float = float(e[2]) * _height
 		var c: Color = e[3]
 		var k := ghosts if shape in [HEX, RING] else strength
+		k *= GAIN
 		c = Color(c.r * k, c.g * k, c.b * k, 1.0) # additive: the colour alone sets the strength
 		var r := Rect2(at - Vector2(h, h) * 0.5, Vector2(h, h))
 		if shape == STREAK:

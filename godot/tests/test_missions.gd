@@ -168,7 +168,7 @@ func _drift_unit(errors: Array[String]) -> void:
 	var d := DriftScore.new()
 	for i in 366: # 3.05 s at 20 m/s and 0.5 rad
 		d.step(20.0, 0.5, false, false, DT)
-	var combo := 366 * DT * 20.0 * 3.6 * 0.5 * DriftScore.RATE
+	var combo := 366 * DT * DriftScore.rate(20.0, 0.5)
 	if absf(d.combo - combo) > combo * 0.01 or absf(d.mult - 2.0) > 0.01 or d.score != 0:
 		errors.append("drift: 3 s slide gives combo %.0f x%.2f (want %.0f x2.00), score %d" % [d.combo, d.mult, combo, d.score])
 	for i in int(DriftScore.LINK / DT) + 2:
@@ -200,8 +200,13 @@ func _drift_unit(errors: Array[String]) -> void:
 			linked.step(20.0, 0.5, false, false, DT)
 		for i in 60:
 			linked.step(20.0, 0.0, false, false, DT)
-	if linked.mult < 1.0 + DriftScore.MULT_STEP - 1e-6 or linked.score != 0:
+	if linked.mult < 1.0 + DriftScore.LINK_STEPS * DriftScore.MULT_STEP - 1e-6 or linked.score != 0:
 		errors.append("drift: linked slides should still be one combo with a raised multiplier (x%.2f, score %d)" % [linked.mult, linked.score])
+	# a committed slide pays clearly more a second than a tidy one: angle and speed both earn a bonus
+	var tidy := DriftScore.rate(15.0, 0.3)
+	var held := DriftScore.rate(25.0, 0.7)
+	if held < tidy * (25.0 * 0.7) / (15.0 * 0.3) * 1.3: # the bonuses on top of speed x angle
+		errors.append("drift: a 40-degree slide at 90 km/h pays %.0f/s against %.0f/s at 15 degrees and 54 km/h" % [held, tidy])
 	if DriftScore.tier(599, [600, 2500, 6000]) != 0 or DriftScore.tier(2500, [600, 2500, 6000]) != 2 or DriftScore.tier(9999, [600, 2500, 6000]) != 3:
 		errors.append("drift: tier boundaries")
 

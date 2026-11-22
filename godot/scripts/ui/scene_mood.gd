@@ -22,7 +22,7 @@ static func base(env: Environment) -> void:
 	env.ssao_power = 1.6
 	env.ssao_detail = 0.6
 	env.ssao_light_affect = 0.12
-	env.glow_enabled = true
+	env.glow_enabled = GfxFx.bloom
 	env.glow_normalized = true
 	for i in GLOW_LEVELS.size():
 		env.set("glow_levels/%d" % (i + 1), GLOW_LEVELS[i])
@@ -37,9 +37,10 @@ static func base(env: Environment) -> void:
 ## (lamp heads, headlights, tail lights, lit windows) wears a halo. saturation: the world's own daylight saturation.
 static func by_hour(env: Environment, day: float, golden: float, night: float, saturation := 1.15) -> void:
 	# the eye opens up after dark: the moonlit blue stays readable and the lights bloom harder
+	env.glow_enabled = GfxFx.bloom
 	env.tonemap_exposure = lerpf(1.0, 1.35, night)
-	env.glow_hdr_threshold = lerpf(1.2, 0.78, night)
-	env.glow_intensity = lerpf(0.4, 1.05, night) + 0.15 * golden
-	env.glow_bloom = 0.012 * night
+	env.glow_hdr_threshold = lerpf(0.98, 0.72, night)
+	env.glow_intensity = lerpf(0.62, 1.2, night) + 0.25 * golden
+	env.glow_bloom = 0.02 + 0.02 * night
 	env.adjustment_contrast = 1.12
 	env.adjustment_saturation = lerpf(saturation, saturation + 0.1, golden) * lerpf(1.0, 0.95, night * (1.0 - day))

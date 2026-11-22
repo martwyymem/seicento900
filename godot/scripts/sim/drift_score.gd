@@ -1,7 +1,9 @@
 ## Drift points for a campaign drift mission (RaceSettings.drift_score): the open world's drift skill made into a
 ## score attack. While the car slides on the road (slip angle between ANGLE_MIN and ANGLE_MAX, above SPEED_MIN) it
-## earns speed (km/h) x slip angle (rad) x RATE points a second into the running combo; every second a slide is
-## held, and every new slide linked within LINK s of the last, raises the combo's multiplier (up to MULT_MAX). The
+## earns speed (km/h) x slip angle (rad) x RATE points a second into the running combo (rate()), more again for a
+## deep angle and for speed, so a committed, fast slide through a bend pays far more than a tidy one; every second a
+## slide is held raises the combo's multiplier a step, and every new slide linked within LINK s of the last (the
+## flick into the next bend) LINK_STEPS steps (up to MULT_MAX). The
 ## combo banks into the score once the car has driven LINK s without sliding (or at the finish), and it is lost if
 ## the car hits something or leaves the road first.
 class_name DriftScore
@@ -12,7 +14,12 @@ const ANGLE_MAX := 1.9 ## rad: more is a spin, which scores nothing (and ends th
 const SPEED_MIN := 8.0 ## m/s
 const RATE := 6.0 ## points per (km/h x rad) per second, as the open world's skill chain pays
 const LINK := 2.6 ## s without a slide before the combo banks (OpenWorld.CHAIN_IDLE)
-const MULT_STEP := 1.0 / 3.0 ## multiplier gained per held second or linked slide
+const MULT_STEP := 1.0 / 3.0 ## multiplier gained per held second (a linked slide: LINK_STEPS of them)
+const LINK_STEPS := 2 ## multiplier steps for a slide linked to the last: linked corners are what a combo is built on
+const ANGLE_DEEP := 0.7 ## rad (40 degrees): the angle that earns the whole ANGLE_BONUS
+const ANGLE_BONUS := 0.6 ## extra share of the points for a deep angle
+const SPEED_FAST := 110.0 ## km/h that earns the whole SPEED_BONUS (from 40 km/h)
+const SPEED_BONUS := 0.5 ## extra share of the points for speed
 const MULT_MAX := 5.0
 const OFF_ROAD := 0.8 ## m beyond the road edge that counts as off (the combo is lost)
 const HIT_MIN := 5.0 ## m/s of impact that counts as a crash
@@ -73,10 +80,10 @@ func step(v: float, slip: float, off: bool, crash: bool, dt: float, now := 0.0) 
 	drifting = v > SPEED_MIN and slip > ANGLE_MIN and slip < ANGLE_MAX
 	if drifting:
 		if slide_t == 0.0 and combo > 0.0 and idle < LINK:
-			_links += 1 # a new slide linked to the last
+			_links += LINK_STEPS # a new slide linked to the last
 		slide_t += dt
 		idle = 0.0
-		combo += dt * v * 3.6 * slip * RATE
+		combo += dt * rate(v, slip)
 		if int(slide_t) > _paid:
 			_paid = int(slide_t) # every held second raises the multiplier
 			_links += 1
@@ -87,6 +94,13 @@ func step(v: float, slip: float, off: bool, crash: bool, dt: float, now := 0.0) 
 		idle += dt
 		if combo > 0.0 and idle >= LINK:
 			bank(now)
+
+## Points a second for a slide at v m/s and slip rad, before the multiplier: speed (km/h) x slip x RATE, up to
+## ANGLE_BONUS more for a deep angle and SPEED_BONUS more for speed.
+static func rate(v: float, slip: float) -> float:
+	var kmh := v * 3.6
+	var deep := clampf((slip - ANGLE_MIN) / (ANGLE_DEEP - ANGLE_MIN), 0.0, 1.0)
+	return kmh * slip * RATE * (1.0 + ANGLE_BONUS * deep) * (1.0 + SPEED_BONUS * smoothstep(40.0, SPEED_FAST, kmh))
 
 func bank(now := 0.0) -> void:
 	var pts := pending()

@@ -146,8 +146,7 @@ func _instances(parent: Node3D) -> void:
 		check(d.mesh != null, "%s has no mesh" % n)
 		check(d.material_override == mat, "%s does not use the shared decal material" % n)
 		check(d.visible, "%s is hidden on a default car" % n)
-	var body: Mesh = VISUAL._shared_resources().shell
-	var tri := body.generate_triangle_mesh()
+	var tri := VISUAL.body_tri(VISUAL._shared_resources()) # the Body and the Bonnet cut out of it
 	check(tri != null, "the Body mesh gives no triangle mesh to ray-test decals against")
 	if tri != null:
 		for n in decals:

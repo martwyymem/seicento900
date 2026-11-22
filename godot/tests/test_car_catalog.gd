@@ -124,7 +124,7 @@ func _visual() -> void:
 	var rr: Vector3 = car._wheel_spots[3]
 	check(absf(fl.z + 1.2555) < 1e-3 and absf(rr.z - 1.2555) < 1e-3 and absf(fl.y - 0.3172) < 1e-4, "the Golf's wheels are not at its axles (%s %s)" % [fl, rr])
 	# every decal sits on the Body, facing outwards
-	var tri := (VISUAL._shared_resources("golf4").shell as Mesh).generate_triangle_mesh()
+	var tri := VISUAL.body_tri(VISUAL._shared_resources("golf4"))
 	for n in ["DoorDecalL", "DoorDecalR", "Sunstrip", "HoodDecal", "SillDecalL", "SillDecalR"]:
 		var d := car.body_pivot.get_node_or_null(n) as MeshInstance3D
 		check(d != null and d.mesh != null, "the Golf visual lacks decal %s" % n)
@@ -245,7 +245,7 @@ func _logan() -> void:
 	var fl: Vector3 = car._wheel_spots[0]
 	var rr: Vector3 = car._wheel_spots[3]
 	check(car.wheels.size() == 4 and absf(fl.z + 1.315) < 1e-3 and absf(rr.z - 1.315) < 1e-3 and absf(fl.y - 0.3108) < 1e-4, "the Logan's wheels are not at its axles (%s %s)" % [fl, rr])
-	var tri := (VISUAL._shared_resources("logan").shell as Mesh).generate_triangle_mesh()
+	var tri := VISUAL.body_tri(VISUAL._shared_resources("logan"))
 	for n in ["DoorDecalL", "DoorDecalR", "Sunstrip", "HoodDecal", "SillDecalL", "SillDecalR"]:
 		var d := car.body_pivot.get_node_or_null(n) as MeshInstance3D
 		check(d != null and d.mesh != null, "the Logan visual lacks decal %s" % n)
@@ -298,7 +298,7 @@ func _v50() -> void:
 	var fl: Vector3 = car._wheel_spots[0]
 	var rr: Vector3 = car._wheel_spots[3]
 	check(car.wheels.size() == 4 and absf(fl.z + 1.32) < 1e-3 and absf(rr.z - 1.32) < 1e-3 and absf(fl.y - 0.316) < 1e-4, "the V50's wheels are not at its axles (%s %s)" % [fl, rr])
-	var tri := (VISUAL._shared_resources("v50").shell as Mesh).generate_triangle_mesh()
+	var tri := VISUAL.body_tri(VISUAL._shared_resources("v50"))
 	for n in ["DoorDecalL", "DoorDecalR", "Sunstrip", "HoodDecal", "SillDecalL", "SillDecalR"]:
 		var d := car.body_pivot.get_node_or_null(n) as MeshInstance3D
 		check(d != null and d.mesh != null, "the V50 visual lacks decal %s" % n)
@@ -351,7 +351,7 @@ func _i20() -> void:
 	var fl: Vector3 = car._wheel_spots[0]
 	var rr: Vector3 = car._wheel_spots[3]
 	check(car.wheels.size() == 4 and absf(fl.z + 1.2625) < 1e-3 and absf(rr.z - 1.2625) < 1e-3 and absf(fl.y - 0.3015) < 1e-4, "the i20's wheels are not at its axles (%s %s)" % [fl, rr])
-	var tri := (VISUAL._shared_resources("i20").shell as Mesh).generate_triangle_mesh()
+	var tri := VISUAL.body_tri(VISUAL._shared_resources("i20"))
 	for n in ["DoorDecalL", "DoorDecalR", "Sunstrip", "HoodDecal", "SillDecalL", "SillDecalR"]:
 		var d := car.body_pivot.get_node_or_null(n) as MeshInstance3D
 		check(d != null and d.mesh != null, "the i20 visual lacks decal %s" % n)
@@ -446,7 +446,7 @@ func _check_car_model(key: String, roof_lo: float, roof_hi: float, half_wb: floa
 	var fl: Vector3 = car._wheel_spots[0]
 	var rr: Vector3 = car._wheel_spots[3]
 	check(car.wheels.size() == 4 and absf(fl.z + half_wb) < 1e-3 and absf(rr.z - half_wb) < 1e-3 and absf(fl.y - wr) < 1e-4, "%s wheels are not at its axles (%s %s)" % [key, fl, rr])
-	var tri := (VISUAL._shared_resources(key).shell as Mesh).generate_triangle_mesh()
+	var tri := VISUAL.body_tri(VISUAL._shared_resources(key))
 	for n in ["DoorDecalL", "DoorDecalR", "Sunstrip", "HoodDecal", "SillDecalL", "SillDecalR"]:
 		var d := car.body_pivot.get_node_or_null(n) as MeshInstance3D
 		check(d != null and d.mesh != null, "%s visual lacks decal %s" % [key, n])

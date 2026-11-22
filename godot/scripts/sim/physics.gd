@@ -33,13 +33,50 @@ const TY_E := 0.1
 
 # handbrake: rear brake torque (times the rear brake bias), the rear grip it leaves and how fast that grip returns
 const HB_TORQUE := 0.45
-const HB_GRIP_MIN := 0.7
+const HB_GRIP_MIN := 0.55 ## (0.7 before the player's drift tuning, 2026-11-22: a tap now swings a front-driver's tail out)
 # drift assist: slide angle (between the nose and the velocity) left to the driver, then a yaw acceleration (rad/s² per rad past it)
 # that turns the nose back along the velocity, and a damping on the yaw rate (1/s)
 const DRIFT_BETA_MAX := 0.5
 const DRIFT_RESTORE := 14.0
 const DRIFT_DAMP := 2.5
 const HB_GRIP_RECOVER := 1.5 ## per second
+
+# ---- the player's drift handling (Env.drift_handling: 1 for the player's car in races and the open world, 0 for every
+# AI car, whose physics stays bit-identical for the parity tests). Measured with tests/_drift_probe.gd.
+static var player_drift_handling := 1.0 ## what Race and FreeCar put in the player's Env.drift_handling (probes set 0 to compare)
+const DH_CONTACT_HOLD := 0.6 ## s after a wall or car contact with none of it: a car shoved along a wall is not drifting
+const DH_MIN_SPEED := 6.0 ## m/s: below this nothing of it acts (slip angles at a crawl are the bend's geometry, not a slide)
+## Counter-steer lock: steering towards a slide past DH_LOCK_FROM (rad), full input turns the front wheels to DH_LOCK_GAIN
+## times the slide angle (when that is more than the normal limit), so they can follow the velocity and catch the car
+## without a full key press snapping it back; never past DH_LOCK_CAP (rad, road wheel).
+const DH_LOCK_FROM := 0.04
+const DH_LOCK_GAIN := 1.0
+const DH_LOCK_CAP := 0.7
+## Slide-rate damping (1/s): the yaw rate is pulled towards the rate the velocity itself turns, so the slide angle settles
+## where the driver holds it. While the slide closes (the car straightening itself, or snapping back after a catch)
+## DH_SLIP_DAMP holds it; while it opens it is left alone, unless the driver is counter-steering: then DH_CATCH_DAMP catches
+## it. Off while the handbrake is pulled; fades in between DH_SLIP_FROM and DH_SLIP_FULL of the rear axle's slip angle (rad;
+## the rear tyres peak at ~0.115), so grip driving, even at the limit, never feels it.
+const DH_SLIP_DAMP := 8.0
+const DH_CATCH_DAMP := 4.0
+const DH_SLIP_FROM := 0.12
+const DH_SLIP_FULL := 0.25
+## Progressive rear grip: past their peak the rear tyres keep this share of the force the Magic Formula would shed
+## (it falls to ~60 % of the peak at a full slide), so a slide builds and fades instead of snapping. Only for sideways
+## slip (times the lateral share of the slip, squared): a locked (handbrake) or spinning wheel lets go as before.
+const DH_REAR_HOLD := 0.2
+## Drift scrub: on the throttle (no brake, no handbrake) this share of the drag the sideways tyre forces put on the
+## car's speed is handed back, fading in between DH_SCRUB_FROM and DH_SCRUB_FULL of the rear axle's slip angle (rad): a held
+## drift through a corner loses little more time than the grip line.
+const DH_SCRUB_REFUND := 0.55
+const DH_SCRUB_FROM := 0.15
+const DH_SCRUB_FULL := 0.35
+## Keyboard steering (key_steer): the ramp towards a key (1/s) at low speed, at high speed, and towards centre or
+## when the key steers into a slide (counter-steer comes at the fast rate all the way to full lock).
+const KEY_RATE_SLOW := 4.4
+const KEY_RATE_FAST := 2.6
+const KEY_RATE_BACK := 8.0
+const KEY_SLIDE_FROM := 0.12 ## rad of rear slip (rear_slide) above which a key towards the slide counts as counter-steer
 
 ## Everything the car needs from the world for one step.
 class Env:
@@ -55,6 +92,7 @@ class Env:
 	var surface: Callable ## (x, y) -> SURF_* id
 	var drift_assist := 0.0 ## 0..1: how hard the car helps the driver keep a slide in check (yaw restoring and damping past DRIFT_BETA_MAX)
 	var rear_grip := 1.0 ## extra factor on the rear tyres' grip (open-world modifiers; 1.0 everywhere else)
+	var drift_handling := 0.0 ## 0..1: the player's drift handling (DH_* constants); 0 for the AI cars
 
 ## Driver input, with throttle/brake already routed for reverse.
 class Controls:
@@ -176,6 +214,38 @@ func max_steer(v: float, mu: float, k := 1.0) -> float:
 		return minf(spec.steer_lock, (wb * mu * G / v2 + 1.35 * APK * calm) * spec.steer_gain * k)
 	return minf(spec.steer_lock, (wb * mu * G / v2 + 1.35 * APK) * spec.steer_gain * k)
 
+## The steering limit for an input of sign `steer` with the player's drift handling (dh, Env.drift_handling): max_steer,
+## opened while counter-steering a slide so that a full input points the front wheels DH_LOCK_GAIN of the way along
+## the velocity (DH_LOCK_*).
+func steer_limit(car: RaceCar, steer: float, mu: float, k := 1.0, dh := 1.0) -> float:
+	var v := sqrt(car.vx * car.vx + car.vy * car.vy)
+	var lock := max_steer(v, mu, k)
+	var beta := slide_angle(car)
+	if dh <= 0.0 or v < DH_MIN_SPEED or signf(steer) != signf(beta) or absf(beta) <= DH_LOCK_FROM:
+		return lock
+	return maxf(lock, minf(maxf(lock, DH_LOCK_CAP), dh * DH_LOCK_GAIN * absf(beta)))
+
+## The car's slide angle (rad, between the nose and the velocity; the sign a counter-steering input has).
+static func slide_angle(car: RaceCar) -> float:
+	var ch := cos(car.heading)
+	var sh := sin(car.heading)
+	return atan2(-car.vx * sh + car.vy * ch, maxf(car.vx * ch + car.vy * sh, 0.5))
+
+## The rear axle's slip angle (rad, same sign as slide_angle): a few degrees at the grip limit, large once the tail is out
+## (a tight bend at low speed turns the car's middle across its nose, not the rear axle).
+func rear_slide(car: RaceCar) -> float:
+	var ch := cos(car.heading)
+	var sh := sin(car.heading)
+	return atan2(-car.vx * sh + car.vy * ch - car.yaw_rate * b, maxf(car.vx * ch + car.vy * sh, 0.5))
+
+## Keyboard steering ramp (Game and OpenWorld): eases the steering towards the key (st: -1, 0, 1) instead of snapping,
+## slower at speed; back to centre, and towards a slide (beta: rear_slide) once the car is sliding, at the fast rate.
+static func key_steer(steer: float, st: float, kmh: float, beta: float, dt: float) -> float:
+	var back := st == 0.0 or signf(st) != signf(steer)
+	var catch := st != 0.0 and kmh > 15.0 and absf(beta) > KEY_SLIDE_FROM and signf(st) == signf(beta)
+	var rate := KEY_RATE_SLOW if kmh < 40.0 else lerpf(KEY_RATE_SLOW, KEY_RATE_FAST, clampf((kmh - 40.0) / 80.0, 0.0, 1.0))
+	return move_toward(steer, st, (KEY_RATE_BACK if back or catch else rate) * dt)
+
 ## Advance the car by dt.
 ## Hot path (every car, 8 substeps per tick): the tyre model is inlined and the car/drivetrain state
 ## lives in locals for the whole step. The arithmetic matches tyre() and mf() term for term, so the
@@ -237,7 +307,9 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 		surf[i] = env.surface.call(car.x + WX[i] * ch0 - WY[i] * sh0, car.y + WX[i] * sh0 + WY[i] * ch0)
 		drag[i] = crr + SURF_DRAG[surf[i]] * offroad
 	var steer_k: float = (SURF_STEER[surf[0]] + SURF_STEER[surf[1]]) * 0.5
-	var delta := input.steer * max_steer(v0, env.mu, steer_k)
+	var dh := env.drift_handling
+	var dh_on := dh > 0.0 and v0 > DH_MIN_SPEED
+	var delta := input.steer * (steer_limit(car, input.steer, env.mu, steer_k, dh) if dh_on else max_steer(v0, env.mu, steer_k))
 	var drift_k := env.drift_assist
 	car.steer = delta
 	# Ackermann: the inside wheel turns tighter
@@ -498,7 +570,12 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 				var bx := TX_B * (rho * kpk)
 				Fl = fm * sin(TX_C * atan(bx - TX_E * (bx - atan(bx)))) * sx / rho
 				var by_ := TY_B * atan(rho * tapk)
-				Ft = -fm * sin(TY_C * atan(by_ - TY_E * (by_ - atan(by_)))) * sy / rho
+				var fy := sin(TY_C * atan(by_ - TY_E * (by_ - atan(by_))))
+				if dh_on and i >= 2 and rho > 1.0:
+					# progressive rear grip past the peak, for a sideways slide (not a locked or spinning wheel)
+					var lat := sy / rho
+					fy += dh * DH_REAR_HOLD * lat * lat * (1.0 - fy)
+				Ft = -fm * fy * sy / rho
 			rho_a[i] = rho
 			var bx := Fl * cd[i] - Ft * sd[i]
 			var by := Fl * sd[i] + Ft * cd[i]
@@ -514,6 +591,17 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 			else:
 				max_rho_r = maxf(max_rho_r, rho)
 		var vmag := sqrt(v2)
+		var dh_slip := 0.0 # how far into a slide the car is, 0..1 (DH_SLIP_*)
+		if dh_on and vx > DH_MIN_SPEED:
+			# the rear axle's slip angle: a few degrees at the grip limit, large only once the tail is out
+			var beta_s := absf(atan2(vy - r * b, vx))
+			dh_slip = smoothstep(DH_SLIP_FROM, DH_SLIP_FULL, beta_s)
+			# drift scrub: hand back part of the drag the sideways tyre forces put on the speed (DH_SCRUB_*)
+			var side_drag := fyB * vy
+			if side_drag < 0.0 and thr_in > 0.2 and brk < 0.05 and hb <= 0.0:
+				var refund := -side_drag / v2 * DH_SCRUB_REFUND * dh * smoothstep(DH_SCRUB_FROM, DH_SCRUB_FULL, beta_s) * minf(1.0, thr_in)
+				fxB += refund * vx
+				fyB += refund * vy
 		var fa := 0.5 * 1.2 * cd_a * drag_mul * vmag
 		fxB -= fa * vx
 		fyB -= fa * vy
@@ -529,6 +617,15 @@ func step(car: RaceCar, input: Controls, env: Env, dt: float) -> void:
 			var over_beta := absf(slide_beta) - DRIFT_BETA_MAX
 			if over_beta > 0.0:
 				c_yaw += (signf(slide_beta) * DRIFT_RESTORE * over_beta - DRIFT_DAMP * c_yaw) * drift_k * h
+		if dh_slip > 0.0 and hb <= 0.0:
+			# slide-rate damping: the slide angle changes at (the rate the velocity turns) - (the yaw rate); pull the yaw
+			# rate towards the velocity's (DH_SLIP_DAMP, DH_CATCH_DAMP)
+			var beta_dot := (vx * ayB - vy * axB) / v2 - r
+			var damp := DH_SLIP_DAMP # the slide closing: it holds
+			if beta_dot * vy > 0.0:
+				# the slide opening: left alone, unless the driver is counter-steering (the catch)
+				damp = DH_CATCH_DAMP if signf(delta) == signf(vy) else 0.0
+			c_yaw += beta_dot * damp * dh * dh_slip * h
 		# parked with the brakes on: stop creeping
 		if brk > 0.2 and v2 < 0.01 and absf(c_yaw) < 0.05:
 			c_vx *= 0.9

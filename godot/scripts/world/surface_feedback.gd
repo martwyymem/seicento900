@@ -79,7 +79,8 @@ func update(car: FreeCar, vis: Node, delta: float) -> void:
 	if vis and vis.has_method("set_fx"):
 		var want := {}
 		if not surfs.is_empty():
-			want = CarVisual.surface_fx(kick_surface(surfs), v, car.car.slip, 0.0, 0.0, false)
+			want = CarVisual.surface_fx(kick_surface(surfs), v, car.car.slip, 0.0, 0.0, false,
+				absf(DriftStyle.slip_angle(car.car.vx, car.car.vy, car.car.heading)))
 		vis.set_fx(want)
 
 ## Out of the drive (paused, a menu, the race takes over): the loops die away and the kick-up stops.

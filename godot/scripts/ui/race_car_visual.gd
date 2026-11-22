@@ -81,11 +81,39 @@ var _ghost := false
 var _paint := Color.WHITE
 var _damage_shown := 0.0
 var _previous_throttle := 0.0
+var _hit_seen := 0.0 ## car.last_hit last frame (sparks off a wall touched mid-drift)
 var _light_bar: Array[StandardMaterial3D] = [] ## safety car only: left and right lamps
 var _beacon: OmniLight3D
 var _shell: MeshInstance3D
 var _details_node: MeshInstance3D
 var _dents_shown := {"front": 0.0, "rear": 0.0, "left": 0.0, "right": 0.0}
+## The bonnet (the model's Bonnet mesh and its stripe and livery pieces, hinged at its rear edge): a heavy frontal hit pops
+## its catch and it lifts and flaps on the hinge with speed; a hard frontal crash, or the wind at motorway speed, tears it
+## off as a loose RigidBody3D, and a repaired front (dents back to nothing) puts it back. RaceCar.dents.front adds
+## 3 x ((dv - 3) / 6.7)^2 per hit (RaceControl.hurt, FreeCar._impact) and saturates at 1 near 25 km/h, so the dent only
+## decides the pop (BONNET_POP is one hit of about 21 km/h, or a few smaller ones). Tearing it off goes by the crash itself:
+## the visual's own forward speed lost against a reference that may fall only at 3 g (no brakes do that).
+const BONNET_POP := 0.5
+const BONNET_TEAR_DV := 11.0 ## m/s (40 km/h) of speed lost in a crash that tears a popped bonnet off
+const BONNET_RIP_DV := 15.0 ## m/s (54 km/h): a crash that pops and tears off a shut one at once
+const BONNET_WIND_V := 33.0 ## m/s (120 km/h): a popped bonnet driven this fast ...
+const BONNET_WIND_T := 4.0 ## ... for this long in s is torn off by the wind
+const BONNET_REF_FALL := 30.0 ## m/s^2 the crash reference speed may fall
+const BONNET_MASS := 12.0
+const BONNET_LIFE := 20.0 ## s a thrown bonnet lies about
+const BONNET_REACH := 150.0 ## m from the car past which a thrown bonnet is cleared
+const BONNET_LAYER := 1 << 19 ## physics layer of loose bonnets and the ground they land on (nothing else uses it)
+var _bonnet: Node3D ## the hinge (null: a model without a Bonnet)
+var _bonnet_parts: Array = [] ## [piece, the body mesh whose visibility it copies, or null]
+var _bonnet_state := 0 ## 0 shut, 1 popped, 2 thrown off
+var _bonnet_popped_at := 0.0 ## the front dent when it popped
+var _bonnet_flap := 0.0
+var _bonnet_ref := 0.0 ## recent forward speed, falling at most BONNET_REF_FALL
+var _bonnet_wind := 0.0 ## s driven above BONNET_WIND_V while popped
+var _bonnet_last := Vector3.ZERO
+var _bonnet_seen := false
+var _loose: Node3D ## a thrown bonnet and its landing plane
+var _loose_t := 0.0
 var _fx_near := false ## this car shows effects: in a race, not a ghost, and the player or near the camera
 var _world: Node = null ## the RaceWorld this car races in (effects only there, not for menus or the ghost)
 var _fx_checked := false
@@ -147,6 +175,7 @@ func set_car(key: String) -> void:
 	_lamp_sig = Vector4(-1.0, -1.0, -1.0, -1.0)
 	_damage_shown = 0.0
 	_dents_shown = {"front": 0.0, "rear": 0.0, "left": 0.0, "right": 0.0}
+	_clear_bonnet()
 	_build()
 	set_paint(_paint)
 	set_livery(livery)
@@ -248,6 +277,8 @@ func _build() -> void:
 		body_pivot.add_child(node)
 		livery_nodes[k] = node
 	martini_node = livery_nodes[2]
+	if sh.bonnet != null:
+		_build_bonnet(sh)
 
 	for spot in _wheel_spots:
 		var pivot := Node3D.new()
@@ -310,7 +341,7 @@ func _build() -> void:
 ## A decal on the car's body where a ray from aim.from along aim.dir meets it (the Body mesh's triangles), reading along aim.up.
 func _aim_decal(label: String, mat: StandardMaterial3D, sh: Dictionary, aim: Dictionary) -> MeshInstance3D:
 	if not sh.has("tri"):
-		sh["tri"] = (sh.shell as Mesh).generate_triangle_mesh()
+		sh["tri"] = body_tri(sh)
 	var dir: Vector3 = (aim.dir as Vector3).normalized()
 	var hit: Dictionary = (sh.tri as TriangleMesh).intersect_ray(aim.from, dir) if sh.tri != null else {}
 	if hit.is_empty():
@@ -320,6 +351,163 @@ func _aim_decal(label: String, mat: StandardMaterial3D, sh: Dictionary, aim: Dic
 	if n.dot(dir) > 0.0:
 		n = -n
 	return _add_decal(label, mat, hit.position, n, aim.up)
+
+## The Body's triangles plus the Bonnet's (cut out of it), for rays at the car's skin.
+static func body_tri(sh: Dictionary) -> TriangleMesh:
+	if sh.get("bonnet") == null:
+		return (sh.shell as Mesh).generate_triangle_mesh()
+	var faces: PackedVector3Array = (sh.shell as Mesh).get_faces()
+	faces.append_array((sh.bonnet as Mesh).get_faces())
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = faces
+	var m := ArrayMesh.new()
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return m.generate_triangle_mesh()
+
+func _build_bonnet(sh: Dictionary) -> void:
+	var mesh: Mesh = sh.bonnet
+	var box := mesh.get_aabb()
+	var hinge := Vector3(0.0, box.end.y, box.end.z) # its rear edge, under the windscreen (front is -Z)
+	_bonnet = Node3D.new()
+	_bonnet.name = "BonnetHinge"
+	_bonnet.position = hinge
+	body_pivot.add_child(_bonnet)
+	var panel := MeshInstance3D.new()
+	panel.name = "Bonnet"
+	panel.mesh = mesh
+	panel.position = -hinge
+	panel.set_surface_override_material(sh.bonnet_paint, paint_material)
+	_bonnet.add_child(panel)
+	_bonnet_parts = [[panel, null]]
+	for k in sh.bonnet_parts:
+		var src: MeshInstance3D = stripes_node if k == "Stripes" else body_pivot.get_node(NodePath(k))
+		var piece := MeshInstance3D.new()
+		piece.name = "Bonnet" + k
+		piece.mesh = sh.bonnet_parts[k]
+		piece.position = -hinge
+		piece.material_override = src.material_override
+		piece.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		piece.visible = src.visible
+		_bonnet.add_child(piece)
+		_bonnet_parts.append([piece, src])
+
+## Pops, flaps, throws or refits the bonnet from the car's front dent; the car's velocity is the visual's own motion.
+func _update_bonnet(car: RaceCar, dt: float) -> void:
+	_sync_bonnet_parts()
+	var pos := global_position if is_inside_tree() else position
+	var vel := (pos - _bonnet_last) / maxf(dt, 1e-3) if _bonnet_seen and dt > 0.0 else Vector3.ZERO
+	if vel.length() > 120.0:
+		vel = Vector3.ZERO # a teleport (reset, respawn), not motion
+		_bonnet_ref = 0.0
+	_bonnet_last = pos
+	_bonnet_seen = true
+	var front: float = float(car.dents.get("front", 0.0))
+	var fwd := maxf(0.0, vel.dot(-global_basis.z if is_inside_tree() else -basis.z))
+	_bonnet_ref = maxf(_bonnet_ref - BONNET_REF_FALL * dt, fwd)
+	var crash := _bonnet_ref - fwd
+	_bonnet_wind = _bonnet_wind + dt if _bonnet_state == 1 and fwd > BONNET_WIND_V else 0.0
+	if _bonnet_state != 0 and front < 0.05:
+		_refit_bonnet()
+	elif _bonnet_state == 0 and front >= BONNET_POP and not _ghost:
+		_bonnet_state = 1
+		_bonnet_popped_at = front
+		_show_livery()
+		if crash >= BONNET_RIP_DV:
+			_throw_bonnet(vel)
+	elif _bonnet_state == 1 and (crash >= BONNET_TEAR_DV or _bonnet_wind > BONNET_WIND_T):
+		_throw_bonnet(vel)
+	if _bonnet_state == 1:
+		# lifted off its catch: the wind under it lifts it further and it flutters, faster and wider with speed
+		var k := clampf(vel.length() / 30.0, 0.0, 1.0)
+		_bonnet_flap += dt * (8.0 + 16.0 * k)
+		var lift := 0.08 + 0.2 * k * k + (0.02 + 0.07 * k) * sin(_bonnet_flap) * (0.6 + 0.4 * sin(_bonnet_flap * 0.37))
+		_bonnet.rotation.x = lerpf(_bonnet.rotation.x, lift, minf(1.0, dt * 14.0))
+	if is_instance_valid(_loose):
+		_loose_t += dt
+		var body := _loose.get_child(1) as Node3D
+		if _loose_t > BONNET_LIFE or body.global_position.distance_to(pos) > BONNET_REACH:
+			_loose.queue_free()
+			_loose = null
+
+## Tears the bonnet off: a copy goes flying as a RigidBody3D (box, BONNET_MASS) with the car's velocity, a kick up and
+## back and a tumble about its hinge, onto a plane at the car's ground height (the tracks and the map have no physics
+## floor); the hinge on the car is hidden.
+func _throw_bonnet(vel: Vector3) -> void:
+	_bonnet_state = 2
+	_bonnet.visible = false
+	_show_livery()
+	if not is_inside_tree() or get_parent() == null:
+		return
+	if is_instance_valid(_loose):
+		_loose.queue_free()
+	var speed := vel.length()
+	var back := global_basis.z.normalized() # the car's rear
+	var side := global_basis.x.normalized()
+	_loose = Node3D.new()
+	_loose.name = "LooseBonnet"
+	_loose.top_level = true
+	get_parent().add_child(_loose)
+	var ground := StaticBody3D.new()
+	ground.collision_layer = BONNET_LAYER
+	ground.collision_mask = 0
+	var plane := CollisionShape3D.new()
+	plane.shape = WorldBoundaryShape3D.new()
+	ground.add_child(plane)
+	_loose.add_child(ground)
+	ground.global_position = global_position
+	var body := RigidBody3D.new()
+	body.mass = BONNET_MASS
+	body.collision_layer = BONNET_LAYER
+	body.collision_mask = BONNET_LAYER
+	body.linear_damp = 0.5 # a light panel catches the air
+	body.angular_damp = 0.6
+	var box := (_bonnet_parts[0][0] as MeshInstance3D).mesh.get_aabb()
+	var col := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(box.size.x, maxf(box.size.y * 0.35, 0.06), box.size.z)
+	col.shape = shape
+	col.position = box.get_center() - _bonnet.position
+	body.add_child(col)
+	_loose.add_child(body)
+	body.global_transform = _bonnet.global_transform
+	var copy := _bonnet.duplicate() as Node3D
+	copy.transform = Transform3D.IDENTITY
+	copy.visible = true
+	body.add_child(copy)
+	body.linear_velocity = vel * 0.9 + Vector3.UP * (3.0 + 0.08 * speed) + back * (1.5 + 0.05 * speed) + side * randf_range(-1.0, 1.0)
+	body.angular_velocity = side * (5.0 + 0.12 * speed) + global_basis.y * randf_range(-2.0, 2.0) + back * randf_range(-1.5, 1.5)
+	_loose_t = 0.0
+
+## The bonnet's stripe and livery pieces show with the body's.
+func _sync_bonnet_parts() -> void:
+	for p in _bonnet_parts:
+		if p[1] != null and (p[0] as Node3D).visible != (p[1] as Node3D).visible:
+			(p[0] as Node3D).visible = (p[1] as Node3D).visible
+
+## Back on, shut (a repaired or reset car).
+func _refit_bonnet() -> void:
+	_bonnet_state = 0
+	_bonnet.visible = true
+	_bonnet.rotation = Vector3.ZERO
+	if is_instance_valid(_loose):
+		_loose.queue_free()
+	_loose = null
+	_show_livery()
+
+func _clear_bonnet() -> void:
+	if is_instance_valid(_loose):
+		_loose.queue_free()
+	_loose = null
+	_bonnet = null
+	_bonnet_parts = []
+	_bonnet_state = 0
+	_bonnet_seen = false
+
+func _exit_tree() -> void:
+	if is_instance_valid(_loose):
+		_loose.queue_free()
+		_loose = null
 
 func _add_decal(label: String, mat: StandardMaterial3D, surface: Vector3, normal: Vector3, up: Vector3) -> MeshInstance3D:
 	var z := normal.normalized()
@@ -365,17 +553,20 @@ func set_livery(value: int) -> void:
 	_show_livery()
 	if is_instance_valid(stripes_node) and livery in WHITE_LIVERIES:
 		stripes_node.visible = false
+	_sync_bonnet_parts()
 
 ## The livery mesh and the racing decals the livery leaves room for.
 func _show_livery() -> void:
 	for k in livery_nodes:
 		(livery_nodes[k] as MeshInstance3D).visible = livery == k and not _ghost
+	_sync_bonnet_parts()
 	if is_instance_valid(_door_decal_l):
 		var shown := not _ghost and _decal_material().albedo_texture != null
 		for d in [_door_decal_l, _door_decal_r]:
 			d.visible = shown and livery not in WHITE_LIVERIES
 		for d in [_hood_decal, _sill_decal_l, _sill_decal_r]: # the Abarth shield and sill band sit where these go
 			d.visible = shown and livery < 2
+		_hood_decal.visible = _hood_decal.visible and _bonnet_state == 0 # it sits on the bonnet
 
 func _apply_finish() -> void:
 	var color := _base_paint()
@@ -404,7 +595,7 @@ func _show_dents(target: Dictionary, dt: float) -> void:
 			changed = true
 	if not changed:
 		return
-	for mi in [_shell, _details_node, stripes_node] + livery_nodes.values():
+	for mi in [_shell, _details_node, stripes_node] + livery_nodes.values() + _bonnet_parts.map(func(p): return p[0]):
 		if not is_instance_valid(mi):
 			continue
 		for k in _dents_shown:
@@ -425,6 +616,8 @@ func _apply_paint() -> void:
 		var lum := _base_paint().get_luminance()
 		var coat_scale: float = lerpf(1.15, 0.6, smoothstep(0.2, 0.8, lum)) * (1.0 - 0.85 * _damage_shown)
 		_shell.set_instance_shader_parameter("coat", coat_scale)
+		if not _bonnet_parts.is_empty():
+			(_bonnet_parts[0][0] as MeshInstance3D).set_instance_shader_parameter("coat", coat_scale)
 
 ## Dress this car as the safety car: white with yellow stripes and an amber light bar on the roof.
 func make_safety_car() -> void:
@@ -471,6 +664,7 @@ func make_safety_car() -> void:
 func set_stripes(enabled: bool) -> void:
 	if is_instance_valid(stripes_node):
 		stripes_node.visible = enabled and livery not in WHITE_LIVERIES
+	_sync_bonnet_parts()
 
 ## How far the headlamps are on (0 off .. 1 full) at this much night: the beams (OpenWorld.headlights, the race's pooled
 ## beams) and the lamp lenses (set_lamps) all follow it, so a lit lens always means a beam and a dark one none.
@@ -606,6 +800,8 @@ func sync(car: RaceCar, dt: float, curvature: float, night: float, ghost: bool) 
 		FxParticles.burst(self, "debris", global_position + Vector3(0.0, 0.35, 0.0), 14, q)
 		FxParticles.burst(self, "sparks", global_position + Vector3(0.0, 0.25, 0.0), 10, q)
 	_show_dents(car.dents, dt)
+	if _bonnet != null:
+		_update_bonnet(car, dt)
 	if absf(hurt - _damage_shown) > 0.02:
 		_damage_shown = hurt
 		_apply_paint()
@@ -623,6 +819,9 @@ func sync(car: RaceCar, dt: float, curvature: float, night: float, ghost: bool) 
 		# a pop from the tailpipe tip (build_seicento.py: 0.30 m right, 0.18 m up, behind the bumper) on a sharp lift
 		FxParticles.burst(self, "backfire", to_global(_fit.tailpipe), 8, _world.quality)
 	_previous_throttle = car.throttle
+	if car.last_hit > _hit_seen and _fx_near and DriftStyle.amount(absf(DriftStyle.slip_angle(car.vx, car.vy, car.heading)), absf(car.speed)) > 0.2:
+		FxParticles.burst(self, "sparks", global_position + Vector3(0.0, 0.25, 0.0), 14, _world.quality) # a wall touched mid-drift
+	_hit_seen = car.last_hit
 
 # ---------------- tyre smoke, spray and kick-up ----------------
 ## Effect strengths from what the car is doing and what it drives on. Bots only show them near the camera
@@ -674,11 +873,12 @@ static func _fx_strengths(race, car: RaceCar) -> Dictionary:
 	var surf: int = race.surface_at(car, car.x + tr.sample(tr.NX, car.s) * side * 0.65,
 		car.y + tr.sample(tr.NY, car.s) * side * 0.65)
 	var loose: bool = race.s != null and race.s.surface != "tarmac"
-	return surface_fx(surf, v, car.slip, race.weather.wet, race.weather.snow, loose)
+	return surface_fx(surf, v, car.slip, race.weather.wet, race.weather.snow, loose, absf(DriftStyle.slip_angle(car.vx, car.vy, car.heading)))
 
 ## Effect strengths (kind -> 0..1) for a car at speed v (m/s) with tyre slip `slip` on surface surf (Physics.SURF_*),
-## in weather this wet and snowy; loose: the whole road is a loose rally stage.
-static func surface_fx(surf: int, v: float, slip: float, wet: float, snow: float, loose: bool) -> Dictionary:
+## in weather this wet and snowy; loose: the whole road is a loose rally stage; angle: the slip angle (rad, a drift
+## smokes more the deeper and faster it is).
+static func surface_fx(surf: int, v: float, slip: float, wet: float, snow: float, loose: bool, angle := 0.0) -> Dictionary:
 	var out := {}
 	if v < 1.5:
 		return out
@@ -701,7 +901,9 @@ static func surface_fx(surf: int, v: float, slip: float, wet: float, snow: float
 			out.splash = wet * smoothstep(9.0, 28.0, v)
 	# tyre smoke: wheelspin, lock-ups and slides on a dry paved road (the wet road sprays, loose ground throws dust)
 	if wet < 0.5 and not loose and not out.has("gravel") and not out.has("dust") and not out.has("gravel_dust") and not out.has("grass"):
-		out.smoke = clampf((slip - 0.3) / 0.6, 0.0, 1.0) * smoothstep(2.0, 8.0, v) * (1.0 - wet * 1.6)
+		var spin := clampf((slip - 0.3) / 0.6, 0.0, 1.0) * smoothstep(2.0, 8.0, v)
+		var drift := DriftStyle.amount(angle, v) * (0.55 + 0.45 * smoothstep(8.0, 25.0, v))
+		out.smoke = maxf(spin, drift) * (1.0 - wet * 1.6)
 	return out
 
 const PRESET_FOR_KIND := {
@@ -906,7 +1108,13 @@ static func _shared_resources(key := "stock") -> Dictionary:
 	contact_mat.albedo_color = Color.WHITE
 	contact.material = contact_mat
 
-	var made := {"shell": shell, "details": details, "cabin": cabin,
+	var bonnet: Mesh = meshes.get("Bonnet")
+	var bonnet_parts := {}
+	for k in ["Stripes"] + LIVERY_MESHES.values():
+		if meshes.has("Bonnet" + k):
+			bonnet_parts[k] = meshes["Bonnet" + k]
+	var made := {"shell": shell, "details": details, "cabin": cabin, "bonnet": bonnet, "bonnet_parts": bonnet_parts,
+		"bonnet_paint": maxi(0, _surface(bonnet, "Paint")) if bonnet else 0,
 		"flakes": common.get("flakes") if not common.is_empty() else _flake_texture(), "peel": common.get("peel") if not common.is_empty() else _peel_texture(),
 		"coat": common.get("coat") if not common.is_empty() else _coat_material(), "puff": common.get("puff") if not common.is_empty() else _puff_mesh(),
 		"fx": common.get("fx") if not common.is_empty() else _fx_materials(), "stripes": meshes.get("Stripes", BoxMesh.new()), "liveries": liveries,

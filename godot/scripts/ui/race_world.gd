@@ -28,7 +28,7 @@ const RUNOFF_LIFT := 0.01 ## m: the run-off ribbon under it
 const ROAD_REF := 0.09 ## m: _road_y / _world_pos stand this far over the track's ground height (what the trackside is placed against)
 const BEAM_COUNT := 4 ## headlight spotlights handed to the cars nearest the camera after dark
 const BEAM_REACH := 180.0 ## m: cars further from the camera than this get no headlight beam
-const SKID_CAPACITY := 1600 ## skid-mark quads kept; the oldest is reused once they run out
+const SKID_CAPACITY := 3200 ## skid-mark quads kept; the oldest is reused once they run out
 ## Trackside structures built in Blender (tools/blender/build_trackside.py); the layout numbers below match it.
 const TRACKSIDE_PATH := "res://models/trackside.glb"
 const STAND_BAY := 10.0 ## grandstand bay width along the road
@@ -192,6 +192,8 @@ var _chase_base := Vector3.ZERO ## the chase camera's eased spot before the free
 var _last_cam_mode := -1 ## the mode _update_camera ran in last frame (_chase_base is only good after a chase frame)
 var _focus_pos := Vector3.ZERO
 var _focus_heading := 0.0
+var drift_cam := DriftStyle.new() ## the chase cameras' swing and roll through a drift
+var _focus_car: RaceCar = null
 var _focus_s := 0.0
 
 ## Trackside TV camera positions along the track, their distance along it and their kind: a high tower
@@ -513,8 +515,9 @@ func _process(delta: float) -> void:
 		if car == focus:
 			_focus_pos = p
 			_focus_heading = heading
+			_focus_car = car
 			_focus_s = s
-		if car.control == "free" and (car.slip > 0.42 or (car.brake_on and car.speed > 8.0)):
+		if car.control == "free" and (car.slip > 0.42 or (car.brake_on and car.speed > 8.0) or DriftStyle.amount(absf(DriftStyle.slip_angle(car.vx, car.vy, car.heading)), absf(car.speed)) > 0.15):
 			_add_skid(car.id, p, heading)
 		elif _skid_last.has(car.id):
 			_skid_last.erase(car.id)
@@ -797,7 +800,12 @@ func _update_camera(delta: float) -> void:
 	camera.projection = Camera3D.PROJECTION_PERSPECTIVE
 
 	# the camera swings round after the car rather than being bolted to it
-	_cam_head += wrapf(_focus_heading - _cam_head, -PI, PI) * _ease(30.0 if camera_mode in [2, 6, 7] else 5.0, delta, snap)
+	# and through a drift the chase cameras swing round towards the car's side, rolling with the angle (DriftStyle)
+	if _focus_car and _focus_car.control == "free" and camera_mode in [0, 1]:
+		drift_cam.update_camera(_focus_car.vx, _focus_car.vy, _focus_car.heading, delta, snap, _focus_car.yaw_rate / 5.0)
+	else:
+		drift_cam.reset()
+	_cam_head += wrapf(_focus_heading + drift_cam.swing + drift_cam.lead - _cam_head, -PI, PI) * _ease(30.0 if camera_mode in [2, 6, 7] else 5.0, delta, snap)
 	var fwd := Vector3(cos(_cam_head), 0.0, sin(_cam_head))
 	var v := Vector2(player.vx, player.vy).length()
 	# the view opens out with speed, easing in off the line and settling by top speed rather than at a hard cap
@@ -829,7 +837,7 @@ func _update_camera(delta: float) -> void:
 				spot.y = maxf(spot.y, _road_y(s_at) + 0.5)
 			camera.global_position = spot
 			var roll_tilt := clampf(-player.body_roll * 0.35, -0.06, 0.06) * cos(look.yaw)
-			var cam_up := Vector3.UP.rotated(view, roll_tilt)
+			var cam_up := Vector3.UP.rotated(view, roll_tilt + drift_cam.roll * cos(look.yaw))
 			var aim := p + view * (10.0 if far else 7.0) * cos(look.pitch) + Vector3.UP * (0.6 if far else 1.0)
 			if look.active():
 				# look at the car itself while swung round it, so it stays in the middle of the picture
@@ -902,6 +910,8 @@ func _update_camera(delta: float) -> void:
 		var t := Time.get_ticks_msec() * 0.001
 		var amp := (on[0] * 0.02 + on[2] * 0.026 + on[1] * 0.01) * clampf(v / 30.0, 0.3, 1.0) * (0.5 if camera_mode == 1 else 1.0)
 		camera.global_position.y += amp * (sin(t * 71.0) * 0.6 + sin(t * 113.0 + 1.3) * 0.4)
+	if camera_mode in [0, 1, 2, 6, 7]:
+		fov += GfxFx.update(v * 3.6, delta)
 	var target_fov := HudLayout.camera_fov_for(camera, fov)
 	camera.fov += (target_fov - camera.fov) * _ease(4.0, delta, snap)
 
@@ -1254,6 +1264,7 @@ func _build_environment() -> void:
 	world_environment.ambient_light_energy = 0.65
 	# tonemapper, glow and ambient occlusion shared with the open world (SceneMood)
 	SceneMood.base(world_environment)
+	add_child(SpeedBlur.new())
 	world_environment.ssao_enabled = true
 	world_environment.ssil_radius = 4.0
 	world_environment.ssil_intensity = 0.8
@@ -4310,10 +4321,10 @@ func _reset_skids() -> void:
 		skid_multimesh = MultiMesh.new()
 		skid_multimesh.transform_format = MultiMesh.TRANSFORM_3D
 		var quad := PlaneMesh.new()
-		quad.size = Vector2(0.2, 1.0)
+		quad.size = Vector2(SkidTrail.WIDTH, 1.0)
 		var mat := StandardMaterial3D.new()
 		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		mat.albedo_color = Color(0.04, 0.04, 0.04, 0.5)
+		mat.albedo_color = SkidTrail.COLOUR # darker rubber, as the open world's
 		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		quad.material = mat
 		skid_multimesh.mesh = quad

@@ -111,6 +111,18 @@ var tower: Control ## a race's running order on the map (StreetRivals.standings)
 var _standings: Array = []
 var _standings_color := Color.WHITE
 var stats_box: VBoxContainer
+var fans_gain: Label ## "+1 234" beside the count while fans come in
+var drift_meter: DriftMeter ## the drift readout under the top-centre chain (OpenWorld feeds it)
+## The fans card (top left) hides while you drive and comes in when fans are added: the count ticks up to the new
+## total with a pulse and a "+N" flash, then it slides away (FANS_SHOW s); the pause menu and the map always show it.
+const FANS_SHOW := 4.5
+const FANS_COUNT := 0.9 ## s the count takes to tick up
+var _fans_target := -1
+var _fans_from := 0.0
+var _fans_shown := 0.0
+var _fans_t := 99.0 ## s since the last gain
+var _card_t := 0.0 ## s the card stays up
+var _card_a := 0.0 ## its fade, 0..1
 var _street := ""
 var _street_t := 0.0
 var _area_t := 0.0
@@ -208,8 +220,16 @@ func _build() -> void:
 	corners_group.add_child(stats)
 	brand_label = _label("SEICENTO FEST · BRZESZCZE", 16, HudLayout.neon_primary(), 900, true)
 	stats.add_child(brand_label)
+	var fans_row := HBoxContainer.new()
+	fans_row.add_theme_constant_override("separation", 34) # room for the count's pulse
+	fans_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stats.add_child(fans_row)
 	fans_label = _label("0 FANS", 36, Color.WHITE, 900, true)
-	stats.add_child(fans_label)
+	fans_row.add_child(fans_label)
+	fans_gain = _label("", 26, HudLayout.neon_boost(), 900, true, 4)
+	fans_gain.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	fans_gain.modulate.a = 0.0
+	fans_row.add_child(fans_gain)
 	level_label = _label("", 15, HudLayout.neon_boost(), 800, true)
 	stats.add_child(level_label)
 	roads_label = _label("", 14, Color(0.92, 0.96, 1.0, 0.88), 700)
@@ -251,6 +271,8 @@ func _build() -> void:
 	live_line.visible = false
 	chain_box.add_child(live_line)
 	chain_box.move_child(live_line, 1)
+	drift_meter = DriftMeter.new()
+	safe_frame.add_child(drift_meter)
 	# discovery and result banners, left, between the stats and the satnav (_trim_banners keeps them there)
 	banners = VBoxContainer.new()
 	banners.position = Vector2(_inset.x, _inset.y + 168.0)
@@ -513,7 +535,33 @@ func update_drive(kmh: float, g: int, r: float, r_max: float, pos: Vector2, head
 		_area_t -= dt
 		area_label.modulate.a = clampf(minf(_area_t, 3.2 - _area_t) * 2.0, 0.0, 1.0)
 	_fit_card()
+	_tick_fans(dt)
 	_update_motion(kmh, pos, heading, dt, vz)
+
+## The fans card's count-up, pulse, "+N" flash and slide (see FANS_SHOW).
+func _tick_fans(dt: float) -> void:
+	_fans_t += dt
+	_card_t = maxf(0.0, _card_t - dt)
+	if _fans_target >= 0 and _fans_t < FANS_COUNT:
+		var k := 1.0 - pow(1.0 - _fans_t / FANS_COUNT, 3.0)
+		_fans_shown = lerpf(_fans_from, _fans_target, k)
+		fans_label.text = "%s FANS" % _thousands(roundi(_fans_shown))
+	elif _fans_target >= 0 and roundi(_fans_shown) != _fans_target:
+		_fans_shown = _fans_target
+		fans_label.text = "%s FANS" % _thousands(_fans_target)
+	# a pulse as it starts counting and a smaller one as it lands
+	var pulse := 0.12 * maxf(0.0, 1.0 - _fans_t / 0.3) + 0.06 * maxf(0.0, 1.0 - absf(_fans_t - FANS_COUNT) / 0.15)
+	fans_label.pivot_offset = Vector2(0.0, fans_label.size.y * 0.5)
+	fans_label.scale = Vector2.ONE * (1.0 + pulse)
+	fans_label.modulate = Color.WHITE.lerp(HudLayout.neon_boost(), clampf(pulse * 4.0, 0.0, 1.0))
+	fans_gain.modulate.a = clampf(minf(_fans_t / 0.12, (FANS_SHOW - 1.0 - _fans_t) / 0.5), 0.0, 1.0)
+	fans_gain.scale = Vector2.ONE * (1.0 + 0.5 * maxf(0.0, 1.0 - _fans_t / 0.2))
+	fans_gain.pivot_offset = Vector2(0.0, fans_gain.size.y * 0.5)
+	var want := 1.0 if _card_t > 0.0 or map_open or (pause_panel != null and pause_panel.visible) else 0.0
+	var was := _card_a
+	_card_a = move_toward(_card_a, want, dt * (6.0 if want > _card_a else 2.5))
+	if _card_a != was:
+		_layout()
 
 func _update_motion(kmh: float, pos: Vector2, heading: float, dt: float, vz: float) -> void:
 	if map_open or (pause_panel != null and pause_panel.visible):
@@ -539,7 +587,19 @@ func _apply_motion() -> void:
 		c.rotation = crot
 
 func set_stats(fans: int, roads_found: int, roads_total: int, hour: float) -> void:
-	fans_label.text = "%s FANS" % _thousands(fans)
+	if _fans_target < 0:
+		_fans_shown = fans # the session's first figure: shown for a moment as you arrive, not counted up
+		_card_t = FANS_SHOW
+		_card_a = 1.0
+	elif fans > _fans_target:
+		_fans_from = _fans_shown
+		_fans_t = 0.0
+		_card_t = FANS_SHOW
+		fans_gain.text = "+" + _thousands(fans - int(_fans_from))
+	elif fans < _fans_target:
+		_fans_shown = fans
+	_fans_target = fans
+	fans_label.text = "%s FANS" % _thousands(roundi(_fans_shown))
 	var lv := FanLevels.level(fans)
 	var left := FanLevels.to_next(fans)
 	level_label.text = "LEVEL %d · %s%s" % [lv, FanLevels.title(lv).to_upper(), "" if left < 0 else "  ·  %s TO NEXT" % _thousands(left)]
@@ -606,6 +666,15 @@ func _layout() -> void:
 	if is_instance_valid(stats_plate):
 		stats_plate.position = Vector2(mx, my)
 		stats_plate.size = Vector2(stats_w + 26.0, stats_h + 16.0)
+	# hidden while driving (see FANS_SHOW): it slides in from the left as it fades up
+	var card_ease := _card_a * _card_a * (3.0 - 2.0 * _card_a)
+	var slide := -(1.0 - card_ease) * 60.0 * s
+	stats_box.position.x += slide
+	stats_plate.position.x += slide
+	stats_box.modulate.a = card_ease
+	stats_plate.modulate.a = card_ease
+	stats_box.visible = _card_a > 0.001
+	stats_plate.visible = stats_box.visible
 	# top-right standings tower
 	var tw := roundf(TOWER_W * s)
 	var th := roundf(TOWER_HEADER * s) + maxi(1, _standings.size()) * roundf((TOWER_ROW + 3.0) * s) + 8.0
@@ -616,7 +685,8 @@ func _layout() -> void:
 	# banners and event card pulled inward
 	var bw := minf(roundf(BANNERS_W * s), maxf(300.0, floorf(W * 0.34)))
 	var cw := minf(roundf(CARD_W * s), maxf(320.0, floorf(W * 0.34)))
-	banners.position = Vector2(mx, my + stats_h + 28.0)
+	# the notices sit under the fans card while it shows and move up into its place when it goes
+	banners.position = Vector2(mx, lerpf(my, my + stats_h + 28.0, card_ease))
 	banners.custom_minimum_size.x = bw
 	banners.size = Vector2(bw, 0.0) # height back to what the stack needs (a Control only grows on its own)
 	card.offset_left = -mx - cw
@@ -643,7 +713,9 @@ func _layout() -> void:
 	var chain_half := clampf(minf(cx - (mx + stats_w + 38.0), (W - mx - right_top_w - 16.0) - cx), 150.0, 320.0)
 	chain_box.offset_left = -chain_half
 	chain_box.offset_right = chain_half
-	chain_box.offset_top = my + 6.0
+	# below the rear-view mirror when it shows (it sits top centre, RearMirror.screen_bottom)
+	var mirror_y := RearMirror.screen_bottom - safe_frame.global_position.y + 14.0 if RearMirror.screen_bottom > 0.0 else 0.0
+	chain_box.offset_top = maxf(my + 6.0, mirror_y)
 	var inner_w := maxf(160.0, chain_half * 2.0 - 32.0)
 	_fit_vbox_label(chain_title, inner_w, maxi(14, roundi(20.0 * s)), 13)
 	_fit_vbox_label(chain_points, inner_w, maxi(26, roundi(48.0 * s)), 24)
@@ -656,6 +728,12 @@ func _layout() -> void:
 	var top_gap := minf(cx - (mx + bw + 12.0), right_mid - cx)
 	var live_bottom := (live_plate.offset_bottom + 14.0) if (is_instance_valid(live_plate) and live_plate.visible) else (my + roundf(120.0 * s))
 	area_label.offset_top = maxf(my + roundf(120.0 * s), live_bottom)
+	if drift_meter:
+		# the drift plate under the chain (or the mirror), never up over them
+		var under := maxf(live_bottom, chain_box.offset_top) + 4.0
+		if area_label.modulate.a > 0.05 and area_label.text != "":
+			under = maxf(under, area_label.offset_top + _line_h(area_label) + 6.0)
+		drift_meter.top_min = under
 	_fit_label(area_label, top_gap, maxi(26, roundi(52.0 * s)), 22)
 	if H > 0.0:
 		_fit_card()

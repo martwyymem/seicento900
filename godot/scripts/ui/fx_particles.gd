@@ -18,7 +18,12 @@ const PRESETS := {
 	"kickup_snow": {"amount": 30, "life": 1.0, "color": Color(0.92, 0.95, 1.0, 0.72), "speed": Vector2(0.25, 0.7), "up": 0.35, "gravity": 0.3, "drag": 0.6, "scale": Vector2(0.12, 0.2), "grow": 1.5, "spread": 20.0, "inherit": 0.2},
 	"sparks": {"amount": 22, "life": 0.45, "color": Color(1.0, 0.58, 0.18, 0.95), "speed": Vector2(5.0, 12.0), "up": 0.18, "gravity": 18.0, "drag": 0.4, "scale": Vector2(0.025, 0.055), "grow": 0.35, "spread": 55.0, "emission": true},
 	"debris": {"amount": 18, "life": 0.85, "color": Color(0.56, 0.49, 0.39, 0.9), "speed": Vector2(3.0, 9.0), "up": 0.55, "gravity": 13.0, "drag": 0.7, "scale": Vector2(0.04, 0.11), "grow": 0.55, "spread": 65.0},
-	"smoke": {"amount": 80, "life": 1.5, "color": Color(0.84, 0.86, 0.89, 0.22), "speed": Vector2(0.4, 1.4), "up": 0.03, "gravity": -0.02, "drag": 1.8, "scale": Vector2(0.26, 0.48), "grow": 3.6, "spread": 18.0, "inherit": 0.22},
+	# tyre smoke (a drift, wheelspin, a lock-up): thick billows off both rear tyres that swell to 4-6 m, rise slowly,
+	# hang about for seconds and drift off downwind ("wind": m/s2 sideways in the world; "box": the emission half
+	# extents, the rear track; "reach": the culling box, as the cloud is left far behind a car at speed)
+	"smoke": {"amount": 150, "life": 3.6, "color": Color(0.9, 0.91, 0.93, 0.5), "speed": Vector2(0.8, 2.4), "up": 0.45, "gravity": -0.4, "drag": 1.0, "scale": Vector2(0.9, 1.4), "grow": 4.4, "spread": 50.0, "inherit": 0.3,
+		"wind": Vector3(1.1, 0.0, 0.65), "box": Vector3(0.72, 0.05, 0.22), "reach": 70.0, "fast_in": true,
+		"offset": Vector3(0.0, 0.4, 0.0), "soft": 0.3, "cam_fade": 1.6},
 	"splash": {"amount": 30, "life": 0.7, "color": Color(0.72, 0.84, 0.91, 0.5), "speed": Vector2(2.0, 5.5), "up": 0.7, "gravity": 8.0, "drag": 2.0, "scale": Vector2(0.08, 0.16), "grow": 1.4, "spread": 38.0, "inherit": 0.25},
 	"spray": {"amount": 36, "life": 0.9, "color": Color(0.82, 0.88, 0.93, 0.32), "speed": Vector2(2.0, 5.0), "up": 0.38, "gravity": 1.5, "drag": 1.6, "scale": Vector2(0.12, 0.25), "grow": 2.0, "spread": 24.0, "inherit": 0.3},
 	"exhaust": {"amount": 12, "life": 1.0, "color": Color(0.7, 0.72, 0.74, 0.19), "speed": Vector2(0.2, 0.7), "up": 0.08, "gravity": -0.4, "drag": 0.6, "scale": Vector2(0.07, 0.13), "grow": 1.4, "spread": 10.0},
@@ -95,7 +100,8 @@ static func _new_system(preset: String, quality: int, density: float) -> GPUPart
 	p.randomness = 0.35
 	p.local_coords = false
 	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	p.visibility_aabb = AABB(Vector3(-18, -5, -18), Vector3(36, 18, 36))
+	var reach := float(spec.get("reach", 18.0))
+	p.visibility_aabb = AABB(Vector3(-reach, -5, -reach), Vector3(reach * 2.0, 18.0 + reach * 0.3, reach * 2.0))
 	p.process_material = _materials[preset]
 	p.draw_pass_1 = _meshes[preset]
 	p.emitting = false
@@ -113,16 +119,24 @@ static func _build_resources() -> void:
 	])
 	var ramp := GradientTexture1D.new()
 	ramp.gradient = gradient
+	# a puff that is there at once (tyre smoke: the chase camera is only a few metres behind the wheels, so a slow
+	# fade-in had the puffs behind the camera before they showed)
+	var fast := Gradient.new()
+	fast.offsets = PackedFloat32Array([0.0, 0.015, 0.3, 0.72, 1.0])
+	fast.colors = gradient.colors
+	var fast_ramp := GradientTexture1D.new()
+	fast_ramp.gradient = fast
 	for key in PRESETS:
 		var spec: Dictionary = PRESETS[key]
 		var pm := ParticleProcessMaterial.new()
 		pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-		pm.emission_box_extents = Vector3(0.58, 0.015, 0.12)
+		pm.emission_box_extents = spec.get("box", Vector3(0.58, 0.015, 0.12))
+		pm.emission_shape_offset = spec.get("offset", Vector3.ZERO) # (tyre smoke starts at the wheels' height, not half in the road)
 		pm.direction = Vector3(0.0, float(spec.up), 1.0).normalized()
 		pm.spread = spec.spread
 		pm.initial_velocity_min = spec.speed.x
 		pm.initial_velocity_max = spec.speed.y
-		pm.gravity = Vector3(0.0, -float(spec.gravity), 0.0)
+		pm.gravity = Vector3(0.0, -float(spec.gravity), 0.0) + spec.get("wind", Vector3.ZERO)
 		pm.damping_min = float(spec.drag) * 0.7
 		pm.damping_max = float(spec.drag)
 		pm.inherit_velocity_ratio = float(spec.get("inherit", 0.0))
@@ -134,7 +148,7 @@ static func _build_resources() -> void:
 		pm.scale_max = spec.scale.y
 		var curve := Curve.new()
 		curve.max_value = maxf(1.0, float(spec.grow))
-		curve.add_point(Vector2(0.0, 0.2))
+		curve.add_point(Vector2(0.0, 0.6 if spec.get("fast_in", false) else 0.2))
 		curve.add_point(Vector2(0.18, 0.8))
 		curve.add_point(Vector2(0.5, 1.8))
 		curve.add_point(Vector2(1.0, float(spec.grow)))
@@ -142,11 +156,11 @@ static func _build_resources() -> void:
 		curve_tex.curve = curve
 		pm.scale_curve = curve_tex
 		pm.color = spec.color
-		pm.color_ramp = ramp
+		pm.color_ramp = fast_ramp if spec.get("fast_in", false) else ramp
 		var material := ShaderMaterial.new()
 		material.shader = SHADER
 		material.set_shader_parameter("soft_distance", float(spec.get("soft", 0.55))) # metres a particle fades out over into what is behind it
-		material.set_shader_parameter("camera_fade_distance", 3.0)
+		material.set_shader_parameter("camera_fade_distance", float(spec.get("cam_fade", 3.0)))
 		material.set_shader_parameter("camera_fade_min", 0.85)
 		material.set_shader_parameter("emissive", bool(spec.get("emission", false)))
 		material.set_shader_parameter("leaf_shape", key == "leaves")

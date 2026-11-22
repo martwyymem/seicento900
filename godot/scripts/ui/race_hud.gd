@@ -66,6 +66,8 @@ var _feed_cache_n := -1
 const HELP_TEXT := "DRIVING:  W / ↑ Throttle  ·  S / ↓ Brake  ·  Space Handbrake  ·  A / D / ← → Steer  ·  Backspace / R Reset Car  ·  E / Q Gear (Manual)\nVIEW & AIDS:  C Camera  ·  L Racing Line  ·  V Speed Limiter  ·  O Autopilot  ·  G Ghost Car  ·  M Mute  ·  Esc Pause\nPIT & STRATEGY:  P Request Box  ·  [ ] Next Tyre  ·  − / = Fuel  ·  F Fuel Mix  ·  Shift+R Replan  ·  H Toggle Help"
 
 var race: Race
+var drift_meter: DriftMeter ## the drift readout in the centre column, under the stack (DriftMeter)
+var _drift_view := DriftScore.new() ## the player's drifts in a race that does not score them (display only)
 var records: LapRecords ## the player's lap record here, for the gap to it (null: no record row)
 var world: Node3D
 var audio: RaceAudio
@@ -217,6 +219,8 @@ func _ready() -> void:
 	deltabar = _canvas(_draw_delta_bar)
 	_place(deltabar, 0.5, 0.0, 0.5, 0.0, -DELTA_W * 0.5, 156, DELTA_W * 0.5, 156 + 92)
 	missionbar = _canvas(_draw_mission)
+	drift_meter = DriftMeter.new()
+	safe_frame.add_child(drift_meter)
 	splitbox = _canvas(_draw_splits)
 	_place(splitbox, 1.0, 0.0, 1.0, 0.0, -14 - CLOCK_W - 20 - 250, 32, -14 - CLOCK_W - 20 - 12, 90)
 	_place(pacenote, 0.5, 0.0, 0.5, 0.0, -150, 14, 150, 146)
@@ -296,6 +300,9 @@ func start(race_: Race, world_: Node3D, audio_: RaceAudio) -> void:
 	warp = 1
 	skip_note = ""
 	_event_seen = 0
+	_drift_view = DriftScore.new()
+	if drift_meter:
+		drift_meter.clear()
 	_feed_cache = []
 	_feed_cache_n = -1
 	_last_flag = ""
@@ -408,6 +415,7 @@ func update(dt: float) -> void:
 		deltabar.queue_redraw()
 	missionbar.visible = _mission_showing()
 	missionbar.queue_redraw()
+	_update_drift(dt)
 	var note_key = _pacenote_key()
 	if note_key is Array and note_key != _note_key:
 		_note_key = note_key
@@ -560,7 +568,11 @@ func _layout() -> void:
 
 	var pn_half := roundf(PACENOTE_HALF * s)
 	var pn_h := roundf(132.0 * s)
-	_place(pacenote, 0.5, 0.0, 0.5, 0.0, -pn_half, _my, pn_half, _my + pn_h)
+	# the centre column starts under the rear-view mirror when it shows (RearMirror, top centre)
+	var top_c := _my
+	if RearMirror.screen_bottom > 0.0:
+		top_c = maxf(_my, RearMirror.screen_bottom - safe_frame.global_position.y + 8.0)
+	_place(pacenote, 0.5, 0.0, 0.5, 0.0, -pn_half, top_c, pn_half, top_c + pn_h)
 
 	var left_w := mw if modepanel.visible else (tw if tower.visible else 0.0)
 	var band := _band_half()
@@ -604,7 +616,7 @@ func _layout() -> void:
 	for b: Label in [banner, banner_small]:
 		if b.text != "":
 			stack.append([b, band * 2.0, _label_height(b, band * 2.0)])
-	var y := _my + pn_h + roundf(8.0 * s)
+	var y := top_c + pn_h + roundf(8.0 * s)
 	for item in stack:
 		var c: Control = item[0]
 		var w: float = item[1]
@@ -620,7 +632,9 @@ func _layout() -> void:
 		_reserved.append(Rect2(sx + cx - used_w * 0.5, y, used_w, h))
 		y += h + STACK_GAP
 	_stack_bottom = y - STACK_GAP
-	_reserved.append(Rect2(sx + cx - pn_half, _my, pn_half * 2.0, pn_h))
+	if drift_meter:
+		drift_meter.top_min = _stack_bottom + 10.0
+	_reserved.append(Rect2(sx + cx - pn_half, top_c, pn_half * 2.0, pn_h))
 	var shift := Vector2(sx, 0.0)
 	_reserved.append(Rect2(sx + W - _mx - cw, _my, cw, ch))
 	_reserved.append(Rect2(shift + Vector2(W - _mx - ms, map_top), Vector2(ms, ms)))
@@ -2655,6 +2669,16 @@ func _draw_mission() -> void:
 	_mt(c, Vector2(16.0 * s, H * 0.80), _fit_font(_bold, line, lfs, line_w), lfs, line_col, _bold, HORIZONTAL_ALIGNMENT_LEFT, line_w)
 	if line_right != "":
 		_mt(c, Vector2(W - 14.0 * s - lw, H * 0.80), line_right, lfs, MUTED, _bold, HORIZONTAL_ALIGNMENT_LEFT, lw + 2.0)
+
+## The drift meter: a drift mission's own score, else the player's slides scored for show (nothing reads _drift_view).
+func _update_drift(dt: float) -> void:
+	var p := race.player
+	var on := p != null and race.phase == "racing" and warp == 1 and race.s.mode != "rally" and p.control == "free" and not p.finished
+	var ds: DriftScore = race.drift
+	if ds == null and on:
+		_drift_view.tick(race, p, dt)
+		ds = _drift_view
+	drift_meter.feed(ds if on or race.drift != null else null, dt)
 
 func _mission_name(car: RaceCar) -> String:
 	return "YOU" if car.is_player else str(car.name).split(" ")[-1].to_upper()

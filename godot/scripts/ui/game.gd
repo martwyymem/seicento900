@@ -261,6 +261,9 @@ var fps_limit_picker: MenuSelector
 var reflections_picker: MenuSelector
 var ssao_toggle: CheckButton
 var shadows_toggle: CheckButton
+var bloom_toggle: CheckButton
+var speed_fov_toggle: CheckButton
+var speed_blur_toggle: CheckButton
 var codriver_voice_toggle: CheckButton
 var graphics_display_mode := 0
 var graphics_fps_limit := 1 ## index into FPS_LIMITS
@@ -282,6 +285,8 @@ var control_hints_toggle: CheckButton
 var graphics_ui_scale := 1 ## index into UI_SCALES
 var ui_scale_picker: MenuSelector
 var hud_motion_picker: MenuSelector
+var mirror_toggle: CheckButton
+var flare_toggle: CheckButton
 var menu_tab_buttons: Dictionary = {}
 var menu_tab_dividers: Dictionary = {}
 var menu_tab_index := 1
@@ -652,10 +657,9 @@ func _update_input(dt: float) -> void:
 	handbrake = 1.0 if hand else 0.0
 	nitro_held = Input.is_physical_key_pressed(KEY_SHIFT)
 	var st := (1.0 if right else 0.0) - (1.0 if left else 0.0)
-	var back := st == 0.0 or signf(st) != signf(steer)
 	var v_kmh := absf(race.player.speed) * 3.6 if (race and race.player) else 0.0
-	var steer_rate := 4.4 if v_kmh < 40.0 else lerpf(4.4, 2.6, clampf((v_kmh - 40.0) / 80.0, 0.0, 1.0))
-	steer = move_toward(steer, st, (8.0 if back else steer_rate) * dt)
+	var slide := race.player.physics.rear_slide(race.player) if (race and race.player) else 0.0
+	steer = Physics.key_steer(steer, st, v_kmh, slide, dt) # counter-steering a slide comes at the fast rate
 	throttle = move_toward(throttle, 1.0 if up else 0.0, 6.0 * dt)
 	brake = move_toward(brake, 1.0 if down else 0.0, 8.0 * dt)
 
@@ -740,7 +744,21 @@ func _build_viewport() -> void:
 	# (set_race) instead of on every circuit change in the menus
 	lap_ghost = LapGhost.new()
 	world_view.add_child(lap_ghost)
+	_add_view_fx(viewport)
 	_apply_world_graphics_settings()
+
+## Rear-view mirror and lens flare for races (scripts/ui/rear_mirror.gd, lens_flare.gd).
+func _add_view_fx(vp: SubViewport) -> void:
+	var live := func() -> bool: return race != null and not paused and is_instance_valid(hud) and hud.is_visible_in_tree() and race.phase != "finished"
+	var mirror := RearMirror.new()
+	add_child(mirror)
+	mirror.setup(vp.world_3d, func() -> Node3D:
+		if not live.call() or not is_instance_valid(world_view):
+			return null
+		for v in world_view.visuals.values():
+			if is_instance_valid(v) and v.get("is_player"):
+				return v
+		return null)
 
 func _viewport_view(viewport: SubViewport) -> TextureRect:
 	var view := TextureRect.new()
@@ -2673,7 +2691,7 @@ func _build_menu_car_preview() -> void:
 	environment_data.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	environment_data.ambient_light_color = Color("#b8c8ee")
 	environment_data.ambient_light_energy = 0.55
-	environment_data.glow_enabled = true
+	environment_data.glow_enabled = GfxFx.bloom
 	environment_data.glow_intensity = 0.65
 	environment_data.glow_bloom = 0.22
 	environment_data.glow_hdr_threshold = 1.0
@@ -3517,6 +3535,25 @@ func _build_options_page() -> void:
 	ssao_toggle.toggled.connect(_on_ssao_toggled)
 	shadows_toggle = _check_field(effects_row, "Dynamic shadows", graphics_shadows)
 	shadows_toggle.toggled.connect(_on_shadows_toggled)
+	_menu_rule(adv_col)
+	_field_label(adv_col, "CAMERA & SCREEN EFFECTS")
+	var fx_row := HBoxContainer.new()
+	fx_row.add_theme_constant_override("separation", 22)
+	adv_col.add_child(fx_row)
+	bloom_toggle = _check_field(fx_row, "Bloom", GfxFx.bloom)
+	bloom_toggle.toggled.connect(func(on: bool) -> void: GfxFx.bloom = on; _apply_world_graphics_settings(); _save_graphics_settings())
+	flare_toggle = _check_field(fx_row, "Lens flare", GfxFx.lens_flare)
+	flare_toggle.toggled.connect(func(on: bool) -> void: GfxFx.lens_flare = on; _save_graphics_settings())
+	mirror_toggle = _check_field(fx_row, "Rear-view mirror", GfxFx.rear_mirror)
+	mirror_toggle.toggled.connect(func(on: bool) -> void: GfxFx.rear_mirror = on; _save_graphics_settings())
+	var fx_row2 := HBoxContainer.new()
+	fx_row2.add_theme_constant_override("separation", 22)
+	adv_col.add_child(fx_row2)
+	speed_fov_toggle = _check_field(fx_row2, "Speed FOV", GfxFx.speed_fov)
+	speed_fov_toggle.toggled.connect(func(on: bool) -> void: GfxFx.speed_fov = on; _save_graphics_settings())
+	speed_blur_toggle = _check_field(fx_row2, "Motion blur", GfxFx.speed_blur)
+	speed_blur_toggle.toggled.connect(func(on: bool) -> void: GfxFx.speed_blur = on; _save_graphics_settings())
+	_grid_spacers(fx_row2, 1)
 	var reflections_row := HBoxContainer.new()
 	reflections_row.add_theme_constant_override("separation", 22)
 	adv_col.add_child(reflections_row)
@@ -3542,9 +3579,14 @@ func _build_options_page() -> void:
 	fps_limit_picker.select(graphics_fps_limit)
 	ssao_toggle.button_pressed = graphics_ssao
 	shadows_toggle.button_pressed = graphics_shadows
+	bloom_toggle.set_pressed_no_signal(GfxFx.bloom)
+	speed_fov_toggle.set_pressed_no_signal(GfxFx.speed_fov)
+	speed_blur_toggle.set_pressed_no_signal(GfxFx.speed_blur)
 	reflections_picker.select(graphics_reflections)
 	retro_picker.select(graphics_retro_mode)
 	hud_motion_picker.select(HudMotion.mode)
+	mirror_toggle.set_pressed_no_signal(GfxFx.rear_mirror)
+	flare_toggle.set_pressed_no_signal(GfxFx.lens_flare)
 	_show_preset_state()
 	_apply_upscaling()
 
@@ -3871,6 +3913,7 @@ func _apply_world_graphics_settings() -> void:
 	var environment := world_view.get("world_environment") as Environment
 	if environment:
 		environment.ssao_enabled = graphics_ssao
+		environment.glow_enabled = GfxFx.bloom
 		environment.ssr_enabled = graphics_reflections == 1 and not _compat_renderer() # SSR is Forward+ only
 	var ray_tracing := world_view.get("ray_tracing") as RayTracing
 	if ray_tracing:
@@ -3893,6 +3936,7 @@ func _load_graphics_settings() -> void:
 		graphics_ssao = bool(config.get_value("graphics", "ssao", true))
 		graphics_quality = clampi(int(config.get_value("graphics", "quality", graphics_quality)), 0, GraphicsPresets.PRESETS.size() - 1)
 		graphics_shadows = bool(config.get_value("graphics", "shadows", true))
+		GfxFx.load_from(config)
 		if config.has_section_key("graphics", "upscaler"):
 			graphics_upscaler = clampi(int(config.get_value("graphics", "upscaler", 0)), 0, UPSCALERS.size() - 1)
 			graphics_upscale_preset = clampi(int(config.get_value("graphics", "upscale_preset", 1)), 0, UPSCALE_PRESETS.size() - 1)
@@ -3998,6 +4042,7 @@ func _save_graphics_settings() -> void:
 	config.set_value("graphics", "reflections", graphics_reflections)
 	config.set_value("graphics", "ssao", graphics_ssao)
 	config.set_value("graphics", "shadows", graphics_shadows)
+	GfxFx.save_to(config)
 	config.set_value("graphics", "quality", graphics_quality)
 	config.set_value("graphics", "ui_scale", graphics_ui_scale)
 	config.set_value("graphics", "resolution", graphics_resolution)

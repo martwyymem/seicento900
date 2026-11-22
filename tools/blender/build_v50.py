@@ -1224,7 +1224,8 @@ def main():
 		total += t
 		print("%-8s %6d tris" % (name, t))
 	print("total    %6d tris" % total)
-	for name in ("Body", "Details", "Stripes", "Martini", "Abarth", "Marlboro"):
+	carkit.split_bonnet(objs, Y0, S_SCUTTLE, carkit.material("Trim"))
+	for name in [k for k in objs if k in ("Body", "Details", "Stripes", "Martini", "Abarth", "Marlboro") or k.startswith("Bonnet")]:
 		add_damage_keys(objs[name], dent_delta)
 	kit.export_glb(OUT_GLB, texcoords=False)
 	if arg("--blend"):
