@@ -190,7 +190,7 @@
     "short_name": "Kraków",
     "width": 9.0,
     "theme": "city",
-    "street_stage": true,
+    "street_stage": true, "urban_ground": true,
     "cobbles": [[3015.1, 3322.2]],
     "barrier": "jersey",
     "runoff": 1.5,

@@ -2274,6 +2274,16 @@ func barrier_contact(car: RaceCar, mass: float) -> void:
 		car.x -= nx * pen * side
 		car.y -= ny * pen * side
 		car.d -= pen * side
+		if tr.verge_kind(car.s, side) == Track.VERGE_OPEN:
+			# the far edge of an open verge: the car bogs down in the soft ground past it, no wall to hit
+			var vn: float = (car.vx * nx + car.vy * ny) * side
+			if vn > 0.0:
+				car.vx -= nx * side * vn
+				car.vy -= ny * side * vn
+			car.vx *= 0.97
+			car.vy *= 0.97
+			car.yaw_rate *= 0.9
+			continue
 		var h := phys.barrier_hit(car, nx * side, ny * side, rx, ry, mass)
 		if car.is_player and h > 0.0:
 			_player_wall_t = clock

@@ -13,7 +13,8 @@ Writes, like build_tracks.py + build_surroundings.py do for the circuits:
                                         [[x, y, angle, width]] a barrier across every side road where it meets
                                         the route (angle: the barrier's direction, radians from +x towards +y)
     godot/data/tracks/<key>_land.png    the land map (build_surroundings.py)
-    godot/data/tracks/<key>_far.json    the land out to 40 km on the horizon (fetch_horizon.py, fetch_landcover.py)
+    godot/data/tracks/<key>_far.json    the land out to 40 km on the horizon (fetch_horizon.py, fetch_landcover.py,
+                                        fetch_places.py)
 
 Raw downloads are cached so rebuilds run offline: the route ways and their level crossings in
 tools/street_routes/cache/<key>_route.json, the elevations (OpenTopoData) in .../<key>_elevation.json, and the
@@ -37,7 +38,9 @@ exit_level, name} splices in a helix that isn't on the map (splice_spiral); buil
 buildings and trees that close to the route; dense_city (true) makes plain mid-sized buildings flat-roofed blocks of
 3-9 storeys instead of houses (a city centre that OSM maps without heights); surface_spans [[from m, to m, 'gravel' |
 'dirt']] (from the start line) draws those stretches unpaved (Track.loose, the road shader; the grip stays the race's);
-extra_landmarks places props OSM has no tag for (extra_landmarks(): Pszczyna's wisent enclosure).
+extra_landmarks places props OSM has no tag for (extra_landmarks(): Pszczyna's wisent enclosure); verges (true) gives a
+rural stage open verges with guardrails only where a real road has them (verges(): track["verges"]); trackdef
+urban_ground (true) paints a town's paving on the land map from OSM landuse (build_surroundings.URBAN_GROUND).
 
 Data © OpenStreetMap contributors, ODbL. Elevation: EU-DEM via OpenTopoData; in Japan, GSI elevation tiles (国土地理院).
 """
@@ -50,6 +53,7 @@ import build_surroundings as bs  # noqa: E402
 import fetch_elevation as fe  # noqa: E402
 import fetch_horizon as fh  # noqa: E402
 import fetch_landcover as fl  # noqa: E402
+import fetch_places as fp  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROUTES = os.path.join(HERE, 'street_routes')
@@ -723,6 +727,234 @@ def build_trams(key):
     print(f'{key}: {len(runs)} tram rail runs, {sum(len(r) // 2 for r in runs)} samples')
 
 
+# Open verges (a route file with "verges": true, the rural stages). A country road has no barrier along most of it:
+# the grass verge runs into the field or the trees. A guardrail stands only where a real road would have one:
+VERGE = 6.0  # m of open grass verge beyond the run-off where nothing stands nearer
+RAIL_BEND = (30.0, 260.0)  # radius range (m) of a fast bend: its outside gets a rail (tighter turns are taken slowly)
+RAIL_BEND_TURN = 18.0  # degrees the road turns within 40 m either way for it to count as a bend, not a wiggle
+RAIL_DROP = 1.8  # m the ground falls within 15 m of the run-off edge (an embankment, a hillside)
+RAIL_WATER = 9.0  # m from the run-off edge to open water, a river or a stream
+RAIL_DITCH = 3.0  # m from the run-off edge to a mapped ditch or drain
+RAIL_PAD = 12.0  # m a rail runs on past what it guards
+RAIL_GAP = 40.0  # m: shorter gaps between two rails are closed
+RAIL_MIN = 32.0  # m: the shortest rail
+RAIL_FLARE = 0.5  # how fast (m across per m along) a rail's end flares back to the open verge
+RAIL_XING = 10.0  # m either side of a level crossing kept clear of rails (they would stand across the line)
+
+
+def verges(cfg, pts, elev, grid, osm, route, env, half, P):
+    """Where a rural stage has guardrails and how far its open verges reach, per sample and side (left is +d, the
+    game's normal): {"reach": [left, right, ...] m from the centreline to the sim's wall, "kind": one character
+    per sample and side, '1' a guardrail (drawn at reach + 0.3), '2' something drawn stops the car there (a building,
+    a hedge, a tree or the edge of a wood), '0' the open verge's far edge (soft ground, no impact)}. Guardrails go on
+    the outside of fast bends, along drops and embankments, next to water and ditches, and on bridges (and their
+    approaches); see the RAIL_* constants."""
+    from PIL import Image
+    n = len(pts)
+    step = sum(math.dist(pts[i], pts[(i + 1) % n]) for i in range(n)) / n
+    edge = half + cfg['trackdef'].get('runoff', 1.8)
+    tan, nor = [], []
+    for i in range(n):
+        a, b = pts[i - 1], pts[(i + 1) % n]
+        l = math.dist(a, b) or 1.0
+        tan.append(((b[0] - a[0]) / l, (b[1] - a[1]) / l))
+        nor.append((-(b[1] - a[1]) / l, (b[0] - a[0]) / l))
+    ang = [math.atan2(t[1], t[0]) for t in tan]
+    wrap = lambda a: (a + math.pi) % (2 * math.pi) - math.pi
+    side_pt = lambda i, sd, d: (pts[i][0] + nor[i][0] * sd * d, pts[i][1] + nor[i][1] * sd * d)
+    rail = {1: [False] * n, -1: [False] * n}
+    why = {}
+    # 1. the outside of fast bends: curvature over 20 m, the turn over 40 m either way
+    w20, w40 = max(1, round(10 / step)), max(1, round(40 / step))
+    for i in range(n):
+        k = wrap(ang[(i + w20) % n] - ang[i - w20]) / (2 * w20 * step)
+        turn = abs(math.degrees(wrap(ang[(i + w40) % n] - ang[i - w40])))
+        if k and RAIL_BEND[0] <= 1 / abs(k) <= RAIL_BEND[1] and turn >= RAIL_BEND_TURN:
+            rail[-1 if k > 0 else 1][i] = True  # the centre of the bend is on the side of sign(k)
+            why['bend'] = why.get('bend', 0) + 1
+    # 2. drops beside the road (the DEM, its grid in track metres)
+    def ground(p):
+        fx = min(max((p[0] - grid['x0']) / grid['step'], 0), grid['nx'] - 1.001)
+        fz = min(max((p[1] - grid['y0']) / grid['step'], 0), grid['ny'] - 1.001)
+        ix, iz, u, v = int(fx), int(fz), fx - int(fx), fz - int(fz)
+        h = grid['h']
+        at = lambda x, z: h[z * grid['nx'] + x]
+        return (at(ix, iz) * (1 - u) * (1 - v) + at(ix + 1, iz) * u * (1 - v) + at(ix, iz + 1) * (1 - u) * v
+                + at(ix + 1, iz + 1) * u * v)
+    for i in range(n):
+        for sd in (1, -1):
+            if min(ground(side_pt(i, sd, edge + d)) for d in (5.0, 10.0, 15.0)) < elev[i] - RAIL_DROP:
+                rail[sd][i] = True
+                why['drop'] = why.get('drop', 0) + 1
+    # 3. water: lakes and ponds, rivers, streams and ditches beside the road
+    def inside(p, ring):
+        c = False
+        for (x1, y1), (x2, y2) in zip(ring, ring[1:] + ring[:1]):
+            if (y1 > p[1]) != (y2 > p[1]) and p[0] < x1 + (p[1] - y1) * (x2 - x1) / (y2 - y1):
+                c = not c
+        return c
+    lakes = [list(zip(w[0::2], w[1::2])) for w in env.get('water', [])]
+    lines = [(r[0] / 2 + RAIL_WATER, list(zip(r[1::2], r[2::2]))) for r in env.get('rivers', [])]
+    crossing_streams = []
+    for el in osm['elements']:
+        tags = el.get('tags', {})
+        ww = tags.get('waterway')
+        if el['type'] != 'way' or ww not in ('stream', 'ditch', 'drain', 'canal', 'river') or tags.get('tunnel') == 'yes' and ww in ('ditch', 'drain'):
+            continue
+        g = [P(p) for p in el.get('geometry', []) if p]
+        if len(g) < 2:
+            continue
+        if ww in ('stream', 'canal', 'river'):
+            crossing_streams.append(g)
+            if ww == 'stream':
+                lines.append((RAIL_WATER * 0.5, g))
+        else:
+            lines.append((RAIL_DITCH, g))
+    near = lambda p, line, r: any(point_segment(p, a, b) < r for a, b in zip(line, line[1:]))
+    box = lambda line: (min(q[0] for q in line), min(q[1] for q in line), max(q[0] for q in line), max(q[1] for q in line))
+    lake_boxes = [box(r) for r in lakes]
+    line_boxes = [box(g) for _, g in lines]
+    for i in range(n):
+        for sd in (1, -1):
+            probe = [side_pt(i, sd, edge + d) for d in (1.0, 4.0, 7.0, RAIL_WATER)]
+            hit = False
+            for r, bb in zip(lakes, lake_boxes):
+                if any(bb[0] <= q[0] <= bb[2] and bb[1] <= q[1] <= bb[3] and inside(q, r) for q in probe):
+                    hit = True
+                    break
+            if not hit:
+                q = probe[0]
+                for (r, g), bb in zip(lines, line_boxes):
+                    if bb[0] - r <= q[0] <= bb[2] + r and bb[1] - r <= q[1] <= bb[3] + r and near(q, g, r):
+                        hit = True
+                        break
+            if hit:
+                rail[sd][i] = True
+                why['water'] = why.get('water', 0) + 1
+    # 4. bridges and embankments: the route's own ways so tagged, and a stream or river crossing under the road
+    own = [[P(p) for p in w['geometry']] for w in route['elements'] if w['type'] == 'way'
+           and (w.get('tags', {}).get('bridge') not in (None, 'no') or w.get('tags', {}).get('embankment') == 'yes')]
+    seg_hits = lambda p, q, line: any(cross(p, q, a, b) for a, b in zip(line, line[1:]))
+    def cross(p, q, a, b):
+        d = lambda u, v, w: (v[0] - u[0]) * (w[1] - u[1]) - (v[1] - u[1]) * (w[0] - u[0])
+        return d(p, q, a) * d(p, q, b) < 0 and d(a, b, p) * d(a, b, q) < 0
+    stream_boxes = [box(g) for g in crossing_streams]
+    for i in range(n):
+        p, q = pts[i], pts[(i + 1) % n]
+        hit = any(near(p, g, 3.0) for g in own)
+        if not hit:
+            for g, bb in zip(crossing_streams, stream_boxes):
+                if bb[0] - 3 <= p[0] <= bb[2] + 3 and bb[1] - 3 <= p[1] <= bb[3] + 3 and seg_hits(p, q, g):
+                    hit = True
+                    break
+        if hit:
+            rail[1][i] = rail[-1][i] = True
+            why['bridge'] = why.get('bridge', 0) + 1
+    # level crossings stay clear (a rail can't stand across the line)
+    xings = [P(e) for e in route['elements'] if e['type'] == 'node']
+    xing_at = [i for i in range(n) if any(math.dist(pts[i], x) < RAIL_XING for x in xings)]
+    # pad, close short gaps, drop short runs
+    pad, gap, short = round(RAIL_PAD / step), round(RAIL_GAP / step), round(RAIL_MIN / step)
+    def runs(flags):
+        out, i0 = [], None
+        for i in range(n + 1):
+            f = flags[i] if i < n else False
+            if f and i0 is None:
+                i0 = i
+            elif not f and i0 is not None:
+                out.append([i0, i - 1])
+                i0 = None
+        return out
+    for sd in (1, -1):
+        f = [any(rail[sd][(i + k) % n] for k in range(-pad, pad + 1)) for i in range(n)]
+        g = f[:]
+        for a, b in runs([not v for v in f]):
+            if b - a + 1 < gap and 0 < a and b < n - 1:
+                for i in range(a, b + 1):
+                    g[i] = True
+        for a, b in runs(g):
+            if b - a + 1 < short:
+                for i in range(a, b + 1):
+                    g[i] = False
+        for i in xing_at:
+            g[i] = False
+        rail[sd] = g
+    # the open verge's reach: up to VERGE past the run-off, short of the first drawn thing (buildings the game
+    # keeps, hedges, trees, the edge of a wood on the land map)
+    cell = {}
+    for i, p in enumerate(pts):
+        cell.setdefault((int(p[0] // 20), int(p[1] // 20)), []).append(p)
+    def off_road(p):  # distance to the centreline (within 40 m)
+        cx, cy = int(p[0] // 20), int(p[1] // 20)
+        return min((math.dist(p, q) for a in (-2, -1, 0, 1, 2) for b in (-2, -1, 0, 1, 2)
+                    for q in cell.get((cx + a, cy + b), ())), default=99.0)
+    # (surroundings.gd: buildings stand from edge + 0.3, hedges and single trees from edge + 3, the woods' trees from
+    # edge + 5; it leaves out anything nearer)
+    walls, greens = [], []
+    for b in env.get('buildings', []):
+        ring = list(zip(b[3::2], b[4::2]))
+        if min(off_road(q) for q in ring) < edge + 0.3:
+            continue
+        walls.append((box(ring), ring + ring[:1]))
+    for hg in env.get('hedges', []):
+        flat = hg[1:] if len(hg) % 2 else hg
+        line = list(zip(flat[0::2], flat[1::2]))
+        if len(line) >= 2:
+            greens.append((box(line), line))
+    trees = list(zip(env.get('trees', [])[0::2], env.get('trees', [])[1::2]))
+    land = env['land']
+    path = os.path.join(GODOT_TRACKS, cfg['key'] + '_land.png')
+    im = Image.open(path).convert('RGBA')
+    lw, lh = im.size
+    lpx = im.load()
+    def wood(p):
+        u, v = int((p[0] - land['x0']) / land['w'] * lw), int((p[1] - land['y0']) / land['h'] * lh)
+        return 0 <= u < lw and 0 <= v < lh and lpx[u, v][3] >= 89 and lpx[u, v][0] <= 64  # (as _build_woods plants)
+    far = edge + VERGE
+    reach = {1: [far] * n, -1: [far] * n}
+    kind = {1: ['0'] * n, -1: ['0'] * n}
+    probes = [edge + 0.5 * k for k in range(1, int(VERGE / 0.5) + 2)]
+    for i in range(n):
+        for sd in (1, -1):
+            if rail[sd][i]:
+                reach[sd][i], kind[sd][i] = edge, '1'
+                continue
+            c = side_pt(i, sd, edge + VERGE / 2)
+            rad = VERGE / 2 + 3.0
+            cand = [w for bb, w in walls if bb[0] - rad <= c[0] <= bb[2] + rad and bb[1] - rad <= c[1] <= bb[3] + rad]
+            gcand = [w for bb, w in greens if bb[0] - rad <= c[0] <= bb[2] + rad and bb[1] - rad <= c[1] <= bb[3] + rad]
+            tcand = [t for t in trees if abs(t[0] - c[0]) < rad and abs(t[1] - c[1]) < rad]
+            for d in probes:
+                q = side_pt(i, sd, d)
+                hit = any(near(q, w, 0.6) or inside(q, w[:-1]) for w in cand)
+                if not hit and d >= edge + 3.0:
+                    hit = any(math.dist(q, t) < 1.0 for t in tcand) or any(near(q, w, 1.0) for w in gcand)
+                if not hit and d >= edge + 5.0:
+                    hit = wood(q)
+                if hit:
+                    if d - 0.6 < far:
+                        reach[sd][i], kind[sd][i] = max(edge, d - 0.6), '2'
+                    break
+    # ease the reach in towards a rail (its end flares back to the verge) and round a building's corner
+    for sd in (1, -1):
+        r0 = reach[sd][:]
+        win = round(VERGE / RAIL_FLARE / step) + 1
+        for i in range(n):
+            best, src = r0[i], i
+            for k in range(-win, win + 1):
+                v = r0[(i + k) % n] + abs(k) * step * RAIL_FLARE
+                if v < best - 1e-6:
+                    best, src = v, (i + k) % n
+            if src != i:
+                reach[sd][i] = best
+                kind[sd][i] = '1' if kind[sd][src] == '1' else '2'
+    print('  verges: rails on %.0f%% of the left side, %.0f%% of the right (%s); open verge reach %.1f m'
+          % (100 * sum(rail[1]) / n, 100 * sum(rail[-1]) / n,
+             ', '.join(f'{k} {v * step:.0f} m' for k, v in sorted(why.items())), far))
+    return {'reach': [round(reach[sd][i], 2) for i in range(n) for sd in (1, -1)],
+            'kind': ''.join(kind[sd][i] for i in range(n) for sd in (1, -1))}
+
+
 def build(key, refetch=False, check=None):
     cfg = json.load(open(os.path.join(ROUTES, key + '.json')))
     bt.TRACKS[key] = dict(origin=tuple(cfg['origin']), dem=cfg['dem'], grid=cfg['grid'], godot=True)
@@ -802,6 +1034,7 @@ def build(key, refetch=False, check=None):
         os.makedirs(fs.OUT_DIR, exist_ok=True)
         json.dump(fs.fetch(key), open(env_src, 'w'), separators=(',', ':'))
     bs.DENSE_CITY[key] = bool(cfg.get('dense_city'))
+    bs.URBAN_GROUND[key] = bool(cfg['trackdef'].get('urban_ground'))
     bs.build(key)
     osm = json.load(open(env_src))
     half = cfg['trackdef'].get('width', 6.5) / 2
@@ -841,8 +1074,13 @@ def build(key, refetch=False, check=None):
     if cfg.get('extra_landmarks'):
         extra_landmarks(cfg, env, pts)
     json.dump(env, open(env_path, 'w'), separators=(',', ':'))
+    if cfg.get('verges'):  # open verges and guardrails where a real road has them (verges())
+        track['verges'] = verges(cfg, pts, elev, ev['grid'], osm, route, env, half, P)
+        with open(os.path.join(GODOT_TRACKS, key + '.json'), 'w') as f:
+            json.dump(track, f, separators=(',', ':'))
     fh.build(key, ev)  # the distant land (its height and cover tiles are cached in tools/.tiles/)
     fl.build(key)
+    fp.build(key)  # the towns on the horizon (Overpass, cached in tools/.tiles/places/)
     print(f'  {len(blocks)} road blockages: ' + ', '.join(sorted({b[5] or str(b[4]) for b in blocks})))
     if check:
         check_image(key, pts, osm, blocks, corners, node_s, check)

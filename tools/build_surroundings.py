@@ -72,6 +72,23 @@ LANDMARKS = {
     'pszczyna': {('way', 172583260): 'PszczynaCastle'},
     'wilamowice': {('way', 161150872): 'WilamowiceChurch'},  # Kościół pw. Przenajświętszej Trójcy
 }
+# A town's ground (a street stage with "urban_ground" in its TrackDef, URBAN_GROUND): the built-up land is worn
+# paving in proportion (R), the green land inside it (parks, gardens, lawns, cemeteries, allotments, woods) is
+# cleared back to grass, and every building gets a paved apron (pavements, yards), so a block of flats stands on
+# paving with lawns between blocks further apart, while the game's grass shows only where OSM has green land or nothing.
+URBAN_AREAS = {('landuse', 'residential'): 0.45, ('landuse', 'commercial'): 0.7, ('landuse', 'retail'): 0.8,
+               ('landuse', 'industrial'): 0.7, ('landuse', 'religious'): 0.5, ('amenity', 'school'): 0.5,
+               ('amenity', 'kindergarten'): 0.45, ('amenity', 'hospital'): 0.55, ('amenity', 'university'): 0.55,
+               ('amenity', 'college'): 0.55, ('amenity', 'place_of_worship'): 0.6, ('amenity', 'marketplace'): 1.0,
+               ('amenity', 'fuel'): 1.0, ('place', 'square'): 1.0, ('area:highway', 'pedestrian'): 1.0}
+GREEN_AREAS = {('leisure', 'park'): 0.0, ('leisure', 'garden'): 0.0, ('leisure', 'pitch'): 0.0,
+               ('leisure', 'golf_course'): 0.0, ('landuse', 'grass'): 0.0, ('landuse', 'meadow'): 0.0,
+               ('landuse', 'village_green'): 0.0, ('landuse', 'recreation_ground'): 0.0, ('landuse', 'cemetery'): 0.0,
+               ('amenity', 'grave_yard'): 0.0, ('landuse', 'allotments'): 0.0, ('landuse', 'orchard'): 0.0,
+               ('landuse', 'forest'): 0.0, ('natural', 'wood'): 0.0, ('natural', 'grassland'): 0.0,
+               ('natural', 'scrub'): 0.0, ('natural', 'heath'): 0.0, ('landuse', 'farmland'): 0.0}
+URBAN_APRON = 5.0  # m: the paved band drawn along a building's walls (half of it outside)
+URBAN_GROUND = {}  # key -> True (set by build_street_tracks.py from the TrackDef's urban_ground)
 WATER_AREAS = {('natural', 'water'), ('landuse', 'reservoir'), ('landuse', 'basin'), ('waterway', 'riverbank'),
                ('waterway', 'dock')}
 
@@ -325,7 +342,11 @@ def build(key):
         tags = el.get('tags', {})
         if el['type'] == 'node' or 'building' in tags or 'building:part' in tags:
             continue
-        for ch, table in ((3, FOREST_AREAS), (1, FARM_AREAS), (2, BARE_AREAS), (0, PAVED_AREAS)):
+        tables = ((3, FOREST_AREAS), (1, FARM_AREAS), (2, BARE_AREAS), (0, PAVED_AREAS))
+        if URBAN_GROUND.get(key):
+            urban = match(tags, PAVED_AREAS) is None and match(tags, URBAN_AREAS) is not None
+            tables += ((0, URBAN_AREAS),) if urban else ((0, GREEN_AREAS),)
+        for ch, table in tables:
             wgt = match(tags, table)
             if wgt is None or (ch == 0 and tags.get('highway') == 'pedestrian' and tags.get('area') != 'yes'):
                 continue
@@ -399,6 +420,8 @@ def build(key):
             if fp < 8:
                 continue
             fill(0, [r], [], 1.0)  # (no trees through the house)
+            if URBAN_GROUND.get(key):
+                line(0, r, URBAN_APRON, 0.75)
             lm = landmark_of(key, el)
             if lm:
                 cx, cy, ln, wd, ang = fit_rect(r[:-1])

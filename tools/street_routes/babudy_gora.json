@@ -1,6 +1,7 @@
 {
  "_comment": "Babudy–Góra: a gravel rally stage on the compacted tracks west of the S1, point to point from Babudy (ul. Wojciecha Korfantego), under the S1 and back, south-west to Góra by ul. Kościelna. Baked as a loop with a run-off to ul. Pszczyńska and a return leg (Topolowa, Zapadź, Bażantów, Korfantego). Planned by tools/plan_route.py, baked from the open world's caches.",
  "key": "babudy_gora",
+ "verges": true,
  "local": "brzeszcze",
  "origin": [
   49.99073285,

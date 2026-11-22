@@ -35,7 +35,7 @@
     "short_name": "Wilamowice",
     "width": 6.5,
     "theme": "country",
-    "street_stage": true,
+    "street_stage": true, "urban_ground": true,
     "barrier": "plastic",
     "runoff": 2.0,
     "runoff_surface": "grass",

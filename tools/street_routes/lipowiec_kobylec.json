@@ -1,6 +1,7 @@
 {
  "_comment": "Lipowiec–Kobylec: a gravel rally stage on the gravel track along the south edge east of Lipowiec, then north across ul. Łęcka to the forest track beyond, point to point, inside the playable area (it starts past the track's dip over the edge). Baked as a loop with a run-off west and a return leg (Łęcka, Pocztowa, Krucza). Planned by tools/plan_route.py, baked from the open world's caches.",
  "key": "lipowiec_kobylec",
+ "verges": true,
  "local": "brzeszcze",
  "origin": [
   49.99073285,

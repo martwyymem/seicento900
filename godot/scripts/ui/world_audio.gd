@@ -271,7 +271,9 @@ static func touching_barrier(race: Race, car: RaceCar) -> bool:
 		var ox: float = c[0] * ch - c[1] * sh
 		var oy: float = c[0] * sh + c[1] * ch
 		var d: float = car.d + ox * nx + oy * ny
-		if d > lim[1] + hw - 0.04 or d < lim[0] - hw + 0.04:
+		# (the far edge of an open verge is soft ground, nothing to scrape: Track.VERGE_OPEN)
+		if d > lim[1] + hw - 0.04 and tr.verge_kind(car.s, 1.0) != Track.VERGE_OPEN \
+				or d < lim[0] - hw + 0.04 and tr.verge_kind(car.s, -1.0) != Track.VERGE_OPEN:
 			return true
 	return false
 

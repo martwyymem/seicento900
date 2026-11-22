@@ -316,6 +316,8 @@ def plan(key):
                 'blockage_types': R.get('blockage_types', BLOCKAGE_TYPES), 'blockage_skip_service': SKIP_SERVICE})
     cfg['surfaces'] = True  # the baker writes each sample's road surface (gravel / dirt / paved)
     cfg['bridges'] = True  # lifts an overbridge where the loop passes under itself, drops the route's own bridges from the env
+    if R['trackdef'].get('barrier') == 'guardrail':
+        cfg['verges'] = True  # a country stage: open verges, guardrails only where a real road has them
     cfg['trackdef'] = R['trackdef']
     json.dump(cfg, open(os.path.join(HERE, 'street_routes', key + '.json'), 'w'), indent=1, ensure_ascii=False)
     print(len(corners), 'corners')

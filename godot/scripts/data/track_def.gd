@@ -57,6 +57,10 @@ extends Resource
 @export var viaduct := false
 @export var cobbles := PackedVector2Array() ## street stages: lap distances (from, to) of cobbled stretches, drawn in road.gdshader
 @export var unpainted := PackedVector2Array() ## lap distances (from, to) where the road has no painted lines (a park's alleys); cobbled and loose stretches never have any
+## The land map paints the town's paving from OpenStreetMap's land use (build_surroundings.py URBAN_GROUND: built-up
+## land paved in proportion, a paved apron round each building, parks and gardens cleared to grass), so the ground it
+## leaves is grass even on a "city" stage (no CITY_GROUND paving under the gardens)
+@export var urban_ground := false
 @export var loose_grip := false ## the baked loose spans (Track.loose, a street route's surface_spans) grip as gravel or dirt, not as the race's road; for every car, and the AI's speed profile slows to match
 ## A point-to-point rally stage baked as a loop (tools/plan_route.py): the stage, a run-off past the finish and a
 ## return leg. data/tracks/<key>.json has "stage": [from, to]. Rally only: kept out of the race and championship pickers.

@@ -1,6 +1,7 @@
 {
  "_comment": "Kolonia Stawowa: a gravel rally stage on the compacted forest tracks between Wola and the Harmęże edge, point to point: north-east from ul. Graniczna past ul. Powstańców to ul. Oświęcimska at Most Bronisław, a hairpin onto the parallel track back south-west, and the tracks south to ul. Kolejowa. Baked as a loop with a run-off past the finish and a return leg (ul. Kolejowa, ul. Graniczna). Planned by tools/plan_route.py, baked from the open world's caches.",
  "key": "kolonia_stawowa",
+ "verges": true,
  "local": "brzeszcze",
  "origin": [
   49.99073285,

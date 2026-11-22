@@ -1,6 +1,7 @@
 {
  "_comment": "Mały Bór: a gravel rally stage through the forest tracks and fishponds between Brzeszcze-Bór and the Wisła (ul. Nazieleńce, ul. Kolejowa), point to point; baked as a loop with a run-off past the finish and a return leg on other roads. Planned by tools/plan_route.py, baked from the open world's caches.",
  "key": "maly_bor",
+ "verges": true,
  "local": "brzeszcze",
  "origin": [
   49.99073285,

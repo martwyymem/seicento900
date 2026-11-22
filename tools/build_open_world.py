@@ -389,6 +389,7 @@ def round_junction_corners(dense, marks):
 HOUSE_CLEAR = 0.3  # m between a street's (narrowed) edge and a building corner beside it
 MIN_HALF = 1.5  # m: no street is narrowed below 3 m
 SHED_DROP_AREA = 60.0  # m2: a shed or garage standing in a street this narrow goes (the street was there first)
+END_TRIM = 8.0  # m: the most a dead end running into a surveyed wall is cut back
 PASSAGE_HALF = 2.0  # m: half the clear width cut through a building for a tunnel=building_passage street
 PASSAGE_EXTEND = 2.5  # m: the cut runs this far past the way's end nodes (they sit on, not past, the walls)
 PASSAGE_MIN_AREA = 1.5  # m2: a piece of a cut building smaller than this is dropped
@@ -764,7 +765,7 @@ def _plane_of(poly):
     return lambda x, y: a[2] + gx * (x - a[0]) + gy * (y - a[1])
 
 
-def narrow_past_buildings(out_roads, zr, buildings):
+def narrow_past_buildings(out_roads, zr, buildings, node_xy=None):
     """The class default width (5.4 m for a residential street) is a guess; between old houses whose walls stand 1-2 m
     from the centre line the street is narrower. Each street gets a half width per point ('hw', only where it is
     narrowed): HOUSE_CLEAR inside the nearest wall of a building beside it (its footprint ring and its measured roof
@@ -772,7 +773,9 @@ def narrow_past_buildings(out_roads, zr, buildings):
     MIN_HALF. A shed or garage under SHED_DROP_AREA that still stands in the lane is dropped from `buildings`; a house
     the centre line runs through (a gateway, a misaligned way) is listed and the street shifted off it, after which the
     half widths are measured again along the shifted line. A building still inside the drawn street then goes if no
-    GUGiK survey confirms it. A street climbing onto a bridge or embankment is narrowed on its ground-level part."""
+    GUGiK survey confirms it, and a dead end that runs into a surveyed wall (a driveway drawn up to the house, a parking
+    aisle ending in a shop front) is cut back clear of it. A street climbing onto a bridge or embankment is narrowed on
+    its ground-level part."""
     grid = {}
     for bi, b in enumerate(buildings):
         ring = b[4]
@@ -865,7 +868,7 @@ def narrow_past_buildings(out_roads, zr, buildings):
                                     shifts.append((cum[k] + dl * t, nx_ * side * push, ny_ * side * push))
                                 through.add((r['n'] or r['kn'], round(ring[0]), round(ring[1]), kind))
                             if d < MIN_HALF - 0.02:
-                                inside.append((bi, d))
+                                inside.append((bi, d, cum[k] + math.dist(a, b) * t))
                             req = MIN_HALF
                         sc = cum[k] + math.dist(a, b) * t
                         for j in range(len(pts)):
@@ -880,8 +883,14 @@ def narrow_past_buildings(out_roads, zr, buildings):
     def eligible(r, z):
         return not r['b'] and len(r['p']) >= 2
 
-    # 1. shift streets off the walls their centre line runs through
+    degree = {}
+    for r in out_roads:
+        for _, nid in r['e']:
+            degree[nid] = degree.get(nid, 0) + 1
+
+    # 1. shift streets off the walls their centre line runs through (a dead end moves with them: no street meets it)
     shifted = []
+    moved_ends = 0
     for r, z in zip(out_roads, zr):
         if not eligible(r, z):
             continue
@@ -889,7 +898,7 @@ def narrow_past_buildings(out_roads, zr, buildings):
         if not shifts:
             continue
         pts = r['p']
-        fixed = {i for i, _ in r['e']} | {j for j in range(len(pts)) if not flat[j]}
+        fixed = {i for i, n in r['e'] if degree.get(n, 0) != 1} | {j for j in range(len(pts)) if not flat[j]}
         new_pts = list(pts)
         for j in range(len(pts)):
             if j in fixed:
@@ -903,9 +912,99 @@ def narrow_past_buildings(out_roads, zr, buildings):
             near_fixed = min((abs(cum[j] - cum[i]) for i in fixed), default=99.0)
             f = min(1.0, near_fixed / 6.0)
             new_pts[j] = (pts[j][0] + ox * f, pts[j][1] + oy * f)
+        for i, n in r['e']:
+            if i not in fixed and new_pts[i] != pts[i]:
+                moved_ends += 1
+                if node_xy is not None:
+                    node_xy[n] = (r1(new_pts[i][0]), r1(new_pts[i][1]))
         r['p'][:] = new_pts
         shifted.append(r['n'] or r['kn'])
-    print(len(shifted), 'streets shifted off walls their centre line ran through:', shifted[:12])
+    print(len(shifted), 'streets shifted off walls their centre line ran through (%d dead ends moved):' % moved_ends, shifted[:12])
+
+    # 1b. a dead end whose last metres run into a surveyed wall stops HOUSE_CLEAR short of it (its rounded end and
+    # shoulder are drawn and driven at the end point, so the house front stays a wall the street leads up to)
+
+    def walls_of(bis):
+        out = []
+        for bi in bis:
+            b = buildings[bi]
+            extra = b[6] if len(b) > 6 and isinstance(b[6], dict) else {}
+            ring = b[4]
+            polys = [[(ring[m], ring[m + 1]) for m in range(0, len(ring) - 1, 2)]]
+            polys += [[(q[m], q[m + 1]) for m in range(0, len(q) - 2, 3)] for q in extra.get('rs', [])]
+            for pl in polys:
+                out += [(pl[m], pl[(m + 1) % len(pl)]) for m in range(len(pl))]
+        return out
+
+    def cut_tail(pts, zs, length):
+        """pts/zs with `length` m taken off the end (both as lists, the new end interpolated)."""
+        left = length
+        pts, zs = list(pts), list(zs)
+        while len(pts) > 1:
+            seg = math.dist(pts[-1], pts[-2])
+            if seg > left + 1e-6:
+                f = (seg - left) / seg
+                a, b = pts[-2], pts[-1]
+                pts[-1] = (a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f)
+                zs[-1] = zs[-2] + (zs[-1] - zs[-2]) * f
+                break
+            left -= seg
+            pts.pop()
+            zs.pop()
+        return pts, zs
+
+    trimmed = []
+    for ri, (r, z) in enumerate(zip(out_roads, zr)):
+        if not eligible(r, z):
+            continue
+        hits = scan(r, z, False)[3]
+        if not hits:
+            continue
+        total = sum(math.dist(a, b) for a, b in zip(r['p'], r['p'][1:]))
+        for first in (True, False):
+            mi = 0 if first else len(r['e']) - 1
+            nid = r['e'][mi][1]
+            if degree.get(nid, 0) != 1 or z[0 if first else -1] > 0.05:
+                continue
+            near = {bi for bi, _, sc in hits if (sc if first else total - sc) < END_TRIM}
+            if not near:
+                continue
+            walls = walls_of(near)
+            pts = list(reversed(r['p'])) if first else list(r['p'])
+            zs = list(reversed(z)) if first else list(z)
+            # the next junction node along keeps a stretch of street before it
+            other = r['e'][1][0] if first else r['e'][-2][0]
+            seg_pts = r['p'][:other + 1] if first else r['p'][other:]
+            span = sum(math.dist(a, b) for a, b in zip(seg_pts, seg_pts[1:]))
+            room = min(END_TRIM, span - 3.0)
+            done = None
+            cut = 0.25
+            while cut <= room + 1e-6:
+                cp, cz = cut_tail(pts, zs, cut)
+                tail_from = max(0, len(cp) - 6)
+                if all(closest(a, b, e0, e1)[0] >= MIN_HALF + HOUSE_CLEAR
+                       for a, b in zip(cp[tail_from:], cp[tail_from + 1:]) for e0, e1 in walls):
+                    done = (cut, cp, cz)
+                    break
+                cut += 0.25
+            if done is None:
+                continue
+            cut, cp, cz = done
+            removed = len(pts) - len(cp)
+            if first:
+                cp.reverse()
+                cz.reverse()
+                r['e'][:] = [(0, r['e'][0][1])] + [(i - removed, n) for i, n in r['e'][1:]]
+            else:
+                r['e'][-1] = (len(cp) - 1, r['e'][-1][1])
+            r['p'][:] = cp
+            zr[ri] = z = cz
+            total -= cut
+            end = cp[0] if first else cp[-1]
+            if node_xy is not None:
+                node_xy[nid] = (r1(end[0]), r1(end[1]))
+            trimmed.append((ri, r['n'] or r['kn'], round(cut, 2)))
+    print(len(trimmed), 'dead ends cut back clear of a surveyed wall (road, name, metres):', trimmed[:12])
     # 2. a building still standing inside the drawn street after the shift, that no GUGiK survey confirms (no 'src':
     # an OSM outline drawn off an old photo, or a passage over the street mapped as layer 1), goes: the street is there
     unconfirmed = {}
@@ -913,7 +1012,7 @@ def narrow_past_buildings(out_roads, zr, buildings):
     for ri, (r, z) in enumerate(zip(out_roads, zr)):
         if not eligible(r, z):
             continue
-        for bi, d in scan(r, z, False)[3]:
+        for bi, d, _ in scan(r, z, False)[3]:
             extra = buildings[bi][6] if len(buildings[bi]) > 6 and isinstance(buildings[bi][6], dict) else {}
             into = (bi, ri, r['n'] or r['kn'])
             if not extra.get('src') and not extra.get('lm'):
@@ -2756,7 +2855,7 @@ def build(check_png=None):
     n_b = len(buildings)
     n_cuts, passage_refs = cut_building_passages(out_roads, buildings)
     print(n_cuts, 'buildings cut for tunnel=building_passage streets:', n_b, '->', len(buildings), f'({len(passage_refs)} passages)')
-    road_hw = narrow_past_buildings(out_roads, zr, buildings)
+    road_hw = narrow_past_buildings(out_roads, zr, buildings, node_xy)
     bld_idx = {id(b): i for i, b in enumerate(buildings)}
     passages = []
     for ref, prec in passage_refs:

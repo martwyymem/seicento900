@@ -376,7 +376,7 @@
     "short_name": "Pszczyna",
     "width": 7.0,
     "theme": "city",
-    "street_stage": true,
+    "street_stage": true, "urban_ground": true,
     "cobbles": [
       [
         574.0,

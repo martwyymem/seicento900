@@ -121,6 +121,7 @@ short_name = "Pszczyna"
 width = 7.0
 theme = "city"
 street_stage = true
+urban_ground = true
 cobbles = PackedVector2Array(574.0, 1008.0, 2218.0, 2508.0)
 barrier = "plastic"
 barrier_color = Color(0.91, 0.72, 0.0, 1)

@@ -81,6 +81,7 @@ short_name = "Oświęcim"
 width = 8.0
 theme = "city"
 street_stage = true
+urban_ground = true
 cobbles = PackedVector2Array(908.0, 1119.0)
 barrier = "guardrail"
 runoff = 1.5

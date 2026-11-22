@@ -45,6 +45,12 @@ var sectors: Array = [] ## [[sample index, name]] sorted by index
 var bounds := PackedFloat64Array() ## [min_x, min_y, max_x, max_y]
 var cal: Dictionary = {} ## strategy calibration for the stock Seicento, filled lazily by Strategy
 var cal_alt := {} ## the same for any other car (the Hypercar Seicento), by CarSpec instance id
+## Open verges (a rural street stage, tools/build_street_tracks.py verges()): per sample, how far from the centreline
+## the sim's wall stands on each side (left +d at 2i, right at 2i + 1) and what stands there (VERGE_*). Empty on
+## every other track, whose walls are at half + runoff both sides all the way round.
+var REACH := PackedFloat64Array()
+var VKIND := PackedByteArray()
+enum { VERGE_OPEN, VERGE_RAIL, VERGE_SOLID } ## the far edge of an open verge (soft ground), a guardrail, a drawn obstacle
 
 static func load_def(track_key: String) -> TrackDef:
 	return load("res://data/tracks/%s.tres" % track_key)
@@ -86,6 +92,16 @@ func _init(def: TrackDef) -> void:
 			loose.append(Vector3(a * step, n * step, code))
 			loose.append(Vector3(0.0, b * step, code))
 	tunnels = raw.get("tunnels", [])
+	var verges = raw.get("verges")
+	if verges is Dictionary and verges.reach.size() == 2 * n:
+		REACH.resize(2 * n)
+		VKIND.resize(2 * n)
+		var kinds: String = verges.kind
+		for i in n:
+			var j := (i + off) % n
+			for k in 2:
+				REACH[2 * i + k] = verges.reach[2 * j + k]
+				VKIND[2 * i + k] = kinds.unicode_at(2 * j + k) - 48
 	h_min = INF
 	h_max = -INF
 	for h in H:
@@ -465,12 +481,32 @@ func pit_blend(s: float) -> float:
 func box_s(i: int) -> float:
 	return cfg.box_start + i * cfg.box_spacing
 
+## How far from the centreline the wall stands at s on one side (side > 0: +d), between samples linearly.
+func reach(s: float, side: float) -> float:
+	if REACH.is_empty() or by_pits(s, side):
+		return half + cfg.runoff
+	var u := wrap_s(s) / step
+	var i := int(u) % n
+	var k := 0 if side > 0.0 else 1
+	return lerpf(REACH[2 * i + k], REACH[2 * ((i + 1) % n) + k], u - floorf(u))
+
+## What stands at the wall at s on one side: VERGE_RAIL everywhere on a track without open verges.
+func verge_kind(s: float, side: float) -> int:
+	if VKIND.is_empty() or by_pits(s, side):
+		return VERGE_RAIL
+	return VKIND[2 * (roundi(wrap_s(s) / step) % n) + (0 if side > 0.0 else 1)]
+
+## Whether s is along the pit lane, on its side (where the pit lane's own walls stand, verges or not).
+func by_pits(s: float, side: float) -> bool:
+	var p := rel(s)
+	return absf(cfg.pit_offset) > 1.0 and signf(side) == signf(cfg.pit_offset) and p > cfg.pit_entry - 20.0 and p < cfg.pit_exit + 20.0
+
 ## Lateral barrier limits for a free-driving car at s: [lo, hi].
 func limits(s: float) -> PackedFloat64Array:
 	var p := rel(s)
 	var c := cfg
-	var lo := clamp_d(s, -(half + c.runoff))
-	var hi := clamp_d(s, half + c.runoff)
+	var lo := clamp_d(s, -reach(s, -1.0))
+	var hi := clamp_d(s, reach(s, 1.0))
 	var in_wall := p > c.pit_entry + c.pit_ramp * 0.55 and p < c.pit_exit - c.pit_ramp * 0.55
 	if in_wall:
 		if c.pit_offset > 0.0:

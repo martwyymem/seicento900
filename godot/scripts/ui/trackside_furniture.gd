@@ -190,7 +190,11 @@ func _build_braking_boards() -> void:
 				if _taken(bs, d, track.half + 1.0):
 					continue
 				var p := track.pos(bs, d)
-				(boards["BrakeBoard_%d" % dist] as Array[Transform3D]).append(Transform3D(_facing(-_tangent(bs)), _at(p) - Vector3.UP * 0.05))
+				var at := _at(p) - Vector3.UP * 0.05
+				# where the road runs on a bank over the surroundings' ground (street stages), a board on that ground
+				# stood up to 3 m below the road, hidden behind the barrier: it stands at the road's height instead
+				at.y = maxf(at.y, world._road_y(bs) - world.ROAD_REF + track.bank_rise(bs, d) - 0.3)
+				(boards["BrakeBoard_%d" % dist] as Array[Transform3D]).append(Transform3D(_facing(-_tangent(bs)), at))
 		s += 150.0 # past this corner
 	for part in boards:
 		_add(part, boards[part])

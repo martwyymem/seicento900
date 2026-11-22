@@ -1335,8 +1335,8 @@ func _build_track() -> void:
 	plane.size = Vector2(extent * 2.8, extent * 2.8)
 	ground.mesh = plane
 	ground.position = Vector3(0, -1.8, 0)
-	var far_ground := _surface_material(GROUND_SHADER, "grass" if track.cfg.theme != "city" else "")
-	far_ground.set_shader_parameter("base_color", Color("#364a38") if track.cfg.theme != "city" else CITY_GROUND)
+	var far_ground := _surface_material(GROUND_SHADER, "grass" if not _paved_city() else "")
+	far_ground.set_shader_parameter("base_color", Color("#364a38") if not _paved_city() else CITY_GROUND)
 	ground.material_override = far_ground
 	track_root.add_child(ground)
 	surroundings = SURROUNDINGS.new()
@@ -1524,19 +1524,19 @@ func _build_terrain(ground: MeshInstance3D) -> void:
 	var portal := _portal_samples() if viaduct else PackedByteArray()
 	var portal_reach := (track.half + track.cfg.runoff + fine) * (track.half + track.cfg.runoff + fine)
 	var base_color := _terrain_base_color()
-	var terrain_material := _surface_material(GROUND_SHADER, "grass" if track.cfg.theme != "city" else "")
+	var terrain_material := _surface_material(GROUND_SHADER, "grass" if not _paved_city() else "")
 	terrain_material.set_shader_parameter("use_vertex_color", true)
 	terrain_material.set_shader_parameter("tex_color_mix", 0.1)
 	terrain_material.set_shader_parameter("slope_rock", 0.4 if track.cfg.theme == "city" else 1.0)
 	# a city's ground between the mapped streets and plots is paving and yards, not meadow (Tokyo read as tan
 	# grass, 2026-11-10 QA): no lush grass and little of the grass's patchy tint
-	var lush := 0.0 if track.cfg.theme == "city" else 1.0
+	var lush := 0.0 if _paved_city() else 1.0
 	terrain_material.set_shader_parameter("lush", lush)
-	if track.cfg.theme == "city":
+	if _paved_city():
 		terrain_material.set_shader_parameter("tuft", 0.25)
 	if ground.material_override is ShaderMaterial:
 		(ground.material_override as ShaderMaterial).set_shader_parameter("lush", lush)
-		if track.cfg.theme == "city":
+		if _paved_city():
 			(ground.material_override as ShaderMaterial).set_shader_parameter("tuft", 0.25)
 	if surroundings:
 		surroundings.apply_land_map(terrain_material)
@@ -1679,10 +1679,16 @@ func _sample_dem(grid: Dictionary, x: float, z: float) -> float:
 
 const CITY_GROUND := Color("#74726b") ## a city circuit's unmapped ground: worn grey paving (the land map's streets are paler)
 
+## Whether the ground the land map leaves unmapped is a city's paving (CITY_GROUND): a city theme, unless its land map
+## paints the paving itself from OSM land use (TrackDef.urban_ground, the Polish towns), when the rest is grass.
+func _paved_city() -> bool:
+	return track.cfg.theme == "city" and not track.cfg.urban_ground
+
 func _terrain_base_color() -> Color:
 	match track.cfg.theme:
 		"city":
-			return CITY_GROUND
+			if _paved_city():
+				return CITY_GROUND
 		"oval":
 			return Color("#607a43")
 	return Color("#52684a")
@@ -2521,15 +2527,20 @@ func _build_barriers() -> void:
 				continue
 			if _in_wooden_rails(s): # a park fence there instead (_build_wooden_rails)
 				continue
-
 			var nxt := (i + 1) % track.n
+			var side_bd1 := side_bd
+			if not track.REACH.is_empty() and not track.by_pits(s, side): # a rural stage's open verges: a rail only where the sim has one (Track.reach)
+				if track.verge_kind(s, side) != Track.VERGE_RAIL:
+					continue
+				side_bd = track.reach(s, side) + 0.3
+				side_bd1 = track.reach(nxt * track.step, side) + 0.3
 			var rise0 := track.bank_rise(s, side * side_bd)
-			var rise1 := track.bank_rise(nxt * track.step, side * side_bd)
+			var rise1 := track.bank_rise(nxt * track.step, side * side_bd1)
 			var y0 := (track.H[i] - elevation_base) * ALTITUDE_SCALE + rise0
 			var y1 := (track.H[nxt] - elevation_base) * ALTITUDE_SCALE + rise1
 
 			var p0 := track.pos(s, side * side_bd)
-			var p1 := track.pos(nxt * track.step, side * side_bd)
+			var p1 := track.pos(nxt * track.step, side * side_bd1)
 
 			# on a banked turn the solid wall carries on down to the ground behind the raised road
 			var drop0 := rise0 + 0.4 if rise0 > 0.0 and not is_armco else 0.0

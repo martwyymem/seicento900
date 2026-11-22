@@ -1,6 +1,7 @@
 {
   "_comment": "Brzeszcze-Bór, Poland: a closed loop of real public roads, from OpenStreetMap. Start on ul. Bór heading east, left (north) into ul. Strażacka by the OSP fire station, on along ul. Borska over the railway (level crossing) and north-west to the Browarna/Lachowicka junction, left (south) down ul. Lachowicka over the railway again and past the fishponds, left onto ul. Bór at the Przedborek ponds, and east back to the line. See tools/build_street_tracks.py for the keys.",
   "key": "bor",
+  "verges": true,
   "origin": [50.0097, 19.1537],
   "dem": "eudem25m",
   "grid": 30,

@@ -195,7 +195,8 @@ func _add_view_fx() -> void:
 	add_child(mirror)
 	# own_world_3d: viewport.world_3d itself is null, so the mirror rendered the race scene's world
 	mirror.setup(viewport.find_world_3d(), func() -> Node3D:
-		return car_visual if visible and not paused and is_instance_valid(car_visual) else null)
+		# (not over the full-screen map either: it covered the map's title and hint row)
+		return car_visual if visible and not paused and not (hud and hud.map_open) and is_instance_valid(car_visual) else null)
 
 static func available() -> bool:
 	return FileAccess.file_exists("res://data/world/%s.json" % MAP_KEY)

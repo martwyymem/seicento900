@@ -1,6 +1,7 @@
 {
  "_comment": "Rajsko–Wilczkowice: a dirt rally stage on the forest tracks along the east edge, point to point from ul. Przemysłowa in Rajsko south through the woods, round the loop by the Soła and west to Wilczkowice, inside the playable area and off ul. Oświęcimska (the Goliath) until the run-off. Baked as a loop with the return up ul. Oświęcimska. Planned by tools/plan_route.py, baked from the open world's caches.",
  "key": "rajsko_wilczkowice",
+ "verges": true,
  "local": "brzeszcze",
  "origin": [
   49.99073285,

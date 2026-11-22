@@ -65,5 +65,32 @@ func run() -> Array:
 	check("goliath places 100 m and 200 m braking boards", b100 != null and b100.multimesh.instance_count > 0
 		and b200 != null and b200.multimesh.instance_count > 0)
 	rw.free()
+	# rural stages: open verges, guardrails only where a real road has them (build_street_tracks.py verges())
+	for key in ["bor", "maly_bor", "lipowiec_kobylec"]:
+		var vt := Track.new(Track.load_def(key))
+		var edge := vt.half + vt.cfg.runoff
+		var counts := [0, 0, 0]
+		var bad := 0
+		for i in vt.n:
+			for sd in [1.0, -1.0]:
+				var s := i * vt.step
+				if vt.by_pits(s, sd):
+					continue
+				var k := vt.verge_kind(s, sd)
+				counts[k] += 1
+				var r := vt.reach(s, sd)
+				if r < edge - 0.01 or r > edge + 6.01 or (k == Track.VERGE_OPEN and r < edge + 5.99):
+					bad += 1
+		check("%s has open verges and guardrails" % key, counts[Track.VERGE_OPEN] > 0 and counts[Track.VERGE_RAIL] > 0, str(counts))
+		check("%s verge reach stays between the run-off and the verge's edge" % key, bad == 0, "(%d samples)" % bad)
+		var lim := vt.limits(vt.L * 0.5)
+		check("%s limits follow the reach" % key, is_equal_approx(lim[1], vt.clamp_d(vt.L * 0.5, vt.reach(vt.L * 0.5, 1.0))))
+	var gp := Track.new(Track.load_def("gp"))
+	check("a circuit keeps its walls at the run-off edge", gp.REACH.is_empty() and gp.reach(100.0, 1.0) == gp.half + gp.cfg.runoff
+		and gp.verge_kind(100.0, -1.0) == Track.VERGE_RAIL)
+	var far: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://data/tracks/bor_far.json"))
+	check("bor's horizon has its towns", far.get("places", []).size() > 5)
+	for key in ["bielsko", "krakow", "oswiecim", "wilamowice", "brzeszcze", "pszczyna"]:
+		check("%s paints its town ground from OSM land use" % key, (load("res://data/tracks/%s.tres" % key) as TrackDef).urban_ground)
 	completed = true
 	return errors

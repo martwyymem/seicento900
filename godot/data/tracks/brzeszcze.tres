@@ -56,6 +56,7 @@ short_name = "Brzeszcze"
 width = 7.0
 theme = "city"
 street_stage = true
+urban_ground = true
 barrier = "plastic"
 runoff = 1.5
 runoff_surface = "asphalt"
