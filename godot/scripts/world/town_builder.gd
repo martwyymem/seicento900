@@ -400,8 +400,10 @@ func _take_ahead(tag: String, build: Callable) -> Array:
 	set("_ahead_" + tag, [])
 	return out
 
-## Joins an ahead task. Its RenderingServer calls wait for the main thread to flush the server's queue: on the main
-## thread (headless), do that while waiting; a build on a worker thread has the main thread doing it (OpenWorld._build_world).
+## Joins a task of the build's (an ahead step, a cache write). Its RenderingServer calls wait for the main thread to
+## flush the server's queue: on the main thread (headless), do that while waiting; a build on a worker thread has the
+## main thread doing it (OpenWorld._build_world). Never join such a task with a bare wait_for_task_completion on the
+## main thread: the worker sits in its server call and the main thread in the wait, for good.
 func _join_ahead(task: int) -> void:
 	var on_main := OS.get_thread_caller_id() == OS.get_main_thread_id()
 	while on_main and not WorkerThreadPool.is_task_completed(task):
@@ -422,8 +424,10 @@ func wait_for_stores() -> void:
 	if not _street_job.is_empty(): # (the same for the streets' tasks)
 		_join_streets(int(_street_job.group))
 		_street_job = {}
+	# (a write may read a mesh back from the RenderingServer: the fences' bush is roadside.glb's own ArrayMesh, which
+	# _pack_meshes leaves as it is and ResourceSaver reads surface by surface)
 	for id in _store_tasks:
-		WorkerThreadPool.wait_for_task_completion(id)
+		_join_ahead(id)
 	_store_tasks.clear()
 
 ## The steps in order, for the caller to run one per frame: [label, Callable].

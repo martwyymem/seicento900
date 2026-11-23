@@ -27,7 +27,7 @@ Everything from the original Pillars 1–9, Phases 0–4 core roadmap, and `0.5.
 - [ ] Night-rain High/Ultra frame time on the GP circuit: re-measure on an idle machine (windowed; this thread).
 - [x] Cold open-world load optimization (committed; suite + parity green): festival placement cache (warm 1.44 -> 0.91 s), parallel `_wall_edges` + per-chunk `_add_building` (release cold build 9.7 -> 6.0 s; debug capped at 2 threads, ~1 s); still running: faster cold `TownMap.load_map`. Taken by the T3 thread "Complete Next Headless Tasks" (2026-11-22). Measured cold 10.9 s / warm 1.6 s; worktree delegates: parallel `_building_meshes` (~6 s single-threaded, the cold critical path), festival placement cache (~0.65 s of every load), faster cold `TownMap.load_map` (~1.2 s).
 - [x] Parallel worktree delegates batch 1 (2026-11-22): live events, campaign arc, car GLB size, playtest fixes; committed in `6e44cd5`.
-- [ ] Batch 2 (2026-11-23, worktree delegates of "Complete Next Headless Tasks"): release-export open-world stall, test runner script-error detection + fingerprint faces, rear-plate damage cut (Golf/Focus/Sandero), faster cold Streets/Terrain meshes, windowed QA of `6e44cd5`.
+- [x] Batch 2 (2026-11-23, committed in `4887fc0` + the cache-hang fix), worktree delegates of "Complete Next Headless Tasks"): release-export open-world stall, test runner script-error detection + fingerprint faces, rear-plate damage cut (Golf/Focus/Sandero), faster cold Streets/Terrain meshes, windowed QA of `6e44cd5`.
 
 ---
 
@@ -47,7 +47,7 @@ Items surfaced by recent releases (`0.5.0`–`0.5.2-hotfix3`) and remaining loos
 - [x] **Per-car circuit hero stills (decided 2026-11-22: keep the cover fallback, no per-car stills):** races currently fall back to each car's open-world cover still; decide whether to render `hero_<track>_<car>.jpg` (`CAR=<key> tests/_loading_shots.gd`) or keep the cover fallback to avoid bloating release size.
 - [x] **Test tooling (2026-11-23):** `run_tests.gd` registers a `Logger` (`OS.add_logger`) and fails a suite on any engine/script error inside it; `_mesh_fingerprint.gd` hashes non-mesh state too (building faces, lamps, crossings, festival) and runs every step (`LEGACY=1` = old seven-step hashes).
 - [x] **Route-finder freeze (shipped in 0.5.5):** `TownMap.route` could loop forever when a search started on a loop road (5 such roads; ~1 in 6 open-world loads froze via live-event routes, the satnav too). Fixed (keep the cheaper start cost); `test_open_world.gd` `_loop_routes`. Needs a hotfix release.
-- [ ] **BLOCKER before shipping `6e44cd5`: `test_open_world_cache.gd` hangs intermittently** (4 of 5 solo runs at `6e44cd5`): suspected WorkerThreadPool deadlock in the new parallel `_building_meshes` / threaded `TownMap._from_raw`; an Opus worktree delegate is on it.
+- [x] **`test_open_world_cache.gd` hang fixed (2026-11-23; test path only, the game was not affected):** `wait_for_stores` joined cache-write tasks with a bare wait on the main thread while `ResourceSaver.save` of the fences' live `BushCluster` ArrayMesh waited for a RenderingServer flush; it now joins via `_join_ahead` (force_sync while waiting). 22/22 solo runs, 10/10 cold opens, fingerprint equal, suite 0 failures.
 - [ ] **Further cold open-world load optimization (optional; in progress in the T3 thread "Complete Next Headless Tasks"):** warm loads are ~2.4 s; cold loads (~9.1 s) spend ~2.9 s on street geometry and ~1.6 s on JSON parsing if we want to cut cold startup further.
 
 ---
