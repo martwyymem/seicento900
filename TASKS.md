@@ -11,7 +11,11 @@
 
 ---
 
-## Shipped Baseline (as of v0.5.5, 2026-11-22)
+## Shipped Baseline (as of v0.5.6, 2026-11-23)
+
+Project motto (2026-11-23): **Faster, better, harder, stronger.**
+
+- **`0.5.6`:** route-finder freeze fixed (0.5.5 could hang ~1 in 6 open-world loads); faster cold/warm open-world loads (parallel buildings, threaded map load, festival cache, faster terrain/streets); night race / rain drift / fog sprint live events; 14-stage + 11-mission campaign with save migration; car GLBs 5-6 MB; rear plates on one panel; playtest fixes; test runner fails on script errors.
 
 Everything from the original Pillars 1–9, Phases 0–4 core roadmap, and `0.5.3`–`0.5.5` is **built and shipped**:
 - **21 circuits & street tracks + 5 point-to-point rally stages (26 tracks total):** 11 circuits (GP, Nordschleife, Monaco, Indy, Le Mans, Monza, Silverstone, Spa, Suzuka, Zandvoort, Fiat Track), 8 real-OSM city/street loops (Tokyo C1 + Hamarikyu Spiral, Bielsko-Biała, Kraków with tram rails & Barbakan, Oświęcim, Wilamowice with church, Brzeszcze Kopalnia, Pszczyna with castle park & wisent herd, Bór), Goliath (27 km), S1 Sprint (9.6 km), plus 5 Brzeszcze-area rally stages (Mały Bór, Kolonia Stawowa, Babudy–Góra, Rajsko–Wilczkowice, Lipowiec–Kobylec) with measured lap counts.

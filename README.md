@@ -1,5 +1,7 @@
 # Seicento 900 Cup
 
+*Faster, better, harder, stronger.*
+
 A racing game about the humble Fiat Seicento 900, made in [Godot 4](https://godotengine.org/). Race it on
 famous circuits, Polish city and forest stages, and a free-roam campaign set in the real town of Brzeszcze,
 which was rebuilt from OpenStreetMap data. The menus and HUD follow Colin McRae Rally 2.0, and there are
