@@ -29,6 +29,16 @@ Everything from the original Pillars 1–9, Phases 0–4 core roadmap, and `0.5.
 
 ## Active Now — Next Release (In Flight)
 
+**Council review priority (2026-11-23, five-model review of `f87b605`; order is the council's consensus):**
+
+1. **Security `0.5.7`:** close the `user://` code-execution paths (mesh cache `.res`, ConfigFile `Resource(...)`, `world_assets.gd` `load()`), with a regression test. Nothing else ships before this.
+2. **Release gate:** headless CI or a script running the suite, `run_qa.gd`, `_run_race_test.gd`, a boot check and a clean-HEAD export. No same-day point releases without it.
+3. **Human playtest:** real gamepad, the 14-stage campaign and the gated live events, by hand, before more balance simulation.
+4. **Car blend-shape size:** strip non-panel blend shapes and morph tangents (~139 MB across the car scenes).
+5. **Finish the difficulty/accessibility work, then stop Batch 3** until worktrees are drained.
+
+**Hold (do not start):** new cars, circuits, open-world areas, live-event types, festival dressing, per-car hero stills; a big split of `game.gd` while worktrees are live; the WRC branch.
+
 - [ ] Night-rain High/Ultra frame time on the GP circuit: re-measure on an idle machine (windowed; this thread).
 - [ ] **Security (review 2026-11-23, council-confirmed at `f87b605`; plan: a security-only `0.5.7`):** two code-execution paths from crafted files dropped into user://: the mesh cache loads `.res` via ResourceLoader (`town_builder.gd:252`; embedded scripts run), and user ConfigFiles accept `Resource("...")` (`game.gd:2499`, `game.gd:3928`, `race_world.gd:283`, `car_catalog.gd:422`, `world_assets.gd:107`). Fixes in progress (`store_var`/`get_var(false)` cache format, shared `load_cfg` helper that rejects Resources + JSON save hardening); needs a regression test that plants a crafted `.res` and `.cfg` and checks both are refused. Also check (unconfirmed): `world_assets.gd` calls `load()` on files under `user://assets` (a planted `.remap`/`.import` could redirect it); load those only via `Image.load_from_file` / `GLTFDocument`.
 - [ ] **Optimization follow-ups (the first batch shipped in `f87b605`, see the baseline):** open: festival fireworks cost; car `.scn` blend shapes are dense (~35 of 40 MB per car, 139 MB for the eight imported scenes: 18 shapes on all 33 meshes): keep crush shapes only on body panels / drop tangents (~100 MB export + RAM/VRAM); traffic/train AI at 30-60 Hz with placement once per frame (measure first).
