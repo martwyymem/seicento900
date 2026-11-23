@@ -281,7 +281,7 @@ var night := 0.0
 
 func _ready() -> void:
 	var cfg := ConfigFile.new()
-	if cfg.load(SaveData.read_path("graphics.cfg")) == OK:
+	if SaveData.load_cfg_into(cfg, SaveData.read_path("graphics.cfg")) == OK:
 		quality = clampi(int(cfg.get_value("graphics", "quality", quality)), 0, QUALITY_NAMES.size() - 1)
 	_build_environment()
 	reflections = CarReflections.new()

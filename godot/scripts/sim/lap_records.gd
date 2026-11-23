@@ -53,12 +53,29 @@ static func load_store() -> Dictionary:
 	if _store != null:
 		return _store
 	var s = null
-	if use_disk and FileAccess.file_exists(SaveData.path(FILE)):
-		s = JSON.parse_string(FileAccess.get_file_as_string(SaveData.path(FILE)))
-	if not (s is Dictionary) or s.get("v") != float(VER):
+	if use_disk:
+		s = SaveData.read_json(SaveData.path(FILE))
+		if FileAccess.file_exists(SaveData.path(FILE)) and not (s is Dictionary):
+			SaveData.quarantine(SaveData.path(FILE))
+	if not (s is Dictionary) or not (s.get("v") is float or s.get("v") is int) or s.get("v") != float(VER) \
+			or not _clean_store(s):
 		s = {"v": VER, "tracks": {}, "ghost": {"solo": true, "race": false}}
 	_store = s
 	return _store
+
+## Whether a loaded store has the shape the records code reads: tracks -> {slot -> record} and an optional ghost Dictionary.
+static func _clean_store(s: Dictionary) -> bool:
+	var t = s.get("tracks")
+	if not (t is Dictionary) or (s.has("ghost") and not (s.get("ghost") is Dictionary)):
+		return false
+	for k in t:
+		if not (t[k] is Dictionary):
+			return false
+		for slot_key in t[k]:
+			var r = t[k][slot_key]
+			if not (r is Dictionary) or not (r.get("t") is float or r.get("t") is int):
+				return false
+	return true
 
 static func _save_store() -> void:
 	if not use_disk:

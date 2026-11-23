@@ -104,13 +104,14 @@ func _scan_skies() -> void:
 	if files.is_empty():
 		return
 	var cache := ConfigFile.new()
-	cache.load(SKY_CACHE)
+	SaveData.load_cfg_into(cache, SKY_CACHE)
 	var dirty := false
 	for path in files:
 		var stamp := FileAccess.get_modified_time(ProjectSettings.globalize_path(path))
 		if stamp == 0:
 			stamp = FileAccess.get_modified_time(path + ".import")
-		var info: Dictionary = cache.get_value("skies", path, {})
+		var cached = cache.get_value("skies", path, {})
+		var info: Dictionary = cached if cached is Dictionary else {}
 		if info.get("stamp", -1) != stamp:
 			info = _analyse_sky(path)
 			if info.is_empty():

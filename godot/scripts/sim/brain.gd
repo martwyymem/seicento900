@@ -19,12 +19,25 @@ static func load_store() -> Dictionary:
 	if _store != null:
 		return _store
 	var s = null
-	if use_disk and FileAccess.file_exists(SaveData.path("brain.json")):
-		s = JSON.parse_string(FileAccess.get_file_as_string(SaveData.path("brain.json")))
-	if not (s is Dictionary) or s.get("v") != float(VER):
+	if use_disk:
+		s = SaveData.read_json(SaveData.path("brain.json"))
+		if FileAccess.file_exists(SaveData.path("brain.json")) and not (s is Dictionary):
+			SaveData.quarantine(SaveData.path("brain.json"))
+	if not (s is Dictionary) or not (s.get("v") is float or s.get("v") is int) or s.get("v") != float(VER) \
+			or not _clean_tracks(s):
 		s = {"v": VER, "tracks": {}}
 	_store = s
 	return _store
+
+## Whether a loaded store's "tracks" is a Dictionary of Dictionaries (a hand-edited or damaged file is not).
+static func _clean_tracks(s: Dictionary) -> bool:
+	var t = s.get("tracks")
+	if not (t is Dictionary):
+		return false
+	for k in t:
+		if not (t[k] is Dictionary):
+			return false
+	return true
 
 static func save_store() -> void:
 	if not use_disk:
@@ -50,7 +63,7 @@ static func dec(a, n: int, k := 1e4) -> PackedFloat32Array:
 	out.fill(0.0)
 	if a is Array and a.size() == n:
 		for i in n:
-			out[i] = (float(a[i]) if a[i] else 0.0) / k
+			out[i] = SaveData.to_float(a[i], 0.0) / k
 	return out
 
 class Memory:

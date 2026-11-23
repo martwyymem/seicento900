@@ -313,13 +313,28 @@ static func load_progress() -> Dictionary:
 	var path := SaveData.read_path(save_file)
 	if not FileAccess.file_exists(path):
 		return empty_progress()
-	var f := FileAccess.open(path, FileAccess.READ)
-	if not f:
-		return empty_progress()
-	var json = JSON.parse_string(f.get_as_text())
+	var json = SaveData.read_json(path)
 	if json is Dictionary:
-		return migrate(json)
+		return migrate(clean_progress(json))
 	return empty_progress()
+
+## A loaded save with every field the game reads as the type it expects (a damaged or hand-edited file may hold
+## anything under a key): a field of the wrong kind is dropped (or reset for the stage counters) so its default applies.
+static func clean_progress(json: Dictionary) -> Dictionary:
+	var out := json.duplicate()
+	for k: String in ["unlocked", "arc"]:
+		if out.has(k):
+			out[k] = SaveData.to_int(out[k], 0 if k == "unlocked" else 1)
+	for k: String in ["best_pos", "fails", "missions", "car", "story"]:
+		if out.has(k) and not (out[k] is Dictionary):
+			out.erase(k)
+	for k: String in ["trophies", "cars"]:
+		if out.has(k):
+			if out[k] is Array:
+				out[k] = (out[k] as Array).filter(func(x: Variant) -> bool: return x is String)
+			else:
+				out.erase(k)
+	return out
 
 static func save_progress(data: Dictionary) -> void:
 	var path := SaveData.path(save_file)

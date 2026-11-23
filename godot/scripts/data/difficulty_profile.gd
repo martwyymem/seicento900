@@ -100,7 +100,7 @@ static func is_default(p: Dictionary) -> bool:
 ## game can build the first profile from the set-up page's old choices.
 static func load_profile(file := "") -> bool:
 	var cfg := ConfigFile.new()
-	if cfg.load(file if file != "" else SaveData.path(FILE)) != OK:
+	if SaveData.load_cfg_into(cfg, file if file != "" else SaveData.path(FILE)) != OK: # (refuses Resource(...)/Object(...) values)
 		return false
 	var d := {}
 	if cfg.has_section("profile"):

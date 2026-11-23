@@ -32,8 +32,11 @@ func run() -> Array:
 	if (cold.builder as TownBuilder).cache_log != ["terrain miss", "water miss", "streets miss", "rail miss", "buildings miss", "trees miss", "fences miss"]:
 		errors.append("a cold build logs %s" % [(cold.builder as TownBuilder).cache_log])
 	# the meshes are stored as the arrays MeshBatch made them of (no read-back from the GPU), and dropped from the meshes
-	var stored := ResourceLoader.load((cold.builder as TownBuilder)._cache_path("terrain"), "", ResourceLoader.CACHE_MODE_IGNORE)
-	if stored == null or not ((stored.get_meta("meshes") as Array)[0] is Dictionary):
+	var stored_file := FileAccess.open((cold.builder as TownBuilder)._cache_path("terrain"), FileAccess.READ)
+	var stored: Variant = null
+	if stored_file and stored_file.get_buffer(TownBuilder.MESH_CACHE_MAGIC.length()) == TownBuilder.MESH_CACHE_MAGIC.to_ascii_buffer():
+		stored = stored_file.get_var(false)
+	if not stored is Array or (stored as Array).is_empty() or not (stored as Array)[0] is Dictionary:
 		errors.append("the cache stores the terrain's meshes as ArrayMeshes (read back from the GPU), not as their arrays")
 	if MeshBatch.keeps_arrays(true):
 		errors.append("MeshBatch still keeps its arrays after the build")
@@ -80,6 +83,7 @@ func run() -> Array:
 	if MeshBatch.keeps_arrays(true):
 		errors.append("a cache miss in _cached_meshes left MeshBatch keeping its arrays")
 	other.root.free()
+	_crafted_files(map, errors)
 	for w in [cold, warm]:
 		(w.world as Node3D).free()
 	_snapshot(map, errors)
@@ -87,6 +91,51 @@ func run() -> Array:
 	DirAccess.remove_absolute(DIR)
 	completed = true
 	return errors
+
+const PWNED := "test_open_world_cache_pwned"
+const CRAFTED_TRES := """[gd_resource type="Resource" load_steps=2 format=3]
+
+[sub_resource type="GDScript" id="1"]
+script/source = "extends Resource
+func _init():
+	Engine.set_meta(\\"%s\\", true)
+"
+
+[resource]
+script = SubResource("1")
+""" % PWNED
+
+## A crafted file at a cache path (a .tres with a script, or an encoded object) is a miss and runs nothing: the cache
+## is never read through ResourceLoader or with objects allowed. The payload is checked to run when it is loaded as a
+## resource, so the test cannot pass on a payload that does nothing.
+func _crafted_files(map: TownMap, errors: Array[String]) -> void:
+	var dir := DIR + "/crafted"
+	DirAccess.make_dir_recursive_absolute(dir)
+	var b := TownBuilder.new(map, Node3D.new())
+	b.mesh_cache_dir = dir
+	Engine.remove_meta(PWNED)
+	var f := FileAccess.open(b._cache_path("terrain"), FileAccess.WRITE)
+	f.store_string(CRAFTED_TRES)
+	f.close()
+	# (an encoded object behind the right header is refused by get_var(false) too, but the engine prints an error for
+	# it, which the suite runner counts: checked by hand, not here)
+	if not b._cached_meshes("terrain").is_empty():
+		errors.append("a crafted file at a cache path was read as a hit")
+	if Engine.has_meta(PWNED):
+		errors.append("a crafted file at a cache path ran its script")
+	# (the same .tres loaded as a resource does run: the check above means something)
+	var tres := dir + "/crafted.tres"
+	f = FileAccess.open(tres, FileAccess.WRITE)
+	f.store_string(CRAFTED_TRES)
+	f.close()
+	ResourceLoader.load(tres, "", ResourceLoader.CACHE_MODE_IGNORE)
+	if not Engine.has_meta(PWNED):
+		errors.append("the crafted .tres did not run its script when loaded as a resource (the test proves nothing)")
+	Engine.remove_meta(PWNED)
+	for n in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(dir.path_join(n))
+	DirAccess.remove_absolute(dir)
+	b.root.free()
 
 ## The street furniture (lamps, parked cars, shelters, signals): built on two maps of their own (it stands posts in the map,
 ## which the shared one must not get) after every other step, a warm build gives the same instances, lamp heads, lamp grid and

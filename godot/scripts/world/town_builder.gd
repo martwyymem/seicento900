@@ -118,7 +118,7 @@ func has_model(name: String) -> bool:
 ## Keep CACHE_STEPS true: a step that reads a section or file not listed there would serve stale meshes after it changes
 ## (tests/test_open_world_cache.gd checks the lists against the map's sections).
 const MESH_CACHE_DIR := "user://open_world_cache"
-const MESH_CACHE_VERSION := "2" ## bump to drop every cache (a change to how records are stored)
+const MESH_CACHE_VERSION := "3" ## bump to drop every cache (a change to how records are stored)
 const CODE_HASH := preload("res://scripts/world/code_hash.gd")
 const SELF_PATH := "res://scripts/world/town_builder.gd"
 const MAP_PATH := "res://scripts/world/town_map.gd"
@@ -240,20 +240,53 @@ func _md5_file(path: String) -> String:
 func _cache_path(tag: String) -> String:
 	if mesh_cache_dir == "":
 		return ""
-	return "%s/%s_%s.res" % [mesh_cache_dir, tag, _stamp(tag)]
+	return "%s/%s_%s.bin" % [mesh_cache_dir, tag, _stamp(tag)]
 
 ## What step `tag` stored (in the order it was stored), or [] when there is nothing for this stamp.
+## The file is plain data read with get_var (objects refused): a cache file is never loaded through ResourceLoader,
+## which would run any script a crafted .res/.tres embeds (user:// files can come from anywhere, the stamp is
+## predictable). Anything that is not the shape _store_meshes writes is a miss.
 func _cached_meshes(tag: String) -> Array:
 	var path := _cache_path(tag)
 	if path == "":
 		return []
 	var hit: Array = []
-	if FileAccess.file_exists(path):
-		var res := ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
-		if res != null and res.has_meta("meshes"):
-			hit = _unpack_meshes(res.get_meta("meshes"))
+	var f := FileAccess.open(path, FileAccess.READ) if FileAccess.file_exists(path) else null
+	if f != null and f.get_length() > MESH_CACHE_MAGIC.length() \
+			and f.get_buffer(MESH_CACHE_MAGIC.length()) == MESH_CACHE_MAGIC.to_ascii_buffer():
+		var data: Variant = f.get_var(false)
+		if data is Array and _plain_data(data):
+			hit = _unpack_meshes(data)
+	if f != null:
+		f.close()
 	cache_log.append("%s %s" % [tag, "hit" if not hit.is_empty() else "miss"])
 	return hit
+
+## The first bytes of every cache file (anything else at a cache path is a miss before get_var reads a byte of it).
+const MESH_CACHE_MAGIC := "SEICMC3\n"
+
+## Whether v holds no objects at any depth (what store_var/get_var without objects can carry whole), and every
+## PACKED_MESH entry is a list of surface arrays.
+static func _plain_data(v: Variant) -> bool:
+	match typeof(v):
+		TYPE_OBJECT, TYPE_CALLABLE, TYPE_SIGNAL, TYPE_RID:
+			return false
+		TYPE_ARRAY:
+			for e in v:
+				if not _plain_data(e):
+					return false
+		TYPE_DICTIONARY:
+			var d := v as Dictionary
+			if d.has(PACKED_MESH):
+				if d.size() != 1 or not d[PACKED_MESH] is Array:
+					return false
+				for arr in d[PACKED_MESH]:
+					if not arr is Array or (arr as Array).size() != Mesh.ARRAY_MAX:
+						return false
+			for k in d:
+				if not _plain_data(k) or not _plain_data(d[k]):
+					return false
+	return true
 
 const PACKED_MESH := "packed_mesh" ## a cached mesh stored as its surfaces' arrays: {PACKED_MESH: [arrays per surface]}
 
@@ -266,7 +299,7 @@ static func _pack_meshes(v: Variant) -> Variant:
 		var kept: Array = m.get_meta(MeshBatch.KEEP_META, [])
 		if kept.size() == m.get_surface_count() and not kept.is_empty():
 			return {PACKED_MESH: kept}
-		return v
+		return v # (left an object: _store_meshes refuses to store it)
 	if v is Array:
 		var a := v as Array
 		# (a typed array keeps its type, unless it holds objects a packed mesh could not take the place of)
@@ -326,24 +359,32 @@ func _store_meshes(tag: String, meshes: Array) -> void:
 	if path == "":
 		_drop_kept(meshes)
 		return
-	DirAccess.make_dir_recursive_absolute(mesh_cache_dir)
-	var res := Resource.new()
-	res.set_meta("meshes", _pack_meshes(meshes))
+	var packed: Variant = _pack_meshes(meshes)
 	_drop_kept(meshes)
-	var tmp := "%s/%s_%s.tmp%d.res" % [mesh_cache_dir, tag, _stamp(tag), OS.get_process_id()]
+	# the cache holds plain data only (_cached_meshes reads it without objects): a record with an object left in it
+	# (a mesh MeshBatch did not make, a material...) is a bug in the step, so say so and store nothing
+	if not _plain_data(packed):
+		push_error("The open world's %s cache was not stored: its records hold an object (store a reference instead)" % tag)
+		return
+	DirAccess.make_dir_recursive_absolute(mesh_cache_dir)
+	var tmp := "%s/%s_%s.tmp%d.bin" % [mesh_cache_dir, tag, _stamp(tag), OS.get_process_id()]
 	# written on another thread while the next steps build (it took a fifth of a cold build); wait_for_stores() joins it
-	_store_tasks.append(WorkerThreadPool.add_task(_save_cache.bind(res, tmp, path, tag, mesh_cache_dir), false, "Open world cache"))
+	_store_tasks.append(WorkerThreadPool.add_task(_save_cache.bind(packed, tmp, path, tag, mesh_cache_dir), false, "Open world cache"))
 
 var _store_tasks: Array[int] = []
 
-static func _save_cache(res: Resource, tmp: String, path: String, tag: String, dir: String) -> void:
-	if ResourceSaver.save(res, tmp) != OK or DirAccess.rename_absolute(tmp, path) != OK:
+static func _save_cache(data: Variant, tmp: String, path: String, tag: String, dir: String) -> void:
+	var f := FileAccess.open(tmp, FileAccess.WRITE)
+	var ok := f != null and f.store_buffer(MESH_CACHE_MAGIC.to_ascii_buffer()) and f.store_var(data, false)
+	if f != null:
+		f.close()
+	if not ok or DirAccess.rename_absolute(tmp, path) != OK:
 		push_warning("Could not cache the open world's %s at %s" % [tag, path])
 		DirAccess.remove_absolute(tmp)
 		return
-	for f in DirAccess.get_files_at(dir):
-		if f.begins_with(tag + "_") and ".tmp" not in f and dir.path_join(f) != path:
-			DirAccess.remove_absolute(dir.path_join(f))
+	for n in DirAccess.get_files_at(dir):
+		if n.begins_with(tag + "_") and ".tmp" not in n and dir.path_join(n) != path:
+			DirAccess.remove_absolute(dir.path_join(n))
 
 ## The cached steps a cold build makes on other threads (start_ahead) while the ones before them build: they read only
 ## what TownMap loaded (the terrain's grid and pond beds, the raw map, the buildings' rings) and builder state of their
@@ -424,8 +465,7 @@ func wait_for_stores() -> void:
 	if not _street_job.is_empty(): # (the same for the streets' tasks)
 		_join_streets(int(_street_job.group))
 		_street_job = {}
-	# (a write may read a mesh back from the RenderingServer: the fences' bush is roadside.glb's own ArrayMesh, which
-	# _pack_meshes leaves as it is and ResourceSaver reads surface by surface)
+	# (writes hold plain data now and touch no server, but joining through _join_ahead stays safe either way)
 	for id in _store_tasks:
 		_join_ahead(id)
 	_store_tasks.clear()
@@ -3173,8 +3213,9 @@ func build_fences() -> void:
 	for k in panels.size():
 		panels[k].name = "PlotFencePanels" if k == 0 else "PlotFencePanels%d" % k
 	# Low shrubs on selected boundaries soften the hard edges and make garden rows read from the street.
-	if recs[1] != null:
-		_multimesh_cells(group, recs[1], recs[2], false, null, 320.0)
+	var bush := _bush_mesh() if recs[1] == true else null
+	if bush != null:
+		_multimesh_cells(group, bush, recs[2], false, null, 320.0)
 	# Simple dark soil rectangles inside home gardens and the mapped allotments.
 	var bed_mesh := BoxMesh.new()
 	bed_mesh.size = Vector3.ONE
@@ -3183,7 +3224,22 @@ func build_fences() -> void:
 	soil.roughness = 1.0
 	_multimesh_cells(group, bed_mesh, recs[3], false, soil, 240.0)
 
-## The fences step's instance data, cached as "fences": [panel cells, the shrub mesh (null: none), shrub cells, bed
+var _bush: Variant = false ## _bush_mesh(): false until looked up, then the Mesh or null
+
+## The hedges' bush: roadside.glb's BushCluster (null when the model or the mesh is missing). Looked up once per builder.
+## The fences' cache stores only whether there was one (the cache holds no objects, see _pack_meshes).
+func _bush_mesh() -> Mesh:
+	if _bush is bool:
+		_bush = null
+		var roadside: Node = WORLD_ASSETS._load_model(ROADSIDE_MODELS)
+		if roadside:
+			for mi in roadside.find_children("BushCluster", "MeshInstance3D", true, false):
+				_bush = (mi as MeshInstance3D).mesh
+				break
+			roadside.free()
+	return _bush
+
+## The fences step's instance data, cached as "fences": [panel cells, whether there is a shrub mesh (_bush_mesh), shrub cells, bed
 ## cells], each a list of [instance buffer, count] per SMALL_CHUNK cell (_chunk_cells). `fence` is the panel model
 ## ([mesh, its transform in town.glb]).
 func _fence_records(fence: Array) -> Array:
@@ -3219,41 +3275,35 @@ func _fence_records(fence: Array) -> Array:
 	for xf in xfs:
 		placed.append(xf * local)
 	var panel_cells := _chunk_cells(placed, [])
-	var roadside: Node = WORLD_ASSETS._load_model(ROADSIDE_MODELS)
-	var bush: Mesh = null
+	var bush := _bush_mesh()
 	var bush_cells: Array = []
-	if roadside:
-		for mi in roadside.find_children("BushCluster", "MeshInstance3D", true, false):
-			bush = (mi as MeshInstance3D).mesh
-			break
-		if bush:
-			var bushes := []
-			# a hedge (style 2) is a row of bush clusters standing on its line, end to end (the cluster is ~2.1 m long
-			# along its X), so the hedge the car hits (TownMap: a 0.48 m half-thick wall on that line) is the one drawn
-			for wi in walls.size():
-				var w: Array = walls[wi]
-				if int(w[4]) != 2:
-					continue
-				if Vector2(float(w[0]), float(w[1])).distance_to(Vector2(float(w[2]), float(w[3]))) < 0.35:
-					continue
-				for piece_ab: Array in map.fence_pieces(Vector2(float(w[0]), float(w[1])), Vector2(float(w[2]), float(w[3]))):
-					var a: Vector2 = piece_ab[0]
-					var d: Vector2 = piece_ab[1] - a
-					var steps := maxi(1, int(ceil(d.length() / HEDGE_STEP)))
-					var yaw := atan2(-d.y, d.x)
-					for j in steps:
-						var p := a + d * ((float(j) + 0.5) / float(steps))
-						var s := 0.8 + hash2(p.x, p.y, 17.0) * 0.3
-						var turn := yaw + (hash2(p.x, p.y, 19.0) - 0.5) * 0.5 + (PI if hash2(p.x, p.y, 23.0) > 0.5 else 0.0)
-						bushes.append(Transform3D(Basis(Vector3.UP, turn).scaled(Vector3.ONE * s), Vector3(p.x, map.ground(p.x, p.y), p.y)))
-			bush_cells = _chunk_cells(bushes, [])
-		roadside.free()
+	if bush:
+		var bushes := []
+		# a hedge (style 2) is a row of bush clusters standing on its line, end to end (the cluster is ~2.1 m long
+		# along its X), so the hedge the car hits (TownMap: a 0.48 m half-thick wall on that line) is the one drawn
+		for wi in walls.size():
+			var w: Array = walls[wi]
+			if int(w[4]) != 2:
+				continue
+			if Vector2(float(w[0]), float(w[1])).distance_to(Vector2(float(w[2]), float(w[3]))) < 0.35:
+				continue
+			for piece_ab: Array in map.fence_pieces(Vector2(float(w[0]), float(w[1])), Vector2(float(w[2]), float(w[3]))):
+				var a: Vector2 = piece_ab[0]
+				var d: Vector2 = piece_ab[1] - a
+				var steps := maxi(1, int(ceil(d.length() / HEDGE_STEP)))
+				var yaw := atan2(-d.y, d.x)
+				for j in steps:
+					var p := a + d * ((float(j) + 0.5) / float(steps))
+					var s := 0.8 + hash2(p.x, p.y, 17.0) * 0.3
+					var turn := yaw + (hash2(p.x, p.y, 19.0) - 0.5) * 0.5 + (PI if hash2(p.x, p.y, 23.0) > 0.5 else 0.0)
+					bushes.append(Transform3D(Basis(Vector3.UP, turn).scaled(Vector3.ONE * s), Vector3(p.x, map.ground(p.x, p.y), p.y)))
+		bush_cells = _chunk_cells(bushes, [])
 	var beds := []
 	for bed in map.raw.get("garden_beds", []):
 		var p := Vector2(float(bed[0]), float(bed[1]))
 		var basis := Basis(Vector3.UP, float(bed[2])).scaled_local(Vector3(float(bed[3]), 0.12, float(bed[4])))
 		beds.append(Transform3D(basis, Vector3(p.x, map.ground(p.x, p.y) + 0.05, p.y)))
-	return [panel_cells, bush, bush_cells, _chunk_cells(beds, [])]
+	return [panel_cells, bush != null, bush_cells, _chunk_cells(beds, [])]
 
 func _fallback_fence() -> Mesh:
 	var mesh := BoxMesh.new()

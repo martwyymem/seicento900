@@ -11,10 +11,11 @@
 
 ---
 
-## Shipped Baseline (as of v0.5.7, 2026-11-23)
+## Shipped Baseline (as of v0.5.8, 2026-11-23)
 
 Project motto (2026-11-23): **Faster, better, harder, stronger.**
 
+- **`0.5.8` (security):** no user:// file is loaded through ResourceLoader any more: the open-world mesh cache is `store_var` plain data (`.bin`, `SEICMC3` header, `get_var(false)` + plain-data check; crafted `.tres` = cache miss, script never runs); every user ConfigFile goes through `SaveData.load_cfg` (refuses `Resource(`/`Object(`/`ExtResource(`/`SubResource(`, incl. comment/control-char variants); championship, rally, campaign, world-progress, brain and lap-record saves type-checked, bad files kept as `.bad`; tests `test_save_safety.gd` + `_crafted_files` in `test_open_world_cache.gd`.
 - **`0.5.7`:** difficulty & assists profile (7-step rival ladder relative to each event's design, fan multiplier x0.8-x1.5 plus assist bonuses; separate ABS/TC/stability/steering/braking aids with presets, auto/manual shifting, racing line full/braking/off; fuel use off, tyre wear off, damage off/cosmetic/full, auto-recover); dev menu only in debug builds; exports ~135 MB smaller (lossy loading photos, BC6H skies, no extension_api.json); per-frame HUD/beacon/light savings.
 - **`0.5.6`:** route-finder freeze fixed (0.5.5 could hang ~1 in 6 open-world loads); faster cold/warm open-world loads (parallel buildings, threaded map load, festival cache, faster terrain/streets); night race / rain drift / fog sprint live events; 14-stage + 11-mission campaign with save migration; car GLBs 5-6 MB; rear plates on one panel; playtest fixes; test runner fails on script errors. Post-0.5.6 on `main` (`f87b605`): dev menu (§+1) only in debug builds (`OS.is_debug_build()`), `extension_api.json` (7 MB) left out of exports, lossy loading JPGs + VRAM-compressed sky HDRs (~139 MB off the export), per-frame HUD `set_stats`/`_layout` caching (~0.13 ms/frame), beacon label and festival light caching.
 
@@ -32,7 +33,7 @@ Everything from the original Pillars 1–9, Phases 0–4 core roadmap, and `0.5.
 
 **Council review priority (2026-11-23, five-model review of `f87b605`; order is the council's consensus):**
 
-1. **Security `0.5.8`** (0.5.7 shipped the difficulty & assists profile at the user's request, 2026-11-23): close the `user://` code-execution paths (mesh cache `.res`, ConfigFile `Resource(...)`, `world_assets.gd` `load()`), with a regression test. Nothing else ships before this.
+1. [x] **Security `0.5.8` (shipped 2026-11-23)** (0.5.7 shipped the difficulty & assists profile at the user's request, 2026-11-23): close the `user://` code-execution paths (mesh cache `.res`, ConfigFile `Resource(...)`, `world_assets.gd` `load()`), with a regression test. Nothing else ships before this.
 2. **Release gate:** headless CI or a script running the suite, `run_qa.gd`, `_run_race_test.gd`, a boot check and a clean-HEAD export. No same-day point releases without it.
 3. **Human playtest:** real gamepad, the 14-stage campaign and the gated live events, by hand, before more balance simulation.
 4. **Car blend-shape size:** strip non-panel blend shapes and morph tangents (~139 MB across the car scenes).

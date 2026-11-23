@@ -2539,7 +2539,7 @@ func _apply_menu_car() -> void:
 
 func _load_race_settings() -> void:
 	var cfg := ConfigFile.new()
-	if cfg.load(SaveData.path("race_settings.cfg")) != OK:
+	if SaveData.load_cfg_into(cfg, SaveData.path("race_settings.cfg")) != OK:
 		return
 	_loading_settings = true
 	var controls := _race_setting_controls()
@@ -3985,7 +3985,7 @@ func _apply_world_graphics_settings() -> void:
 
 func _load_graphics_settings() -> void:
 	var config := ConfigFile.new()
-	if config.load(SaveData.read_path("graphics.cfg")) == OK:
+	if SaveData.load_cfg_into(config, SaveData.read_path("graphics.cfg")) == OK:
 		graphics_display_mode = clampi(int(config.get_value("graphics", "display_mode", 0)), 0, 1)
 		graphics_antialiasing = clampi(int(config.get_value("graphics", "antialiasing", 0)), 0, 2)
 		graphics_vsync = bool(config.get_value("graphics", "vsync", true))
@@ -4090,7 +4090,7 @@ func _save_graphics_settings() -> void:
 	graphics_preset = GraphicsPresets.match_index(_graphics_snapshot())
 	_show_preset_state()
 	var config := ConfigFile.new()
-	config.load(SaveData.read_path("graphics.cfg"))
+	SaveData.load_cfg_into(config, SaveData.read_path("graphics.cfg"))
 	if config.has_section_key("graphics", "render_scale"):
 		config.erase_section_key("graphics", "render_scale")
 	config.set_value("graphics", "upscaler", graphics_upscaler)
@@ -5895,7 +5895,9 @@ func _season() -> Dictionary:
 	if c.has("difficulty") and not c.has("rival_step"):
 		c["rival_step"] = DifficultyProfile.LEGACY_STEP[clampi(int(c.difficulty), 0, 3)] # a season saved on the 4-step picker
 	for k in d:
-		if not c.has(k):
+		var v = c.get(k)
+		var numbers: bool = (v is int or v is float) and (d[k] is int or d[k] is float) # (JSON hands ints back as floats)
+		if not c.has(k) or (typeof(v) != typeof(d[k]) and not numbers): # a missing or wrong-typed value takes the default
 			c[k] = d[k]
 	var cal: Array = (c.calendar as Array).filter(func(k) -> bool: return str(k) in TRACK_KEYS) if c.calendar is Array else []
 	c.calendar = cal if not cal.is_empty() else CHAMPIONSHIP_CALENDAR.duplicate()
@@ -6434,17 +6436,14 @@ func _load_championship() -> void:
 	champ_data = {"round": 0, "scored": false, "table": {}}
 	if not FileAccess.file_exists(SaveData.path("championship.json")):
 		return
-	var f := FileAccess.open(SaveData.path("championship.json"), FileAccess.READ)
-	var parsed = JSON.parse_string(f.get_as_text())
-	if not (parsed is Dictionary) or not (parsed.get("table", {}) is Dictionary):
+	var parsed := SaveData.clean_championship(SaveData.read_json(SaveData.path("championship.json")))
+	if parsed.is_empty():
+		SaveData.quarantine(SaveData.path("championship.json")) # unreadable or the wrong shape: start fresh, keep it as .bad
 		return
-	var saved_round := int(parsed.get("round", -1))
+	var saved_round := int(parsed.round)
 	champ_data = parsed # (its config, if any, says how long the season is)
 	if saved_round < 0 or saved_round >= _calendar().size():
 		champ_data = {"round": 0, "scored": false, "table": {}, "config": champ_data.get("config", {})}
-		return
-	champ_data["round"] = saved_round
-	champ_data["scored"] = bool(parsed.get("scored", false))
 
 func _save_championship() -> void:
 	var f := FileAccess.open(SaveData.path("championship.json"), FileAccess.WRITE)
@@ -6864,12 +6863,12 @@ func _load_rally() -> void:
 		return
 	var path := SaveData.path(RALLY_FILE)
 	if FileAccess.file_exists(path):
-		var d = JSON.parse_string(FileAccess.get_file_as_string(path))
-		if d is Dictionary and not Rally.event(str(d.get("key", ""))).is_empty():
+		var d = SaveData.read_json(path)
+		if d is Dictionary and not Rally.event(SaveData.to_str(d.get("key", ""))).is_empty():
 			rally_event = RallyEvent.from_dict(d)
-			var car = d.get("car", {})
-			rally_car = car if car is Dictionary else {}
+			rally_car = SaveData.clean_carried_car(d.get("car", {}))
 			return
+		SaveData.quarantine(path)
 	_new_rally(Rally.EVENTS[0].key)
 
 func _save_rally() -> void:

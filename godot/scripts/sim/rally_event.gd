@@ -204,19 +204,56 @@ func to_dict() -> Dictionary:
 		"player": {"name": player_name, "number": player_number, "color": player_color.to_html()}}
 
 static func from_dict(d: Dictionary) -> RallyEvent:
-	var ev := RallyEvent.new(str(d.get("key", "")), int(d.get("seed", 0)), str(d.get("difficulty", "")), float(d.get("difficulty_shift", 0.0)))
-	ev.stage_index = int(d.get("stage_index", 0))
-	ev.results = d.get("results", [])
-	# JSON hands numbers back as floats and keeps nulls: the rows are read with float()/int() throughout
-	for r in ev.results:
-		for x in r.rivals:
-			x.id = int(x.id)
-	ev.service_penalty = float(d.get("service_penalty", 0.0))
-	ev.service_log = d.get("service_log", [])
-	ev.parts = d.get("parts", {})
-	ev.pull = float(d.get("pull", 0.0))
-	var pl: Dictionary = d.get("player", {})
-	ev.player_name = str(pl.get("name", "You"))
-	ev.player_number = int(pl.get("number", 9))
-	ev.player_color = Color(str(pl.get("color", "b3121d")))
+	var ev := RallyEvent.new(str(d.get("key", "")), int(d.get("seed", 0)), str(d.get("difficulty", "")), SaveData.to_float(d.get("difficulty_shift", 0.0)))
+	ev.stage_index = clampi(SaveData.to_int(d.get("stage_index", 0)), 0, ev.stage_count())
+	# JSON hands numbers back as floats and keeps nulls: the rows are read with float()/int() throughout.
+	# A damaged save keeps the stage rows that are well formed, and the run resumes at the stage after them.
+	ev.results = []
+	var rows = d.get("results", [])
+	if rows is Array:
+		for r in rows:
+			if _valid_stage_row(r):
+				for x in r.rivals:
+					x.id = int(x.id)
+				ev.results.append(r)
+			else:
+				break
+	ev.stage_index = mini(ev.stage_index, ev.results.size())
+	ev.service_penalty = SaveData.to_float(d.get("service_penalty", 0.0))
+	var log = d.get("service_log", [])
+	ev.service_log = log if log is Array else []
+	var parts_in = d.get("parts", {})
+	ev.parts = {}
+	if parts_in is Dictionary:
+		for part in parts_in:
+			ev.parts[str(part)] = clampf(SaveData.to_float(parts_in[part]), 0.0, 1.0)
+	ev.pull = SaveData.to_float(d.get("pull", 0.0))
+	var pl = d.get("player", {})
+	if not (pl is Dictionary):
+		pl = {}
+	ev.player_name = SaveData.to_str(pl.get("name", "You"), "You")
+	ev.player_number = SaveData.to_int(pl.get("number", 9), 9)
+	ev.player_color = Color(SaveData.to_str(pl.get("color", "b3121d"), "b3121d"))
 	return ev
+
+## Whether a saved stage row has the shape stage_results/_slowest read: a player run with a time, penalty,
+## penalties, dnf and splits, and rival rows with an id, time (or null), dnf and note.
+static func _valid_stage_row(r: Variant) -> bool:
+	if not (r is Dictionary) or not (r.get("player") is Dictionary) or not (r.get("rivals") is Array):
+		return false
+	var me: Dictionary = r.player
+	for f in ["time", "penalty"]:
+		if not (me.get(f) is float or me.get(f) is int):
+			return false
+	if not (me.get("dnf") is bool) or not (me.get("penalties") is Array) or not (me.get("splits") is Array):
+		return false
+	for p in me.penalties:
+		if not (p is Array) or p.size() < 2 or not (p[1] is float or p[1] is int):
+			return false
+	for x in r.rivals:
+		if not (x is Dictionary) or not (x.get("id") is float or x.get("id") is int) or not (x.get("dnf") is bool) \
+				or not (x.get("note") is String):
+			return false
+		if x.get("time") != null and not (x.get("time") is float or x.get("time") is int):
+			return false
+	return true

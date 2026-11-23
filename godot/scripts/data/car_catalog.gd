@@ -419,7 +419,7 @@ static func saved_paint(key: String, fallback: Color) -> Color:
 	if not liv.is_empty():
 		return liv.color
 	var cfg := ConfigFile.new()
-	if cfg.load(SaveData.read_path(PAINT_SAVE)) == OK and cfg.has_section_key("paint", key):
+	if SaveData.load_cfg_into(cfg, SaveData.read_path(PAINT_SAVE)) == OK and cfg.has_section_key("paint", key):
 		var name := String(cfg.get_value("paint", key))
 		for e in palette(key):
 			if String(e.name) == name:
@@ -428,6 +428,6 @@ static func saved_paint(key: String, fallback: Color) -> Color:
 
 static func save_paint(key: String, c: Color) -> void:
 	var cfg := ConfigFile.new()
-	cfg.load(SaveData.read_path(PAINT_SAVE))
+	SaveData.load_cfg_into(cfg, SaveData.read_path(PAINT_SAVE))
 	cfg.set_value("paint", key, paint_name(key, c))
 	cfg.save(SaveData.path(PAINT_SAVE))

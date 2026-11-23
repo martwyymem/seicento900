@@ -29,43 +29,48 @@ static func load_progress() -> WorldProgress:
 	var path := SaveData.read_path(SAVE_FILE)
 	if not FileAccess.file_exists(path):
 		return WorldProgress.new()
-	return from_dict(JSON.parse_string(FileAccess.get_file_as_string(path)))
+	return from_dict(SaveData.read_json(path))
 
 ## A save's JSON as a WorldProgress; a key an older save lacks keeps its default.
 static func from_dict(data: Variant) -> WorldProgress:
 	var w := WorldProgress.new()
 	if not data is Dictionary:
 		return w
-	var p: Array = data.get("pos", [])
-	if p.size() >= 3:
-		w.pos = Vector2(p[0], p[1])
-		w.heading = p[2]
+	var p = data.get("pos", [])
+	if p is Array and p.size() >= 3:
+		w.pos = Vector2(SaveData.to_float(p[0]), SaveData.to_float(p[1]))
+		w.heading = SaveData.to_float(p[2])
 		w.has_pos = true
-	w.hour = float(data.get("hour", 18.5))
-	for r in data.get("roads", []):
-		w.roads[int(r)] = true
-	for n in data.get("landmarks", []):
+	w.hour = SaveData.to_float(data.get("hour", 18.5), 18.5)
+	for r in _list(data, "roads"):
+		w.roads[SaveData.to_int(r)] = true
+	for n in _list(data, "landmarks"):
 		w.landmarks[str(n)] = true
 	var t = data.get("traps", {})
 	if t is Dictionary:
 		w.traps = t
-	w.fans = int(data.get("fans", 0))
-	w.best_chain = int(data.get("best_chain", 0))
-	w.odometer = float(data.get("odometer", 0.0))
-	w.car_class = int(data.get("car_class", 0))
-	for id in data.get("mods", []):
+	w.fans = SaveData.to_int(data.get("fans", 0))
+	w.best_chain = SaveData.to_int(data.get("best_chain", 0))
+	w.odometer = SaveData.to_float(data.get("odometer", 0.0))
+	w.car_class = SaveData.to_int(data.get("car_class", 0))
+	for id in _list(data, "mods"):
 		w.mods[str(id)] = true
-	for k in data.get("tips", []):
+	for k in _list(data, "tips"):
 		w.tips[str(k)] = true
-	for id in data.get("map_hidden", []):
+	for id in _list(data, "map_hidden"):
 		w.map_hidden.append(str(id))
 	var lv = data.get("live", {})
 	if lv is Dictionary:
 		w.live = lv
-	w.weather_seed = int(data.get("weather_seed", 0))
-	w.weather_day = maxi(int(data.get("weather_day", 0)), 0)
-	w.weather_dynamic = bool(data.get("weather_dynamic", true))
+	w.weather_seed = SaveData.to_int(data.get("weather_seed", 0))
+	w.weather_day = maxi(SaveData.to_int(data.get("weather_day", 0)), 0)
+	w.weather_dynamic = SaveData.to_bool(data.get("weather_dynamic", true), true)
 	return w
+
+## A save's list under `key`, or an empty one when it is missing or not a list.
+static func _list(data: Dictionary, key: String) -> Array:
+	var v = data.get(key, [])
+	return v if v is Array else []
 
 func to_dict() -> Dictionary:
 	return {
