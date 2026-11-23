@@ -48,7 +48,7 @@ const TIER_COLORS := [Color("#ff5a4a"), Color("#d08a4a"), Color("#d8dde6"), Colo
 ## its card text, its colour, its fan bonus and its drift tiers' factor (a slick road slides easily).
 const VARIANTS := {
 	"night_race": {"base": "sprint", "gate": "night", "open": 0.6, "keep": 0.35, "name": "NIGHT RACE", "tag": "NIGHT ONLY",
-		"until": "first light", "color": Color("#8f7bff"), "fan_k": 1.2, "tier_k": 1.0,
+		"until": "it gets light", "color": Color("#8f7bff"), "fan_k": 1.2, "tier_k": 1.0,
 		"blurb": "Nobody races this one in daylight. The lamps are on, the squares are empty and somebody has chalked a start line under a streetlight. Point to point through the town against the night crews, every checkpoint in order."},
 	"rain_drift": {"base": "drift", "gate": "wet", "open": 0.4, "keep": 0.15, "name": "RAIN DRIFT", "tag": "WET ROADS ONLY",
 		"until": "the road dries", "color": Color("#4aa8ff"), "fan_k": 1.15, "tier_k": 1.25,
@@ -1139,7 +1139,7 @@ static func gate_tag(ev: Dictionary) -> String:
 	var vk := String(ev.get("variant", ""))
 	return String(VARIANTS[vk].tag) if VARIANTS.has(vk) else ""
 
-## "NIGHT ONLY · gone at first light" for a gated event, "" otherwise.
+## "NIGHT ONLY · gone when it gets light" for a gated event, "" otherwise.
 static func gate_line(ev: Dictionary) -> String:
 	var vk := String(ev.get("variant", ""))
 	return "%s · gone when %s" % [VARIANTS[vk].tag, VARIANTS[vk].until] if VARIANTS.has(vk) else ""

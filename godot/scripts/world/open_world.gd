@@ -2347,7 +2347,7 @@ func _update_camera(delta: float) -> void:
 ## other. While the banner is up and an overhead arch is on screen behind it, the banner hides (OpenWorldHud.set_area_hold)
 ## and comes back when the arch has passed.
 const ARCH_BANNER_RANGE := 120.0 ## m: arches further off are too small to clash
-const ARCH_HEIGHT := 5.5 ## m: where an arch's lettering is
+const ARCH_HEIGHT := 6.3 ## m: the middle of an arch's lettering (windowed QA 2026-11-23: 5.5 sat 0.8 m below it)
 const ARCH_HALF_WIDTH := 7.0 ## m: how far its lettering reaches to the side
 var _arch_pts: Array[Vector3] = []
 var _arch_scan_t := 0.0
@@ -2389,7 +2389,10 @@ func _update_area_hold(delta: float) -> void:
 ## Whether an arch whose lettering is centred at screen point `sp`, reaching `reach` px to each side (and as much up and
 ## down), is behind the banner's rect (a margin round it).
 static func arch_behind_banner(banner: Rect2, sp: Vector2, reach: float) -> bool:
-	return banner.grow(40.0).intersects(Rect2(sp - Vector2(reach, reach * 0.5), Vector2(reach * 2.0, reach)))
+	# the lettering is ~1.2 m tall on a 14 m span: half-height = reach * 0.6 / ARCH_HALF_WIDTH (treating it as half the span
+	# tall hid the banner from ~50 m, so an area entered at a gate never showed its name)
+	var half_h := reach * 0.6 / ARCH_HALF_WIDTH
+	return banner.grow_individual(40.0, 16.0, 40.0, 16.0).intersects(Rect2(sp - Vector2(reach, half_h), Vector2(reach * 2.0, half_h * 2.0)))
 
 ## The points over the festival's overhead arches (its Inflatable / Festival / Live arch MultiMeshes), into _arch_pts.
 func _collect_arches(n: Node, depth: int) -> void:

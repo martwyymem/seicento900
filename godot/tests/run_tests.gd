@@ -1,6 +1,9 @@
 ## Headless test runner: godot --headless --path godot -s tests/run_tests.gd
 ## Each suite's run() returns its error list and must set `completed = true` last: a script error aborts
 ## run() and still hands back an empty (typed) Array, so the flag is what tells a pass from a crash.
+## A script error inside a function the suite calls only aborts that callee (the suite carries on and
+## completes), so an OS Logger also records every engine/script/shader error printed while a suite runs
+## and the runner fails the suite with those messages.
 extends SceneTree
 
 const SUITES := [
@@ -97,6 +100,28 @@ var _wd_suite := ""
 var _wd_started_msec := 0
 var _wd_hard_msec := 0
 
+## Collects errors the engine prints (script errors, push_error, shader errors) so a suite that survives
+## one still fails. Warnings are not collected. May be called from any thread.
+class _ErrorLog extends Logger:
+	var _mutex := Mutex.new()
+	var _errors: Array[String] = []
+
+	func _log_error(function: String, file: String, line: int, code: String, rationale: String, _editor_notify: bool, error_type: int, _script_backtraces: Array[ScriptBacktrace]) -> void:
+		if error_type == ERROR_TYPE_WARNING:
+			return
+		var msg := rationale if rationale != "" else code
+		_mutex.lock()
+		_errors.append("engine error: %s (%s:%d in %s)" % [msg, file, line, function])
+		_mutex.unlock()
+
+	## Returns the errors recorded since the last call and clears the list.
+	func take() -> Array[String]:
+		_mutex.lock()
+		var out := _errors.duplicate()
+		_errors.clear()
+		_mutex.unlock()
+		return out
+
 class _SuiteRun:
 	var done := false
 	var result: Variant = null
@@ -165,8 +190,11 @@ func _initialize() -> void:
 	var timeout_msec := _suite_timeout_msec()
 	_start_watchdog(timeout_msec)
 	var failed := 0
+	var error_log := _ErrorLog.new()
+	OS.add_logger(error_log)
 	for path in SUITES:
 		print("run  %s" % path)
+		error_log.take()
 		var script = load(path)
 		var errors: Array = ["failed to load (compile error above)"]
 		if script and script.can_instantiate():
@@ -189,10 +217,12 @@ func _initialize() -> void:
 				errors = runner.result if runner.result is Array else []
 				if not suite.get("completed"):
 					errors.append("run() aborted by a script error (see above)")
+		errors.append_array(error_log.take())
 		print("%s %s" % ["FAIL" if errors else "ok  ", path])
 		for e in errors.slice(0, 20):
 			print("    ", e)
 		failed += errors.size()
+	OS.remove_logger(error_log)
 	_stop_watchdog()
 	print("%d failure(s)" % failed)
 	await release(self)

@@ -16,6 +16,7 @@ func run() -> Array:
 	_driving(map, errors)
 	_walls(map, errors)
 	_gps(map, errors)
+	_loop_routes(map, errors)
 	_traffic(map, errors)
 	_build(map, errors)
 	completed = true
@@ -189,6 +190,31 @@ func _gps(map: TownMap, errors: Array[String]) -> void:
 		if map.road_at(p.x, p.y, -INF, 1.0).is_empty():
 			errors.append("the route leaves the roads at %s" % p)
 			break
+
+## Routes out of a loop stretch (both its ends at one junction). The A* once seeded that junction with the dearer of
+## its two costs, so a neighbour later "improved" it and overwrote its null `came`: the walk back went round a cycle and
+## froze the game (a live event or the GPS starting on one of these about one load in six).
+func _loop_routes(map: TownMap, errors: Array[String]) -> void:
+	var b: Array = map.spots.bor_stage
+	var far := Vector2(b[0], b[1])
+	var loops := 0
+	for ri in map.road_pts.size():
+		var marks: Array = map.road_marks[ri]
+		var pts := map.road_pts[ri]
+		for m in range(marks.size() - 1):
+			var ia := int(marks[m][0])
+			var ib := int(marks[m + 1][0])
+			if ib - ia < 2:
+				continue
+			var ends: Array = map._ends_of({"road": ri, "i": ia, "t": 0.5})
+			if ends.size() != 2 or ends[0][0] != ends[1][0]:
+				continue
+			loops += 1
+			for p in [pts[ia].lerp(pts[ia + 1], 0.5), pts[ib - 1].lerp(pts[ib], 0.5)]:
+				if map.route(p, far).size() < 2:
+					errors.append("no route out of the loop on road %d" % ri)
+	if loops == 0:
+		errors.append("no loop stretch in the map: the A* loop regression check tests nothing")
 
 func _traffic(map: TownMap, errors: Array[String]) -> void:
 	var root := Node3D.new()

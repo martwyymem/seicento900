@@ -857,14 +857,60 @@ func pave_top_at(x: float, y: float) -> float:
 
 ## Kerb height (KERB_H) when (x, y) is on a pavement, else 0.
 func kerb_at(x: float, y: float) -> float:
-	var ck := _cell_key(int(floor(x / CELL)), int(floor(y / CELL)))
+	var ck := (int(floor(x / CELL)) + 4096) * 8192 + (int(floor(y / CELL)) + 4096) # _cell_key, inlined
 	if not _pave_cells.has(ck):
 		return 0.0
 	var p := Vector2(x, y)
 	for pid in _pave_cells[ck]:
-		if _pave_rects[pid].has_point(p) and inside(p, pave_polys[pid]):
+		if _pave_rects[pid].has_point(p) and (_inside_pave(p, pid) if _pave_bands_built else inside(p, pave_polys[pid])):
 			return KERB_H
 	return 0.0
+
+## inside(p, pave_polys[pid]) over only the edges that reach p's band of PAVE_BAND m (prime_pavement_bands): the same
+## crossing test, edge by edge, so the same answer (an edge whose ends both lie on one side of p's line never counts).
+const PAVE_BAND := 2.0
+var _pave_bands: Array = [] ## per pave poly: Array of PackedInt32Array, the edges (by end index i, from i - 1) per band
+var _pave_bands_built := false
+
+## Builds the pavements' band index (kerb_at answers without it until then). Call where no other thread reads the map
+## (TownBuilder._prime_map, before its tasks start).
+func prime_pavement_bands() -> void:
+	if _pave_bands_built:
+		return
+	_pave_bands.resize(pave_polys.size())
+	for pid in pave_polys.size():
+		var poly := pave_polys[pid]
+		var y0: float = _pave_rects[pid].position.y
+		var bands: Array[PackedInt32Array] = []
+		bands.resize(int(floor((float(_pave_rects[pid].end.y) - y0) / PAVE_BAND)) + 1)
+		var n := poly.size()
+		var j := n - 1
+		for i in n:
+			var yi: float = poly[i].y
+			var yj: float = poly[j].y
+			for b in range(maxi(int(floor((minf(yi, yj) - y0) / PAVE_BAND)), 0), mini(int(floor((maxf(yi, yj) - y0) / PAVE_BAND)), bands.size() - 1) + 1):
+				bands[b].append(i)
+			j = i
+		_pave_bands[pid] = bands
+	_pave_bands_built = true
+
+func _inside_pave(p: Vector2, pid: int) -> bool:
+	var poly := pave_polys[pid]
+	var bands: Array[PackedInt32Array] = _pave_bands[pid]
+	var x: float = p.x
+	var y: float = p.y
+	var b := clampi(int(floor((y - float(_pave_rects[pid].position.y)) / PAVE_BAND)), 0, bands.size() - 1)
+	var n := poly.size()
+	var odd := false
+	for i in bands[b]:
+		var j := i - 1 if i > 0 else n - 1
+		var yi: float = poly[i].y
+		var yj: float = poly[j].y
+		if (yi > y) != (yj > y):
+			var xi: float = poly[i].x
+			if x < xi + (y - yi) * (float(poly[j].x) - xi) / (yj - yi):
+				odd = not odd
+	return odd
 
 ## A raised deck is level across (a bridge or an embankment's top does not lean with the hillside under it): its height
 ## over the ground at p, beside the centreline point q where the deck is `deck` over the ground. Low ramps (under
@@ -952,6 +998,54 @@ func road_at(x: float, y: float, z_ref := -INF, reach := 0.0) -> Dictionary:
 	if not best.is_empty():
 		best["height"] = ground(x, y) + float(best.deck) + float(best.level) + road_lift(int(best.road))
 	return best
+
+## Whether road_at(x, y, any z_ref, reach) finds a road: the same test, stopping at the first segment that passes it
+## and building no result (TownBuilder asks this hundreds of thousands of times a build). With prime_segments() made,
+## it reads each segment's start, direction and half width from flat arrays.
+func on_road(x: float, y: float, reach := 0.0) -> bool:
+	if not _segs_built:
+		return not road_at(x, y, -INF, reach).is_empty()
+	var ck := (int(floor(x / CELL)) + 4096) * 8192 + (int(floor(y / CELL)) + 4096) # _cell_key, inlined
+	if not _seg_cells.has(ck):
+		return false
+	var p := Vector2(x, y)
+	for sid in _seg_cells[ck]:
+		var a := _seg_a[sid]
+		var ab := _seg_ab[sid]
+		var l2 := _seg_l2[sid]
+		var t := 0.0 if l2 < 1e-6 else clampf((p - a).dot(ab) / l2, 0.0, 1.0)
+		var d := p.distance_to(a + ab * t)
+		if d > _seg_hw[sid] + reach:
+			continue
+		if d <= half_at(_seg_road[sid], _seg_i[sid], t) + reach:
+			return true
+	return false
+
+var _seg_a := PackedVector2Array() ## (prime_segments: per segment its start, start to end, that squared, road_w / 2)
+var _seg_ab := PackedVector2Array()
+var _seg_l2 := PackedFloat64Array()
+var _seg_hw := PackedFloat64Array()
+var _segs_built := false
+
+## Builds on_road's per-segment arrays. Call where no other thread reads the map (TownBuilder._prime_map).
+func prime_segments() -> void:
+	if _segs_built:
+		return
+	var n := _seg_road.size()
+	_seg_a.resize(n)
+	_seg_ab.resize(n)
+	_seg_l2.resize(n)
+	_seg_hw.resize(n)
+	for sid in n:
+		var ri := _seg_road[sid]
+		var i := _seg_i[sid]
+		var pts := road_pts[ri]
+		var ab := pts[i + 1] - pts[i]
+		_seg_a[sid] = pts[i]
+		_seg_ab[sid] = ab
+		_seg_l2[sid] = ab.length_squared()
+		_seg_hw[sid] = road_w[ri] * 0.5
+	_segs_built = true
 
 ## Every road deck under a map point (for the car's vertical contact: it may be on a bridge or under it):
 ## [road, deck height over ground, distance beyond the edge (< 0 inside), direction, offset from the centreline, bridge
@@ -1158,7 +1252,7 @@ func has_cone(ri: int, last: int) -> bool:
 ## the cones at its node (each past its own road's end) and the raised junction's pad there, on the ground.
 func cone_height(cone: Dictionary, p: Vector2) -> float:
 	# (on a road's footprint, a bridge's over it included, the car's ground is the plain ground, else the drawn terrain)
-	var base := ground(p.x, p.y) if not road_at(p.x, p.y).is_empty() else terrain(p.x, p.y) + pave_top_at(p.x, p.y)
+	var base := ground(p.x, p.y) if on_road(p.x, p.y) else terrain(p.x, p.y) + pave_top_at(p.x, p.y)
 	return base + cone_rise(cone, p)
 
 ## How far an embankment mound's surface stands over the ground the car finds at p (zero past its foot), -INF where
@@ -1268,6 +1362,10 @@ func route(from: Vector2, to: Vector2) -> PackedVector2Array:
 	var came := {}
 	var g_score := {}
 	for s in starts:
+		# a loop stretch has one junction at both ends: keep the cheaper way to it, or a later "better" path to that
+		# start would overwrite its null `came` and the walk back below would go round a cycle for ever
+		if s[1] >= g_score.get(s[0], INF):
+			continue
 		g_score[s[0]] = s[1]
 		came[s[0]] = null
 		open.append([s[1] + (node_pos[s[0]] as Vector2).distance_to(to), s[1], s[0]])

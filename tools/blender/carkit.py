@@ -656,6 +656,26 @@ def split_part(objs, name, picks, floor_mat, push=None, inner=0.012, decals=DECA
 	print("%s: %s" % (name, ", ".join("%s %d" % (k, len(objs[k].data.polygons)) for k in objs if k.startswith(name))))
 
 
+def rear_plate_box(details, y0, rear_axle_s, margin=0.02):
+	"""The rear number plate's frame box (0.0, half width, z0, z1) in Blender coordinates, or None: the Plate-material
+	faces of details that face the tail (behind the rear axle, near the centre line), grown by margin so the plate's frame
+	and recess faces fall inside it too."""
+	if details is None:
+		return None
+	dn = _names(details.data)
+	xs, zs = [], []
+	for p in details.data.polygons:
+		if dn[p.material_index] != "Plate" or p.normal.y > -0.5 or abs(p.center.x) > 0.45 or y0 - p.center.y < rear_axle_s:
+			continue
+		for i in p.vertices:
+			co = details.data.vertices[i].co
+			xs.append(abs(co.x))
+			zs.append(co.z)
+	if not xs:
+		return None
+	return (0.0, max(xs) + margin, min(zs) - margin, max(zs) + margin)
+
+
 def split_damage_parts(objs, y0, front_axle_s, rear_axle_s, arch_r, door, s_deck, floor_mat, recess=0.05):
 	"""The front doors, both bumpers and the boot lid or tailgate cut out of the Body (and the Details on them) as
 	DoorL DoorR BumperF BumperR Boot, then the Body's glass split into Windscreen WindowL WindowR RearWindow (RaceCarVisual
@@ -706,11 +726,25 @@ def split_damage_parts(objs, y0, front_axle_s, rear_axle_s, arch_r, door, s_deck
 			"Details": lambda c, n, m, f=in_door, h=half, sd=side: m not in LAMP_MATS and f(c) and c.x * sd > h - 0.09},
 			floor_mat)  # (the hole shows the cabin, through the door's frame)
 
+	# the rear number plate with its frame and recess must ride on ONE loose part: where the bumper/boot cut (z_rb) runs
+	# through it, the whole frame box goes to whichever panel the plate mostly sits on (the boot when its centre is above
+	# the cut, else the bumper), so a torn-off boot or bumper takes all of it and no sliver stays on the Body
+	plate_box = rear_plate_box(details, y0, rear_axle_s)
+	plate_owner = None
+	if plate_box is not None:
+		plate_owner = "Boot" if (plate_box[2] + plate_box[3]) / 2.0 >= z_rb else "BumperR"
+
+	def in_plate(c):
+		b = plate_box
+		return b is not None and abs(c.x) < b[1] and b[2] < c.z < b[3] and s_of(c) > s_rb
+
 	# bumpers: everything below the lamps ahead of the front arches and behind the rear ones
 	def front_zone(c):
 		return s_of(c) < s_fb and c.z < z_fb
 
 	def rear_zone(c):
+		if in_plate(c):
+			return plate_owner == "BumperR"
 		return s_of(c) > s_rb and c.z < z_rb
 	for name, zone in (("BumperF", front_zone), ("BumperR", rear_zone)):
 		split_part(objs, name, {
@@ -722,17 +756,33 @@ def split_damage_parts(objs, y0, front_axle_s, rear_axle_s, arch_r, door, s_deck
 	lamp_in = min((abs(c.x) for c in tail if c.z > z_rb), default=None)
 	lamp_top = max((c.z for c in tail), default=0.0)
 	print("parts: bumper tops %.3f / %.3f, tail lamps inside %s up to %.3f, deck %.2f" % (z_fb, z_rb, lamp_in, lamp_top, s_deck))
+	if plate_box is not None:
+		print("parts: rear plate frame x +-%.3f z %.3f..%.3f goes with %s" % (plate_box[1], plate_box[2], plate_box[3], plate_owner))
 
 	def in_boot(c):
+		if in_plate(c):
+			return plate_owner == "Boot"
 		if s_of(c) < s_deck + 0.004 or c.z < z_rb + 0.004:
 			return False
 		lim = lamp_in - 0.012 if lamp_in is not None and c.z < lamp_top + 0.01 else 0.9 * half_at(s_of(c), (z_rb, 2.0))
 		return abs(c.x) < lim
 	split_part(objs, "Boot", {
-		"Body": lambda c, n, m: m == "Paint" and in_boot(c) and (n.y < -0.2 or n.z > 0.45),
+		"Body": lambda c, n, m: in_boot(c) and ((m == "Paint" and (n.y < -0.2 or n.z > 0.45)) or (m not in other and in_plate(c) and n.y < -0.2)),
 		"Details": lambda c, n, m: m not in LAMP_MATS and in_boot(c) and c.z < 1.6},
 		floor_mat, push=lambda co, n: -n * recess)
 	split_glass(objs, y0)
+	if plate_box is not None:  # the rear plate and its frame must now sit on exactly one panel, none on the Body
+		holders = {}
+		for k, ob in objs.items():
+			kn = _names(ob.data)
+			for p in ob.data.polygons:
+				c = p.center
+				if p.normal.y < -0.5 and plate_box[2] < c.z < plate_box[3] and abs(c.x) < plate_box[1] and s_of(c) > s_rb \
+						and kn[p.material_index] in ("Plate", "Gasket"):
+					holders.setdefault(k, set()).add(kn[p.material_index])
+		print("rear plate faces by object: %s" % holders)
+		if "Body" in holders or any(k not in (plate_owner, plate_owner + "Details") for k in holders if k not in DECALS):
+			raise RuntimeError("the rear plate is split across %s (owner %s)" % (sorted(holders), plate_owner))
 
 
 def split_glass(objs, y0):

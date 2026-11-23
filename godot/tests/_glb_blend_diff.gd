@@ -63,7 +63,20 @@ func _init() -> void:
 		var dn := 0.0
 		var verts := 0
 		var vb_tot := 0
-		for s in a.get_surface_count():
+		if a.get_surface_count() != b.get_surface_count():
+			# a plate (or its frame) moved between parts: a surface appeared or vanished, so compare by material name only
+			var mats_a: Array[String] = []
+			var mats_b: Array[String] = []
+			for s in a.get_surface_count():
+				var m: Material = a.surface_get_material(s)
+				mats_a.append(m.resource_name if m else "")
+				verts += (a.surface_get_arrays(s)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+			for s in b.get_surface_count():
+				var m: Material = b.surface_get_material(s)
+				mats_b.append(m.resource_name if m else "")
+				vb_tot += (b.surface_get_arrays(s)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+			print("SURFACES CHANGED %s: %s -> %s" % [k, str(mats_a), str(mats_b)])
+		for s in mini(a.get_surface_count(), b.get_surface_count()) if a.get_surface_count() == b.get_surface_count() else 0:
 			var sa := a.surface_get_arrays(s)
 			var sb := b.surface_get_arrays(s)
 			verts += (sa[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
@@ -77,6 +90,8 @@ func _init() -> void:
 				print("MATERIAL MISMATCH ", k, " surf ", s)
 			var ba := a.surface_get_blend_shape_arrays(s)
 			var bb := b.surface_get_blend_shape_arrays(s)
+			if (sa[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() != (sb[Mesh.ARRAY_VERTEX] as PackedVector3Array).size():
+				continue # the mesh changed (faces moved between parts): vertex-wise deltas are not comparable, counts are reported
 			for i in ba.size():
 				var pa: PackedVector3Array = ba[i][Mesh.ARRAY_VERTEX]
 				var pb: PackedVector3Array = bb[i][Mesh.ARRAY_VERTEX]
@@ -87,6 +102,15 @@ func _init() -> void:
 				if na is PackedVector3Array and nb is PackedVector3Array:
 					for v in (na as PackedVector3Array).size():
 						dn = maxf(dn, _mx(na[v] - nb[v]))
+		var shapes_a: Array[String] = []
+		var shapes_b: Array[String] = []
+		for i in a.get_blend_shape_count():
+			shapes_a.append(str(a.get_blend_shape_name(i)))
+		for i in b.get_blend_shape_count():
+			shapes_b.append(str(b.get_blend_shape_name(i)))
+		if shapes_a != shapes_b:
+			bad += 1
+			line += " BLEND SHAPE NAMES DIFFER"
 		if a.get_surface_count() != b.get_surface_count() or a.get_blend_shape_count() != b.get_blend_shape_count() or verts != vb_tot:
 			bad += 1
 		print("%s verts=%d/%d dpos=%.5f dnrm=%.5f" % [line, verts, vb_tot, dp, dn])

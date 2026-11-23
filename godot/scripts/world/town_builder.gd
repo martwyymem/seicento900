@@ -505,38 +505,87 @@ func build_terrain() -> void:
 	for mesh in meshes:
 		_add_mesh(group, mesh, mat, "", false)
 
-## The terrain's meshes, one per TERRAIN_CHUNK square of quads (cached as the "terrain" step).
+## The terrain's meshes, one per TERRAIN_CHUNK square of quads (cached as the "terrain" step). The heights are
+## TownMap.bed_vertex's (its ground() lookup written out per row, the pond beds from a flat copy of bed_mask) and each
+## chunk's arrays are written in place, its indices shared by every chunk of one size: the same meshes, without a few
+## million GDScript calls.
 func _terrain_meshes() -> Array:
 	var meshes: Array = []
 	var ex := map.extent
 	var nx := int(ex.size.x / TERRAIN_STEP) + 1
 	var ny := int(ex.size.y / TERRAIN_STEP) + 1
+	var bed := PackedFloat64Array()
+	bed.resize(nx * ny)
+	for k: int in map.bed_mask:
+		if k >= 0 and k < nx * ny:
+			bed[k] = float(map.bed_mask[k])
 	var hs := PackedFloat32Array()
 	hs.resize(nx * ny)
+	var th := map.th
+	var tnx := map.tnx
 	for j in ny:
+		# TownMap.ground(ex.position.x + i * TERRAIN_STEP, ex.position.y + j * TERRAIN_STEP), the row's half hoisted
+		var fy := clampf((ex.position.y + j * TERRAIN_STEP - map.ty0) / map.tstep, 0.0, map.tny - 1.001)
+		var gj := int(fy)
+		var v := fy - gj
+		var row := gj * tnx
 		for i in nx:
-			hs[j * nx + i] = map.bed_vertex(i, j, nx) # the ground, sunk in and round the ponds
+			var fx := clampf((ex.position.x + i * TERRAIN_STEP - map.tx0) / map.tstep, 0.0, tnx - 1.001)
+			var gi := int(fx)
+			var u := fx - gi
+			var g := row + gi
+			var h := lerpf(lerpf(th[g], th[g + 1], u), lerpf(th[g + tnx], th[g + tnx + 1], u), v)
+			hs[j * nx + i] = h - bed[j * nx + i] # the ground, sunk in and round the ponds
+	var index_sets := {} # Vector2i(quads across, quads down) -> PackedInt32Array
 	for cj in range(0, ny - 1, TERRAIN_CHUNK):
 		for ci in range(0, nx - 1, TERRAIN_CHUNK):
 			var mb := MeshBatch.new()
 			var i1 := mini(ci + TERRAIN_CHUNK, nx - 1)
 			var j1 := mini(cj + TERRAIN_CHUNK, ny - 1)
 			var w := i1 - ci + 1
+			var count := w * (j1 - cj + 1)
+			var verts := PackedVector3Array()
+			var normals := PackedVector3Array()
+			var uvs := PackedVector2Array()
+			verts.resize(count)
+			normals.resize(count)
+			uvs.resize(count)
+			var at := 0
 			for j in range(cj, j1 + 1):
+				var up := maxi(j - 1, 0) * nx
+				var down := mini(j + 1, ny - 1) * nx
 				for i in range(ci, i1 + 1):
 					var k := j * nx + i
 					var hl := hs[j * nx + maxi(i - 1, 0)]
 					var hr := hs[j * nx + mini(i + 1, nx - 1)]
-					var hu := hs[maxi(j - 1, 0) * nx + i]
-					var hd := hs[mini(j + 1, ny - 1) * nx + i]
-					var n := Vector3(hl - hr, 2.0 * TERRAIN_STEP, hu - hd).normalized()
+					var hu := hs[up + i]
+					var hd := hs[down + i]
 					var p := Vector3(ex.position.x + i * TERRAIN_STEP, hs[k], ex.position.y + j * TERRAIN_STEP)
-					mb.vertex(p, n, Vector2(p.x, p.z))
-			for j in range(j1 - cj):
-				for i in range(i1 - ci):
-					var a := j * w + i
-					# counter-clockwise seen from above (x east, z south): a, a+w, a+w+1, a+1
-					mb.quad(a, a + w, a + w + 1, a + 1)
+					verts[at] = p
+					normals[at] = Vector3(hl - hr, 2.0 * TERRAIN_STEP, hu - hd).normalized()
+					uvs[at] = Vector2(p.x, p.z)
+					at += 1
+			var shape := Vector2i(i1 - ci, j1 - cj)
+			if not index_sets.has(shape):
+				var idx := PackedInt32Array()
+				idx.resize(shape.x * shape.y * 6)
+				var q := 0
+				for j in shape.y:
+					for i in shape.x:
+						var a := j * w + i
+						# counter-clockwise seen from above (x east, z south): a, a+w, a+w+1, a+1 (MeshBatch.quad's order)
+						idx[q] = a
+						idx[q + 1] = a + w + 1
+						idx[q + 2] = a + w
+						idx[q + 3] = a
+						idx[q + 4] = a + 1
+						idx[q + 5] = a + w + 1
+						q += 6
+				index_sets[shape] = idx
+			mb.verts = verts
+			mb.normals = normals
+			mb.uvs = uvs
+			mb.indices = index_sets[shape]
 			meshes.append(mb.commit())
 	return meshes
 
@@ -960,6 +1009,8 @@ func _prime_map() -> void:
 		map.road_halves(ri)
 	map.embankment_cones()
 	map.raised_pads()
+	map.prime_pavement_bands()
+	map.prime_segments()
 
 ## Waits for the street tasks. On the main thread (headless) it serves the RenderingServer meanwhile, so the steps
 ## start_ahead began keep going (as _join_ahead does).
@@ -1059,7 +1110,7 @@ func _street_road(ch: Dictionary, ri: int, node_width: Dictionary, node_roads: D
 			if jd[i] < 0.6 or jd[i + 1] < 0.6:
 				continue
 			var mid := (foot[i] + foot[i + 1] + edge[i] + edge[i + 1]) * 0.25
-			if map.kerb_at(mid.x, mid.z) > 0.0 or not map.road_at(mid.x, mid.z).is_empty():
+			if map.kerb_at(mid.x, mid.z) > 0.0 or map.on_road(mid.x, mid.z):
 				continue
 			var tone := 0.9 + 0.2 * hash2(floorf(mid.x / 4.0), floorf(mid.z / 4.0), 7.0)
 			var gravel := Color(0.07 * tone, 0.058 * tone, 0.04 * tone)
@@ -1078,7 +1129,7 @@ func _street_road(ch: Dictionary, ri: int, node_width: Dictionary, node_roads: D
 			continue
 		var dir_out := (pts[ei] - pts[1 if e == 0 else n - 2]).normalized()
 		var beyond := pts[ei] + dir_out * (half + 0.6)
-		if not map.road_at(beyond.x, beyond.y).is_empty() or map.kerb_at(beyond.x, beyond.y) > 0.0:
+		if map.on_road(beyond.x, beyond.y) or map.kerb_at(beyond.x, beyond.y) > 0.0:
 			continue # it runs into another street or a pavement
 		var side_v := Vector2(-dir_out.y, dir_out.x)
 		var along := 1.0 if e == 1 else -1.0 # which way the arc length runs past the end
@@ -1247,15 +1298,20 @@ func _pavement_poly(pv: Dictionary, poly: PackedVector2Array, pi: int) -> void:
 			long_len = ed.length_squared()
 			long_edge = ed
 	var course := long_edge.normalized()
+	var gy := PackedFloat64Array() # the ground under each corner, read once (the triangles and the faces share them)
+	gy.resize(poly.size())
+	for k in poly.size():
+		gy[k] = map.ground(poly[k].x, poly[k].y)
 	for t in range(0, tris.size(), 3):
-		var v: Array[Vector3] = []
 		var cen := Vector2.ZERO
 		for k in 3:
-			var q := poly[tris[t + k]]
-			cen += q / 3.0
-			v.append(Vector3(q.x, map.ground(q.x, q.y) + top_y, q.y))
+			cen += poly[tris[t + k]] / 3.0
+		var q0 := poly[tris[t]]
+		var q1 := poly[tris[t + 1]]
+		var q2 := poly[tris[t + 2]]
 		var pc := Color(0.38, 0.37, 0.35) if hash2(floorf(cen.x / 3.0), floorf(cen.y / 3.0), 4.0) > 0.5 else Color(0.34, 0.33, 0.32)
-		kb.flat_tri(v[0], v[1], v[2], Vector3.UP, course, course, course, pc)
+		kb.flat_tri(Vector3(q0.x, gy[tris[t]] + top_y, q0.y), Vector3(q1.x, gy[tris[t + 1]] + top_y, q1.y),
+			Vector3(q2.x, gy[tris[t + 2]] + top_y, q2.y), Vector3.UP, course, course, course, pc)
 	var sign_ := 1.0 if TownMap._area_of(poly) > 0.0 else -1.0
 	var np := poly.size()
 	# each edge: its outward normal and what it gets (0 nothing, 1 kerb face, 2 plain face, 3 grass verge)
@@ -1277,11 +1333,11 @@ func _pavement_poly(pv: Dictionary, poly: PackedVector2Array, pi: int) -> void:
 		var inner := mid - n2 * 0.1
 		if map.kerb_at(inner.x, inner.y) == 0.0:
 			continue
-		if not map.road_at(mid.x, mid.y, -INF, 0.35).is_empty():
+		if map.on_road(mid.x, mid.y, 0.35):
 			kind[k] = 1
 			continue
 		var vo := mid + n2 * VERGE_W
-		kind[k] = 3 if map.road_at(vo.x, vo.y, -INF, 0.2).is_empty() and map.kerb_at(vo.x, vo.y) == 0.0 else 2
+		kind[k] = 3 if not map.on_road(vo.x, vo.y, 0.2) and map.kerb_at(vo.x, vo.y) == 0.0 else 2
 	# where two verge edges meet, both use one mitred foot so the slopes join rather than overlap or gap
 	var foot := PackedVector2Array()
 	foot.resize(np)
@@ -1298,8 +1354,8 @@ func _pavement_poly(pv: Dictionary, poly: PackedVector2Array, pi: int) -> void:
 		var k1 := (k + 1) % np
 		var a := poly[k]
 		var b := poly[k1]
-		var ta := Vector3(a.x, map.ground(a.x, a.y) + top_y, a.y)
-		var tb := Vector3(b.x, map.ground(b.x, b.y) + top_y, b.y)
+		var ta := Vector3(a.x, gy[k] + top_y, a.y)
+		var tb := Vector3(b.x, gy[k1] + top_y, b.y)
 		if kind[k] == 3:
 			# a grass verge from the pavement's edge down into the lawn
 			if pv.verge == null:
@@ -1316,8 +1372,8 @@ func _pavement_poly(pv: Dictionary, poly: PackedVector2Array, pi: int) -> void:
 			continue
 		var n2 := nrm[k]
 		var col := Color(0.5, 0.49, 0.47) if kind[k] == 1 else Color(0.36, 0.35, 0.33)
-		var ba := Vector3(a.x, map.ground(a.x, a.y) - 0.2, a.y)
-		var bb := Vector3(b.x, map.ground(b.x, b.y) - 0.2, b.y)
+		var ba := Vector3(a.x, gy[k] - 0.2, a.y)
+		var bb := Vector3(b.x, gy[k1] - 0.2, b.y)
 		kb.flat_quad(ta, tb, bb, ba, Vector3(n2.x, 0.0, n2.y), col)
 
 ## A disc of plain asphalt over each junction, so the meeting streets' ends and corners join up.

@@ -79,23 +79,41 @@ func quad(a: int, b: int, c: int, d: int) -> void:
 	indices.append(d)
 	indices.append(c)
 
-## One flat-shaded triangle facing n (the winding is fixed to match).
+## One flat-shaded triangle facing n (the winding is fixed to match). (vertex() written out: this is the hot call of
+## every builder, and a GDScript call each vertex was most of its cost.)
 func flat_tri(p0: Vector3, p1: Vector3, p2: Vector3, n: Vector3, uv0: Vector2, uv1: Vector2, uv2_: Vector2, c: Color, u2 := Vector2.ZERO) -> void:
 	var base := verts.size()
+	verts.append(p0)
+	uvs.append(uv0)
 	if (p1 - p0).cross(p2 - p0).dot(n) > 0.0:
-		vertex(p0, n, uv0, u2, c)
-		vertex(p2, n, uv2_, u2, c)
-		vertex(p1, n, uv1, u2, c)
+		verts.append(p2)
+		verts.append(p1)
+		uvs.append(uv2_)
+		uvs.append(uv1)
 	else:
-		vertex(p0, n, uv0, u2, c)
-		vertex(p1, n, uv1, u2, c)
-		vertex(p2, n, uv2_, u2, c)
+		verts.append(p1)
+		verts.append(p2)
+		uvs.append(uv1)
+		uvs.append(uv2_)
+	normals.append(n)
+	normals.append(n)
+	normals.append(n)
+	if use_uv2:
+		uv2s.append(u2)
+		uv2s.append(u2)
+		uv2s.append(u2)
+	if use_color:
+		colors.append(c)
+		colors.append(c)
+		colors.append(c)
 	indices.append(base)
 	indices.append(base + 1)
 	indices.append(base + 2)
 
+const _NO_UV := [Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO]
+
 ## A flat quad p0-p1-p2-p3 (in order round it) facing n.
-func flat_quad(p0: Vector3, p1: Vector3, p2: Vector3, p3: Vector3, n: Vector3, c: Color, uv := [Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO], u2 := Vector2.ZERO) -> void:
+func flat_quad(p0: Vector3, p1: Vector3, p2: Vector3, p3: Vector3, n: Vector3, c: Color, uv: Array = _NO_UV, u2 := Vector2.ZERO) -> void:
 	flat_tri(p0, p1, p2, n, uv[0], uv[1], uv[2], c, u2)
 	flat_tri(p0, p2, p3, n, uv[0], uv[2], uv[3], c, u2)
 
