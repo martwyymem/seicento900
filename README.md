@@ -50,7 +50,7 @@ detail under **Options**.
 - **Visuals & conditions:** day and night, dynamic weather (dry, wet, snow, hail, fog, variable) in races and
   free roam, 6 retro post-process styles, a Gran Turismo-style rear-view mirror, and Camera & Screen Effects
   (bloom, lens flare, speed FOV, radial speed blur).
-- **Damage & festival (unreleased on `main`):** hinged and detachable body panels (bonnet, doors, bumpers,
+- **Damage & festival (0.5.5):** hinged and detachable body panels (bonnet, doors, bumpers,
   boot/tailgate), bending and detaching wheels, spider-web windscreen cracks and shattering side/rear glass,
   per-lamp breakage, localised crush deformation and scraped bare metal; plus Brzeszcze dressed as a sports
   festival with spectator crowds behind barriers, bunting, string lights, inflatable SEICENTO FEST arches,
@@ -58,23 +58,20 @@ detail under **Options**.
 
 ## What's being worked on
 
-Last updated 2026-11-22. The full task list is in [`TASKS.md`](TASKS.md); the port status is in
+Last updated 2026-11-23, at version 0.5.6. The full task list is in [`TASKS.md`](TASKS.md); the port status is in
 [`godot/README.md`](godot/README.md).
 
-**Active now (next release)**
+**Next release**
 
-- Open-world map geometry & visual sweep: cleaning up the remaining protruding OSM buildings and running
-  windowed visual checks (grass LODs, building passages, street-track braking boards, aerial satnav zoom/pan).
-- Street track polish: Bór guardrails vs open verges, Bór far horizon, and an urban ground-shading audit.
-- Performance follow-ups: re-measuring High/Ultra night-rain frame time on the GP circuit and optional cold
-  open-world load optimization.
+- Security: hardening the loading of cache and settings files from the save folder, with tests.
+- A difficulty ladder for rivals, driving-assist presets and accessibility options (damage, tyre wear and fuel
+  switches).
+- Smaller downloads and a release check that runs the tests before every build.
 
-**Next up**
+**Playtest and feel tuning (by hand)**
 
-- Deciding on per-car circuit loading hero stills vs the open-world cover fallback.
-- Expanded live-event variety (weather- and time-gated events) and a longer campaign progression arc (cars
-  stay mission rewards, never bought with fans).
-- Playtest and feel tuning: damage/festival visual polish, physical gamepad QA, and driving/event balance.
+- Physical gamepad feel, the 14-stage campaign and its balance, weather- and time-gated live events, and
+  damage/festival visual polish.
 
 ## Controls
 
@@ -150,7 +147,7 @@ for extra detail. The game looks complete without them.
 |---|---|
 | `godot/` | **The game.** Scripts, shaders, scenes, baked track data and models. |
 | `tools/` | Generators: Blender scripts for the 3D models (`tools/blender/`), OpenStreetMap track, surroundings and open-world bakers, and the sound baker. |
-| repository root (`index.html`, `js/`, `css/`, `vendor/`) | The original browser version. Git-ignored and no longer on GitHub; the files stay local as the parity reference. |
+| repository root (`index.html`, `js/`, `css/`, `vendor/`) | The original browser version. Not tracked in git (since 2026-11-23) and no longer on GitHub; the files may stay on a local disk as the parity reference. |
 
 The 3D models, tracks and sounds are built by scripts, so to change one, edit the script and rebuild it
 rather than editing the output. The developer documentation covers the details:

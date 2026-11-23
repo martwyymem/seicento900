@@ -11,7 +11,7 @@ The active game is the Godot 4 project in [`godot/`](godot/):
 godot --path godot
 ```
 
-The browser game at the repository root is only a reference for porting and parity work. Make new
+The old browser game (no longer tracked in git) was only a reference for porting. Make new
 gameplay, UI and rendering changes in the Godot project. Outstanding work is tracked in
 [`TASKS.md`](TASKS.md) and [`godot/README.md`](godot/README.md).
 
