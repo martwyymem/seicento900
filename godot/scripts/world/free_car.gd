@@ -25,6 +25,8 @@ var env := Physics.Env.new()
 var ctl := Physics.Controls.new()
 var gearbox := "auto"
 var assists := "abs" ## full | abs | off
+var aids := {} ## each aid on its own over `assists` (RaceSettings.aid_of; the player's DifficultyProfile), empty = as `assists`
+var no_damage := false ## the profile's damage is off: knocks neither dent the body nor bend or tear off a wheel
 var mu := 1.0 ## weather grip
 var grav_mul := 1.0 ## CarMods: moon gravity
 var grip_mul := 1.0 ## CarMods: ice rink
@@ -289,14 +291,14 @@ func step(dt: float, thr: float, brk: float, steer_in: float, shift_up := false,
 	env.surface = _surface_fn
 	env.power = power_mul
 	env.drag_mul = 4.0 if in_water else 1.0
-	env.abs_on = assists != "off"
-	env.tc_on = assists == "full"
-	env.esc_on = assists == "full"
+	env.abs_on = RaceSettings.aid_of(assists, aids, "abs")
+	env.tc_on = RaceSettings.aid_of(assists, aids, "tc")
+	env.esc_on = RaceSettings.aid_of(assists, aids, "esc")
 	ctl.throttle = thr
 	ctl.brake = brk
 	ctl.steer = steer_in
 	ctl.handbrake = handbrake
-	env.drift_assist = Race.DRIFT_ASSIST_FULL if assists == "full" else (Race.DRIFT_ASSIST_ABS if assists == "abs" else 0.0)
+	env.drift_assist = Race.DRIFT_ASSIST_FULL if env.esc_on else (Race.DRIFT_ASSIST_ABS if env.abs_on else 0.0)
 	if drift_king:
 		env.drift_assist = 1.0
 	_contact_t += dt
@@ -794,7 +796,7 @@ func _impact(n: Vector2, r: Vector2, share: float) -> float:
 ## Crumples the side of the body a knock of `closing` m/s at contact point r lands on (RaceCar.dents, which the visual
 ## shows and which pop and tear off the bonnet), on RaceControl.hurt's scale: nothing under 3 m/s, a full dent at 9.7.
 func _dent(r: Vector2, closing: float) -> void:
-	if closing <= 3.0 or r.length_squared() < 1e-6:
+	if closing <= 3.0 or r.length_squared() < 1e-6 or no_damage:
 		return
 	var x := (closing - 3.0) / 6.7
 	var f := Vector2.from_angle(car.heading)

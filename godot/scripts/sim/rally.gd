@@ -246,8 +246,8 @@ static func simulate_rivals(rivals: Array, base: Array, split_frac: Array, seed_
 
 ## The rally field for a difficulty, seeded: Drivers.ROSTER in grid order, with Race.build_field's spread of
 ## pace round the difficulty's level and a little form for the event. [{id, name, number, color, skill, mistakes, wet}]
-static func make_rivals(difficulty: String, seed_: int, count := RIVALS) -> Array:
-	var diff: Dictionary = Race.DIFFICULTY.get(difficulty, Race.DIFFICULTY.medium)
+static func make_rivals(difficulty: String, seed_: int, count := RIVALS, shift := 0.0) -> Array:
+	var diff: Dictionary = DifficultyProfile.race_params(difficulty if Race.DIFFICULTY.has(difficulty) else "medium", shift)
 	var rng := SimUtil.Rng.new((seed_ * 31 + 5) & 0x7fffffff)
 	var out := []
 	for i in mini(count, Drivers.ROSTER.size()):

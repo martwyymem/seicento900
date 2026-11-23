@@ -12,6 +12,9 @@ extends Resource
 @export_group("Field")
 @export_range(0, 15) var opponents := 15
 @export_enum("easy", "medium", "hard", "alien") var difficulty := "medium"
+## levels the field is moved from `difficulty` (DifficultyProfile.resolve: the player's rival step against the
+## event's authored level), interpolated between Race.DIFFICULTY's rows; 0 keeps the row exactly
+@export var difficulty_shift := 0.0
 @export_enum("pole", "middle", "back", "random") var grid := "middle" ## or "p<N>": start in slot N (campaign stages start where their target is)
 @export var collisions := true
 @export var draft := true ## slipstream: a car behind another one, close and in line, pulls less air and gains speed
@@ -20,6 +23,9 @@ extends Resource
 ## circuit races only dent and scuff the bodywork. A rally stage always has it on; a championship turns it on with
 ## its Damage & Repairs setting; quick races and campaign circuits keep it as the player chose (opt-in).
 @export var mechanical_damage := false
+## DifficultyProfile's damage switch: "event" keeps mechanical_damage (and a rally stage's) as the event has it;
+## "full" forces mechanical damage, "cosmetic" forces it off, "off" also leaves the bodywork undented
+@export_enum("event", "off", "cosmetic", "full") var damage_mode := "event"
 @export var real_drivers := true ## the field is Drivers.ROSTER, each on their set-up and character; off: the JS reference's field (Race.BOTS)
 @export_enum("on", "off") var ai_learning := "on"
 @export_enum("on", "off", "near") var bot_physics := "on" ## near: only bots close to the player run the physics (saves battery)
@@ -69,5 +75,24 @@ extends Resource
 @export_enum("auto", "manual") var gearbox := "auto"
 @export_enum("full", "abs", "off") var assists := "full"
 @export var brake_assist := true ## with full assists, brake for a corner the car is arriving at too fast
+## Each aid on its own (DifficultyProfile.AID_KEYS: abs, tc, esc, steer, brake -> bool), over what `assists`
+## says; empty (the default) is exactly `assists`. Like `assists`, ABS, traction and stability control are the
+## whole field's; steering and braking assist only the player's.
+@export var aids := {}
 @export var auto_rejoin := true ## a beached player car is put back on the track, as the bots are (a car that merely faces the wrong way is not)
 @export var car_setup := {} ## CarSetup notches for the player's car (empty = stock)
+
+## Whether a driving aid is on: `aids`' own entry, else what the `assists` tier gives it (ABS on with full and
+## abs; traction, stability, steering and braking assist with full only, braking assist also needing brake_assist).
+func aid(key: String) -> bool:
+	return aid_of(assists, aids, key, brake_assist)
+
+static func aid_of(tier: String, overrides: Dictionary, key: String, brake_ok := true) -> bool:
+	if overrides.has(key):
+		return bool(overrides[key])
+	match key:
+		"abs":
+			return tier != "off"
+		"brake":
+			return tier == "full" and brake_ok
+	return tier == "full"

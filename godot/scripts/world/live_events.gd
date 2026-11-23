@@ -494,12 +494,16 @@ static func stat_kind(ev: Dictionary) -> String:
 	return String(ev.get("variant", ev.get("mkind", ev.get("kind", ""))))
 
 ## A drift's point tiers [bronze, silver, gold] (a mission's own, or per km); [] for a race.
+## The player's rival step scales them (DifficultyProfile.tier_scale); at Average they are as authored.
 func tiers_for(ev: Dictionary, _car_key := "stock") -> Array:
+	var ts := DifficultyProfile.tier_scale(DifficultyProfile.event_shift())
 	if ev.has("mission_tiers"):
-		return ev.mission_tiers
+		if ts == 1.0:
+			return ev.mission_tiers
+		return (ev.mission_tiers as Array).map(func(t): return roundf(float(t) * ts))
 	if String(ev.kind) == "drift_zone":
 		var km := float(ev.length) / 1000.0
-		var k := float(ev.get("tier_k", 1.0))
+		var k := float(ev.get("tier_k", 1.0)) * ts
 		return [DRIFT_PER_KM[0] * km * k, DRIFT_PER_KM[1] * km * k, DRIFT_PER_KM[2] * km * k]
 	return []
 
@@ -523,6 +527,7 @@ func target_text(ev: Dictionary, car_key := "stock") -> String:
 static func reward(ev: Dictionary, pos: int, success: bool, first_clear: bool) -> int:
 	var base := FANS_PER_KM * clampf(float(ev.get("length", 0.0)) / 1000.0, 1.5, 5.0) * float(DIFF_FANS.get(String(ev.get("difficulty", "medium")), 1.0)) \
 		* float(ev.get("fan_k", 1.0)) # a gated event (night, rain, fog) pays a fifth more
+	base = DifficultyProfile.scale_fans(base) # the player's difficulty and aids (1.0 at the default profile)
 	if not success:
 		return int(base * FanLevels.FAIL_SHARE / 10.0) * 10
 	var beat := clampf(float(int(ev.get("target", 3)) - pos), 0.0, 3.0)
@@ -714,6 +719,7 @@ func holding() -> bool:
 ## weather changes mid-run do not re-scale them.
 func begin(ev: Dictionary, car_key: String) -> void:
 	ease_field(ev)
+	ev["difficulty_shift"] = DifficultyProfile.event_shift() # the player's rival step, fixed for the run
 	var start_mu := clampf(float(ev.get("mu", 1.0)), 0.1, 1.0)
 	run = {"ev": ev, "state": "countdown", "t": -COUNTDOWN, "cp": 0, "car": car_key, "mu": start_mu,
 		"tiers": tiers_for(ev, car_key), "drift": DriftScore.new() if ev.kind == "drift_zone" else null, "cps": ev.cps,
@@ -723,6 +729,7 @@ func begin(ev: Dictionary, car_key: String) -> void:
 	if ev.kind == "race" and int(ev.get("rivals", 0)) > 0:
 		var ro := {"grid": String(ev.get("grid", "")), "knockout": bool(ev.get("knockout", false)),
 			"lap_length": float(ev.get("lap_length", 0.0)), "difficulty": String(ev.get("difficulty", "medium")),
+			"difficulty_shift": float(ev.get("difficulty_shift", 0.0)),
 			"profile": _weather_profile(profile(ev, StreetRivals.STEP), start_mu)}
 		if String(ev.get("grid", "")) == "drag":
 			ro["drag_time"] = drag_time(car_key, float(ev.length), grip_of(ev) * start_mu)

@@ -590,12 +590,41 @@ func _check_menus(errors: Array[String], tree: SceneTree) -> void:
 				var r := Rect2((p as Control).global_position, (p as Control).size)
 				if not screen.encloses(r):
 					errors.append("%s: options %s %s runs off the canvas" % [tag, p.name, r])
+		# the Difficulty & Assists page: inside the canvas, no row wider than the page, no control off its sides or
+		# over its neighbour, the fan reward and the step's note in full
+		game._show_difficulty_page("options")
+		await _settle(tree, 3)
+		var dp: Control = game.difficulty_panel
+		var dr := Rect2(dp.global_position, dp.size)
+		if not screen.encloses(dr):
+			errors.append("%s: the difficulty page %s runs off the canvas" % [tag, dr])
+		var dcol: Control = game.difficulty_column
+		var dscroll := dcol.get_parent() as ScrollContainer
+		if dcol.get_combined_minimum_size().x > dscroll.size.x + 1.0:
+			errors.append("%s: the difficulty page needs %d px across, has %d" % [tag, dcol.get_combined_minimum_size().x, dscroll.size.x])
+		for item: Control in game._difficulty_focus_items():
+			var ir := Rect2(item.global_position, item.size)
+			if ir.position.x < dr.position.x - 1.0 or ir.end.x > dr.end.x + 1.0:
+				errors.append("%s: difficulty control %s %s leaves the page %s" % [tag, item.name, ir, dr])
+		for row in dcol.get_children():
+			if row is HBoxContainer:
+				var cells := {}
+				for c in row.get_children():
+					if (c as Control).visible and (c as Control).size.x > 0.0:
+						cells["%s %d" % [c.get_class(), c.get_index()]] = Rect2((c as Control).global_position, (c as Control).size)
+				_no_overlap(errors, tag + " difficulty row %d" % row.get_index(), cells, Vector2(1e6, 1e6)) # (the page scrolls: rows may sit below the fold)
+		var fans: Label = game.difficulty_fans_label
+		if fans.text == "" or fans.get_minimum_size().x > fans.size.x + 1.0:
+			errors.append("%s: the fan reward '%s' does not fit (%d of %d px)" % [tag, fans.text, fans.get_minimum_size().x, fans.size.x])
+		if game.difficulty_step_note.text == "":
+			errors.append("%s: the rival step has no note" % tag)
 		# everything the menus show stays inside the safe zone (and so on the canvas), on every page
-		for page in ["home", "setup", "options", "car", "advanced", "strategy", "repair"]:
+		for page in ["home", "setup", "options", "difficulty", "car", "advanced", "strategy", "repair"]:
 			match page:
 				"home": game._show_home()
 				"setup": game._show_setup_page()
 				"options": game._show_options_page()
+				"difficulty": game._show_difficulty_page("options")
 				"car": game._show_car_page()
 				"advanced": game._show_advanced_page()
 				"strategy": game._show_strategy_page()

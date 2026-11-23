@@ -111,7 +111,13 @@ func _init(path: PackedVector2Array, car_key: String, count: int, seed_value: in
 	knockout = bool(opts.get("knockout", false))
 	lap_length = float(opts.get("lap_length", 0.0))
 	var diff := String(opts.get("difficulty", "medium"))
+	# the player's rival step moves the field off the event's own level (DifficultyProfile.band), never past the
+	# reference driver
+	var shift := float(opts.get("difficulty_shift", 0.0))
 	var band: Vector2 = PACE_BANDS.get(diff, PACE_RANGE)
+	if shift != 0.0:
+		band = DifficultyProfile.band(PACE_BANDS, diff if PACE_BANDS.has(diff) else "medium", shift)
+		band = Vector2(minf(band.x, 0.98), minf(band.y, 1.0))
 	var pc: Array = LiveEvents.PACE.get(car_key, LiveEvents.PACE.stock)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value
@@ -148,6 +154,9 @@ func _init(path: PackedVector2Array, car_key: String, count: int, seed_value: in
 		var dt_ref := float(opts.get("drag_time", 0.0))
 		if dt_ref > 0.0:
 			var db: Vector2 = DRAG_BANDS.get(diff, DRAG_BANDS.medium)
+			if shift != 0.0:
+				db = DifficultyProfile.band(DRAG_BANDS, diff if DRAG_BANDS.has(diff) else "medium", shift)
+				db = Vector2(maxf(db.x, 1.01), maxf(db.y, 1.0))
 			for k in n:
 				var want := dt_ref * (lerpf(db.y, db.x, float(k) / maxf(n - 1, 1)) + rng.randf_range(-0.004, 0.004))
 				_calibrate_drag(rivals[k], want)

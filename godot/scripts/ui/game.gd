@@ -101,6 +101,7 @@ const PAD_KEYS := {
 	"strategy": "✚ choose · change   Ⓐ press   LB RB pages   START race   Ⓑ back",
 	"repair": "✚ ↑ ↓ part   Ⓐ repair   LB RB pages   START continue   Ⓑ back",
 	"options": "✚ ↑ ↓ choose   ← → change   Ⓐ press   Ⓑ back",
+	"difficulty": "✚ ↑ ↓ choose   ← → change   Ⓐ press   Ⓑ back",
 }
 const KEY_KEYS := {
 	"home": "← → browse     Enter select",
@@ -110,6 +111,7 @@ const KEY_KEYS := {
 	"strategy": SETUP_KEYS,
 	"repair": "↑ ↓ part   Enter repair   Space continue   Q E pages   Esc back",
 	"options": "↑ ↓ choose   ← → change   Enter press   Esc back",
+	"difficulty": "↑ ↓ choose   ← → change   Enter press   Esc back",
 }
 const WARP_VALUES := [1, 2, 5, 10, 30, 60] ## time-warp steps (, and . keys)
 const UI_SCALES := [0.85, 1.0, 1.15, 1.3] ## Options → Interface size, on top of the window scaling
@@ -206,6 +208,15 @@ var menu_home_strip: HBoxContainer
 var menu_home_desc: Label
 var menu_home_track: Label
 var options_panel: PanelContainer
+var difficulty_panel: PanelContainer ## Options → DIFFICULTY & ASSISTS (DifficultyProfile)
+var difficulty_column: VBoxContainer
+var difficulty_controls := {} ## the page's pickers and switches by profile key ("step", "preset", "shifting", "line", aids, switches)
+var difficulty_fans_label: Label
+var difficulty_step_note: Label
+var _difficulty_back := "options" ## where the page's BACK (and Esc / B) goes: "options" or the set-up page it came from
+var _profile_syncing := false ## pickers being set from the profile (their handlers must not write it back)
+var setup_profile_note: Label ## the Advanced page's line on what the difficulty profile changes for every race
+var options_difficulty_note: Label ## the Options page's summary of the profile beside its button
 var upscaler_picker: MenuSelector
 var upscale_preset_picker: MenuSelector
 var sharpening_picker: MenuSelector
@@ -480,6 +491,7 @@ func _ready() -> void:
 	_build_repair_page()
 	_build_home_screen()
 	_build_options_page()
+	_build_difficulty_page()
 	_build_hud()
 	_build_results()
 	loading_screen = LOADING_SCREEN.new()
@@ -528,7 +540,7 @@ func _refresh_prompts() -> void:
 		menu_back_button.text = "MAIN MENU (Ⓑ)" if _pad_connected() else "MAIN MENU (Esc)"
 	if is_instance_valid(menu_prompt):
 		menu_prompt.text = _hint(active_menu_page)
-		menu_prompt.visible = active_menu_page in ["repair", "options"] and menu_tint.visible
+		menu_prompt.visible = active_menu_page in ["repair", "options", "difficulty"] and menu_tint.visible
 	if active_menu_page == "home" and is_instance_valid(menu_home_desc):
 		_home_select(home_menu_index, false)
 	if active_menu_page in ["setup", "advanced", "car", "strategy"] and is_instance_valid(setup_hint):
@@ -1009,9 +1021,10 @@ func _build_setup() -> void:
 	_core_row(conditions, "OPPONENTS", opponents_picker)
 	opponents_picker.tooltip_text = "Cars against you. 0 = solo time trial: hot-lap alone against your ghost and lap records"
 	opponents_picker.value_changed.connect(func(_v: float) -> void: _update_opponents_label())
-	difficulty_picker = _make_option(["Easy", "Medium", "Hard", "Alien"])
+	difficulty_picker = _make_option(DifficultyProfile.STEPS)
 	_core_row(conditions, "DIFFICULTY", difficulty_picker)
-	difficulty_picker.selected = 1
+	difficulty_picker.selected = DifficultyProfile.AVERAGE
+	difficulty_picker.tooltip_text = "The rivals for this race. It follows Options → Difficulty & Assists; change it here for this race only"
 	weather_picker = _make_option(["Dry", "Wet", "Snow", "Hail", "Fog", "Variable"])
 	_core_row(conditions, "WEATHER", weather_picker)
 	weather_picker.item_selected.connect(func(_index: int) -> void: _update_information_page())
@@ -1054,12 +1067,28 @@ func _build_setup() -> void:
 	start_hour_picker.tooltip_text = "Time of day at the start; a long race runs on into the evening or the night"
 	var row3 := HBoxContainer.new()
 	row3.add_theme_constant_override("separation", 14)
-	_group(adv_left, "driving", "GEARBOX, AIDS & GRID").add_child(row3)
+	var driving_body := _group(adv_left, "driving", "GEARBOX, AIDS & GRID")
+	driving_body.add_child(row3)
 	setup_driving_row = row3
 	gearbox_picker = _option_field(row3, "TRANSMISSION", ["Automatic", "Manual (E/Q)"])
-	assists_picker = _option_field(row3, "DRIVING AIDS", ["Full assists", "ABS only", "Off"])
-	assists_picker.tooltip_text = "Full assists: ABS, traction and stability control, and help steering and braking for corners. ABS only: just the anti-lock brakes. Off: none"
+	assists_picker = _option_field(row3, "DRIVING AIDS", ["Full assists", "ABS only", "Off", "Custom"])
+	assists_picker.tooltip_text = "Full assists: ABS, traction and stability control, and help steering and braking for corners. ABS only: just the anti-lock brakes. Off: none. Custom: each aid as set on the Difficulty & Assists page"
 	grid_picker = _option_field(row3, "GRID POSITION", ["Pole", "Middle", "Back", "Random"])
+	for picker in [gearbox_picker, assists_picker]:
+		picker.item_selected.connect(func(_i: int) -> void: _setup_aids_changed())
+	var aids_row := HBoxContainer.new()
+	aids_row.add_theme_constant_override("separation", 14)
+	driving_body.add_child(aids_row)
+	var profile_button := _button("DIFFICULTY & ASSISTS  ▸", Color.WHITE)
+	profile_button.name = "DifficultyButton"
+	profile_button.tooltip_text = "Rival difficulty, every driving aid, the racing line, fuel, tyre wear, damage and auto-recover: the defaults for every race"
+	profile_button.pressed.connect(func() -> void: _show_difficulty_page(active_menu_page))
+	aids_row.add_child(profile_button)
+	setup_profile_note = _label("", 12, MUTED)
+	setup_profile_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	setup_profile_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	setup_profile_note.size_flags_stretch_ratio = 2.0
+	aids_row.add_child(setup_profile_note)
 
 	var driver := _group(car_col, "driver", "DRIVER & PAINT")
 	var profile_row := HBoxContainer.new()
@@ -1230,6 +1259,7 @@ func _build_setup() -> void:
 	ai_learning_picker.item_selected.connect(func(_i: int) -> void: _update_ai_memory())
 	quali_picker.item_selected.connect(func(_i: int) -> void: _update_championship_view())
 	_load_race_settings()
+	_load_profile()
 	_update_championship_view()
 	_update_menu_car_summary()
 	_update_driver_summary()
@@ -1365,6 +1395,10 @@ func _update_rules_summary() -> void:
 	var rules: Array[String] = ["TYRES ×%.1f" % wear_picker.value, "FUEL ×%.1f" % fuel_picker.value, crew_picker.get_item_text(crew_picker.selected).to_upper() + " CREW"]
 	if not refuel_toggle.button_pressed:
 		rules.append("NO REFUEL")
+	if not bool(DifficultyProfile.current.fuel):
+		rules.append("NO FUEL USE")
+	if not bool(DifficultyProfile.current.wear):
+		rules.append("NO TYRE WEAR")
 	_set_section_summary("rules", "  ·  ".join(rules))
 
 ## The set-up page's settings in keyboard order: down each column, left to right across a row, then RACE.
@@ -1582,7 +1616,10 @@ func _input(event: InputEvent) -> void:
 			return
 	if key == KEY_ESCAPE or pad == JOY_BUTTON_B or (key == KEY_BACKSPACE and page != "setup"):
 		if not echo:
-			_show_home()
+			if page == "difficulty":
+				_difficulty_go_back()
+			else:
+				_show_home()
 	elif page in MENU_PAGE_IDS and (key in [KEY_Q, KEY_PAGEUP] or pad == JOY_BUTTON_LEFT_SHOULDER):
 		if not echo:
 			_step_menu_page(-1)
@@ -1603,8 +1640,9 @@ func _input(event: InputEvent) -> void:
 				if _servicing():
 					_continue_from_service()
 			_: return
-	elif page in ["setup", "advanced", "car", "strategy", "options"]:
-		var items := _options_focus_items() if page == "options" else _setup_focus_items()
+	elif page in ["setup", "advanced", "car", "strategy", "options", "difficulty"]:
+		var flat := page in ["options", "difficulty"] # one plain list, top to bottom
+		var items := _options_focus_items() if page == "options" else (_difficulty_focus_items() if page == "difficulty" else _setup_focus_items())
 		if items.is_empty():
 			return
 		var at := items.find(owner)
@@ -1620,12 +1658,12 @@ func _input(event: InputEvent) -> void:
 			[_, JOY_BUTTON_A]: pass
 			_: return
 		if at < 0:
-			if page != "options":
+			if not flat:
 				_focus_setup_item(items, _setup_focus_at) # nothing picked yet (or it went away): the first press picks
 			else:
 				items[0].grab_focus()
 		elif dy != 0:
-			if page != "options":
+			if not flat:
 				_focus_setup_item(items, at + dy)
 			else:
 				items[clampi(at + dy, 0, items.size() - 1)].grab_focus()
@@ -1778,13 +1816,15 @@ func _race_laps(track: Track) -> int:
 	return int(laps_picker.value)
 
 ## `weather` is the race's ("dry", "wet", …); empty takes the set-up page's picker.
+## The difficulty profile's fuel and wear switches apply (off: planned with none, and no refuelling).
 func _plan_opts(track: Track, laps: int, wear_mult: float, weather := "") -> Dictionary:
 	if weather == "":
 		weather = ["dry", "wet", "snow", "hail", "fog", "variable"][weather_picker.selected]
+	var fuel_on := bool(DifficultyProfile.current.fuel)
 	return {
 		"track": track, "laps": laps, "wet": 0.85 if weather in ["wet", "snow", "hail"] else (0.15 if weather == "variable" else 0.0),
-		"wear_mult": wear_mult, "fuel_mult": fuel_picker.value,
-		"rules": {"mandatory_stop": mandatory_stop_toggle.button_pressed, "two_compounds": two_compounds_toggle.button_pressed, "refuel": refuel_toggle.button_pressed},
+		"wear_mult": wear_mult if bool(DifficultyProfile.current.wear) else 0.0, "fuel_mult": fuel_picker.value if fuel_on else 0.0,
+		"rules": {"mandatory_stop": mandatory_stop_toggle.button_pressed, "two_compounds": two_compounds_toggle.button_pressed, "refuel": refuel_toggle.button_pressed and fuel_on},
 		"crew": ["pro", "club", "amateur"][crew_picker.selected], "parallel": parallel_toggle.button_pressed,
 	}
 
@@ -1917,6 +1957,9 @@ func _refresh_strategy() -> void:
 		elif not refuel_toggle.button_pressed and Strategy.fuel_need(laps, fpl) > tank:
 			why = "Without refuelling the race needs %.1f L — more than the %d L tank." % [Strategy.fuel_need(laps, fpl), int(tank)]
 		info += "\n⚠ " + why
+	elif DifficultyProfile.alters_strategy(DifficultyProfile.current):
+		info += "\nDifficulty & Assists: %s for every car, and the plans above count on it." % " and ".join(
+			(["no fuel use"] if not bool(DifficultyProfile.current.fuel) else []) + (["no tyre wear"] if not bool(DifficultyProfile.current.wear) else []))
 	elif strategy_options[0].horizon:
 		info += "\nEndurance: the strategist plans the next %d laps and keeps extending the plan (≈ %d stops in all)." % [
 			strategy_options[0].horizon, roundi(float(laps) / strategy_options[0].horizon * strategy_options[0].stops)]
@@ -2216,7 +2259,7 @@ func _forget_ai_memory() -> void:
 func _race_setting_controls() -> Dictionary:
 	return {
 		"track": track_picker, "laps": laps_picker, "format": format_picker, "hours": hours_picker,
-		"start_hour": start_hour_picker, "opponents": opponents_picker, "difficulty": difficulty_picker,
+		"start_hour": start_hour_picker, "opponents": opponents_picker, "rival_step": difficulty_picker,
 		"weather": weather_picker, "gearbox": gearbox_picker, "grid": grid_picker, "quali": quali_picker, "assists": assists_picker,
 		"wear_mult": wear_picker, "fuel_mult": fuel_picker, "mandatory_stop": mandatory_stop_toggle,
 		"two_compounds": two_compounds_toggle, "refuel": refuel_toggle, "collisions": collisions_toggle,
@@ -2517,6 +2560,9 @@ func _load_race_settings() -> void:
 			(control as LineEdit).text = str(v)
 		elif control is ColorPickerButton and v is Color:
 			(control as ColorPickerButton).color = v
+	if not cfg.has_section_key("race", "rival_step") and cfg.has_section_key("race", "difficulty"):
+		# the old Easy / Medium / Hard / Alien picker, as the same field on the seven-step ladder
+		difficulty_picker.select(DifficultyProfile.LEGACY_STEP[clampi(int(cfg.get_value("race", "difficulty")), 0, 3)])
 	_select_format(format_picker.selected) # visibility only: the saved refuel/wear values stay
 	# a free colour saved before the factory palettes lands on the car's nearest paint
 	player_color_picker.color = CarCatalog.palette(_picked_car())[CarCatalog.nearest_paint(_picked_car(), player_color_picker.color)].color
@@ -3392,7 +3438,21 @@ func _build_options_page() -> void:
 	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.follow_focus = true
 	options_column = column
-	_title(column, "OPTIONS", "DISPLAY, GRAPHICS, AUDIO & CO-DRIVER")
+	_title(column, "OPTIONS", "DIFFICULTY, DISPLAY, GRAPHICS, AUDIO & CO-DRIVER")
+	_menu_rule(column)
+	_field_label(column, "DIFFICULTY & ASSISTS")
+	var difficulty_row := HBoxContainer.new()
+	difficulty_row.add_theme_constant_override("separation", 22)
+	column.add_child(difficulty_row)
+	var difficulty_button := _button("DIFFICULTY & ASSISTS  ▸", Color.WHITE)
+	difficulty_button.name = "DifficultyButton"
+	difficulty_button.pressed.connect(func() -> void: _show_difficulty_page("options"))
+	difficulty_row.add_child(difficulty_button)
+	options_difficulty_note = _label("", 14, MUTED)
+	options_difficulty_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	options_difficulty_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	options_difficulty_note.size_flags_stretch_ratio = 2.0
+	difficulty_row.add_child(options_difficulty_note)
 	_menu_rule(column)
 	_field_label(column, "GRAPHICS")
 	var preset_row := HBoxContainer.new()
@@ -3627,7 +3687,7 @@ func _apply_ui_skin() -> void:
 	_lit_caption_color = CmrStyle.recolor(_lit_caption_color)
 	var neon := HudLayout.neon_primary()
 	var is_ps1 := CmrStyle.skin == "ps1"
-	for p in [setup_panel, advanced_panel, car_panel, strategy_panel, options_panel]:
+	for p in [setup_panel, advanced_panel, car_panel, strategy_panel, options_panel, difficulty_panel]:
 		if is_instance_valid(p):
 			p.add_theme_stylebox_override("panel", _menu_panel_style())
 	for p in [pause_panel, result_panel]:
@@ -4208,7 +4268,7 @@ func _show_home() -> void:
 
 ## Hide every front-end page, leaving just the backdrop.
 func _hide_pages() -> void:
-	for page in [menu_home, menu_header, setup_panel, advanced_panel, car_panel, strategy_panel, repair_panel, repair_details, options_panel,
+	for page in [menu_home, menu_header, setup_panel, advanced_panel, car_panel, strategy_panel, repair_panel, repair_details, options_panel, difficulty_panel,
 			circuit_map_frame, circuit_facts, menu_car_preview, menu_car_summary, menu_car_rule, menu_prompt]:
 		if is_instance_valid(page):
 			page.hide()
@@ -4732,7 +4792,9 @@ func _set_up_race() -> void:
 		var season := _season()
 		settings.laps = _season_laps(t_key)
 		settings.opponents = clampi(int(season.opponents), 1, 15)
-		settings.difficulty = ["easy", "medium", "hard", "alien"][clampi(int(season.difficulty), 0, 3)]
+		var rivals := DifficultyProfile.resolve("medium", int(season.rival_step))
+		settings.difficulty = rivals.difficulty
+		settings.difficulty_shift = rivals.shift
 		settings.weather = _season_weather(round_idx)
 		settings.wear_mult = defaults.wear
 		settings.fuel_mult = defaults.get("fuel", 1.0)
@@ -4745,7 +4807,10 @@ func _set_up_race() -> void:
 		settings.format = "laps"
 		settings.weather = stage.weather
 		settings.opponents = stage.opponents
-		settings.difficulty = stage.difficulty
+		# the stage's own (eased) level, moved by the player's rival step (exactly as authored at Average)
+		var rivals := DifficultyProfile.resolve(String(stage.difficulty), int(DifficultyProfile.current.step))
+		settings.difficulty = rivals.difficulty
+		settings.difficulty_shift = rivals.shift
 		settings.start_hour = stage.start_hour
 		settings.wear_mult = stage.get("wear_mult", 2.0)
 		settings.fuel_mult = stage.get("fuel_mult", 1.0)
@@ -4764,12 +4829,14 @@ func _set_up_race() -> void:
 		settings.hours = hours_picker.value
 		settings.start_hour = start_hour_picker.value
 		settings.opponents = 0 if is_time_trial_mode else int(opponents_picker.value)
-		settings.difficulty = ["easy", "medium", "hard", "alien"][difficulty_picker.selected]
+		var rivals := DifficultyProfile.resolve("medium", difficulty_picker.selected)
+		settings.difficulty = rivals.difficulty
+		settings.difficulty_shift = rivals.shift
 		settings.weather = ["dry", "wet", "snow", "hail", "fog", "variable"][weather_picker.selected]
 		settings.wear_mult = wear_picker.value
 		settings.fuel_mult = fuel_picker.value
 
-	settings.gearbox = "manual" if gearbox_picker.selected == 1 else "auto"
+	_apply_race_aids(settings)
 	settings.player_name = player_name_edit.text.strip_edges() if not player_name_edit.text.strip_edges().is_empty() else "You"
 	settings.player_number = int(player_number_picker.value)
 	settings.player_color = player_color_picker.color
@@ -4787,7 +4854,6 @@ func _set_up_race() -> void:
 	settings.ai_learning = "off" if ai_learning_picker.selected == 1 else "on"
 	settings.bot_physics = ["on", "off", "near"][bot_physics_picker.selected]
 	settings.grid = str(CampaignData.get_stage(campaign_stage_index).get("grid", "middle")) if is_campaign_mode else ["pole", "middle", "back", "random"][grid_picker.selected] # a stage sets its own grid
-	settings.assists = ["full", "abs", "off"][assists_picker.selected]
 	settings.mandatory_stop = mandatory_stop_toggle.button_pressed
 	settings.two_compounds = two_compounds_toggle.button_pressed
 	settings.refuel = refuel_toggle.button_pressed
@@ -4810,14 +4876,17 @@ func _set_up_race() -> void:
 	elif is_time_trial_mode:
 		TimeTrial.configure(settings, tt_start_picker.selected == 1)
 		plan = {}
+	# the profile's switches (fuel use, tyre wear, damage, auto-recover) over what the mode set
+	DifficultyProfile.apply_sim(settings, DifficultyProfile.current)
 
 	await _open_loading_screen(settings, quali_run)
 	if quali_run or is_time_trial_mode or is_rally_mode:
 		plan = {} # the session builds its own one-run plan
-	elif is_championship_mode or is_campaign_mode or settings.car_class != "stock":
+	elif is_championship_mode or is_campaign_mode or settings.car_class != "stock" or DifficultyProfile.alters_strategy(DifficultyProfile.current):
 		# every round is planned by the strategist for that circuit's race length, tyre wear and fuel use
 		var opts := _plan_opts(Race.get_track(settings.track), settings.laps, settings.wear_mult, settings.weather if is_campaign_mode or is_championship_mode else "")
 		opts.fuel_mult = settings.fuel_mult
+		opts.rules.refuel = settings.refuel
 		var options: Array = _models_for(settings.car_class).strategy.plan(opts)
 		plan = options[0] if options.size() else null
 
@@ -4855,6 +4924,7 @@ func _set_up_race() -> void:
 	await _loading_progress(0.6)
 	world_view.mods = race.mods
 	world_view.one_make = is_championship_mode and settings.car_class == "stock"
+	world_view.set_racing_line_mode(String(DifficultyProfile.current.line))
 	world_view.set_race(race)
 	lap_records = LapRecords.new(race)
 	lap_ghost.start(world_view, lap_records)
@@ -5483,8 +5553,11 @@ func _enter_open_world(spawn) -> void:
 	active_menu_page = "world"
 	get_viewport().gui_release_focus()
 	await open_world.open(spawn, {
-		"gearbox": "manual" if gearbox_picker.selected == 1 else "auto",
-		"assists": ["full", "abs", "off"][assists_picker.selected],
+		# the campaign drives on the player's profile (the set-up page's pickers write it in campaign mode)
+		"gearbox": String(DifficultyProfile.current.shifting),
+		"assists": DifficultyProfile.tier_name(DifficultyProfile.current),
+		"aids": DifficultyProfile.aids(DifficultyProfile.current),
+		"no_damage": String(DifficultyProfile.current.damage) == "off",
 		"paint": player_color_picker.color,
 		"number": int(player_number_picker.value),
 		"retro_material": retro_pipeline.material if retro_pipeline else null,
@@ -5732,6 +5805,7 @@ func _update_mode_view() -> void:
 	_update_information_page()
 	_update_menu_car_summary()
 	_update_ai_memory()
+	_update_profile_notes()
 
 func _update_championship_view() -> void:
 	_show_fold("season", is_championship_mode)
@@ -5746,7 +5820,7 @@ func _update_championship_view() -> void:
 		var points := "-".join(_points_table().map(func(x): return str(x)))
 		var season := _season()
 		var info := "%d round%s · points %s · %d opponents (%s) · %s · damage %s" % [_calendar().size(), "" if _calendar().size() == 1 else "s",
-			points, int(season.opponents), ["Easy", "Medium", "Hard", "Alien"][clampi(int(season.difficulty), 0, 3)],
+			points, int(season.opponents), DifficultyProfile.STEPS[clampi(int(season.rival_step), 0, DifficultyProfile.STEPS.size() - 1)],
 			str(SEASON_WEATHERS[clampi(int(season.weather), 0, SEASON_WEATHERS.size() - 1)]).to_lower(),
 			str(SEASON_DAMAGE[clampi(int(season.damage), 0, SEASON_DAMAGE.size() - 1)].name).to_lower()]
 		var nxt := _next_round()
@@ -5808,7 +5882,8 @@ func _render_champ_side(done: int) -> void:
 # ---------------- the championship season's set-up (champ_data.config) ----------------
 func _default_season() -> Dictionary:
 	return {"preset": 0, "custom": CHAMPIONSHIP_CALENDAR.duplicate(), "calendar": CHAMPIONSHIP_CALENDAR.duplicate(), "order": 0,
-		"length": 1, "opponents": 12, "difficulty": 1, "weather": 0, "points": 0, "quali": 0, "damage": 1, "seed": randi() % 1000000}
+		"length": 1, "opponents": 12, "difficulty": 1,
+		"rival_step": int(DifficultyProfile.current.step), "weather": 0, "points": 0, "quali": 0, "damage": 1, "seed": randi() % 1000000}
 
 ## The season's settings, filled in with the defaults (a season saved before they existed keeps the old rules:
 ## the classic calendar, F1 points, realistic damage).
@@ -5817,6 +5892,8 @@ func _season() -> Dictionary:
 	if not (c is Dictionary):
 		c = {}
 	var d := _default_season()
+	if c.has("difficulty") and not c.has("rival_step"):
+		c["rival_step"] = DifficultyProfile.LEGACY_STEP[clampi(int(c.difficulty), 0, 3)] # a season saved on the 4-step picker
 	for k in d:
 		if not c.has(k):
 			c[k] = d[k]
@@ -5882,7 +5959,8 @@ func _build_season_box(parent: VBoxContainer, cal: VBoxContainer) -> void:
 		counts.append(str(i))
 	season_opponents_picker = _option_field(row2, "OPPONENTS", counts)
 	season_opponents_picker.tooltip_text = "Cars against you in every round"
-	season_difficulty_picker = _option_field(row2, "DIFFICULTY", ["Easy", "Medium", "Hard", "Alien"])
+	season_difficulty_picker = _option_field(row2, "DIFFICULTY", DifficultyProfile.STEPS)
+	season_difficulty_picker.tooltip_text = "The rivals all season: a new season starts on your Difficulty & Assists level"
 	season_weather_picker = _option_field(row2, "WEATHER", SEASON_WEATHERS)
 	season_weather_picker.tooltip_text = "One weather for the whole season, or a roll of the dice for every round (mostly dry)"
 	var row3 := HBoxContainer.new()
@@ -5926,7 +6004,8 @@ func _season_changed() -> void:
 	c.order = order
 	c.length = season_length_picker.selected
 	c.opponents = season_opponents_picker.selected + 1
-	c.difficulty = season_difficulty_picker.selected
+	c.rival_step = season_difficulty_picker.selected
+	c.difficulty = DifficultyProfile.LEVELS.find(DifficultyProfile.resolve("medium", int(c.rival_step)).difficulty)
 	c.weather = season_weather_picker.selected
 	c.points = season_points_picker.selected
 	c.quali = quali_picker.selected
@@ -5984,7 +6063,7 @@ func _sync_season_view() -> void:
 	season_order_picker.select(clampi(int(c.order), 0, 1))
 	season_length_picker.select(clampi(int(c.length), 0, SEASON_LENGTHS.size() - 1))
 	season_opponents_picker.select(clampi(int(c.opponents) - 1, 0, 14))
-	season_difficulty_picker.select(clampi(int(c.difficulty), 0, 3))
+	season_difficulty_picker.select(clampi(int(c.rival_step), 0, DifficultyProfile.STEPS.size() - 1))
 	season_weather_picker.select(clampi(int(c.weather), 0, SEASON_WEATHERS.size() - 1))
 	season_points_picker.select(clampi(int(c.points), 0, SEASON_POINTS.size() - 1))
 	quali_picker.select(clampi(int(c.quali), 0, 2))
@@ -6021,6 +6100,10 @@ func _focus_page() -> void:
 			var items := _options_focus_items()
 			if not items.is_empty():
 				items[0].grab_focus()
+		"difficulty":
+			var items := _difficulty_focus_items()
+			if not items.is_empty():
+				items[0].grab_focus()
 		_:
 			get_viewport().gui_release_focus()
 
@@ -6029,6 +6112,280 @@ func _options_focus_items() -> Array[Control]:
 	if is_instance_valid(options_column):
 		_collect_focusable(options_column, out)
 	return out
+
+# ---------------- Options → DIFFICULTY & ASSISTS (DifficultyProfile) ----------------
+## The rival step with its fan reward, the aid presets and each aid, shifting and the racing line, and the
+## accessibility switches. Every change is saved at once; Quick Race's and a new championship's pickers follow it
+## (they can still be changed for one race), the campaign and the open world drive on it as it is.
+func _build_difficulty_page() -> void:
+	difficulty_panel = _panel(Vector2.ZERO)
+	difficulty_panel.name = "DifficultyPage"
+	difficulty_panel.anchor_left = 0.19
+	difficulty_panel.anchor_right = 0.81
+	difficulty_panel.anchor_top = 0.12
+	difficulty_panel.anchor_bottom = 0.93
+	menu_safe_frame.add_child(difficulty_panel)
+	var scroll := ScrollContainer.new()
+	scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.follow_focus = true
+	difficulty_panel.add_child(scroll)
+	var column := _column(scroll, 12)
+	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	difficulty_column = column
+	_title(column, "DIFFICULTY & ASSISTS", "RIVALS, DRIVING AIDS AND SIMULATION FOR EVERY EVENT")
+	_menu_rule(column)
+	_field_label(column, "RIVALS")
+	var rival_row := _hrow(column)
+	var step := _option_field(rival_row, "RIVAL DIFFICULTY", DifficultyProfile.STEPS)
+	step.tooltip_text = "Moves every event's rivals from the level it was designed for: Average races each event exactly as designed"
+	difficulty_controls["step"] = step
+	var reward_col := VBoxContainer.new()
+	reward_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rival_row.add_child(reward_col)
+	_field_label(reward_col, "FAN REWARD")
+	difficulty_fans_label = _label("", 22, CmrStyle.AMBER)
+	difficulty_fans_label.add_theme_font_override("font", HudLayout.italic_font(900, -0.12))
+	reward_col.add_child(difficulty_fans_label)
+	_grid_spacers(rival_row, 1)
+	difficulty_step_note = _label("", 14, MUTED)
+	difficulty_step_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	column.add_child(difficulty_step_note)
+	_menu_rule(column)
+	_field_label(column, "DRIVING AIDS")
+	var preset_row := _hrow(column)
+	var preset := _option_field(preset_row, "PRESET", DifficultyProfile.PRESET_NAMES)
+	preset.tooltip_text = "Beginner: every aid and the full racing line. Default: ABS and traction control. Pro: no aids, manual gears, no line"
+	difficulty_controls["preset"] = preset
+	difficulty_controls["shifting"] = _option_field(preset_row, "SHIFTING", ["Automatic", "Manual (E/Q)"])
+	difficulty_controls["line"] = _option_field(preset_row, "RACING LINE", DifficultyProfile.LINE_NAMES)
+	(difficulty_controls.line as Control).tooltip_text = "The line drawn on the road: all of it, only the braking zones, or none (L still shows or hides it in a race)"
+	var aid_row := _hrow(column)
+	for k in ["abs", "tc", "esc"]:
+		difficulty_controls[k] = _check_field(aid_row, DifficultyProfile.AID_NAMES[k], true)
+	var aid_row2 := _hrow(column)
+	for k in ["steer", "brake"]:
+		difficulty_controls[k] = _check_field(aid_row2, DifficultyProfile.AID_NAMES[k], true)
+	_grid_spacers(aid_row2, 1)
+	(difficulty_controls.abs as Control).tooltip_text = "The brakes never lock: full pedal still steers"
+	(difficulty_controls.tc as Control).tooltip_text = "Trims the throttle when the driven wheels spin"
+	(difficulty_controls.esc as Control).tooltip_text = "Brakes single wheels to stop a slide, and helps catch one"
+	(difficulty_controls.steer as Control).tooltip_text = "Holds a digital key's full lock to what the corner needs"
+	(difficulty_controls.brake as Control).tooltip_text = "Brakes for a corner you arrive at too fast"
+	var aid_note := _label("ABS, traction and stability control are the whole field's, so no rival runs an aid you switched off. Each aid off pays %d%% more fans." % roundi(DifficultyProfile.AID_FANS * 100.0), 14, MUTED)
+	aid_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	column.add_child(aid_note)
+	_menu_rule(column)
+	_field_label(column, "SIMULATION & ACCESSIBILITY")
+	var sim_row := _hrow(column)
+	difficulty_controls["fuel"] = _check_field(sim_row, "Fuel use", true)
+	difficulty_controls["wear"] = _check_field(sim_row, "Tyre wear", true)
+	difficulty_controls["recover"] = _check_field(sim_row, "Auto-recover", true)
+	(difficulty_controls.fuel as Control).tooltip_text = "Off: no car burns fuel and nobody refuels; pit stops are for tyres only"
+	(difficulty_controls.wear as Control).tooltip_text = "Off: tyres never wear out, for every car"
+	(difficulty_controls.recover as Control).tooltip_text = "Puts your car back on the track when it is stuck off it"
+	var dmg_row := _hrow(column)
+	var damage := _option_field(dmg_row, "DAMAGE", DifficultyProfile.DAMAGE_NAMES)
+	damage.tooltip_text = "Event rules: as each event has it (rally stages mechanical, circuits cosmetic). Off: not even a dent. Cosmetic only: dents, never slowed or retired. Full mechanical: every race, for every car"
+	difficulty_controls["damage"] = damage
+	var sim_note := _label("Fuel, tyre wear and damage apply to the whole field. Switching them off never costs fans.", 14, MUTED)
+	sim_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	sim_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sim_note.size_flags_stretch_ratio = 2.0
+	dmg_row.add_child(sim_note)
+	_menu_rule(column)
+	var button_row := _hrow(column)
+	var reset := _button("RESET TO DEFAULTS", Color.WHITE)
+	reset.name = "DifficultyReset"
+	reset.pressed.connect(func() -> void: _set_profile(DifficultyProfile.defaults()))
+	button_row.add_child(reset)
+	var back := _button("BACK", ACCENT)
+	back.name = "DifficultyBack"
+	back.pressed.connect(_difficulty_go_back)
+	button_row.add_child(back)
+	for key in difficulty_controls:
+		var c: Control = difficulty_controls[key]
+		if c is MenuSelector:
+			(c as MenuSelector).item_selected.connect(func(_i: int) -> void: _on_difficulty_changed(key))
+		elif c is CheckButton:
+			(c as CheckButton).toggled.connect(func(_on: bool) -> void: _on_difficulty_changed(key))
+	difficulty_panel.hide()
+	_sync_difficulty_page()
+
+func _hrow(parent: Control, separation := 22) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", separation)
+	parent.add_child(row)
+	return row
+
+## from: the page BACK returns to ("options", or the set-up page the button was on).
+func _show_difficulty_page(from := "options") -> void:
+	_difficulty_back = from
+	active_menu_page = "difficulty"
+	_hide_pages()
+	difficulty_panel.show()
+	menu_tint.color = CmrStyle.TINT_OPTIONS
+	_sync_difficulty_page()
+	_refresh_prompts()
+	_focus_page.call_deferred()
+
+func _difficulty_go_back() -> void:
+	match _difficulty_back:
+		"options":
+			_show_options_page()
+		"advanced":
+			_show_advanced_page()
+		"setup", "car", "strategy":
+			_show_setup_page()
+		_:
+			_show_home()
+
+func _difficulty_focus_items() -> Array[Control]:
+	var out: Array[Control] = []
+	if is_instance_valid(difficulty_column):
+		_collect_focusable(difficulty_column, out)
+	return out
+
+## A control on the page was changed: the profile takes it (a preset puts its aids, shifting and line on).
+func _on_difficulty_changed(key: String) -> void:
+	if _profile_syncing:
+		return
+	var p := DifficultyProfile.current.duplicate()
+	var c: Control = difficulty_controls[key]
+	match key:
+		"step":
+			p.step = (c as MenuSelector).selected
+		"preset":
+			var i := (c as MenuSelector).selected
+			if i < 0 or i >= DifficultyProfile.PRESET_KEYS.size():
+				_sync_difficulty_page() # Custom is what a changed aid makes, not something to pick
+				return
+			p = DifficultyProfile.with_preset(p, DifficultyProfile.PRESET_KEYS[i])
+		"shifting":
+			p.shifting = "manual" if (c as MenuSelector).selected == 1 else "auto"
+		"line":
+			p.line = DifficultyProfile.LINE_MODES[clampi((c as MenuSelector).selected, 0, 2)]
+		"damage":
+			p.damage = DifficultyProfile.DAMAGE_MODES[clampi((c as MenuSelector).selected, 0, 3)]
+		_:
+			p[key] = (c as CheckButton).button_pressed
+	_set_profile(p)
+
+## Makes p the player's profile: saved, shown, and the set-up page's pickers moved to it.
+func _set_profile(p: Dictionary) -> void:
+	DifficultyProfile.current = DifficultyProfile.clean(p)
+	DifficultyProfile.save_profile()
+	_sync_difficulty_page()
+	_sync_pickers_from_profile()
+
+func _sync_difficulty_page() -> void:
+	if difficulty_controls.is_empty():
+		return
+	var p := DifficultyProfile.current
+	_profile_syncing = true
+	(difficulty_controls.step as MenuSelector).select(int(p.step))
+	(difficulty_controls.preset as MenuSelector).select(DifficultyProfile.preset_index(p))
+	(difficulty_controls.shifting as MenuSelector).select(1 if String(p.shifting) == "manual" else 0)
+	(difficulty_controls.line as MenuSelector).select(maxi(DifficultyProfile.LINE_MODES.find(String(p.line)), 0))
+	(difficulty_controls.damage as MenuSelector).select(maxi(DifficultyProfile.DAMAGE_MODES.find(String(p.damage)), 0))
+	for k in DifficultyProfile.AID_KEYS + ["fuel", "wear", "recover"]:
+		(difficulty_controls[k] as CheckButton).set_pressed_no_signal(bool(p[k]))
+	_profile_syncing = false
+	var m := DifficultyProfile.fan_multiplier(p)
+	difficulty_fans_label.text = "×%.2f  %s" % [m, DifficultyProfile.fan_text(p).to_upper()]
+	var q := DifficultyProfile.resolve("medium", int(p.step))
+	var quick := String(q.difficulty).capitalize()
+	if float(q.level) < 0.0:
+		quick = "under Easy"
+	elif absf(float(q.shift)) > 0.01:
+		var up := float(q.shift) > 0.0
+		var other: String = DifficultyProfile.LEVELS[clampi(DifficultyProfile.LEVELS.find(String(q.difficulty)) + (1 if up else -1), 0, 3)]
+		quick = "between %s and %s" % ([quick, other.capitalize()] if up else [other.capitalize(), quick])
+	difficulty_step_note.text = "%s Quick Race and new championships: rivals %s. Campaign stages, rallies, missions and live events move from their own level the same way; drift targets scale with it." % [
+		DifficultyProfile.STEP_NOTES[int(p.step)], quick]
+	_update_profile_notes()
+
+## Quick Race's DIFFICULTY, TRANSMISSION and DRIVING AIDS (and an unstarted championship's DIFFICULTY) to the profile.
+func _sync_pickers_from_profile() -> void:
+	if not is_instance_valid(difficulty_picker):
+		return
+	var p := DifficultyProfile.current
+	_profile_syncing = true
+	difficulty_picker.select(int(p.step))
+	gearbox_picker.select(1 if String(p.shifting) == "manual" else 0)
+	assists_picker.select(DifficultyProfile.tier_index(p))
+	_profile_syncing = false
+	if is_instance_valid(season_difficulty_picker) and not _season_locked():
+		var c := _season()
+		c.rival_step = int(p.step)
+		c.difficulty = DifficultyProfile.LEVELS.find(DifficultyProfile.resolve("medium", int(p.step)).difficulty)
+		_save_championship()
+		_sync_season_view()
+		_update_championship_view()
+	_save_race_settings()
+	_queue_strategy_refresh()
+	_update_profile_notes()
+
+## The profile at start: difficulty.cfg, or for a save from before it the set-up page's own aids and gearbox (so
+## nothing changes). A dev tool or test (the sandbox) without its own file starts on the defaults.
+func _load_profile() -> void:
+	if not DifficultyProfile.load_profile():
+		DifficultyProfile.current = DifficultyProfile.defaults() if SaveData.sandboxed() \
+			else DifficultyProfile.from_setup(assists_picker.selected, gearbox_picker.selected)
+	_sync_difficulty_page()
+	_update_profile_notes()
+
+## A race's aids and gearbox: the campaign drives on the profile; Quick Race, Rally, Time Trial and championships on
+## the set-up page's pickers (which follow the profile; Custom takes each aid from it).
+func _apply_race_aids(settings: RaceSettings) -> void:
+	var p := DifficultyProfile.current
+	var tier := DifficultyProfile.tier_index(p) if is_campaign_mode else assists_picker.selected
+	if tier >= DifficultyProfile.TIERS.size():
+		settings.assists = DifficultyProfile.tier_name(p)
+		settings.aids = DifficultyProfile.aids(p)
+	else:
+		settings.assists = DifficultyProfile.TIERS[tier]
+		settings.aids = {}
+	if is_campaign_mode:
+		settings.gearbox = String(p.shifting)
+	else:
+		settings.gearbox = "manual" if gearbox_picker.selected == 1 else "auto"
+
+## TRANSMISSION or DRIVING AIDS changed on the set-up page: in the campaign that is the profile itself.
+func _setup_aids_changed() -> void:
+	if _profile_syncing or _loading_settings or not is_campaign_mode:
+		_update_profile_notes()
+		return
+	var p := DifficultyProfile.current.duplicate()
+	p.shifting = "manual" if gearbox_picker.selected == 1 else "auto"
+	if assists_picker.selected < DifficultyProfile.TIERS.size():
+		var tier: Dictionary = DifficultyProfile.TIER_AIDS[DifficultyProfile.TIERS[assists_picker.selected]]
+		for k in tier:
+			p[k] = tier[k]
+	_set_profile(p)
+
+## "Average rivals · Beginner aids · no fuel use · Standard fans"
+func _profile_summary() -> String:
+	var p := DifficultyProfile.current
+	var parts := PackedStringArray(["%s rivals" % DifficultyProfile.STEPS[int(p.step)], "%s aids" % DifficultyProfile.PRESET_NAMES[DifficultyProfile.preset_index(p)]])
+	if not bool(p.fuel):
+		parts.append("no fuel use")
+	if not bool(p.wear):
+		parts.append("no tyre wear")
+	if String(p.damage) != "event":
+		parts.append("damage %s" % String(DifficultyProfile.DAMAGE_NAMES[DifficultyProfile.DAMAGE_MODES.find(String(p.damage))]).to_lower())
+	if not bool(p.recover):
+		parts.append("no auto-recover")
+	parts.append(DifficultyProfile.fan_text(p).to_lower() if DifficultyProfile.fan_multiplier(p) != 1.0 else "standard fans")
+	return " · ".join(parts)
+
+func _update_profile_notes() -> void:
+	var text := _profile_summary()
+	if is_instance_valid(options_difficulty_note):
+		options_difficulty_note.text = "Now: %s." % text
+	if is_instance_valid(setup_profile_note):
+		setup_profile_note.text = "%s. %s" % [text, "The campaign drives on these." if is_campaign_mode \
+			else "The pickers above start from it; change them for one race."]
 
 # ---------------- the car between events: damage carried over, and the service area ----------------
 ## The car carried to the next event ({parts, pull, used, serviced}): the championship's (unless its damage
@@ -6161,9 +6518,12 @@ func _unhandled_key_input(event: InputEvent) -> void:
 					get_viewport().set_input_as_handled()
 					return
 		else:
-			if active_menu_page == "options":
+			if active_menu_page in ["options", "difficulty"]:
 				if event.keycode == KEY_ESCAPE or event.keycode == KEY_BACKSPACE:
-					_show_home()
+					if active_menu_page == "difficulty":
+						_difficulty_go_back()
+					else:
+						_show_home()
 					get_viewport().set_input_as_handled()
 				return
 			if active_menu_page in ["setup", "advanced", "car", "strategy"] and event.keycode not in [KEY_ESCAPE, KEY_BACKSPACE]:
@@ -6494,7 +6854,7 @@ func _rally() -> RallyEvent:
 	return rally_event
 
 func _new_rally(key: String) -> void:
-	rally_event = RallyEvent.new(key)
+	rally_event = RallyEvent.new(key, -1, "", DifficultyProfile.event_shift()) # the crews at the player's rival step
 	rally_car = {}
 	_rally_recorded = null
 	_save_rally()

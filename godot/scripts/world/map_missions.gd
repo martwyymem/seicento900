@@ -167,6 +167,11 @@ static func rally_times(ev: Dictionary, car_key: String, seed_value: int, grips 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value
 	var band: Vector2 = RALLY_PACE.get(String(ev.get("difficulty", "medium")), RALLY_PACE.medium)
+	var shift := float(ev.get("difficulty_shift", 0.0)) # the player's rival step (LiveEvents.begin)
+	if shift != 0.0:
+		var d := String(ev.get("difficulty", "medium"))
+		band = DifficultyProfile.band(RALLY_PACE, d if RALLY_PACE.has(d) else "medium", shift)
+		band = Vector2(maxf(band.x, 1.0), maxf(band.y, 1.04))
 	var out := []
 	var n := int(ev.rivals)
 	for k in n:

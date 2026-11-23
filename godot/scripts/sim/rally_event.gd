@@ -17,6 +17,7 @@ var key := ""
 var def: Dictionary = {}
 var seed := 0
 var difficulty := "medium"
+var difficulty_shift := 0.0 ## levels the crews are moved from `difficulty` (the player's rival step when the rally began)
 var player_name := "You"
 var player_number := 9
 var player_color := Color("#b3121d")
@@ -29,7 +30,7 @@ var parts := {} ## the car's damage carried into the next stage (Service.snapsho
 var pull := 0.0 ## Service.pull_rate, so the steering pull keeps its side
 var _pending: Array = [] ## the rivals' runs on the stage being driven
 
-func _init(event_key := "", seed_ := -1, difficulty_ := "") -> void:
+func _init(event_key := "", seed_ := -1, difficulty_ := "", shift := 0.0) -> void:
 	if event_key == "":
 		return
 	key = event_key
@@ -37,7 +38,8 @@ func _init(event_key := "", seed_ := -1, difficulty_ := "") -> void:
 	assert(not def.is_empty(), "unknown rally event %s" % event_key)
 	seed = seed_ if seed_ >= 0 else randi() & 0x7fffff
 	difficulty = difficulty_ if difficulty_ != "" else def.get("difficulty", "medium")
-	rivals = Rally.make_rivals(difficulty, seed)
+	difficulty_shift = shift
+	rivals = Rally.make_rivals(difficulty, seed, Rally.RIVALS, shift)
 
 func stage_count() -> int:
 	return def.get("stages", []).size()
@@ -197,12 +199,12 @@ static func _rank(rows: Array) -> Array:
 
 # ---------------- saving ----------------
 func to_dict() -> Dictionary:
-	return {"key": key, "seed": seed, "difficulty": difficulty, "stage_index": stage_index, "results": results,
+	return {"key": key, "seed": seed, "difficulty": difficulty, "difficulty_shift": difficulty_shift, "stage_index": stage_index, "results": results,
 		"service_penalty": service_penalty, "service_log": service_log, "parts": parts, "pull": pull,
 		"player": {"name": player_name, "number": player_number, "color": player_color.to_html()}}
 
 static func from_dict(d: Dictionary) -> RallyEvent:
-	var ev := RallyEvent.new(str(d.get("key", "")), int(d.get("seed", 0)), str(d.get("difficulty", "")))
+	var ev := RallyEvent.new(str(d.get("key", "")), int(d.get("seed", 0)), str(d.get("difficulty", "")), float(d.get("difficulty_shift", 0.0)))
 	ev.stage_index = int(d.get("stage_index", 0))
 	ev.results = d.get("results", [])
 	# JSON hands numbers back as floats and keeps nulls: the rows are read with float()/int() throughout

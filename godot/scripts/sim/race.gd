@@ -215,6 +215,14 @@ var hear_impacts := false
 const IMPACT_STRIDE := 6
 
 var _env := Physics.Env.new()
+var diff_params: Dictionary = {} ## the field's Race.DIFFICULTY row (moved by s.difficulty_shift: DifficultyProfile.race_params)
+## the driving aids, read once from the settings (RaceSettings.aid): ABS, traction and stability control are the
+## whole field's, steering and braking assist the player's
+var aid_abs := true
+var aid_tc := true
+var aid_esc := true
+var aid_steer := true
+var aid_brake := true
 var _ctl := Physics.Controls.new()
 var _uturn_ctl := Physics.Controls.new()
 var _surf_car: RaceCar
@@ -253,6 +261,11 @@ func _init(settings: RaceSettings, player_plan = null, seed_ := -1, models := {}
 	_setup_cars[_setup_key(CarSetup.stock())] = [car_model, phys]
 	_surface_fn = func(x: float, y: float) -> int: return surface_at(_surf_car, x, y)
 	s = settings
+	aid_abs = settings.aid("abs")
+	aid_tc = settings.aid("tc")
+	aid_esc = settings.aid("esc")
+	aid_steer = settings.aid("steer")
+	aid_brake = settings.aid("brake")
 	if settings.surface == "gravel" or settings.surface == "dirt":
 		road_surf = Physics.SURF_GRAVEL_ROAD if settings.surface == "gravel" else Physics.SURF_DIRT
 		_steer_k = Physics.SURF_STEER[road_surf]
@@ -290,6 +303,10 @@ func _init(settings: RaceSettings, player_plan = null, seed_ := -1, models := {}
 	brain = Brain.new(self, not settings.demo) if settings.ai_learning != "off" and not settings.qualifying else null
 	build_field(player_plan)
 	mechanical_damage = settings.mechanical_damage or settings.mode == "rally"
+	if settings.damage_mode in ["off", "cosmetic"]:
+		mechanical_damage = false # the player's profile: never slowed or retired by damage, a rally stage too
+	elif settings.damage_mode == "full":
+		mechanical_damage = true
 	rc = RaceControl.new(self) if settings.race_control and not settings.demo and not settings.qualifying else null
 	if settings.mode == "rally":
 		stage = Rally.Stage.new(self)
@@ -443,7 +460,8 @@ func plan_grip(car: RaceCar) -> float:
 	return g
 
 func build_field(player_plan) -> void:
-	var diff: Dictionary = DIFFICULTY[s.difficulty]
+	var diff: Dictionary = DifficultyProfile.race_params(s.difficulty, s.difficulty_shift)
+	diff_params = diff
 	# a rally stage or a time trial has no race to plan (and no field): the player gets the one-stint fallback
 	var options: Array = strategy.plan(plan_opts({"diverse": true})) if s.mode == "race" else []
 	var wild := _wild_pool(options)
@@ -615,7 +633,7 @@ func step(dt: float, input: PlayerInput) -> void:
 			if car.is_player:
 				if s.auto_rejoin:
 					player_rejoin(car, dt)
-				var ab := brake_assist(car) if s.brake_assist and s.assists == "full" else 0.0
+				var ab := brake_assist(car) if aid_brake else 0.0
 				car.brake = input.brake
 				step_free(car, dt, input.throttle * (1.0 - ab), maxf(input.brake, ab), input.steer, input)
 			else:
@@ -1878,11 +1896,10 @@ func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float,
 	var grade := G * tr.sample(tr.GRADE, car.s)
 	var tx := tr.sample(tr.TX, car.s)
 	var ty := tr.sample(tr.TY, car.s)
-	# bots run the same driving-aid setting the player chose — no free assist the player didn't pick
-	var assists := s.assists
+	# bots run the same driving aids the player chose — no free assist the player didn't pick
 	var drag_mul := slipstream(car, dt) if car.is_player else car.slip_drag
 	var mu := grip(car)
-	var steer := steer_assist(car, steer_in, plan_grip(car) if road_surf != Physics.SURF_TRACK else mu, assists) if car.is_player else steer_in
+	var steer := steer_assist(car, steer_in, plan_grip(car) if road_surf != Physics.SURF_TRACK else mu, aid_steer) if car.is_player else steer_in
 	var env := _env
 	env.mu = mu
 	env.mass = mass
@@ -1918,15 +1935,15 @@ func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float,
 	# the fuel mix: a lean map gives the engine less to work with
 	env.power = car.mix_power
 	env.drag_mul = drag_mul
-	env.abs_on = assists != "off"
-	env.tc_on = assists == "full"
-	env.esc_on = assists == "full"
+	env.abs_on = aid_abs
+	env.tc_on = aid_tc
+	env.esc_on = aid_esc
 	_ctl.throttle = thr
 	_ctl.brake = brk
 	_ctl.steer = steer
 	_ctl.handbrake = input.handbrake if input and car.is_player else 0.0
 	# the car helps the player hold a slide, as far as the driving aids allow
-	env.drift_assist = 0.0 if not car.is_player else (DRIFT_ASSIST_FULL if assists == "full" else (DRIFT_ASSIST_ABS if assists == "abs" else 0.0))
+	env.drift_assist = 0.0 if not car.is_player else (DRIFT_ASSIST_FULL if aid_esc else (DRIFT_ASSIST_ABS if aid_abs else 0.0))
 	env.rear_grip = 1.0
 	# the player's drift handling (Physics.DH_*), not while a barrier is shoving the car; the AI keeps its own physics
 	env.drift_handling = Physics.player_drift_handling if car.is_player and clock - _player_wall_t > Physics.DH_CONTACT_HOLD else 0.0
@@ -1982,8 +1999,8 @@ func auto_shift(car: RaceCar, vF: float, thr: float, brk: float) -> void:
 ## wants and throw the car into a slide the bots would never suffer for the same corner. It only caps
 ## steering that's already pointed the way the line wants — an opposite-lock correction, a deliberate
 ## drift, anything that isn't "turning the way the corner goes" is left alone.
-func steer_assist(car: RaceCar, raw: float, mu: float, assists: String) -> float:
-	if assists != "full" or absf(raw) < 1e-3:
+func steer_assist(car: RaceCar, raw: float, mu: float, on: bool) -> float:
+	if not on or absf(raw) < 1e-3:
 		return raw
 	var ideal := Driver.line_steer(car.physics, track, car, mu, grip(car) if road_surf != Physics.SURF_TRACK else -1.0, _steer_k)
 	if signf(raw) != signf(ideal):
@@ -2460,7 +2477,7 @@ func kick(car: RaceCar, ix: float, iy: float, rx: float, ry: float) -> void:
 ## clear ease off a fraction, bots that have fallen behind push a little harder. Small and slow enough
 ## that it never overturns a real pace difference — it only takes the sting out of a single mistake.
 func rubber_band(dt: float) -> void:
-	var band: float = DIFFICULTY[s.difficulty].band
+	var band: float = float(diff_params.get("band", 0.0))
 	var p := player
 	if not band or phase != "racing" or p.dnf:
 		return

@@ -242,6 +242,7 @@ var _crowd_material_track: Track
 ## Racing line assist
 var racing_line_node: MeshInstance3D
 var show_racing_line := true
+var racing_line_mode := "full" ## DifficultyProfile.LINE_MODES: full, braking (only the braking zones drawn), off
 var _racing_line_key := "" ## which car's speeds the racing line was painted from ("" = the stock reference)
 
 ## Night headlight beams and the per-frame nearest-car ranking that assigns them (reused, no allocation)
@@ -384,7 +385,7 @@ func set_track(value: Track) -> void:
 	_skid_instance = null
 	_atmos_key = Vector3(-1.0, -1.0, -1.0) # the new materials pick up the current weather
 
-	_racing_line_key = "" # _build_track paints it from the stock reference
+	_racing_line_key = ":" + racing_line_mode # _build_track paints it from the stock reference
 	_build_track()
 	_reset_skids()
 	position_overview()
@@ -1235,6 +1236,14 @@ func _update_beams() -> void:
 		beam.look_at_from_position(from, visual.position + fwd * 26.0 - Vector3.UP * 0.4, Vector3.UP)
 		beam.light_energy = 24.0 * level * Service.lamp(_rank_cars[i], race.clock) # damaged electrics dim and flicker
 		beam.visible = true
+
+## The player's racing-line display (Difficulty & Assists): the whole line, its braking zones only, or none.
+## L still shows or hides it in a race. The line is repainted at the next set_race.
+func set_racing_line_mode(mode: String) -> void:
+	racing_line_mode = mode if mode in ["full", "braking", "off"] else "full"
+	show_racing_line = racing_line_mode != "off"
+	if is_instance_valid(racing_line_node):
+		racing_line_node.visible = show_racing_line
 
 func toggle_racing_line() -> bool:
 	show_racing_line = not show_racing_line
@@ -3112,6 +3121,7 @@ static func racing_line_speeds(t: Track, r: Race) -> PackedFloat64Array:
 func _repaint_racing_line(r: Race) -> void:
 	var vs := racing_line_speeds(track, r)
 	var key := str(vs.size()) + ":" + str(r.player.model.spec.get_instance_id()) if not vs.is_empty() else ""
+	key += ":" + racing_line_mode
 	if key == _racing_line_key:
 		return
 	_racing_line_key = key
@@ -3166,6 +3176,8 @@ func _build_racing_line(car_vs := PackedFloat64Array()) -> void:
 		verts.append(Vector3(p_right[0] - world_center.x, y_s[i] + track.bank_rise(s, d + 0.24), p_right[1] - world_center.y))
 
 		var c := green.lerp(amber, held[i]).lerp(brake_red, minf(brake[i] * 2.0, 1.0))
+		if racing_line_mode == "braking":
+			c.a = clampf(brake[i] * 3.0 - 0.15, 0.0, 1.0) # only the braking zones, fading in and out
 		colors.append(c)
 		colors.append(c)
 

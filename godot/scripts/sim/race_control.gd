@@ -137,6 +137,8 @@ func _leader() -> RaceCar:
 func hurt(car: RaceCar, dv: float, into_barrier := false, f := 0.0) -> bool:
 	if car.is_safety_car or car.dnf or dv <= DMG_FLOOR:
 		return false
+	if race.s.damage_mode == "off":
+		return false # the player's profile has damage off: not even a dent
 	var x := (dv - DMG_FLOOR) / DMG_SPAN
 	var add := x * x
 	var wheel := car.hit_wheel() if dv >= WHEEL_BEND_DV else -1

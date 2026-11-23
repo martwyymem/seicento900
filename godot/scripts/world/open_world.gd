@@ -53,6 +53,8 @@ var audio = null ## the game's RaceAudio
 var render_size := Callable()
 var gearbox := "auto"
 var assists := "abs"
+var aids := {} ## FreeCar.aids: the player's DifficultyProfile aids over `assists`
+var no_damage := false ## FreeCar.no_damage: the profile's damage is off
 var paint := Color("#c62828")
 var car_number := 9
 
@@ -207,6 +209,8 @@ static func available() -> bool:
 func open(spawn = "", opts := {}) -> void:
 	gearbox = opts.get("gearbox", gearbox)
 	assists = opts.get("assists", assists)
+	aids = opts.get("aids", aids)
+	no_damage = bool(opts.get("no_damage", no_damage))
 	paint = opts.get("paint", paint)
 	car_number = int(opts.get("number", car_number))
 	if opts.has("retro_material") and opts.retro_material:
@@ -235,6 +239,8 @@ func open(spawn = "", opts := {}) -> void:
 	if drive:
 		drive.gearbox = gearbox
 		drive.assists = assists
+		drive.aids = aids
+		drive.no_damage = no_damage
 	if surface_fx:
 		surface_fx.reset_car_bus()
 	_refresh_events()

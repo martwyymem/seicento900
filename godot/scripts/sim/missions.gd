@@ -216,7 +216,8 @@ static func target_text(index: int) -> String:
 	var m := as_stage(index)
 	match String(m.kind):
 		"drift":
-			var t: Array = m.tiers
+			var ts := DifficultyProfile.tier_scale(DifficultyProfile.event_shift()) # as LiveEvents.tiers_for judges them
+			var t: Array = (m.tiers as Array).map(func(x): return roundf(float(x) * ts))
 			return "Score %s for bronze (silver %s, gold %s)" % [_k(int(t[0])), _k(int(t[1])), _k(int(t[2]))]
 		"knockout":
 			return "Win the knockout" if int(m.target_pos) == 1 else "Survive to the final (top %d)" % int(m.target_pos)

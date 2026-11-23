@@ -57,7 +57,7 @@ static func stage_reward(stage_idx: int, pos: int, target: int, first_clear: boo
 	if pos > target:
 		return int(base * FAIL_SHARE)
 	var beat := clampf(float(target - pos), 0.0, 3.0) # each place better than asked adds a quarter
-	var pay := base * (1.0 + 0.25 * beat)
+	var pay := DifficultyProfile.scale_fans(base * (1.0 + 0.25 * beat)) # the player's difficulty and aids
 	return int(pay if first_clear else pay * REPEAT_SHARE)
 
 ## Whether the Hypercar Seicento (and the final race) is open: the top level, or the dev menu's override.
