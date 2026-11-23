@@ -2249,10 +2249,7 @@ func _process(delta: float) -> void:
 		_save_t = 15.0
 		_save()
 	hud.update_drive(drive.speed_kmh(), _gear_shown(), drive.car.rpm, drive.model.spec.limiter, Vector2(drive.car.x, drive.car.y), drive.car.heading, delta, drive.vz)
-	hud.set_stats(progress.fans, progress.roads.size(), map.road_pts.size(), hour)
-	var wx_word := WorldWeather.word(weather_state())
-	if wx_word != "":
-		hud.clock_label.text += "  ·  " + wx_word
+	hud.set_stats(progress.fans, progress.roads.size(), map.road_pts.size(), hour, WorldWeather.word(weather_state()))
 	if audio:
 		audio.update_car(drive.car, true, null)
 
@@ -2351,6 +2348,37 @@ const ARCH_HEIGHT := 6.3 ## m: the middle of an arch's lettering (windowed QA 20
 const ARCH_HALF_WIDTH := 7.0 ## m: how far its lettering reaches to the side
 var _arch_pts: Array[Vector3] = []
 var _arch_scan_t := 0.0
+var _arch_sig := -1 ## signature of the arch MultiMeshes last collected (their instance counts + ids)
+var _hold_text := ""
+var _hold_fsz := -1
+var _hold_font: Font
+var _hold_tw := 0.0
+
+## Re-collects _arch_pts only when the festival's arch MultiMeshes changed (set, or live arches added/removed);
+## the signature walk touches node names and instance counts, not every instance transform.
+func _refresh_arch_pts() -> void:
+	var sig := [0, 0]
+	if builder.festival != null:
+		_arch_signature(builder.festival, 0, sig)
+	var h: int = sig[0] * 31 + sig[1]
+	if h == _arch_sig:
+		return
+	_arch_sig = h
+	_arch_pts.clear()
+	if builder.festival != null:
+		_collect_arches(builder.festival, 0)
+
+func _arch_signature(n: Node, depth: int, sig: Array) -> void:
+	if n is MultiMeshInstance3D:
+		var nm := String(n.name)
+		if nm.begins_with("InflatableArches") or nm.begins_with("FestivalArches") or nm.begins_with("LiveArches"):
+			var mm := (n as MultiMeshInstance3D).multimesh
+			sig[0] = sig[0] * 31 + (n as Object).get_instance_id()
+			sig[1] += mm.instance_count if mm != null else 0
+		return
+	if depth < 2:
+		for c in n.get_children():
+			_arch_signature(c, depth + 1, sig)
 
 func _update_area_hold(delta: float) -> void:
 	if hud == null or camera == null or builder == null or viewport == null:
@@ -2362,15 +2390,19 @@ func _update_area_hold(delta: float) -> void:
 	_arch_scan_t -= delta
 	if _arch_scan_t <= 0.0:
 		_arch_scan_t = 1.0 # (the live events' arches come and go)
-		_arch_pts.clear()
-		if builder.festival != null:
-			_collect_arches(builder.festival, 0)
+		_refresh_arch_pts()
 	var vp_size := Vector2(viewport.size)
 	if vp_size.x <= 1.0 or vp_size.y <= 1.0:
 		return
 	var to_screen := size / vp_size
 	var font := label.get_theme_font("font")
-	var tw := font.get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, label.get_theme_font_size("font_size")).x
+	var fsz := label.get_theme_font_size("font_size")
+	if label.text != _hold_text or fsz != _hold_fsz or font != _hold_font:
+		_hold_text = label.text
+		_hold_fsz = fsz
+		_hold_font = font
+		_hold_tw = font.get_string_size(_hold_text, HORIZONTAL_ALIGNMENT_LEFT, -1, fsz).x
+	var tw := _hold_tw
 	var rect := label.get_global_rect()
 	var banner := Rect2(rect.get_center().x - tw * 0.5, rect.position.y, tw, rect.size.y)
 	var cam_p := camera.global_position
@@ -2411,6 +2443,7 @@ func _collect_arches(n: Node, depth: int) -> void:
 
 ## Fades or hides world-space event beacon labels when the car is close enough that the gate/ring itself reads,
 ## or when the label projects into the top HUD band (rear-view mirror, fans card, or event card).
+const BEACON_LABEL_RANGE_SQ := 430.0 * 430.0 ## just past the labels' 420 m visibility range
 func _update_beacon_labels() -> void:
 	if builder == null or camera == null or viewport == null or drive == null:
 		return
@@ -2428,10 +2461,17 @@ func _update_beacon_labels() -> void:
 		if not is_instance_valid(node) or not (node as Node3D).visible:
 			continue
 		var bn := node as Node3D
-		var label := bn.get_node_or_null("Label") as Label3D
-		if label == null:
-			continue
+		var label: Label3D = bn.get_meta("label_ref", null) as Label3D
+		if label == null or not is_instance_valid(label):
+			label = bn.get_node_or_null("Label") as Label3D
+			if label == null:
+				continue
+			bn.set_meta("label_ref", label)
 		var lpos := label.global_position
+		if cam_p.distance_squared_to(lpos) > BEACON_LABEL_RANGE_SQ:
+			if label.visible:
+				label.visible = false # out past its visibility range: hidden once, then skipped
+			continue
 		if camera.is_position_behind(lpos):
 			label.visible = false
 			continue

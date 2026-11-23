@@ -2,8 +2,11 @@
 *.import
 
 # Optional art downloaded by tools/fetch_assets.py (see ASSETS.md)
-assets/sky/
+assets/sky/*
+!assets/sky/*.hdr.import
 assets/textures/
 assets/models/
 # the satnav aerial needs its mipmaps and VRAM compression on every clone and build host
 !data/world/brzeszcze_map.png.import
+# release-size import settings (lossy loading photos, VRAM-compressed sky HDRs)
+!textures/loading/*.jpg.import

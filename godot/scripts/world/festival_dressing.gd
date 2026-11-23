@@ -52,6 +52,7 @@ var crowd_zones: Array = []
 var _live_crowd_zones: Array = []
 var _live_root: Node3D
 var _hub_lights: Array[OmniLight3D] = []
+var _lamps_shown := -1.0 ## last lamps_on pushed to _hub_lights
 
 ## Fireworks state (single MultiMesh, 3 bursts x 56 sparks = 168 instances)
 const FW_BURSTS := 3
@@ -866,6 +867,7 @@ func _build_hub() -> void:
 		l.visible = false
 		fest.add_child(l)
 		_hub_lights.append(l)
+		_lamps_shown = -1.0
 
 
 # ================================================================================================ 2. main roads
@@ -1510,9 +1512,11 @@ func update(delta: float, car_pos: Vector3, car_vel: Vector3, night: float, acti
 		spectator_mat.set_shader_parameter("car_pos", car_pos)
 		spectator_mat.set_shader_parameter("car_vel", car_vel)
 	var lamps_on := clampf((night - 0.35) * 3.0, 0.0, 1.0)
-	for l in _hub_lights:
-		l.visible = lamps_on > 0.02
-		l.light_energy = 7.0 * lamps_on
+	if lamps_on != _lamps_shown:
+		_lamps_shown = lamps_on
+		for l in _hub_lights:
+			l.visible = lamps_on > 0.02
+			l.light_energy = 7.0 * lamps_on
 	_update_fireworks(delta, car_pos, night)
 	_update_audio(delta, car_pos, car_vel, active_drive)
 

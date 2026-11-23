@@ -471,9 +471,10 @@ func _ready() -> void:
 	_load_championship()
 	_build_audio()
 	add_child(DevHud.new())
-	var dev_menu := DevMenu.new()
-	dev_menu.game = self
-	add_child(dev_menu)
+	if OS.is_debug_build(): # the developer menu (§ + 1: fans, unlocks, teleports) stays out of release exports
+		var dev_menu := DevMenu.new()
+		dev_menu.game = self
+		add_child(dev_menu)
 	_build_viewport()
 	_build_setup()
 	_build_repair_page()

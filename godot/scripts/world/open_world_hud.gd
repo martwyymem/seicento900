@@ -590,7 +590,15 @@ func _apply_motion() -> void:
 		c.pivot_offset = c.size * 0.5
 		c.rotation = crot
 
-func set_stats(fans: int, roads_found: int, roads_total: int, hour: float) -> void:
+var _stats_key := ""
+
+## Called every frame; the texts and the (costly) _layout() only run when something shown changed.
+func set_stats(fans: int, roads_found: int, roads_total: int, hour: float, weather_word: String = "") -> void:
+	var minute := int(fmod(hour, 1.0) * 60.0)
+	var key := "%d|%d|%d|%d|%d|%s" % [fans, roads_found, roads_total, int(hour) % 24, minute, weather_word]
+	if key == _stats_key and _fans_target >= 0:
+		return
+	_stats_key = key
 	if _fans_target < 0:
 		_fans_shown = fans # the session's first figure: shown for a moment as you arrive, not counted up
 		_card_t = FANS_SHOW
@@ -609,7 +617,7 @@ func set_stats(fans: int, roads_found: int, roads_total: int, hour: float) -> vo
 	level_label.text = "LEVEL %d · %s%s" % [lv, FanLevels.title(lv).to_upper(), "" if left < 0 else "  ·  %s TO NEXT" % _thousands(left)]
 	roads_label.text = "ROADS DRIVEN  %d / %d" % [roads_found, roads_total]
 	var h := int(hour) % 24
-	clock_label.text = "%02d:%02d" % [h, int(fmod(hour, 1.0) * 60.0)]
+	clock_label.text = "%02d:%02d" % [h, minute] + ("  ·  " + weather_word if weather_word != "" else "")
 	_layout()
 
 static func _thousands(v: int) -> String:

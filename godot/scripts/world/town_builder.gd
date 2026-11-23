@@ -4488,6 +4488,7 @@ func add_beacon(name: String, p: Vector2, color: Color, label_text: String) -> N
 	label.set_meta("base_outline", label.outline_modulate)
 	label.set_meta("is_cp", name == "live_cp")
 	node.add_child(label)
+	node.set_meta("label_ref", label)
 	root.add_child(node)
 	beacon_nodes[name] = node
 	return node
