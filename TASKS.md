@@ -32,7 +32,7 @@ Everything from the original Pillars 1–9, Phases 0–4 core roadmap, and `0.5.
 
 **Council review priority (2026-11-23, five-model review of `f87b605`; order is the council's consensus):**
 
-1. **Security `0.5.7`:** close the `user://` code-execution paths (mesh cache `.res`, ConfigFile `Resource(...)`, `world_assets.gd` `load()`), with a regression test. Nothing else ships before this.
+1. **Security `0.5.8`** (0.5.7 shipped the difficulty & assists profile at the user's request, 2026-11-23): close the `user://` code-execution paths (mesh cache `.res`, ConfigFile `Resource(...)`, `world_assets.gd` `load()`), with a regression test. Nothing else ships before this.
 2. **Release gate:** headless CI or a script running the suite, `run_qa.gd`, `_run_race_test.gd`, a boot check and a clean-HEAD export. No same-day point releases without it.
 3. **Human playtest:** real gamepad, the 14-stage campaign and the gated live events, by hand, before more balance simulation.
 4. **Car blend-shape size:** strip non-panel blend shapes and morph tangents (~139 MB across the car scenes).
