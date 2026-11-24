@@ -124,6 +124,7 @@ const LAMP_POOL_GLOW := 0.7 ## emission at the middle of a lamp's pool on the gr
 
 var events: Array = [] ## [{stage, spot, pos: Vector2, heading, title, ...}]; a live event has "live": its id
 var live: LiveEvents ## the generated events round the car (scripts/world/live_events.gd)
+var event_dressing: EventDressing ## the driven event's start gantry and spectators, only while it runs (scripts/world/event_dressing.gd)
 var _crashed_frame := false
 var _rival_nodes: Array[Node3D] = [] ## the field of a mission raced on the map (StreetRivals), drawn
 const RIVAL_PAINTS := ["#1565c0", "#f9a825", "#2e7d32", "#6a1b9a", "#ef6c00", "#00838f", "#ad1457", "#4e342e", "#eceff1"]
@@ -1025,6 +1026,8 @@ func _end_run(title := "", sub := "") -> void:
 ## The world after a run, however it ended: no checkpoint beacon, gates, rivals or event HUD; the clock a mission
 ## moved put back; the GPS back on the next campaign target (traffic returns by itself once the roads reopen).
 func _after_run() -> void:
+	if event_dressing:
+		event_dressing.clear()
 	_live_cp_beacon()
 	_event_beacons(true)
 	if hud:
@@ -1151,6 +1154,7 @@ func _update_live(delta: float) -> void:
 	if live == null:
 		return
 	live.set_world(live_world())
+	_event_dressing_tick(delta)
 	var cp := Vector2(drive.car.x, drive.car.y)
 	if live.is_running():
 		var car := drive.car
@@ -1201,6 +1205,19 @@ func _update_live(delta: float) -> void:
 			hud.notify("NEW LIVE EVENT", "%s · %s · %d m%s" % [LiveEvents.kind_name(lev), lev.title, int(d), (" · " + tag) if tag != "" else ""], lev.color)
 	if _live_ids() != before:
 		_live_sync()
+
+## The driven event's start gantry and spectators (EventDressing): built on the frame a run begins, lit with its countdown,
+## freed when it ends or is abandoned (_after_run).
+func _event_dressing_tick(delta: float) -> void:
+	if world == null or map == null or builder == null:
+		return
+	if event_dressing == null:
+		if not live.is_running():
+			return
+		event_dressing = EventDressing.new(map, builder)
+		world.add_child(event_dressing)
+	var pos := car_visual.position if car_visual else Vector3(drive.car.x, drive.z, drive.car.y)
+	event_dressing.update(live, delta * _time_rate, pos, Vector3(drive.car.vx, drive.vz, drive.car.vy))
 
 func _live_ids() -> String:
 	var ids := PackedStringArray()
