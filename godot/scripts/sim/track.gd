@@ -50,6 +50,9 @@ var cal_alt := {} ## the same for any other car (the Hypercar Seicento), by CarS
 ## every other track, whose walls are at half + runoff both sides all the way round.
 var REACH := PackedFloat64Array()
 var VKIND := PackedByteArray()
+## Road half width per sample (m), from the track JSON's "hw" when the road narrows (the pace notes' "narrows"
+## calls). Empty on every track now: each one's width is the single TrackDef.width.
+var HW := PackedFloat64Array()
 enum { VERGE_OPEN, VERGE_RAIL, VERGE_SOLID } ## the far edge of an open verge (soft ground), a guardrail, a drawn obstacle
 
 static func load_def(track_key: String) -> TrackDef:
@@ -102,6 +105,11 @@ func _init(def: TrackDef) -> void:
 			for k in 2:
 				REACH[2 * i + k] = verges.reach[2 * j + k]
 				VKIND[2 * i + k] = kinds.unicode_at(2 * j + k) - 48
+	var hw = raw.get("hw")
+	if hw is Array and hw.size() == n:
+		HW.resize(n)
+		for i in n:
+			HW[i] = float(hw[(i + off) % n])
 	h_min = INF
 	h_max = -INF
 	for h in H:
