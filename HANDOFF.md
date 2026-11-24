@@ -37,3 +37,9 @@ Paused on the 95% quota guard (resets 2026-11-24 16:10 UTC). Do not merge yet: t
    Typed `var rv := live.rivals()` must become untyped (`var rv = ...`). Add EventField tests: completes, on road,
    player contact resolves, pace independent of player position, arrows shown.
 4. Strip StreetRivals to the drag field; update AGENTS.md open-world section; then run_tests.gd, run_qa.gd, _run_race_test.gd.
+
+## Full-field calibration run (PACEK=1.0, all 18 race events x 3 levels, 59 rival times each, 0 unfinished)
+easy median 1.104 (1.042-1.191), medium 1.114 (1.034-1.224), hard 1.123 (1.028-1.179) — at race skill the three
+levels barely differ (Race.DIFFICULTY's skill steps are small next to traffic). Against the old medians (1.139 / 1.095 /
+1.052) the scale wants roughly easy 0.97, medium 1.02, hard 1.07; hard above ~1.03 drives past the mu=1 profile, so
+check spins/off-road there, or widen the level spread another way (e.g. per-level spread/mistakes). Re-measure after.
