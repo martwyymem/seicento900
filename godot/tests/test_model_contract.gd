@@ -32,6 +32,10 @@ const CONTRACT := {
 	"res://models/traffic_cars.glb": {"objects": ["CarSeicento", "CarGolf4", "CarLogan", "CarV50", "CarI20", "CarSandero", "CarFocus", "CarZafira"],
 		"materials": ["Paint", "Glass", "Headlight", "Taillight", "Indicator", "Alloy", "DarkTrim", "Tyre", "Plate"]},
 	"res://models/roadside.glb": {"objects": ["BushCluster"], "materials": []},
+	"res://models/furniture.glb": {"objects": ["MarshalPost", "BrakeBoard_100", "BrakeBoard_200", "BrakeBoard_300",
+		"BridgeSpan", "BridgeTower", "Transporter", "TransporterLivery", "TyreWall", "TyreWallBelt",
+		"StageArchStart", "StageArchFinish", "StageTapeBarrier", "StageChevronLeft", "StageChevronRight", "StageWarningSign"],
+		"materials": ["SteelPaint", "White", "Red", "Black", "SignYellow"]},
 	"res://models/landmarks.glb": {"objects": ["Barbakan", "FloriaGate", "PszczynaCastle", "WilamowiceChurch"],
 		"materials": ["Plaster", "Roof", "Copper", "Glass"]},
 	"res://models/wisents.glb": {"objects": ["WisentBull", "WisentCow", "WisentCowLying", "WisentCalf", "PaddockFence", "HayRack"],
@@ -105,6 +109,14 @@ const SIZES := {
 	"res://models/roadside.glb": {
 		"HayBale": [Vector3(0.6, 0.5, 0.6), Vector3(1.6, 1.4, 1.6)],
 		"KilometrePost": [Vector3(0.1, 0.5, 0.1), Vector3(0.6, 1.3, 0.6)],
+	},
+	"res://models/furniture.glb": {
+		"StageArchStart": [Vector3(11.5, 6.4, 0.6), Vector3(13.0, 7.2, 1.5)],
+		"StageArchFinish": [Vector3(11.5, 6.4, 0.6), Vector3(13.0, 7.2, 1.5)],
+		"StageTapeBarrier": [Vector3(2.8, 0.9, 0.02), Vector3(3.2, 1.3, 0.25)],
+		"StageChevronLeft": [Vector3(1.4, 1.6, 0.05), Vector3(1.8, 2.0, 0.35)],
+		"StageChevronRight": [Vector3(1.4, 1.6, 0.05), Vector3(1.8, 2.0, 0.35)],
+		"StageWarningSign": [Vector3(0.95, 2.0, 0.05), Vector3(1.3, 2.4, 0.35)],
 	},
 }
 
