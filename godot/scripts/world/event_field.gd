@@ -17,7 +17,7 @@ const DT := 1.0 / 120.0
 ## The bots' pace on the map's roads by the event's level: a scale on the race's own skill (Race.DIFFICULTY, moved by
 ## the player's rival step), so a field finishes about where the old StreetRivals bands had it against the reference
 ## driver (LiveEvents.pace_time): measured with tests/_event_field_probe.gd (2026-11-24).
-const PACE := {"easy": 0.86, "medium": 0.9, "hard": 0.95}
+const PACE := {"easy": 0.97, "medium": 1.0, "hard": 1.035} # provisional: medium measured on sprint/11 only (median 1.122 vs old 1.095)
 const MAX_RIVALS := 9
 const GRID_ROW := 7.0 ## m between grid rows
 const EDGE := 0.85 ## m a grid slot's centre keeps from the road's edge

@@ -28,7 +28,7 @@ Paused on the 95% quota guard (resets 2026-11-24 16:10 UTC). Do not merge yet: t
 - Off-road (centre > 0.5 m past the drawn road): 1-3% of samples, on 3 m single-track lanes in bends.
 
 ## Next
-1. Calibrate `EventField.PACE` (now 0.86/0.9/0.95 — too slow; PACEK=1.0 is about right for medium, try easy 0.97,
+1. Verify `EventField.PACE` (set provisionally to 0.97/1.0/1.035; only medium checked, on sprint/11 — easy and hard unmeasured;
    medium 1.0, hard 1.035): `LEVELS=easy,medium,hard PACEK= ... godot --headless --path godot -s tests/_event_field_probe.gd`
    against the OLD medians above.
 2. Run `_live_audit.gd` (all) and check rivals off-road / stuck; knockouts finish.
