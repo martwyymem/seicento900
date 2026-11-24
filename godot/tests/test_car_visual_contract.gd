@@ -222,6 +222,12 @@ func _tint_isolation(parent: Node3D) -> void:
 	a._damage_shown = 1.0
 	a._apply_paint()
 	check(b.paint_material.clearcoat == 1.0 and b.paint_material.albedo_color.is_equal_approx(Color("#1a4fd0")), "car A's damage dulled car B's paint")
+	# a wreck keeps its paint colour (no darkening); only the clear coat dulls, and repair restores it
+	check(a.paint_material.albedo_color.is_equal_approx(Color("#c01818")), "crash damage darkened car A's paint to %s" % a.paint_material.albedo_color)
+	check(a.paint_material.clearcoat < 0.2, "crash damage left car A's clear coat at %.2f" % a.paint_material.clearcoat)
+	a._damage_shown = 0.0
+	a._apply_paint()
+	check(a.paint_material.clearcoat == 1.0 and a.paint_material.albedo_color.is_equal_approx(Color("#c01818")), "repair did not restore car A's paint")
 	check(float(a._shell.get_instance_shader_parameter("coat")) != float(b._shell.get_instance_shader_parameter("coat")), "the clear-coat strength is not per car (instance uniform shared)")
 	var b_stripe: Color = b.stripe_material.albedo_color
 	a.make_safety_car()

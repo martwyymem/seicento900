@@ -1684,7 +1684,7 @@ func step_rail(car: RaceCar, dt: float) -> void:
 		car.v = 0.0
 		car.throttle = 0.0
 		car.rpm = spec.idle_rpm
-		car.pit.left -= dt
+		car.pit.left = maxf(0.0, car.pit.left - dt) # the work is done once it reaches 0; a held car waits there
 		if car.pit.left <= 0.0:
 			car.pit.hold += dt
 		if car.pit.left <= 0.0 and pit_lane_clear(car):
