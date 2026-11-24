@@ -6,6 +6,8 @@
 ##     class the missions have opened by then; CAR=<key> overrides).
 ##   MODE=old: the 0.5.9 layout (P3/P2/pole grids, the stage's base difficulty, a one-make Seicento field), to
 ##     calibrate H against the 2026-11-24 playtest (stages 1-12 won by 10-22 s).
+## Overrides for trying a layout without editing the data (MODE=new): GRID=p8, OPP=7, RIVALS="sandero:2,stock:5",
+## SHIFT=0.5 (levels on top of the stage's own).
 ## STAGES=0,1,2 SEEDS=2 H=1.0 MODE=new godot --headless --path godot -s tests/_campaign_ladder_probe.gd
 extends SceneTree
 
@@ -28,6 +30,16 @@ func _initialize() -> void:
 	for si in stages:
 		var idx := int(si)
 		var st: Dictionary = Campaign.get_stage(idx)
+		if not old:
+			if OS.get_environment("GRID") != "":
+				st["grid"] = OS.get_environment("GRID")
+			if OS.get_environment("OPP") != "":
+				st["opponents"] = int(OS.get_environment("OPP"))
+			if OS.get_environment("RIVALS") != "":
+				var riv := {}
+				for part in OS.get_environment("RIVALS").split(","):
+					riv[part.get_slice(":", 0)] = int(part.get_slice(":", 1))
+				st["rivals"] = riv
 		var key := "stock" if old else (car_over if car_over != "" else ref_car(idx))
 		for seed in seeds:
 			var s := RaceSettings.new()
