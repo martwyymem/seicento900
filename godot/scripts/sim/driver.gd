@@ -16,7 +16,7 @@ static func pursuit_steer(phys: Physics, tr: Track, car: RaceCar, mu: float, off
 	var ch := cos(car.heading)
 	var sh := sin(car.heading)
 	var v := maxf(0.0, car.vx * ch + car.vy * sh)
-	var lim := tr.half + tr.cfg.runoff - 1.0
+	var lim := tr.half_at(car.s) + tr.cfg.runoff - 1.0
 	var Ld := clampf(5.0 + v * 0.42, 6.0, 26.0)
 	var sl := car.s + Ld
 	# a driving error builds up over a moment rather than snapping the line sideways

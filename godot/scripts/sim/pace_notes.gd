@@ -451,7 +451,7 @@ static func corner_profile(tr: Track, brake_k := 1.0, brake_aero := 0.0, loose :
 		if loose:
 			var kind := tr.loose_at(i * tr.step)
 			if kind != 0:
-				vc *= sqrt(Physics.SURF_GRIP[Physics.SURF_GRAVEL_ROAD if kind == 2 else Physics.SURF_DIRT])
+				vc *= sqrt(Physics.SURF_GRIP[Track.loose_surf(kind)])
 		out[i] = vc
 	if _corner_cache.size() > 32:
 		_corner_cache.clear()

@@ -58,7 +58,12 @@ enum { VERGE_OPEN, VERGE_RAIL, VERGE_SOLID } ## the far edge of an open verge (s
 static func load_def(track_key: String) -> TrackDef:
 	return load("res://data/tracks/%s.tres" % track_key)
 
-func _init(def: TrackDef) -> void:
+## def: the track's settings, its centreline read from data/tracks/<key>.json. null leaves the track empty for a
+## builder that fills the arrays itself and then runs the build_* steps (EventTrack: a live event's route on the
+## open-world map).
+func _init(def: TrackDef = null) -> void:
+	if def == null:
+		return
 	cfg = def
 	key = def.key
 	name = def.display_name
@@ -217,7 +222,7 @@ func build_racing_line() -> void:
 	d.resize(n)
 	d.fill(0.0)
 	var lim := half - 1.25
-	for pass_ in [[30, 120], [12, 120], [5, 80]]:
+	for pass_ in RL_PASSES:
 		var k: int = pass_[0]
 		for it in pass_[1]:
 			for i in n:
@@ -228,6 +233,41 @@ func build_racing_line() -> void:
 				var dn := (px - X[i]) * NX[i] + (py - Y[i]) * NY[i]
 				var v := d[i] + (dn - d[i]) * 0.6
 				d[i] = lim if v > lim else (-lim if v < -lim else v)
+	set_racing_line(d)
+
+## The relaxation's passes: [chord half-span in samples, iterations].
+const RL_PASSES := [[30, 120], [12, 120], [5, 80]]
+
+## The same relaxation over the samples [from, to) of an open road (a point-to-point route: no wrap through the
+## ends, which hold their offset), each sample kept `edge` m inside its own half width (HW, else half). The
+## samples outside the span keep d = 0.
+func build_racing_line_span(from: int, to: int, edge := 1.25) -> void:
+	var d := PackedFloat64Array()
+	d.resize(n)
+	d.fill(0.0)
+	from = clampi(from, 0, n)
+	to = clampi(to, from, n)
+	var lims := PackedFloat64Array()
+	lims.resize(n)
+	for i in n:
+		lims[i] = maxf((HW[i] if HW.size() == n else half) - edge, 0.0)
+	var last := to - 1
+	for pass_ in RL_PASSES:
+		var k: int = pass_[0]
+		for it in pass_[1]:
+			for i in range(from + 1, last):
+				var a := maxi(i - k, from)
+				var b := mini(i + k, last)
+				var px := (X[a] + NX[a] * d[a] + X[b] + NX[b] * d[b]) / 2
+				var py := (Y[a] + NY[a] * d[a] + Y[b] + NY[b] * d[b]) / 2
+				var dn := (px - X[i]) * NX[i] + (py - Y[i]) * NY[i]
+				var v := d[i] + (dn - d[i]) * 0.6
+				var lim := lims[i]
+				d[i] = lim if v > lim else (-lim if v < -lim else v)
+	set_racing_line(d)
+
+## The racing line from its offsets d: its points, segment lengths, curvature and length.
+func set_racing_line(d: PackedFloat64Array) -> void:
 	RLD = d
 	RX.resize(n)
 	RY.resize(n)
@@ -310,6 +350,18 @@ func profile_for(cm: CarModel) -> PackedFloat64Array:
 	_prof_alt[id] = p
 	return p
 
+## The Physics.SURF_* of a loose kind (Track.loose): 1 dirt, 2 gravel road, 3 a slower paved road (the open
+## world's asphalt, Physics.SURF_ASPHALT, on an EventTrack); 0 is the race's own road.
+static func loose_surf(kind: int) -> int:
+	match kind:
+		2: return Physics.SURF_GRAVEL_ROAD
+		3: return Physics.SURF_ASPHALT
+	return Physics.SURF_DIRT
+
+## The road's half width at s: HW between the samples where the track has it (EventTrack), else half.
+func half_at(s: float) -> float:
+	return half if HW.size() != n or n == 0 else sample(HW, s)
+
 ## The loose kind at lap distance s: 1 dirt, 2 gravel (Track.loose), 0 paved.
 func loose_at(s: float) -> int:
 	for z in loose:
@@ -328,7 +380,7 @@ func loose_profile(base: PackedFloat64Array) -> PackedFloat64Array:
 	mu.resize(n)
 	for i in n:
 		var kind := loose_at(i * step)
-		mu[i] = 1.0 if kind == 0 else Physics.SURF_GRIP[Physics.SURF_GRAVEL_ROAD if kind == 2 else Physics.SURF_DIRT]
+		mu[i] = 1.0 if kind == 0 else Physics.SURF_GRIP[loose_surf(kind)]
 		p[i] *= sqrt(mu[i])
 	for pass_ in 2:
 		for q in range(n - 1, -1, -1):
