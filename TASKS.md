@@ -67,6 +67,8 @@ Everything from the original Pillars 1–9, Phases 0–4 core roadmap, and `0.5.
 
 - [ ] **0.6.0 extras (user 2026-11-24, started):** 400/500 m braking boards on every approach that needs more than 300 m (Haiku); F1-style start-light gantry at standing-start open-world events + spectators placed along the active event's route only while it runs, never permanent (Sonnet, after Neon failed to open); permanent crowds + an organisers' trailer with 3-5 festival executives (scenery only, user) at every mission start (Sonnet); driver figures (helmet, suit, hands on an animated wheel, head into corners) in every car, all 9 models (Sonnet). 0.6.0 ships when H lands, through the gate.
 
+- [ ] **Stage settings pop-up (user 2026-11-24, VERY important, 0.6.0):** entering a stage beacon / the away gate / a mission / a live event in free roam opens a pre-start panel (stage info, class, grid, rival level) with the difficulty, assists, racing line, damage and auto-recover settings editable there (writes DifficultyProfile like the options menu), START / CANCEL, controller-first. Sonnet delegate.
+
 **Hold (do not start):** new cars, circuits, open-world areas, live-event types, festival dressing, per-car hero stills; a big split of `game.gd` while worktrees are live; the WRC branch.
 
 - [ ] Night-rain High/Ultra frame time on the GP circuit: re-measure on an idle machine (windowed; this thread).
