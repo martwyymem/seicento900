@@ -190,6 +190,32 @@ func _stability(m: CarModel) -> void:
 		check("%s: flat out from rest on full lock, then straight: no spin" % tag, go.max_beta < deg_to_rad(20.0) and _beta(rig) < deg_to_rad(1.0) and absf(rig.car.yaw_rate) < 0.15,
 			"(slide %.1f deg, end %.1f deg, yaw %.2f rad/s)" % [rad_to_deg(go.max_beta), rad_to_deg(_beta(rig)), rig.car.yaw_rate])
 	_goliath_keyboard(m)
+	_key_lock(m)
+
+## A held steering key (or a full stick) at speed asks the front tyres for about their peak slip, not past it (roadmap B3,
+## 2026-11-24: 1.3-1.8x past it washed the nose out and every key press turned the car so far that a keyboard driver weaved
+## at 200-300 km/h, tests/_hypercar_goliath_kb.gd), and still corners as hard as the car can.
+func _key_lock(m: CarModel) -> void:
+	var tarmac: int = Probe.S.surf_ids().asphalt
+	for kmh in [200.0, 250.0, 300.0]:
+		var rig = Probe.Rig.new("race", m, "abs", tarmac)
+		var v: float = kmh / 3.6
+		rig.reset(v)
+		var rho_f := 0.0
+		var ay := 0.0
+		var n := 0
+		for k in int(7.0 / DT):
+			var err: float = v - rig.speed()
+			rig.step(clampf(0.2 + err * 0.8, 0.0, 1.0), clampf(-err * 0.3 - 0.1, 0.0, 1.0), minf(1.0, k * DT * 2.0))
+			if k * DT > 4.5:
+				var ph: PhysState = rig.car.phys
+				rho_f += maxf(ph.rho[0], ph.rho[1])
+				ay += absf(rig.car.yaw_rate) * rig.speed()
+				n += 1
+		rho_f /= n
+		ay /= n * 9.81
+		check("a held key at %.0f km/h keeps the front tyres at their peak, not past it" % kmh, rho_f > 0.8 and rho_f < 1.1, "(front slip %.2f of the peak)" % rho_f)
+		check("and corners at %.0f km/h at 1.6 g or more" % kmh, ay > 1.6, "(%.2f g)" % ay)
 
 ## Keyboard braking & steering taps on the narrow Goliath street track (user, 2026-11-22: brakes felt weak and
 ## nudging steering under braking spun into the wall): must hit >= 2.2 g at 250 km/h, >= 1.5 g at 50 km/h, and
