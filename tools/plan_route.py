@@ -159,7 +159,44 @@ ROUTES = {
         'runoff': 300.0, 'prefer': {'paved': 3.0, 'dirt': 1.0, 'gravel': 0.9}, 'corner_radius': 12.0,
         'surface': 'loose',
         'trackdef': dict(RALLY_TRACKDEF, display_name='Lipowiec–Kobylec Rally Stage', short_name='Lipowiec–Kobylec')},
+    # the campaign's A->B sprints (Campaign.STAGES "format": "sprint"): tarmac village roads raced wheel to wheel
+    # by the whole field, so no motorway (COST_SPRINT) and the stage on paved roads only
+    'wola_sprint': {
+        'comment': 'Sprint do Woli: a tarmac A->B sprint for the campaign, point to point from ul. Wojciecha Korfantego in '
+                   'Babudy north up ul. Starorzeczna under the S1 and across the fields into Wola, east on ul. Mokra, '
+                   'north-east on ul. Powstańców, then back south-west down ul. Pszczyńska through the village to the '
+                   'ul. Kopalniana junction. Baked as a loop with a run-off on Pszczyńska and a return leg (Pszczyńska over '
+                   'the S1 roundabouts, Górnośląska, Korfantego). Planned by tools/plan_route.py, baked from the open '
+                   'world\'s caches.',
+        'cost': 'sprint',
+        'stage': [[-2860, -450, U], [-2620, -1050, 'residential'], [-2030, -2490, 'residential'],
+                  [-1700, -2590, 'residential'], [-1180, -3170, 'residential'], [-1300, -3180, 'tertiary'],
+                  [-2200, -2840, 'tertiary'], [-2790, -2615, 'tertiary']],
+        # (the first return point is past the Międzyrzecka junction, so the way back does not cross the run-off)
+        'return': [[-3660, -1990, 'tertiary'], [-4120, -1130, 'tertiary'], [-3600, -750, 'residential']],
+        'runoff': 300.0, 'prefer': {'paved': 1.0, 'dirt': 4.0, 'gravel': 4.0}, 'corner_radius': 12.0,
+        'surface': 'paved',
+        'trackdef': dict(RALLY_TRACKDEF, display_name='Sprint do Woli', short_name='Wola', width=7.0, theme='country',
+                         tree_density=0.6, tree_patch=0.6, tree_conifer=0.4)},
+    'gora_sprint': {
+        'comment': 'Sprint przez Górę: a tarmac A->B sprint for the campaign through Góra, point to point from ul. Długa '
+                   'by the Parkowa junction west and north on ul. Krótka and ul. Topolowa across ul. Pszczyńska, up '
+                   'Topolowa past the church lane, ul. Zapadź and ul. Dąbrowa to the Bażantów junction. Baked as a loop '
+                   'with a run-off to ul. Wojciecha Korfantego and a return leg (Korfantego, Babudy, the field track '
+                   'down to ul. Kościelna, Pszczyńska, Nad Wisłą, Rybacka). Planned by tools/plan_route.py, baked from '
+                   'the open world\'s caches.',
+        'cost': 'sprint',
+        'stage': [[-2660, 2600, 'residential'], [-2900, 2780, 'residential'], [-3050, 2650, 'residential'],
+                  [-3100, 2200, 'residential'], [-3050, 1450, 'residential'], [-2900, 1000, 'residential'],
+                  [-2700, 330, 'residential']],
+        'return': [[-2200, 250, 'residential'], [-2730, 1400, U], [-2600, 2150, 'residential']],
+        'runoff_to': [-2600, -30, 'residential'],
+        'runoff': 300.0, 'prefer': {'paved': 1.0, 'dirt': 4.0, 'gravel': 4.0}, 'corner_radius': 12.0,
+        'surface': 'paved',
+        'trackdef': dict(RALLY_TRACKDEF, display_name='Sprint przez Górę', short_name='Góra', width=7.0, theme='country',
+                         tree_density=0.6, tree_patch=0.6, tree_conifer=0.4)},
 }
+COST_SPRINT = {k: v for k, v in COST.items() if not k.startswith('motorway')}
 
 
 class Graph:
@@ -237,7 +274,8 @@ class Graph:
 
 def plan(key):
     R = ROUTES[key]
-    G = Graph(R.get('cost', COST))
+    cost = R.get('cost', COST)
+    G = Graph(COST_SPRINT if cost == 'sprint' else cost)
     xy, ways = G.xy, G.ways
     stage = None
     if 'stage' in R:

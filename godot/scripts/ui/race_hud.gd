@@ -1089,6 +1089,8 @@ func _gap_text(car: RaceCar, leader: RaceCar, i: int) -> String:
 	if i == 0:
 		if car.finished:
 			return "FINISH"
+		if race.s.sprint:
+			return "%.1f KM" % (clampf(race.sprint_run(car), 0.0, race.sprint_length()) / 1000.0)
 		return "LAP %d" % ((car.lap + 1) if race.timed else mini(car.lap + 1, race.R))
 	if car.finished and leader.finish_time != null and car.finish_time != null:
 		var laps_down := leader.finish_lap - car.finish_lap
@@ -1218,6 +1220,8 @@ func _draw_tower() -> void:
 	var tot_str := "/ %d" % race.cars.size()
 	_q(Vector2(18.0 * s + pw, hdr_h - 16.0 * s), tot_str, maxi(10, roundi(16.0 * s)), Color(hdr_accent.lightened(0.35), 0.92), it_bold, HORIZONTAL_ALIGNMENT_LEFT, maxf(30.0, W - 114.0 * s - pw))
 	var lap_tag := ("LAP %d/%d" % [mini(p.lap + 1, race.R), race.R]) if not race.timed else "LAP %d" % (p.lap + 1)
+	if race.s.sprint:
+		lap_tag = _sprint_km(p)
 	_q(Vector2(W - 102.0 * s, hdr_h - 17.0 * s), _fit_font(it_bold, lap_tag, maxi(10, roundi(12.0 * s)), 92.0 * s), maxi(10, roundi(12.0 * s)), Color(1.0, 1.0, 1.0, 0.88), it_bold, HORIZONTAL_ALIGNMENT_RIGHT, 92.0 * s)
 
 	var prev := -1
@@ -1337,6 +1341,11 @@ func _draw_clock() -> void:
 	var current := Race.fmt_time(race.race_time - p.lap_start) if race.phase == "racing" else "—"
 	var rows := [["LAP", lap, boost], ["POS", "%d / %d" % [p.pos, race.cars.size()], cyan.lightened(0.25)],
 		["THIS LAP", current, Color.WHITE], ["LAST", Race.fmt_time(p.last_lap), Color.WHITE], ["BEST", Race.fmt_time(p.best_lap), best_col]]
+	if race.s.sprint: # an A->B sprint has no laps: how far along it, and what is left
+		var to_go := maxf(0.0, race.sprint_length() - maxf(0.0, race.sprint_run(p)))
+		rows = [["KM", _sprint_km(p), boost], ["POS", "%d / %d" % [p.pos, race.cars.size()], cyan.lightened(0.25)],
+			["TIME", Race.fmt_time(race.race_time) if race.phase == "racing" else "—", Color.WHITE],
+			["TO GO", "%d m" % roundi(to_go) if not p.finished else "FINISH", Color.WHITE]]
 	if quali:
 		var pole = _sheet[0].time if not _sheet.is_empty() else null
 		var mine := 0
@@ -2569,6 +2578,11 @@ func _draw_delta_bar() -> void:
 	if not tt.valid:
 		_mt(c, Vector2(0, 74), "INVALID", 18, BEHIND, _bold, HORIZONTAL_ALIGNMENT_RIGHT, W - 12)
 
+## An A->B sprint's distance covered: "2.4 / 5.2 KM" (RaceSettings.sprint).
+func _sprint_km(car: RaceCar) -> String:
+	var length := race.sprint_length()
+	return "%.1f / %.1f KM" % [clampf(race.sprint_run(car), 0.0, length) / 1000.0, length / 1000.0]
+
 # ---------------- campaign missions (RaceSettings.mission) ----------------
 const MISSION_W := 420.0
 const MISSION_H := 58.0
@@ -2643,8 +2657,8 @@ func _draw_mission() -> void:
 				fill = clampf(race.run_distance(p) / race.s.finish_distance, 0.0, 1.0)
 		_:
 			# a sprint or an off-road race: how far through the run, and the place
-			var L := race.track.L * race.R
-			var run := clampf(p.lap * race.track.L + p.s, 0.0, L)
+			var L := race.sprint_length() if race.s.sprint else race.track.L * race.R
+			var run := clampf(race.sprint_run(p) if race.s.sprint else p.lap * race.track.L + p.s, 0.0, L)
 			head = "%s · P%d" % [String(Missions.KIND_NAMES.get(race.s.mission, "MISSION")), p.pos]
 			right = "%.1f / %.1f km" % [run / 1000.0, L / 1000.0]
 			var kind := race.track.loose_at(race.track.wrap_s(p.s)) if race.s.loose_spans else 0

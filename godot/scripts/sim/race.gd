@@ -553,11 +553,12 @@ func build_field(player_plan) -> void:
 		field.insert(slot, pl)
 
 	var tr := track
+	var s0 := s.stage_from if s.sprint else 0.0 # a sprint grids behind its start line A, not the track's line
 	for k in field.size():
 		var car := field[k]
 		car.grid = k + 1
 		car.box = k
-		car.s = -(9.0 + k * 6.5)
+		car.s = s0 - (9.0 + k * 6.5)
 		car.d = (-1.0 if k % 2 == 0 else 1.0) * tr.half * 0.36
 		var p := tr.pos(car.s, car.d)
 		car.x = p[0]
@@ -647,7 +648,7 @@ func step(dt: float, input: PlayerInput) -> void:
 	if s.collisions:
 		collide()
 	update_order()
-	if phase == "racing" and (s.knockout or s.finish_distance > 0.0 or drift):
+	if phase == "racing" and (s.knockout or s.finish_distance > 0.0 or s.sprint or drift):
 		_mission_rules(dt)
 	if rc:
 		rc.step(dt)
@@ -762,7 +763,9 @@ func remaining_fraction() -> float:
 	var lead := 0.0
 	for c in cars:
 		if not c.dnf:
-			lead = maxf(lead, c.lap * track.L + c.s)
+			lead = maxf(lead, sprint_run(c) if s.sprint else c.lap * track.L + c.s)
+	if s.sprint:
+		return clampf(1.0 - lead / sprint_length(), 0.0, 1.0)
 	return clampf(1.0 - lead / (R * track.L), 0.0, 1.0) if R > 0 else 0.0
 
 ## Ends the race at once by projecting every running car to the flag from its recent pace and
@@ -924,8 +927,8 @@ func move_s(car: RaceCar, ds: float) -> void:
 		car.invalid_lap = true
 
 func on_line(car: RaceCar) -> void:
-	if phase == "countdown":
-		return
+	if phase == "countdown" or s.sprint:
+		return # (a sprint counts no laps: it finishes at its line B, _mission_rules)
 	var rt := race_time
 	var lt := rt - car.lap_start
 	car.lap_start = rt
@@ -2548,6 +2551,14 @@ func _drag_grid() -> void:
 func run_distance(car: RaceCar) -> float:
 	return car.lap * track.L + car.s - float(_start_run.get(car, 0.0))
 
+## An A->B sprint (s.sprint): metres from its start line A to its finish line B.
+func sprint_length() -> float:
+	return (s.stage_to if s.stage_to > s.stage_from else s.stage_to + track.L) - s.stage_from
+
+## How far a car is past a sprint's start line A, m (negative on the grid).
+func sprint_run(car: RaceCar) -> float:
+	return car.lap * track.L + car.s - s.stage_from
+
 ## The car a knockout drops next: the last one still running (null when there is none).
 func knockout_zone() -> RaceCar:
 	for i in range(order.size() - 1, -1, -1):
@@ -2606,6 +2617,18 @@ func _mission_rules(dt: float) -> void:
 			finish(c)
 			# the line was crossed part-way through the tick
 			c.finish_time = race_time - minf(dt, over / maxf(1.0, absf(c.speed) if c.control == "free" else c.v))
+	if s.sprint:
+		var length := sprint_length()
+		for c in cars:
+			if c.finished or c.dnf:
+				continue
+			var over := sprint_run(c) - length
+			if over < 0.0:
+				continue
+			if not winner:
+				winner = c
+			finish(c)
+			c.finish_time = race_time - minf(dt, over / maxf(1.0, absf(c.speed) if c.control == "free" else c.v))
 	if drift:
 		drift.tick(self, player, dt)
 
@@ -2637,7 +2660,7 @@ func results() -> Array:
 		var r: Dictionary = rows[i]
 		var gap := ""
 		if i > 0:
-			if r.laps < win.laps:
+			if r.laps < win.laps and not s.sprint: # (a sprint's line A may lie either side of the track's line)
 				var dl: int = win.laps - r.laps
 				gap = "+%d lap%s" % [dl, "s" if dl > 1 else ""]
 			elif r.total != null and win.total != null:

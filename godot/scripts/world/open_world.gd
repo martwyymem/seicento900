@@ -787,6 +787,23 @@ func _update_route_mesh() -> void:
 # ================================================================================================ events
 
 ## The campaign stages as beacons, coloured by state: gold done, orange open, hidden while locked.
+## Whether a stage's beacon stands at its own start line rather than a named spot: an A->B sprint on a track baked
+## from this map's roads (Campaign "baked", tools/plan_route.py), whose points are in the map's own metres.
+static func is_sprint_spot(st: Dictionary) -> bool:
+	return not STAGE_SPOTS.has(st.track) and Campaign.is_sprint(st) and st.get("baked", false)
+
+## Where a campaign stage's beacon stands: [x, y, heading] (a named spot, STAGE_SPOTS; a sprint on the map's own
+## roads at its start line A, is_sprint_spot), or [] when there is none.
+static func stage_spot(m: TownMap, st: Dictionary) -> Array:
+	if not is_sprint_spot(st):
+		return m.spots.get(STAGE_SPOTS.get(st.track, "festival"), [])
+	var a := Campaign.sprint_span(st).x
+	var path := MapMissions.span_path(String(st.track), a, a + 40.0)
+	if path.size() < 2:
+		return []
+	var d := path[path.size() - 1] - path[0]
+	return [path[0].x, path[0].y, atan2(d.y, d.x)]
+
 func _refresh_events() -> void:
 	for n in builder.beacon_nodes.values():
 		(n as Node3D).queue_free()
@@ -797,8 +814,8 @@ func _refresh_events() -> void:
 	var trophies: Array = prog.get("trophies", [])
 	for i in Campaign.STAGES.size():
 		var st: Dictionary = Campaign.get_stage(i)
-		var spot_name: String = STAGE_SPOTS.get(st.track, "festival")
-		var spot: Array = map.spots.get(spot_name, [])
+		var spot_name: String = STAGE_SPOTS.get(st.track, String(st.track) if is_sprint_spot(st) else "festival")
+		var spot: Array = stage_spot(map, st)
 		if spot.is_empty():
 			continue
 		var done: bool = st.trophy in trophies
