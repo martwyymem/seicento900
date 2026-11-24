@@ -12,7 +12,13 @@ open-world rivals on the race AI (H), harder Nordschleife (skill_boost). Full su
   /private/tmp/claude-501/-Users-martwyymem-Developer-Seicento/730f2050-173f-47f1-be2d-712510039c03/scratchpad/gate_247d6ca.out
   If red: fix on main. Then run the full gate (with exports) on the final HEAD.
 
-## Not started, waiting on the user (asked in the thread)
+## User answers (2026-11-24 evening)
+- Pop-up: run it on **Gemini 4 Neon** (antigravity_2). Still "Provider is not authenticated" at ~19:40 UTC: retry delegate_task on Neon after the reset; if still unauthenticated, tell the user (don't switch models unasked).
+- Stage 1: **no Zafira, Seicentos only.** Leave the stage-1 field as Seicentos.
+- Permanent live-event arches/spectators: **keep them** (no change).
+- The no-export gate run on 247d6ca was cut off by the session end: rerun the full gate on HEAD.
+
+## Original questions
 1. Settings pop-up when entering a stage/mission/event in free roam (VERY important to the user). Neon (antigravity_2) was
    "not authenticated"; asked whether to run it on Claude Sonnet now. Brief is in the thread (task "Stage settings pop-up").
    Should be in 0.6.0.
