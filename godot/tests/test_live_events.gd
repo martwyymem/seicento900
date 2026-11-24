@@ -233,14 +233,14 @@ func _weather_targets(map: TownMap, by_kind: Dictionary, errors: Array[String]) 
 		var l2 := LiveEvents.new(map, 707)
 		l1.begin(d_dry, "golf4")
 		l2.begin(d_wet, "golf4")
-		var rv1 := l1.rivals()
-		var rv2 := l2.rivals()
+		var rv1 = l1.rivals()
+		var rv2 = l2.rivals()
 		d_dry["mu"] = snow_mu # mid-run weather shift must not affect rv1
 		for _i in 900:
 			rv1.step(1.0 / 30.0, Vector2.ZERO, 0.0)
 			rv2.step(1.0 / 30.0, Vector2.ZERO, 0.0)
-		var t1 := rv1.best_time()
-		var t2 := rv2.best_time()
+		var t1: float = rv1.best_time()
+		var t2: float = rv2.best_time()
 		if t1 <= 0.0 or t2 <= 0.0 or not (t2 > t1):
 			errors.append("wet drag rivals not slower than dry: dry %.2f s, wet %.2f s" % [t1, t2])
 		l1.abandon()
@@ -392,7 +392,7 @@ func _save(errors: Array[String]) -> void:
 ## rest in running order; a knockout's cars out come last as OUT. RESET CAMPAIGN wipes the open-world progress.
 func _standings(errors: Array[String]) -> void:
 	var path := PackedVector2Array([Vector2.ZERO, Vector2(3000, 0)])
-	var rv := StreetRivals.new(path, "stock", 5, 77)
+	var rv := EventField.new(path, "stock", 5, 77)
 	var names := {}
 	for r in rv.rivals:
 		if String(r.get("name", "")) == "" or int(r.get("number", 0)) <= 0:
@@ -413,7 +413,7 @@ func _standings(errors: Array[String]) -> void:
 			errors.append("the timing list is out of order at row %d" % (i + 1))
 		if not String(rows[i].gap).begins_with("+"):
 			errors.append("row %d shows no interval: %s" % [i + 1, rows[i].gap])
-	var ko := StreetRivals.new(path, "stock", 3, 5, {"knockout": true, "lap_length": 750.0})
+	var ko := EventField.new(path, "stock", 3, 5, {"knockout": true, "lap_length": 750.0})
 	for i in 4000:
 		ko.step(1.0 / 30.0, Vector2(float(i) * 0.15, 0.0), 4.5) # a crawl: first out
 		if ko.player_out:
@@ -492,7 +492,7 @@ func _world(map: TownMap, home: Vector2, errors: Array[String]) -> void:
 		errors.append("starting a live event did not begin the countdown")
 	if Vector2(ow.drive.car.x, ow.drive.car.y).distance_to(ow.live.grid_pose(lev)[0]) > 1.0:
 		errors.append("the car was not put in its grid slot")
-	var lrv := ow.live.rivals()
+	var lrv = ow.live.rivals()
 	if lrv == null or ow._rival_nodes.size() != int(lev.rivals) or lrv.rivals.size() != int(lev.rivals):
 		errors.append("the live sprint's field is not drawn: %d nodes for %d rivals" % [ow._rival_nodes.size(), int(lev.rivals)])
 	if not ow._roads_closed():
@@ -570,7 +570,7 @@ func _world(map: TownMap, home: Vector2, errors: Array[String]) -> void:
 	var di := Missions.index_of("drag_quarter")
 	ow.hour = 9.25
 	if ow._begin_mission(di):
-		var rv := ow.live.rivals()
+		var rv = ow.live.rivals()
 		if rv == null or ow._rival_nodes.size() != rv.rivals.size() or rv.rivals.size() != int(Missions.get_def(di).opponents):
 			errors.append("the drag mission's field is not drawn: %d nodes" % ow._rival_nodes.size())
 		var drag_keys: Array[String] = []
@@ -650,10 +650,12 @@ func _missions_on_map(map: TownMap, errors: Array[String]) -> void:
 				var want := MapMissions.lap_length(String(m.track)) * int(m.get("laps", 1))
 				if absf(L - want) > 30.0 or (String(m.track) == "s1_sprint" and (L < 8000.0 or L > 11000.0)):
 					errors.append("sprint %s on the map is %.0f m (its laps are %.0f m)" % [m.id, L, want])
+		# (one outcome each: the live events above drive both a quick and a slow player; a mission's field is the
+		# same EventField, and driving every 7-10 km mission twice would take the suite past its watchdog)
 		if m.kind in ["sprint", "drag"]:
-			_race_run(map, ev, errors)
+			_race_run(map, ev, errors, m.kind == "drag")
 		elif m.kind == "knockout":
-			_knockout_run(map, ev, errors)
+			_knockout_run(map, ev, errors, false)
 		elif m.kind == "rally":
 			_rally_run(map, ev, errors)
 
@@ -670,27 +672,38 @@ func _drive(live: LiveEvents, path: PackedVector2Array, v: float, max_t := 4000.
 			return live.last_result
 		if not live.holding():
 			s += v * dt
+		# every rival home with the player still out there: its place is settled (last), no need to drive on
+		var rv = live.rivals()
+		if rv is EventField and not (rv as EventField).knockout and (rv as EventField).finished_count() == (rv as EventField).count():
+			var res := {"ev": live.run.ev, "pos": (rv as EventField).count() + 1, "finished": true, "knocked": false,
+				"line": "every rival home first", "time": null}
+			live.abandon()
+			return res
 	return {}
 
-func _race_run(map: TownMap, ev: Dictionary, errors: Array[String]) -> void:
+func _race_run(map: TownMap, ev: Dictionary, errors: Array[String], slow_too := true) -> void:
 	var live := LiveEvents.new(map, 31)
 	live.begin(ev, "stock")
 	var ref := LiveEvents.pace_time(ev.path, "stock", 0.0, live.grip_of(ev))
 	var fast := _drive(live, ev.path, float(ev.length) / (ref * 0.8))
 	if int(fast.get("pos", 0)) != 1 or not MapMissions.outcome(fast).success:
 		errors.append("%s: a player far quicker than the reference finished %s" % [ev.mkind, fast.get("line", fast)])
+	if not slow_too:
+		return
 	live.begin(ev, "stock")
 	var slow := _drive(live, ev.path, float(ev.length) / (ref * 1.8))
 	if int(slow.get("pos", 0)) != int(ev.rivals) + 1 or MapMissions.outcome(slow).success:
 		errors.append("%s: a crawling player finished %s" % [ev.mkind, slow.get("line", slow)])
 
-func _knockout_run(map: TownMap, ev: Dictionary, errors: Array[String]) -> void:
+func _knockout_run(map: TownMap, ev: Dictionary, errors: Array[String], fast_too := true) -> void:
 	var live := LiveEvents.new(map, 32)
 	live.begin(ev, "stock")
 	var ref := LiveEvents.pace_time(ev.path, "stock", 0.0, live.grip_of(ev))
 	var slow := _drive(live, ev.path, float(ev.length) / (ref * 2.0))
 	if not bool(slow.get("knocked", false)) or int(slow.get("pos", 0)) != int(ev.rivals) + 1:
 		errors.append("knockout: a slow player was not first out: %s" % [slow])
+	if not fast_too:
+		return
 	live.begin(ev, "stock")
 	var fast := _drive(live, ev.path, float(ev.length) / (ref * 0.8))
 	if int(fast.get("pos", 0)) != 1 or bool(fast.get("knocked", false)):
@@ -732,9 +745,12 @@ func _hairpin(map: TownMap, errors: Array[String]) -> void:
 		return
 	var live := LiveEvents.new(map, 41)
 	live.begin(ev, "stock")
-	var rv := live.rivals()
+	var rv := live.rivals() as EventField
+	if rv == null:
+		errors.append("the Kolonia Stawowa mission has no race field")
+		return
 	# the tightest bend: the sample with the most turning over 30 m
-	var pts := rv.pts
+	var pts := LiveEvents.resample(ev.path, 10.0)
 	var at := 0
 	var most := 0.0
 	for i in range(3, pts.size() - 3):
@@ -742,7 +758,7 @@ func _hairpin(map: TownMap, errors: Array[String]) -> void:
 		if turn > most:
 			most = turn
 			at = i
-	var apex_s := float(rv.cum[at])
+	var apex := pts[at]
 	if most < 1.2:
 		errors.append("Kolonia Stawowa's tightest bend turns only %.2f rad (no hairpin found)" % most)
 	var radius := 30.0 / maxf(most, 0.01)
@@ -750,22 +766,29 @@ func _hairpin(map: TownMap, errors: Array[String]) -> void:
 	var worst := 0.0
 	var dt := 1.0 / 30.0
 	var t := 0.0
+	var far := pts[0] + Vector2(600.0, 600.0) # the player out of everyone's way (no rubber band either way)
 	while t < 900.0 and rv.finished_count() < rv.rivals.size():
 		t += dt
-		rv.step(dt, pts[0], 0.0) # the player left on the line: nobody rubber-bands
-		for r in rv.rivals:
-			if absf(float(r.s) - apex_s) > 12.0:
+		rv.step(dt, far, 0.0)
+		if rv.rivals.all(func(r): return float(r.s) > float(at) * 10.0 + 60.0):
+			break # every rival round it
+		for k in rv.count():
+			var cp := rv.car_pose(k)
+			var q: Vector2 = cp[0]
+			if q.distance_to(apex) > 12.0 or bool(rv.rivals[k].done):
 				continue
-			vmax = maxf(vmax, float(r.v))
-			var q: Vector2 = rv.pose(float(r.s), float(r.lat))[0]
+			vmax = maxf(vmax, float(cp[2]))
 			for m in [0.0, 0.5, 1.0, 2.0, 4.0, 99.0]:
 				if m >= 99.0 or not map.road_at(q.x, q.y, -INF, m).is_empty():
 					worst = maxf(worst, m)
 					break
+	live.abandon()
 	var grip: float = LiveEvents.PACE.stock[2]
 	if OS.get_environment("HAIRPIN") != "":
 		print("hairpin at %s: %.2f rad over 30 m (r %.0f m), rivals up to %.1f m/s, %.1f m beyond the road" % [pts[at], most, radius, vmax, worst])
-	if vmax > sqrt(grip * radius) * 1.3:
+	if vmax > sqrt(grip / 0.86 * radius) * 1.3: # (the race's bots corner at up to 1 g, PACE's grip is 0.86 g)
 		errors.append("a rival rounds the Kolonia Stawowa hairpin (r %.0f m) at %.1f m/s" % [radius, vmax])
-	if worst > 0.5:
+	# (the race's bots on physics, on a 3 m single-track lane whose verge they may use to pass: within it, never further;
+	# the old kinematic rivals were held 0.85 m inside the edge)
+	if worst > 2.0:
 		errors.append("a rival runs %.1f m beyond the road in the Kolonia Stawowa hairpin" % worst)

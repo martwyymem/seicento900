@@ -206,6 +206,15 @@ var bot_uturn := true ## a spun bot drives itself round; false lifts it back ont
 var warp := 1
 var brain: Brain = null
 var limiter := false ## the player has the flag speed limiter switched on (V)
+## An open-world event (EventField): the player's car is driven by the host (the open world's FreeCar) and only
+## mirrored here, so the bots race it and touch it (collide) but the race never moves it, never finishes it and
+## never holds it inside its walls (shove, room); the host sets its pose before each step and takes the contact back.
+var external_player := false
+var stop_at := INF ## m along the lap where cars home park (EventField: the end of the road past the finish); INF: they drive on
+var collide_finished := false ## cars home still touch the others (EventField: parked past the finish line)
+const PARK_GAP := 6.5 ## m between two parked cars on one side
+var pass_wall := 0.0 ## > 0: a bot may pull out to overtake as far as this inside its wall (Track.reach), past the road's edge where the wall stands back (EventTrack: a single-track lane's verge)
+var grip_mul := 1.0 ## every car's grip (grip()) scaled: EventField puts the open world's weather grip (FreeCar.mu) here
 var mechanical_damage := false ## crashes cost power, grip and parts for every car (RaceSettings.mechanical_damage, or a rally stage); else cosmetic only
 var rc: RaceControl = null ## flags, safety car, stewards and damage (null: contact is just physics, as before)
 var stage: Rally.Stage = null ## s.mode == "rally": the special stage's clock, splits and penalties
@@ -497,7 +506,7 @@ func grip(car: RaceCar) -> float:
 		g *= (1.0 - weather.hail * 0.36)
 	if weather.fog > 0.1:
 		g *= 0.94
-	return g
+	return g * grip_mul
 
 ## The grip a driver judges the road by (speeds, braking points, how hard the tyres work): the tyres' grip
 ## and, on a loose stage, the road's surface (Rally.SURFACE_GRIP, = Physics.SURF_GRIP of road_surf).
@@ -697,6 +706,13 @@ func step(dt: float, input: PlayerInput) -> void:
 		car.ps = car.s
 		car.has_prev = true
 		if car.dnf:
+			continue
+		if external_player and car.is_player:
+			var pr := track.project(car.x, car.y, car.s)
+			car.s = pr[0]
+			car.d = pr[1]
+			if not _ring_stale and absf(track.rel(car.s - _ring_s[car.ring_i])) > _ring_slack:
+				_ring_stale = true
 			continue
 		var prev_p := track.rel(car.s)
 		if not car.is_player:
@@ -1462,9 +1478,20 @@ func to_free(car: RaceCar) -> void:
 	car.line_off = car.d - track.sample(track.RLD, car.s)
 
 # ---------------- AI / rail driving ----------------
+## Where a car home parks (stop_at): (s, d), pulled over past the line, the first home furthest on; two abreast
+## (one each side) where the road takes them, else single file in the middle.
+func park_spot(car: RaceCar) -> Vector2:
+	var k := car.finish_order - 1
+	var side := maxf(track.half_at(stop_at) - 1.3, 0.0)
+	if 2.0 * side < spec.width + 0.6:
+		return Vector2(stop_at - float(k) * PARK_GAP, 0.0)
+	return Vector2(stop_at - float(k / 2) * PARK_GAP, side * (1.0 if k % 2 == 0 else -1.0))
+
 func traffic(car: RaceCar, vT: float, rl: float, dt: float) -> Dictionary:
 	var tr := track
-	var lim := tr.half - 1.0
+	var lim := tr.half_at(car.s) - 1.0
+	if pass_wall > 0.0: # (a lane too narrow for two: pass on its verge, this far inside the wall)
+		lim = maxf(lim, minf(tr.reach(car.s, 1.0), tr.reach(car.s, -1.0)) - pass_wall)
 	var ahead: RaceCar = null
 	var ahead_gap := INF
 	var drag := 1.0
@@ -1544,9 +1571,9 @@ func traffic(car: RaceCar, vT: float, rl: float, dt: float) -> Dictionary:
 ## get past, and stop if there's no way through.
 func avoid_wrecks(car: RaceCar, t: Dictionary) -> Dictionary:
 	var tr := track
-	var lim := tr.half - 1.0
+	var lim := tr.half_at(car.s) - 1.0
 	for o in cars:
-		if not o.stranded or o == car or absf(o.d) > tr.half + 1.0:
+		if not o.stranded or o == car or absf(o.d) > tr.half_at(o.s) + 1.0:
 			continue
 		var g := tr.rel(o.s - car.s)
 		if g < -8.0 or g > 140.0:
@@ -1610,10 +1637,10 @@ func side_room(car: RaceCar, near: Array[RaceCar]) -> Dictionary:
 
 func apply_side_room(car: RaceCar, t: Dictionary, side: Dictionary) -> Dictionary:
 	if brain and car.brain:
-		t = brain.adjust(car, t, track.half - 1.0)
+		t = brain.adjust(car, t, track.half_at(car.s) - 1.0)
 	if side.lo == -INF and side.hi == INF:
 		return t
-	var lim := track.half + track.cfg.runoff - 1.2
+	var lim := track.half_at(car.s) + track.cfg.runoff - 1.2
 	var lo := maxf(side.lo, -lim)
 	var hi := minf(side.hi, lim)
 	if lo <= hi:
@@ -1727,6 +1754,10 @@ func targets(car: RaceCar, dt: float, mu: float, is_phys: bool) -> Dictionary:
 	var hindered: bool = car.finished or car.slow_t > 0.0 or car.err != null
 	if car.finished:
 		vT *= 0.8
+		if stop_at < INF:
+			var spot := park_spot(car)
+			vT = minf(vT, sqrt(2.0 * 3.0 * maxf(spot.x - car.s, 0.0)))
+			dT = spot.y
 	if car.slow_t > 0.0:
 		car.slow_t -= dt
 		vT *= 0.82
@@ -1788,7 +1819,7 @@ func step_rail(car: RaceCar, dt: float) -> void:
 		dT = tg.dT
 		drag = tg.drag
 		vT *= 1.0 - 0.012 * absf(car.d - rl)
-		if absf(car.d) > tr.half + 0.3:
+		if absf(car.d) > tr.half_at(car.s) + 0.3:
 			vT *= 0.75
 		if car.damage > 0.0:
 			vT *= 1.0 - (0.3 if rc else 0.06) * car.damage
@@ -1826,7 +1857,7 @@ func step_rail(car: RaceCar, dt: float) -> void:
 	car.d_kick *= exp(-5.0 * dt)
 	car.d += dd * dt
 	if car.mode != "pit":
-		var lim := tr.half + tr.cfg.runoff - 1.0
+		var lim := tr.half_at(car.s) + tr.cfg.runoff - 1.0
 		car.d = clampf(car.d, -lim, lim)
 	move_s(car, car.v * dt * tr.s_rate(car.s, car.d))
 	var q := tr.pos(car.s, car.d)
@@ -1902,15 +1933,16 @@ func surface_at(car: RaceCar, x: float, y: float) -> int:
 	if car.is_player and _monster_player:
 		return Physics.SURF_TRACK # grips like tarmac anywhere, a gravel stage too
 	var c := tr.cfg
-	if ad <= tr.half + 0.3 or (car.is_player and _monster_player):
+	var hw := tr.half_at(car.s)
+	if ad <= hw + 0.3 or (car.is_player and _monster_player):
 		# a cobbled stretch (street stages) grips less than the tarmac round it; tracks without cobbles are untouched
-		if not c.cobbles.is_empty() and ad <= tr.half and not (car.is_player and _monster_player) and in_cobbles(tr.wrap_s(car.s)):
+		if not c.cobbles.is_empty() and ad <= hw and not (car.is_player and _monster_player) and in_cobbles(tr.wrap_s(car.s)):
 			return Physics.SURF_COBBLE
 		# a gravel or dirt stretch of a street stage (TrackDef.loose_grip: Pszczyna's park) grips as it looks
-		if _loose and ad <= tr.half:
+		if _loose and ad <= hw:
 			var kind := tr.loose_at(tr.wrap_s(car.s))
 			if kind > 0:
-				return Physics.SURF_GRAVEL_ROAD if kind == 2 else Physics.SURF_DIRT
+				return Track.loose_surf(kind)
 		return road_surf
 	var p := tr.rel(car.s)
 	if signf(d) == signf(c.pit_offset) and p > c.pit_entry - 20.0 and p < c.pit_exit + 20.0:
@@ -2040,7 +2072,7 @@ func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float,
 	var acc := sqrt(car.phys.ax_f * car.phys.ax_f + car.phys.ay_f * car.phys.ay_f)
 	var u := minf(1.5, acc / mu_g)
 	var slide := minf(3.0, cp.slide_power / (mass * mu_g * 1.5))
-	var off_track := absf(car.d) > tr.half + 0.5
+	var off_track := absf(car.d) > tr.half_at(car.s) + 0.5
 	# (agg: how hard the driver is on tyres, Drivers.ROSTER "wear"; 1 for the player)
 	var factor := (0.45 + 1.1 * u * u + 0.5 * slide) * (1.4 if off_track else 1.0) * (car.agg if s.real_drivers else 1.0)
 	wear_tyres(car, absf(car.speed) * dt, factor)
@@ -2441,7 +2473,7 @@ func collide() -> void:
 	var live := _collide_live
 	live.clear()
 	for c in cars:
-		if not c.finished and (not c.dnf or c.stranded) and c.mode != "pit":
+		if (not c.finished or collide_finished) and (not c.dnf or c.stranded) and c.mode != "pit":
 			live.append(c)
 	var n := live.size()
 	for i in n:
@@ -2506,6 +2538,8 @@ func _heard(x: float, y: float, dv: float, kind: int, id_a: int, id_b: int) -> v
 
 ## How far a car can be pushed along (ux, uy) before its lateral limit (barrier / run-off edge).
 func room(car: RaceCar, ux: float, uy: float) -> float:
+	if external_player and car.is_player:
+		return INF # the host's world holds it (the open world's buildings and fences), not this track's walls
 	var tr := track
 	var un := ux * tr.sample(tr.NX, car.s) + uy * tr.sample(tr.NY, car.s)
 	if absf(un) < 0.2:
@@ -2517,12 +2551,16 @@ func room(car: RaceCar, ux: float, uy: float) -> float:
 		lo = lim[0]
 		hi = lim[1]
 	else:
-		hi = tr.half + tr.cfg.runoff - 1.0
+		hi = tr.half_at(car.s) + tr.cfg.runoff - 1.0
 		lo = -hi
 	var r := (hi - car.d) / un if un > 0.0 else (car.d - lo) / -un
 	return maxf(0.0, r)
 
 func shove(car: RaceCar, dx: float, dy: float) -> void:
+	if external_player and car.is_player:
+		car.x += dx
+		car.y += dy
+		return
 	var tr := track
 	if car.control == "free":
 		car.x += dx
@@ -2535,7 +2573,7 @@ func shove(car: RaceCar, dx: float, dy: float) -> void:
 			car.y += tr.sample(tr.NY, car.s) * (d - pr[1])
 		car.d = d
 		return
-	var lim := tr.half + tr.cfg.runoff - 1.0
+	var lim := tr.half_at(car.s) + tr.cfg.runoff - 1.0
 	car.d = clampf(car.d + dx * tr.sample(tr.NX, car.s) + dy * tr.sample(tr.NY, car.s), -lim, lim)
 	move_s(car, dx * tr.sample(tr.TX, car.s) + dy * tr.sample(tr.TY, car.s))
 	var q := tr.pos(car.s, car.d)
@@ -2683,7 +2721,7 @@ func _mission_rules(dt: float) -> void:
 			finish(last)
 	if s.finish_distance > 0.0:
 		for c in cars:
-			if c.finished or c.dnf:
+			if c.finished or c.dnf or (external_player and c.is_player):
 				continue
 			var over := run_distance(c) - s.finish_distance
 			if over < 0.0:

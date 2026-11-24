@@ -2,7 +2,7 @@
 ## Forza Horizon style. Each is a full mission of one of the campaign's kinds (Missions.KINDS), in the same shape as a
 ## campaign mission on the map (MapMissions.event) and run by the same code (begin / tick here, OpenWorld's
 ## _start_run, the rivals, the results card), only built on the roads round the car instead of a baked track:
-##   sprint    point to point through the town against a StreetRivals field (1.4-5.2 km, mostly paved)
+##   sprint    point to point through the town against a field of the race sim's bots (EventField, 1.4-5.2 km, mostly paved)
 ##   drag      402 m or 1000 m from a standstill on a straight, wide main road, four abreast
 ##   knockout  a 2.4-4.6 km route cut into sectors: the last car is out at each sector line
 ##   offroad   a race on a route that is mostly gravel and dirt
@@ -108,7 +108,7 @@ const DRIFT_PER_KM := [172.5, 690.0, 1725.0]
 const PACE := {"stock": [38.0, 2.4, 8.4, 7.4], "golf4": [47.5, 2.7, 7.6, 6.9], "logan": [45.0, 2.9, 7.4, 6.9], "v50": [58.5, 3.4, 7.6, 7.4], "i20": [50.0, 3.0, 7.5, 7.1], "sandero": [48.3, 3.0, 7.4, 6.9], "focus": [58.3, 3.5, 7.9, 7.2], "zafira": [54.7, 2.8, 7.3, 7.1], "hypercar": [96.0, 9.0, 13.5, 12.0]}
 ## The car's own standing start on the map's S1 (the drag_kilometre mission's line), full throttle with the automatic
 ## box (FreeCar), measured with tests/_pace_probe.gd (2026-11-21): seconds over 402 m and 1000 m. A drag field
-## (StreetRivals) is calibrated against these (scaled by grip_k via pace_time when wet).
+## (StreetRivals, which the drags keep) is calibrated against these (scaled by grip_k via pace_time when wet).
 const DRAG_TIMES := {"stock": [21.0, 40.6], "golf4": [19.1, 36.5], "logan": [18.8, 35.9], "v50": [16.0, 30.3], "i20": [17.9, 34.1], "sandero": [17.9, 34.3], "focus": [16.2, 30.7], "zafira": [18.0, 35.7], "hypercar": [9.9, 18.0]}
 const TOWN_GRIP := 0.9 ## Physics.SURF_GRIP of the map's asphalt, which PACE was measured on
 
@@ -119,6 +119,7 @@ var run: Dictionary = {} ## the event being raced: {ev, state ("countdown", "run
 var clock_h := 0.0 ## game hours since the board was started (expiry runs on it)
 var last_result: Dictionary = {}
 var last_begin: Dictionary = {} ## the last run begun: {ev, car} (RESTART runs it again)
+var car_model: CarModel = null ## the player's car as the open world drives it (FreeCar.model): the field drives the same car
 var stats: Dictionary = {} ## WorldProgress.live (OpenWorld hands it over): the missed tries per kind ease the field
 ## The world's state the gated variants read (OpenWorld.set_world every frame): night 0..1, wet 0..1 (the road's
 ## wetness), rain, fog, hail. Dry noon is all zeros, so no variant stands on the board then.
@@ -721,12 +722,19 @@ func begin(ev: Dictionary, car_key: String) -> void:
 	ease_field(ev)
 	ev["difficulty_shift"] = DifficultyProfile.event_shift() # the player's rival step, fixed for the run
 	var start_mu := clampf(float(ev.get("mu", 1.0)), 0.1, 1.0)
+	_drop_run()
 	run = {"ev": ev, "state": "countdown", "t": -COUNTDOWN, "cp": 0, "car": car_key, "mu": start_mu,
 		"tiers": tiers_for(ev, car_key), "drift": DriftScore.new() if ev.kind == "drift_zone" else null, "cps": ev.cps,
 		"rivals": null, "stage": 0, "stage_times": [], "rally": [], "notice": "", "wrong_t": 0.0, "off_t": 0.0,
 		"lost_t": 0.0, "resets": 0}
 	var seed_value := rng.randi()
-	if ev.kind == "race" and int(ev.get("rivals", 0)) > 0:
+	if ev.kind == "race" and int(ev.get("rivals", 0)) > 0 and String(ev.get("grid", "")) != "drag":
+		# the race sim's own bots on a track made from the route (EventField): physics, traffic, contact
+		run.rivals = EventField.new(ev.path, car_key, int(ev.rivals), seed_value, {"map": map, "beyond": beyond(ev),
+			"difficulty": String(ev.get("difficulty", "medium")), "difficulty_shift": float(ev.get("difficulty_shift", 0.0)),
+			"knockout": bool(ev.get("knockout", false)), "lap_length": float(ev.get("lap_length", 0.0)), "mu": start_mu,
+			"car_model": car_model, "key": "event_%s_%d" % [String(ev.get("id", "")), seed_value & 0xffff]})
+	elif ev.kind == "race" and int(ev.get("rivals", 0)) > 0:
 		var ro := {"grid": String(ev.get("grid", "")), "knockout": bool(ev.get("knockout", false)),
 			"lap_length": float(ev.get("lap_length", 0.0)), "difficulty": String(ev.get("difficulty", "medium")),
 			"difficulty_shift": float(ev.get("difficulty_shift", 0.0)),
@@ -816,9 +824,9 @@ func gates_ahead() -> Array:
 	var cp := int(run.cp)
 	return [gates[cp] if cp < gates.size() else {}, gates[cp + 1] if cp + 1 < gates.size() else {}]
 
-## A race's field (StreetRivals) while it runs, or null.
-func rivals() -> StreetRivals:
-	return run.get("rivals") as StreetRivals if is_running() else null
+## A race's field while it runs (EventField; StreetRivals for a drag), or null.
+func rivals() -> RefCounted:
+	return run.get("rivals") as RefCounted if is_running() else null
 
 ## The road on past an event's finish (cached on the event), StreetRivals.RUNOUT_MAX m of it from the finish: a lap
 ## carries on round from its start, a route along the map's roads straight on from its end (none where the road
@@ -854,8 +862,8 @@ func grid_pose(ev: Dictionary) -> Array:
 	var h := float(ev.heading)
 	var p: Vector2 = ev.pos
 	if is_running() and run.rivals:
-		var g := (run.rivals as StreetRivals).player_grid()
-		var ps: Array = (run.rivals as StreetRivals).pose(g.x, g.y)
+		var g: Vector2 = run.rivals.player_grid()
+		var ps: Array = run.rivals.pose(g.x, g.y)
 		p = ps[0]
 		h = (ps[1] as Vector2).angle()
 	return [_on_road(p), h]
@@ -868,6 +876,13 @@ func _on_road(p: Vector2) -> Vector2:
 	return near.pos if not near.is_empty() else p
 
 func abandon() -> void:
+	_drop_run()
+
+## The run cleared (its field's race sim let go).
+func _drop_run() -> void:
+	var rv = run.get("rivals")
+	if rv is EventField:
+		(rv as EventField).dispose()
 	run = {}
 
 ## Where reset_to_checkpoint() puts the car: [map position, heading] at the last gate the car went through (the
@@ -901,10 +916,11 @@ func reset_to_checkpoint() -> Array:
 	return pose
 
 ## One frame of the run: p the car's map position, v its speed m/s, slip its slip angle (rad), off whether it is
-## off the road, crash whether it hit something hard, z the car's vertical height.
+## off the road, crash whether it hit something hard, z the car's vertical height, car the player's car itself
+## (FreeCar.car): a race's field (EventField) mirrors it into the race and hands the race's contact back to it.
 ## Returns "" or what happened: "go", "cp", "warn" (a new notice: missed checkpoint, wrong way, off the route),
 ## "stage_done", "stage", "done", "fail".
-func tick(dt: float, p: Vector2, v: float, slip: float, off: bool, crash: bool, z := -INF) -> String:
+func tick(dt: float, p: Vector2, v: float, slip: float, off: bool, crash: bool, z := -INF, car: RaceCar = null) -> String:
 	if not is_running():
 		return ""
 	var ev: Dictionary = run.ev
@@ -924,9 +940,12 @@ func tick(dt: float, p: Vector2, v: float, slip: float, off: bool, crash: bool, 
 			run.t = 0.0
 			return "go"
 		return ""
-	var rv := run.rivals as StreetRivals
-	if rv:
+	var rv = run.get("rivals")
+	if rv is EventField:
+		(rv as EventField).step(dt, p, v, car, float(run.s))
+	elif rv:
 		rv.step(dt, p, v)
+	if rv:
 		if rv.player_out:
 			_finish_race(rv.player_out_pos, true)
 			return "done"
@@ -962,7 +981,7 @@ func tick(dt: float, p: Vector2, v: float, slip: float, off: bool, crash: bool, 
 		last_result = {"ev": ev, "success": false, "tier": 0, "score": 0.0, "line": "Out of time", "failed": true}
 		if ev.kind in ["race", "rally"]:
 			last_result.merge({"pos": 999, "finished": false, "knocked": false, "time": null})
-		run = {}
+		_drop_run()
 		return "fail"
 	return said
 
@@ -1045,14 +1064,14 @@ func _finish() -> void:
 	var tier := _tier_high(score, tiers) if tiers.size() >= 3 else 0
 	last_result = {"ev": ev, "success": tier > 0, "tier": tier, "score": score,
 		"line": "%s drift points" % OpenWorldHud._thousands(int(score)), "next": _next_text(score, tier, tiers), "time": t}
-	run = {}
+	_drop_run()
 
 ## A race over: the player's place (knocked: out of a knockout in that place).
 func _finish_race(pos: int, knocked: bool) -> void:
 	var ev: Dictionary = run.ev
 	var t := float(run.t)
-	var rv := run.rivals as StreetRivals
-	var field := rv.field() if rv else 1
+	var rv = run.get("rivals")
+	var field: int = rv.field() if rv else 1
 	if rv and bool(ev.get("knockout", false)):
 		field = rv.rivals.size() + 1
 	var line := "P%d of %d" % [pos, field]
@@ -1062,7 +1081,7 @@ func _finish_race(pos: int, knocked: bool) -> void:
 		line += " · %s" % clock_text(t)
 	last_result = {"ev": ev, "success": pos <= int(ev.get("target", 3)), "tier": 0, "score": 0.0, "line": line,
 		"pos": pos, "finished": not knocked, "knocked": knocked, "time": t if not knocked else null}
-	run = {}
+	_drop_run()
 
 ## A rally stage done: on to the liaison, or the event's result after the last stage.
 func _rally_stage_done() -> String:
@@ -1094,7 +1113,7 @@ func _rally_stage_done() -> String:
 		line += " (+%.1f s)" % (mine - best)
 	last_result = {"ev": ev, "success": pos <= int(ev.get("target", 3)), "tier": 0, "score": 0.0,
 		"line": line, "pos": pos, "finished": true, "knocked": false, "time": mine}
-	run = {}
+	_drop_run()
 	return "done"
 
 ## Where a rally stage starts: [map position on the road, heading].
@@ -1230,8 +1249,8 @@ func hud_lines(p: Vector2) -> Array:
 	var line := dist
 	match String(ev.kind):
 		"race":
-			var rv := run.rivals as StreetRivals
-			var gap := rv.gap_text() if rv else ""
+			var rv = run.get("rivals")
+			var gap: String = rv.gap_text() if rv else ""
 			title = "%s  P%d/%d  %s" % [name, rv.position() if rv else 1, rv.field() if rv else 1, clock_text(t)]
 			line = "CP %d/%d · %s" % [mini(int(run.cp) + 1, cps.size()), cps.size(), dist] if cps.size() > 1 else dist
 			if rv and bool(ev.get("knockout", false)):

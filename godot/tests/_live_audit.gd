@@ -10,6 +10,8 @@ const BEHIND_M := 10.0 ## the corner speed is held this far past the apex (a hai
 
 var map: TownMap
 var anomalies := 0
+var contacts_seen := 0
+var bot_contacts_seen := 0
 
 func _initialize() -> void:
 	map = TownMap.load_map(OpenWorld.MAP_KEY)
@@ -61,10 +63,10 @@ func _audit(ev: Dictionary, label: String) -> void:
 		var d: Vector2 = near.dir
 		if absf(d.dot(Vector2.from_angle(float(g[1])))) < 0.8:
 			_bad("player faces %.0f deg off the road's direction" % rad_to_deg(acos(absf(d.dot(Vector2.from_angle(float(g[1])))))))
-	var rv := live.rivals()
+	var rv = live.rivals()
 	if rv:
 		for k in rv.rivals.size():
-			var ps: Array = rv.pose(float(rv.rivals[k].s), float(rv.rivals[k].lat))
+			var ps: Array = rv.car_pose(k) if rv is EventField else rv.pose(float(rv.rivals[k].s), float(rv.rivals[k].lat))
 			if map.road_at(ps[0].x, ps[0].y, -INF, 0.3).is_empty():
 				_bad("rival %d grid spot off the road (%.1f m)" % [k, _road_dist(ps[0])])
 			if (ps[0] as Vector2).distance_to(gp) < 1.95:
@@ -121,6 +123,8 @@ func _drive(live: LiveEvents, ev: Dictionary, p0: Vector2, h0: float) -> void:
 	var overlap := 0
 	var result := ""
 	var stage := 0
+	contacts_seen = 0
+	bot_contacts_seen = 0
 	while t < MAX_T:
 		t += DT
 		if ev.kind == "rally" and live.is_running() and int(live.run.stage) != stage:
@@ -214,7 +218,14 @@ func _drive(live: LiveEvents, ev: Dictionary, p0: Vector2, h0: float) -> void:
 			if crash:
 				dstat.crash += 1
 			dstat.slip = maxf(float(dstat.slip), slip)
-		var r := live.tick(DT, cp, speed, slip, off, crash, car.z)
+		var r := live.tick(DT, cp, speed, slip, off, crash, car.z, car.car)
+		if live.rivals() is EventField:
+			var efh: EventField = live.rivals()
+			for hh in efh.player_hits:
+				car.car_contact(hh[0], float(hh[1]))
+			efh.player_hits.clear()
+			contacts_seen = efh.contacts
+			bot_contacts_seen = efh.bot_contacts
 		if r != "":
 			events[r] = int(events.get(r, 0)) + 1
 			if r == "stage":
@@ -244,15 +255,15 @@ func _drive(live: LiveEvents, ev: Dictionary, p0: Vector2, h0: float) -> void:
 				stuck = 0.0
 		else:
 			stuck = 0.0
-		var rv := live.rivals()
+		var rv = live.rivals()
 		if rv and live.run.state == "running":
 			for k in rv.rivals.size():
 				var rr: Dictionary = rv.rivals[k]
 				if bool(rr.out) or bool(rr.get("gone", false)): # (not drawn)
 					continue
-				var ps: Array = rv.pose(float(rr.s), float(rr.lat))
+				var ps: Array = rv.car_pose(k) if rv is EventField else rv.pose(float(rr.s), float(rr.lat))
 				var q: Vector2 = ps[0]
-				if prev_rv.has(k) and q.distance_to(prev_rv[k]) > float(rr.v) * DT * 3.0 + 0.5:
+				if prev_rv.has(k) and q.distance_to(prev_rv[k]) > float(rr.v) * DT * 3.0 + 0.5 + (4.0 if rv is EventField else 0.0):
 					teleports += 1
 				prev_rv[k] = q
 				if int(t * 2.0) != int((t - DT) * 2.0):
@@ -267,7 +278,8 @@ func _drive(live: LiveEvents, ev: Dictionary, p0: Vector2, h0: float) -> void:
 						var ro: Dictionary = rv.rivals[o]
 						if bool(ro.out) or bool(ro.get("gone", false)):
 							continue
-						if (rv.pose(float(ro.s), float(ro.lat))[0] as Vector2).distance_to(q) < 2.2:
+						var qo: Vector2 = rv.car_pose(o)[0] if rv is EventField else rv.pose(float(ro.s), float(ro.lat))[0]
+						if qo.distance_to(q) < 2.2:
 							overlap += 1
 		var fine := OS.get_environment("TRACE_FROM") != "" and t >= float(OS.get_environment("TRACE_FROM")) and t <= float(OS.get_environment("TRACE_TO"))
 		if fine and int(t * 4.0) != int((t - DT) * 4.0):
@@ -295,8 +307,8 @@ func _drive(live: LiveEvents, ev: Dictionary, p0: Vector2, h0: float) -> void:
 		print("   rivals: %.0f%% of samples off the road, %d overlaps, worst %.1f m beyond the drawn road at %s" % [100.0 * rival_off / rival_samples, overlap, rival_worst, rival_worst_at])
 		if rival_off * 10 > rival_samples:
 			_bad("rivals off the road %.0f%% of the time" % (100.0 * rival_off / rival_samples))
-	if ev.kind == "race" and res.has("pos"):
-		var rv2: StreetRivals = live.run.get("rivals") if live.is_running() else null
+	if contacts_seen > 0 or bot_contacts_seen > 0:
+		print("   contact ticks: with the player %d, between rivals %d" % [contacts_seen, bot_contacts_seen])
 	if ev.has("mission") and not res.is_empty():
 		print("   outcome %s" % str(MapMissions.outcome(res)))
 

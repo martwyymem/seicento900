@@ -79,6 +79,7 @@ var reflections: CarReflections ## the street mirrored in the car's paint (prese
 var lamp_lights: Array[OmniLight3D] = []
 var _lamp_reach := 200.0 ## m: the pooled lamp lights have faded out by here (_place_lamp_lights)
 var route_mesh: MeshInstance3D
+var race_arrows: RacingArrows ## a race's racing-line chevrons on the map (EventField's track), in place of the GPS chevrons
 var route_mat: StandardMaterial3D
 var hud: OpenWorldHud
 var story: StoryDirector ## the campaign's story: dialogue card, phone messages, journal (scripts/world/story_director.gd)
@@ -129,7 +130,7 @@ var events: Array = [] ## [{stage, spot, pos: Vector2, heading, title, ...}]; a 
 var live: LiveEvents ## the generated events round the car (scripts/world/live_events.gd)
 var event_dressing: EventDressing ## the driven event's start gantry and spectators, only while it runs (scripts/world/event_dressing.gd)
 var _crashed_frame := false
-var _rival_nodes: Array[Node3D] = [] ## the field of a mission raced on the map (StreetRivals), drawn
+var _rival_nodes: Array[Node3D] = [] ## the field of a race on the map (EventField; StreetRivals for a drag), drawn
 const RIVAL_PAINTS := ["#1565c0", "#f9a825", "#2e7d32", "#6a1b9a", "#ef6c00", "#00838f", "#ad1457", "#4e342e", "#eceff1"]
 const RIVAL_MASS := 900.0 ## the car hit something hard this frame (a live drift zone loses its combo)
 var active_event := -1
@@ -762,7 +763,7 @@ func _build_route_mesh() -> void:
 
 ## Chevrons on the road along the next stretch of the GPS route.
 func _update_route_mesh() -> void:
-	if route.size() < 2:
+	if route.size() < 2 or (live and live.rivals() is EventField): # (a race on the map has its racing line instead)
 		route_mesh.mesh = null
 		return
 	var mb := MeshBatch.new()
@@ -1111,6 +1112,7 @@ func _begin_live_ev(lev: Dictionary) -> void:
 func _start_run(lev: Dictionary) -> void:
 	_clear_rivals()
 	_result = {}
+	live.car_model = drive.model
 	live.begin(lev, CarCatalog.key_at(progress.car_class))
 	var g: Array = live.grid_pose(lev)
 	drive.place(g[0], float(g[1]))
@@ -1147,6 +1149,7 @@ func _end_run(title := "", sub := "") -> void:
 ## The world after a run, however it ended: no checkpoint beacon, gates, rivals or event HUD; the clock a mission
 ## moved put back; the GPS back on the next campaign target (traffic returns by itself once the roads reopen).
 func _after_run() -> void:
+	_clear_rivals()
 	if event_dressing:
 		event_dressing.clear()
 	_live_cp_beacon()
@@ -1283,7 +1286,12 @@ func _update_live(delta: float) -> void:
 		var slip := absf(wrapf(atan2(car.vy, car.vx) - car.heading, -PI, PI)) if v > 1.0 else 0.0
 		var off := LiveEvents.off_road(map, cp, drive.z)
 		var lev: Dictionary = live.run.ev
-		var r := live.tick(delta * _time_rate, cp, v, slip, off and not drive.airborne, _crashed_frame, drive.z)
+		var r := live.tick(delta * _time_rate, cp, v, slip, off and not drive.airborne, _crashed_frame, drive.z, drive.car)
+		var ef := live.rivals() as EventField
+		if ef: # the race's car-to-car contact with the player: the dents and the knock (the push is already in drive.car)
+			for h in ef.player_hits:
+				drive.car_contact(h[0], float(h[1]))
+			ef.player_hits.clear()
 		match r:
 			"go":
 				hud.notify("GO!", String(lev.title), lev.color)
@@ -1310,9 +1318,10 @@ func _update_live(delta: float) -> void:
 				_live_finished()
 		if live.is_running():
 			_update_rivals(delta)
+			_update_race_arrows()
 			var lines := live.hud_lines(cp)
 			hud.set_live(String(lines[0]), String(lines[1]), lev.color)
-			var rv := live.rivals()
+			var rv = live.rivals()
 			hud.set_standings(rv.standings() if rv else [], lev.color) # the timing list, as a race has
 		return
 	hud.set_live("", "", Color.WHITE)
@@ -1487,7 +1496,7 @@ func _roads_closed() -> bool:
 
 func _spawn_rivals() -> void:
 	_clear_rivals()
-	var rv := live.rivals()
+	var rv = live.rivals()
 	if rv == null:
 		return
 	var ev: Dictionary = live.run.get("ev", {})
@@ -1527,18 +1536,49 @@ func _spawn_rivals() -> void:
 		node.add_child(tag)
 		_rival_nodes.append(node)
 	_update_rivals(0.0)
+	_start_race_arrows()
 
 func _clear_rivals() -> void:
 	for n in _rival_nodes:
 		if is_instance_valid(n):
 			n.queue_free()
 	_rival_nodes.clear()
+	if race_arrows:
+		race_arrows.set_track(null)
+	if hud:
+		hud.set_brake_cue(false)
 
-## The field drawn where StreetRivals has it, out of the race once knocked out, and pushed by the player's car.
+## A race on the map (EventField) shows the races' racing-line chevrons along its track, and the BRAKE call, by the
+## player's racing-line setting (DifficultyProfile line: full, braking zones only, off); the GPS chevrons step aside.
+func _start_race_arrows() -> void:
+	var ef := live.rivals() as EventField
+	if ef == null or world == null:
+		return
+	if race_arrows == null:
+		race_arrows = RacingArrows.new()
+		world.add_child(race_arrows)
+	race_arrows.mode = String(DifficultyProfile.current.get("line", "full"))
+	race_arrows.set_track(ef.track, ef.et.start_s, ef.et.finish_s, ef.race.brake_k, ef.race.brake_aero, ef.race._loose)
+	if route_mesh:
+		route_mesh.mesh = null
+
+func _update_race_arrows() -> void:
+	var ef := live.rivals() as EventField
+	if ef == null or race_arrows == null or race_arrows.track != ef.track:
+		return
+	var v := maxf(0.0, drive.car.speed)
+	var mu := ef.race.plan_grip(ef.me)
+	race_arrows.update(ef.me.s, v, mu)
+	hud.set_brake_cue(live.run.get("state", "") == "running" and race_arrows.brake_cue(ef.me.s, v, mu, brake))
+
+## The field drawn where the race has it (EventField: the race sim's bots, whose contact with the player is the race's
+## own; StreetRivals for a drag: kinematic lanes, pushed by the player's car with a two-car circle), out of the race
+## once knocked out, gone once parked out of sight.
 func _update_rivals(delta: float) -> void:
-	var rv := live.rivals()
+	var rv = live.rivals()
 	if rv == null or _rival_nodes.size() != rv.rivals.size():
 		return
+	var ef := rv as EventField
 	var me := Vector2(drive.car.x, drive.car.y)
 	for k in rv.rivals.size():
 		var r: Dictionary = rv.rivals[k]
@@ -1546,15 +1586,26 @@ func _update_rivals(delta: float) -> void:
 		if bool(r.get("out", false)) or bool(r.get("gone", false)): # knocked out, or home and turned off out of sight
 			node.visible = false
 			continue
-		var pose: Array = rv.pose(float(r.s), float(r.lat))
-		var p: Vector2 = pose[0]
-		var dir: Vector2 = pose[1]
-		var hit := map.road_at(p.x, p.y, drive.z, 2.0)
+		var p: Vector2
+		var h: float
+		var rv_speed: float
+		var z_ref := drive.z
+		if ef:
+			var cpose := ef.car_pose(k)
+			p = cpose[0]
+			h = float(cpose[1])
+			rv_speed = float(cpose[2])
+			z_ref = float(cpose[3]) # the deck the race's road is on (a bridge, not the street under it)
+		else:
+			var pose: Array = rv.pose(float(r.s), float(r.lat))
+			p = pose[0]
+			h = (pose[1] as Vector2).angle()
+			rv_speed = float(r.v)
+		var hit := map.road_at(p.x, p.y, z_ref, 2.0)
 		var y: float = float(hit.height) if not hit.is_empty() else map.ground(p.x, p.y)
 		node.visible = true
 		node.position = Vector3(p.x, y, p.y)
-		node.basis = Basis(Vector3.UP, -dir.angle() - PI / 2.0)
-		var rv_speed := float(r.v)
+		node.basis = Basis(Vector3.UP, -h - PI / 2.0)
 		var prev_v := float(node.get_meta("prev_v", rv_speed))
 		var braking := delta > 0.001 and rv_speed > 0.2 and (prev_v - rv_speed) / delta > 1.5
 		node.set_meta("prev_v", rv_speed)
@@ -1564,7 +1615,10 @@ func _update_rivals(delta: float) -> void:
 			for w in (node.get("wheels") as Array):
 				(w as Node3D).rotation.x = fmod((w as Node3D).rotation.x - spin, TAU)
 		node.call("set_lamps", night, braking) # headlamps, position lights and brake lamps like the player's
-		# contact: two cars' worth of circles, the player shoved out and the rival knocked across
+		if ef:
+			continue
+		# a drag's lanes: two cars' worth of circles, the player shoved out and the rival knocked across
+		var dir := Vector2.from_angle(h)
 		var d := me.distance_to(p)
 		if d < 2.1 and d > 0.01:
 			var n_out := (me - p) / d

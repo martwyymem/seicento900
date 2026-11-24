@@ -154,8 +154,7 @@ checkpoint beacon `live_cp`, HUD `set_live`, ABANDON EVENT on the pause menu); m
 `tests/test_live_events.gd` covers it; `tests/_live_events_probe.gd` times the generation (about 3 ms each).
 The campaign missions (`Missions`) are raced on the map the same way: [`godot/scripts/world/map_missions.gd`](godot/scripts/world/map_missions.gd)
 (`MapMissions.event`) takes each mission's route from its baked track file (the routes are in the open world's metres) and
-LiveEvents runs it with a field from [`street_rivals.gd`](godot/scripts/world/street_rivals.gd) (`StreetRivals`: cars on the
-route polyline with a grip/accel/brake envelope, drag grid four abreast, knockout eliminations). A rally mission is its special
+LiveEvents runs it with the same field a live event gets (below). A rally mission is its special
 stages in turn with the player driving the liaisons; the crews' times come from `pace_time`. During a mission the traffic is
 kept off the roads (`OpenWorld._roads_closed`), the clock jumps to the mission's hour, and the result goes through
 `Missions.record` as a raced one did (`OpenWorld._mission_finished`). **Missions happen only on the open-world map**
@@ -199,3 +198,22 @@ Events on the map run Forza Horizon style: gates across the road, missed-gate / 
 last gate, RESTART EVENT and ABANDON EVENT on the pause menu, a results card after each event, and one shared clean-up in
 `OpenWorld` that restores the clock, traffic, HUD and GPS. Speed zones, drift zones and trailblazers start by driving through
 their gate; cleared live events stay on the board with their best medal. Drag fields are tuned to `LiveEvents.DRAG_TIMES`.
+
+The field of a race on the map (live sprints, off-road races, knockouts and the map missions' ones; 2026-11-24, user:
+"the same AI as the racers") is the race sim itself: [`event_track.gd`](godot/scripts/world/event_track.gd) (`EventTrack`)
+makes a `Track` from the event's route when it starts (the road's centre under the route with the junction corners
+rounded, the map's half width per sample in `Track.HW`, the map's surfaces as `Track.loose` spans, kind 3 being the
+map's slower asphalt, the road's height, the bots' walls `REACH` 1 m past the road's edges; closed into a loop by a
+lead-in, the road past the finish and a stub nobody drives; racing line by `Track.build_racing_line_span`, profile by
+`build_profile`; 40-130 ms), and [`event_field.gd`](godot/scripts/world/event_field.gd) (`EventField`) runs a `Race` on
+it with the circuits' drivers (Drivers.ROSTER) on full physics, traffic, slipstream and box contact (`Race.collide`).
+The player's FreeCar is a mirrored car in that race (`Race.external_player`: the race never moves, finishes or walls
+it; `EventField.step` copies the car in and the contact push back, `player_hits` go to `FreeCar.car_contact` for dents
+and sounds). There is no rubber banding (`diff_params.band` is 0): the field's pace is `EventField.PACE` by level times
+the race's own skill. Cars home park past the line (`Race.stop_at`, `park_spot`), knockouts drop the last running car
+at each sector line. During such a race `RacingArrows` (the 0.5.9 chevrons, RaceWorld's mesh and PaceNotes' zones)
+shows the racing line in place of the GPS chevrons and `OpenWorldHud.set_brake_cue` the BRAKE call; the checkpoint
+gates stay. Drags keep [`street_rivals.gd`](godot/scripts/world/street_rivals.gd) (`StreetRivals`, drag only: own lanes,
+launches calibrated to `LiveEvents.DRAG_TIMES` by `DRAG_BANDS`, a two-car circle against the player); rallies keep the
+crews' times from `pace_time`. Probes: `tests/_event_field_probe.gd` (rival times against `pace_time` per level,
+OLD=1 for StreetRivals), `_live_audit.gd`; suites `test_event_field.gd`, `test_street_rivals.gd`, `test_live_events.gd`.

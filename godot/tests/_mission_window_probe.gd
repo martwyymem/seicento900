@@ -70,7 +70,7 @@ func _race(id: String) -> void:
 	await _hold(tr[0], (tr[mini(3, tr.size() - 1)] - tr[0]).angle(), 30)
 	await _shot(id + "_1_grid")
 	ow._update_live(3.2) # through the countdown
-	var rv := ow.live.rivals()
+	var rv = ow.live.rivals()
 	if rv == null:
 		print("!! no field")
 		return

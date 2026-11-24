@@ -7,7 +7,7 @@
 ## two levels kinder at Novice and two harder (alien) at Unbeatable. The race sim never reads this class:
 ## the game turns it into RaceSettings.difficulty / difficulty_shift / aids / fuel_mult / wear_mult /
 ## damage_mode / auto_rejoin, so a race built from its own settings (the parity race) is untouched.
-## The open world's events (LiveEvents, MapMissions, StreetRivals) and the fan payouts read `current`.
+## The open world's events (LiveEvents, MapMissions, EventField, StreetRivals) and the fan payouts read `current`.
 class_name DifficultyProfile
 extends RefCounted
 
