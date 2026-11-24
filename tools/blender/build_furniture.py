@@ -23,6 +23,12 @@ Frames (Blender; glTF turns +Y into Godot -Z): X along the road, +Y away from it
                        rear stack four high, in staggered courses
   TyreWallBelt         its conveyor-belt covers: a cap over each stack and three straps down the front, white
                        (tinted per stretch by Godot)
+  StageArchStart       truss start gantry spanning a street or rally stage (legs at +-5.6 m, 5.4 m clear)
+  StageArchFinish      chequered truss finish gantry for point-to-point / split rally stages
+  StageTapeBarrier     3.0 m section of red-and-white hazard barrier tape on two stakes along X
+  StageChevronLeft     1.56 m yellow/black corner chevron board pointing left (-X), face towards -Y
+  StageChevronRight    1.56 m yellow/black corner chevron board pointing right (+X), face towards -Y
+  StageWarningSign     triangular red/yellow caution hazard board (!), face towards -Y
 """
 import random
 import bpy
@@ -46,6 +52,7 @@ kit.MATERIALS.update({
 	"Orange": (srgb("#f06a12"), 0.6, 0.0, {}),
 	"Skin": (srgb("#c89a7a"), 0.7, 0.0, {}),
 	"Flag": (srgb("#ffd21a"), 0.7, 0.0, {"double": True}),
+	"SignYellow": (srgb("#ffd21a"), 0.45, 0.0, {}),
 	"Red": (srgb("#c01a1a"), 0.4, 0.1, {}),
 	"Black": (srgb("#141516"), 0.6, 0.0, {}),
 	"Glass": (srgb("#27343d"), 0.06, 0.6, {}),
@@ -294,10 +301,217 @@ def tyre_wall_belt():
 	return mb
 
 
+def stage_arch(label="START", finish=False):
+	"""Street/rally stage portal arch: dark steel lattice legs at +-5.6 m (clear span 10.4 m, clear height 5.4 m)
+	with a crisp motorsport header fascia reading START or FINISH on both faces."""
+	mb = MB()
+	lx = 5.6
+	h_clear = 5.4
+	h_top = 6.75
+	lw, ld = 0.36, 0.32
+	for sx in (-1, 1):
+		cx = sx * lx
+		# weighted concrete ballast base pad
+		mb.colour = srgb("#9b9890")
+		mb.box((cx - 0.62, -0.52, 0.0), (cx + 0.62, 0.52, 0.28), "Concrete", skip=("-z",))
+		# 4 corner steel chords of the leg tower
+		mb.colour = srgb("#2c3137")
+		for dx in (-lw, lw):
+			for dy in (-ld, ld):
+				mb.box((cx + dx - 0.04, dy - 0.04, 0.28), (cx + dx + 0.04, dy + 0.04, h_top), "SteelPaint", skip=("-z",))
+		# horizontal & diagonal truss bracing up each leg
+		mb.colour = srgb("#8f969c")
+		bays = 6
+		for k in range(bays):
+			z0 = 0.35 + k * (h_clear - 0.45) / bays
+			z1 = 0.35 + (k + 1) * (h_clear - 0.45) / bays
+			for dy in (-ld, ld):
+				mb.tube((cx - lw, dy, z0), (cx + lw, dy, z0), 0.022, "Steel", segs=4, caps=False)
+				if k % 2 == 0:
+					mb.tube((cx - lw, dy, z0), (cx + lw, dy, z1), 0.02, "Steel", segs=4, caps=False)
+				else:
+					mb.tube((cx + lw, dy, z0), (cx - lw, dy, z1), 0.02, "Steel", segs=4, caps=False)
+			for dx in (-lw, lw):
+				mb.tube((cx + dx, -ld, z0), (cx + dx, ld, z0), 0.022, "Steel", segs=4, caps=False)
+		# crisp sponsor/stage plates mounted on front and back of each leg
+		for sy in (-1, 1):
+			y0 = sy * (ld + 0.045)
+			y1 = y0 + sy * 0.008
+			mb.colour = (1, 1, 1)
+			mb.quad((cx - 0.42, y0, 1.55), (cx + 0.42, y0, 1.55), (cx + 0.42, y0, 3.55), (cx - 0.42, y0, 3.55), "White", (0, sy, 0))
+			bar_mat = "Black" if finish else "Red"
+			mb.colour = srgb("#141516") if finish else srgb("#c01a1a")
+			for za, zb in ((1.55, 1.85), (3.25, 3.55)):
+				mb.quad((cx - 0.42, y1, za), (cx + 0.42, y1, za), (cx + 0.42, y1, zb), (cx - 0.42, y1, zb), bar_mat, (0, sy, 0))
+	# overhead header truss box spanning between the legs
+	bx = lx + lw + 0.06
+	by = ld + 0.04
+	mb.colour = srgb("#2c3137")
+	mb.box((-bx, -by, h_clear), (bx, by, h_top), "SteelPaint")
+	# front (-Y) and rear (+Y) header fascia boards
+	for sy in (-1, 1):
+		y0 = sy * (by + 0.012)
+		y1 = y0 + sy * 0.010
+		y2 = y0 + sy * 0.020
+		ax_u = (1, 0, 0) if sy < 0 else (-1, 0, 0)
+		# base banner face
+		if finish:
+			mb.colour = (1, 1, 1)
+			mb.quad((-bx, y0, h_clear), (bx, y0, h_clear), (bx, y0, h_top), (-bx, y0, h_top), "White", (0, sy, 0))
+			# bold two-row chequered wings on left and right, dark centre plaque for FINISH lettering
+			sq = 0.45
+			for row in range(3):
+				zr0 = h_clear + row * ((h_top - h_clear) / 3.0)
+				zr1 = h_clear + (row + 1) * ((h_top - h_clear) / 3.0)
+				for k in range(26):
+					x0 = -bx + k * (2.0 * bx / 26.0)
+					x1 = -bx + (k + 1) * (2.0 * bx / 26.0)
+					if abs((x0 + x1) * 0.5) < 2.85:
+						continue
+					if (k + row) % 2 == 0:
+						mb.colour = srgb("#141516")
+						mb.quad((x0, y1, zr0), (x1, y1, zr0), (x1, y1, zr1), (x0, y1, zr1), "Black", (0, sy, 0))
+			# dark centre plaque + yellow motorsport accent bars
+			mb.colour = srgb("#141516")
+			mb.quad((-2.9, y1, h_clear + 0.08), (2.9, y1, h_clear + 0.08), (2.9, y1, h_top - 0.08), (-2.9, y1, h_top - 0.08), "Black", (0, sy, 0))
+			mb.colour = srgb("#ffd21a")
+			for za, zb in ((h_clear, h_clear + 0.10), (h_top - 0.10, h_top)):
+				mb.quad((-2.9, y2, za), (2.9, y2, za), (2.9, y2, zb), (-2.9, y2, zb), "SignYellow", (0, sy, 0))
+			mb.colour = (1, 1, 1)
+			kit.text_mesh(mb, label, (0.0, y2, (h_clear + h_top) * 0.5), 0.78, "White", axis_u=ax_u, axis_v=(0, 0, 1), bold=0.025)
+		else:
+			mb.colour = srgb("#c01a1a")
+			mb.quad((-bx, y0, h_clear), (bx, y0, h_clear), (bx, y0, h_top), (-bx, y0, h_top), "Red", (0, sy, 0))
+			# crisp white top border and chequered bottom strip
+			mb.colour = (1, 1, 1)
+			mb.quad((-bx, y1, h_top - 0.11), (bx, y1, h_top - 0.11), (bx, y1, h_top), (-bx, y1, h_top), "White", (0, sy, 0))
+			cn = 24
+			cw = 2.0 * bx / cn
+			for k in range(cn):
+				x0 = -bx + k * cw
+				x1 = x0 + cw
+				mb.colour = (1, 1, 1) if k % 2 == 0 else srgb("#141516")
+				mb.quad((x0, y1, h_clear), (x1, y1, h_clear), (x1, y1, h_clear + 0.18), (x0, y1, h_clear + 0.18),
+					"White" if k % 2 == 0 else "Black", (0, sy, 0))
+			# dark centre panel behind START text for crisp contrast in any lighting
+			mb.colour = srgb("#141516")
+			mb.quad((-2.7, y1, h_clear + 0.20), (2.7, y1, h_clear + 0.20), (2.7, y1, h_top - 0.12), (-2.7, y1, h_top - 0.12), "Black", (0, sy, 0))
+			mb.colour = (1, 1, 1)
+			kit.text_mesh(mb, label, (0.0, y2, (h_clear + h_top) * 0.5 + 0.04), 0.78, "White", axis_u=ax_u, axis_v=(0, 0, 1), bold=0.025)
+	return mb
+
+
+def stage_tape_barrier():
+	"""3.0 m section of red-and-white rally hazard tape strung between two stakes along X."""
+	mb = MB()
+	half_l = 1.5
+	# two slim stakes with high-visibility red/white top caps
+	for sx in (-1, 1):
+		px = sx * (half_l - 0.04)
+		mb.colour = srgb("#3a3f45")
+		mb.box((px - 0.028, -0.028, 0.0), (px + 0.028, 0.028, 0.82), "SteelPaint", skip=("-z",))
+		mb.colour = (1, 1, 1)
+		mb.box((px - 0.030, -0.030, 0.82), (px + 0.030, 0.030, 0.96), "White", skip=("-z",))
+		mb.colour = srgb("#c01a1a")
+		mb.box((px - 0.030, -0.030, 0.96), (px + 0.030, 0.030, 1.08), "Red", skip=("-z",))
+	# two taut horizontal hazard-tape ribbons (6 alternating red/white bands each, visible from both sides)
+	bands = 6
+	bw = (2.0 * half_l) / bands
+	x_start = -half_l
+	for z0, z1, shift in ((0.54, 0.62, 1), (0.86, 0.94, 0)):
+		for k in range(bands):
+			xa = x_start + k * bw
+			xb = xa + bw
+			is_red = ((k + shift) % 2) == 0
+			mat = "Red" if is_red else "White"
+			mb.colour = srgb("#c01a1a") if is_red else (1, 1, 1)
+			for sy in (-1, 1):
+				y = sy * 0.008
+				mb.quad((xa, y, z0), (xb, y, z0), (xb, y, z1), (xa, y, z1), mat, (0, sy, 0))
+	return mb
+
+
+def stage_chevron(direction=1):
+	"""Corner chevron board on two posts, face towards -Y (approaching cars).
+	direction = +1 points towards +X (driver's right); -1 points towards -X (driver's left)."""
+	mb = MB()
+	w, h, z0 = 1.56, 0.74, 1.04
+	mb.colour = srgb("#3a3f45")
+	for x in (-0.54, 0.54):
+		mb.box((x - 0.035, 0.02, 0.0), (x + 0.035, 0.09, z0 + h - 0.06), "SteelPaint", skip=("-z",))
+	# yellow front face + dark metal backing (starts at y=0.002 to avoid grazing edge artifacts)
+	mb.colour = srgb("#ffd21a")
+	mb.quad((-w / 2, 0.0, z0), (w / 2, 0.0, z0), (w / 2, 0.0, z0 + h), (-w / 2, 0.0, z0 + h), "SignYellow", (0, -1, 0))
+	mb.colour = srgb("#141516")
+	mb.box((-w / 2 - 0.02, 0.002, z0 - 0.02), (w / 2 + 0.02, 0.042, z0 + h + 0.02), "Black", skip=("-y",))
+	# thin black border
+	b = 0.04
+	for a, c in (((-w / 2, z0), (w / 2, z0 + b)), ((-w / 2, z0 + h - b), (w / 2, z0 + h)),
+			((-w / 2, z0), (-w / 2 + b, z0 + h)), ((w / 2 - b, z0), (w / 2, z0 + h))):
+		mb.quad((a[0], -0.003, a[1]), (c[0], -0.003, a[1]), (c[0], -0.003, c[1]), (a[0], -0.003, c[1]), "Black", (0, -1, 0))
+	# two bold black chevrons centred symmetrically on the face, pointing along direction (+1 right, -1 left)
+	zm = z0 + h * 0.5
+	zb = z0 + 0.08
+	zt = z0 + h - 0.08
+	arm_w = 0.20
+	half_span = 0.25  # total horizontal extent of one chevron = 0.50 m
+	for cx in (-0.31, 0.31):
+		# symmetric around cx: outer tip at cx + half_span*dir, inner tail at cx - half_span*dir
+		t_outer = cx + half_span * direction
+		t_inner = t_outer - arm_w * direction
+		tail_inner = cx - half_span * direction
+		tail_outer = tail_inner + arm_w * direction
+		mb.quad((tail_inner, -0.006, zt), (tail_outer, -0.006, zt), (t_outer, -0.006, zm), (t_inner, -0.006, zm), "Black", (0, -1, 0))
+		mb.quad((t_inner, -0.006, zm), (t_outer, -0.006, zm), (tail_outer, -0.006, zb), (tail_inner, -0.006, zb), "Black", (0, -1, 0))
+	return mb
+
+
+def stage_warning_sign():
+	"""Triangular red-and-yellow rally hazard warning sign (!) on a post, face towards -Y."""
+	mb = MB()
+	z0 = 1.24
+	side = 1.12
+	h = side * math.sqrt(3.0) * 0.5  # ~0.97 m
+	hw = side * 0.5
+	# single central steel post
+	mb.colour = srgb("#3a3f45")
+	mb.box((-0.035, 0.02, 0.0), (0.035, 0.09, z0 + h * 0.78), "SteelPaint", skip=("-z",))
+	# dark backing prism (triangle extruded back 0.035 m)
+	tri_f = [(-hw, 0.0, z0), (hw, 0.0, z0), (0.0, 0.0, z0 + h)]
+	tri_b = [(-hw, 0.035, z0), (hw, 0.035, z0), (0.0, 0.035, z0 + h)]
+	mb.colour = srgb("#141516")
+	mb.poly(tri_b, "Black", (0, 1, 0))
+	for i in range(3):
+		j = (i + 1) % 3
+		edge = Vector(tri_f[j]) - Vector(tri_f[i])
+		out = edge.cross(Vector((0, 1, 0)))
+		mb.quad(tri_f[i], tri_f[j], tri_b[j], tri_b[i], "Black", out)
+	# outer red triangle face
+	mb.colour = srgb("#c01a1a")
+	mb.poly(tri_f, "Red", (0, -1, 0))
+	# inner yellow triangle inset
+	cx, cz = 0.0, z0 + h / 3.0
+	inset = 0.72
+	inner = [(cx + (p[0] - cx) * inset, -0.003, cz + (p[2] - cz) * inset) for p in tri_f]
+	mb.colour = srgb("#ffd21a")
+	mb.poly(inner, "SignYellow", (0, -1, 0))
+	# bold black exclamation mark (!)
+	mb.colour = srgb("#141516")
+	mb.quad((-0.042, -0.006, z0 + 0.30), (0.042, -0.006, z0 + 0.30), (0.056, -0.006, z0 + 0.68), (-0.056, -0.006, z0 + 0.68), "Black", (0, -1, 0))
+	mb.quad((-0.045, -0.006, z0 + 0.16), (0.045, -0.006, z0 + 0.16), (0.045, -0.006, z0 + 0.25), (-0.045, -0.006, z0 + 0.25), "Black", (0, -1, 0))
+	return mb
+
+
 PIECES = {"MarshalPost": marshal_post, "BrakeBoard_100": lambda: brake_board("100"),
 	"BrakeBoard_200": lambda: brake_board("200"), "BrakeBoard_300": lambda: brake_board("300"),
 	"BridgeSpan": bridge_span, "BridgeTower": bridge_tower, "Transporter": transporter,
-	"TransporterLivery": transporter_livery, "TyreWall": tyre_wall, "TyreWallBelt": tyre_wall_belt}
+	"TransporterLivery": transporter_livery, "TyreWall": tyre_wall, "TyreWallBelt": tyre_wall_belt,
+	"StageArchStart": lambda: stage_arch("START", False),
+	"StageArchFinish": lambda: stage_arch("FINISH", True),
+	"StageTapeBarrier": stage_tape_barrier,
+	"StageChevronLeft": lambda: stage_chevron(-1),
+	"StageChevronRight": lambda: stage_chevron(1),
+	"StageWarningSign": stage_warning_sign}
 
 
 def main():
@@ -329,6 +543,19 @@ def main():
 		kit.render(cam, os.path.join(out, "furniture.png"), (0, -26, 9), (0, 6, 2.5), 60)
 		kit.render(cam, os.path.join(out, "furniture_close.png"), (-9, -7, 3.2), (-12, 0, 2.2), 50)
 		kit.render(cam, os.path.join(out, "tyrewall.png"), (-6, -14, 2.4), (-10, -9, 0.6), 50)
+		# Dedicated preview of the street/rally stage dressing pieces
+		for ob in list(bpy.data.objects):
+			if ob.type == "MESH":
+				ob.hide_render = True
+		kit.place(objs["StageArchStart"], (-7.5, 6, 0))
+		kit.place(objs["StageArchFinish"], (7.5, 6, 0))
+		kit.place(objs["StageTapeBarrier"], (-4.5, -2.5, 0))
+		kit.place(objs["StageTapeBarrier"], (-1.5, -2.5, 0))
+		kit.place(objs["StageChevronLeft"], (1.8, -2.5, 0))
+		kit.place(objs["StageChevronRight"], (3.9, -2.5, 0))
+		kit.place(objs["StageWarningSign"], (5.8, -2.5, 0))
+		kit.render(cam, os.path.join(out, "stage_dressing.png"), (0, -18, 4.5), (0, 2, 2.6), 45)
+		kit.render(cam, os.path.join(out, "stage_signs.png"), (2.5, -7.8, 1.8), (2.2, -2.5, 1.3), 45)
 
 
 main()
