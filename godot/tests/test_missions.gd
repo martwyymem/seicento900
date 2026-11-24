@@ -204,9 +204,16 @@ func _arc(errors: Array[String]) -> void:
 		if lv < prev:
 			errors.append("arc: stage %d (%s) is easier than the one before" % [i + 1, Campaign.STAGES[i].id])
 		prev = maxi(prev, lv)
+		# B2 (2026-11-24): a stage that asks for a win starts from pole; every other stage starts behind its target,
+		# in the back half of the grid (test_campaign_ladder.gd checks the slots act by act)
 		var target := int(Campaign.STAGES[i].target_pos)
-		if String(Campaign.STAGES[i].grid) != ("pole" if target == 1 else "p%d" % target):
-			errors.append("arc: stage %s does not start in its target slot" % Campaign.STAGES[i].id)
+		var grid := String(Campaign.STAGES[i].grid)
+		var n := int(Campaign.STAGES[i].opponents) + 1
+		if target == 1:
+			if grid != "pole":
+				errors.append("arc: stage %s asks for a win but does not start on pole" % Campaign.STAGES[i].id)
+		elif not (grid.begins_with("p") and grid.substr(1).to_int() > target and grid.substr(1).to_int() > n / 2.0):
+			errors.append("arc: stage %s does not start in the back half behind its target (%s)" % [Campaign.STAGES[i].id, grid])
 	for a in [1, 2, 3]:
 		if not Campaign.STAGES.any(func(st): return int(st.act) == a):
 			errors.append("arc: no stage in act %d" % a)
@@ -221,7 +228,7 @@ func _arc(errors: Array[String]) -> void:
 			moved = true
 		for k in Missions.MISSIONS.size():
 			var idx := Missions.BASE + k
-			if Missions.is_unlocked(idx) and not Missions.is_cleared(idx):
+			if Missions.is_unlocked(idx, {}, 999) and not Missions.is_cleared(idx): # (the live-event medals: tests/test_campaign_world.gd)
 				Missions.record(idx, {"pos": 1, "success": true, "tier": 3, "score": 99999, "time": 30.0})
 				moved = true
 		if not moved:
@@ -266,8 +273,11 @@ func _migration(errors: Array[String]) -> void:
 		if not CarCatalog.unlocked(c):
 			errors.append("migration: %s lost" % c)
 	var st := Campaign.get_stage(krakow)
-	if int(st.fails) != 2 or int(st.eased) != 1:
-		errors.append("migration: Kraków's failed tries did not follow it (%d fails, eased %d)" % [int(st.fails), int(st.eased)])
+	# (B2: the stage's level is its difficulty plus its pace, Medium + 0.5 for Kraków, so two failed tries take two
+	# easing steps and land on Easy; the save's failures are what must have followed it)
+	var lv0 := float(maxi(Campaign.LEVELS.find(String(Campaign.STAGES[krakow].difficulty)), 0)) + float(Campaign.STAGES[krakow].get("pace", 0.0))
+	if int(st.fails) != 2 or int(st.eased) != mini(2, ceili(lv0 - 0.001)) or not is_equal_approx(float(st.level), maxf(0.0, lv0 - 2.0)):
+		errors.append("migration: Kraków's failed tries did not follow it (%d fails, eased %d, level %.2f)" % [int(st.fails), int(st.eased), float(st.level)])
 	var rewanz := Campaign.index_of("stage_rewanz")
 	if not Campaign.is_unlocked(rewanz) or String(Campaign.STAGES[rewanz].trophy) in prog.trophies:
 		errors.append("migration: the new stage behind the old frontier should be open and not won")

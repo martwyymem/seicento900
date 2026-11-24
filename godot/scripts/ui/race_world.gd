@@ -21,6 +21,7 @@ const SURROUNDINGS := preload("res://scripts/ui/surroundings.gd")
 const FAR_LAND := preload("res://scripts/ui/far_land.gd")
 const FURNITURE := preload("res://scripts/ui/trackside_furniture.gd")
 const ROADSIDE_PROPS := preload("res://scripts/ui/roadside_props.gd")
+const STAGE_DRESSING := preload("res://scripts/ui/stage_dressing.gd")
 const LIGHTING := preload("res://scripts/ui/lighting_presets.gd")
 const ALTITUDE_SCALE := 1.0 ## heights at their real scale (the physics ignores elevation)
 const ASPHALT_LIFT := 0.04 ## m: the asphalt ribbon stands this far over the track's ground height
@@ -138,6 +139,7 @@ var far_land: RefCounted ## far_land.gd: the hills and sea on the horizon, null 
 ## Marshal posts, braking boards, bridges and the paddock (trackside_furniture.gd)
 var furniture: RefCounted
 var roadside_props: RefCounted
+var stage_dressing: RefCounted ## street/rally stage arches, tape, chevrons, warnings & spectators (stage_dressing.gd)
 ## Barrier segments built as tyre walls (trackside_furniture.gd tyre_cells), left out of the plain barrier
 var tyre_cells := {}
 ## The detailed terrain's grid (_build_terrain): corner, spacing, and per point its height, squared distance to
@@ -406,6 +408,31 @@ func set_track(value: Track) -> void:
 	if ray_tracing:
 		ray_tracing.invalidate(true)
 
+## The model and paint each car of a race is drawn with: car id -> [CarCatalog key, paint]. A mixed-class field
+## (Race.mixed, the campaign stages) draws every car as the car it drives (RaceCar.car_key) in Race's paint; a
+## one-make race draws the player's car for the player and, unless one_make (the Seicento Cup) or the Hypercar,
+## its rivals as a deal of the real models (looks only: they all drive the player's car).
+static func field_looks(value: Race, one_make := false) -> Dictionary:
+	var out := {}
+	var player_key := value.s.car_class if CarCatalog.is_key(value.s.car_class) else "stock"
+	var mix_rivals := not one_make and player_key != "hypercar"
+	var field_seed := CarCatalog.rival_seed([value.s.track, player_key, value.s.opponents, value.s.laps])
+	var rival_slot := 0
+	var seen_models := {}
+	for car in value.cars:
+		var car_key := player_key
+		var paint := car.color
+		if value.mixed and CarCatalog.is_key(car.car_key):
+			car_key = car.car_key
+		elif not car.is_player and mix_rivals:
+			car_key = CarCatalog.rival_model(rival_slot, field_seed)
+			rival_slot += 1
+			var occ := int(seen_models.get(car_key, 0))
+			seen_models[car_key] = occ + 1
+			paint = CarCatalog.field_color(car_key, occ, value.s.player_color, field_seed + CarCatalog.index_of(car_key) * 3)
+		out[car.id] = [car_key, paint]
+	return out
+
 func set_race(value: Race) -> void:
 	race = value
 	if track != value.track:
@@ -413,6 +440,8 @@ func set_race(value: Race) -> void:
 		race = value
 	if roadside_props:
 		roadside_props.set_rally(value.s.mode == "rally")
+	if stage_dressing:
+		stage_dressing.configure_race(value)
 	# a restart on the same circuit reuses the scenery but not the previous field
 	for old in visuals.values():
 		old.queue_free()
@@ -420,21 +449,12 @@ func set_race(value: Race) -> void:
 	_reset_skids()
 	_repaint_racing_line(value)
 
-	var player_key := value.s.car_class if CarCatalog.is_key(value.s.car_class) else "stock"
-	var mix_rivals := not one_make and player_key != "hypercar"
-	var field_seed := CarCatalog.rival_seed([value.s.track, player_key, value.s.opponents, value.s.laps])
-	var rival_slot := 0
-	var seen_models := {}
+	var looks := field_looks(value, one_make)
 	for car in value.cars:
 		var visual := CAR_SCENE.instantiate()
-		var car_key := player_key
-		var paint := car.color
-		if not car.is_player and mix_rivals:
-			car_key = CarCatalog.rival_model(rival_slot, field_seed)
-			rival_slot += 1
-			var occ := int(seen_models.get(car_key, 0))
-			seen_models[car_key] = occ + 1
-			paint = CarCatalog.field_color(car_key, occ, value.s.player_color, field_seed + CarCatalog.index_of(car_key) * 3)
+		var car_key: String = looks[car.id][0]
+		var paint: Color = looks[car.id][1]
+		if not car.is_player:
 			car.color = paint # pit bands and timing swatch follow the rival's own model paint
 		visual.car_key = car_key
 		visuals[car.id] = visual
@@ -544,6 +564,8 @@ func _process(delta: float) -> void:
 
 	_update_racing_arrows()
 	_update_start_lights()
+	if stage_dressing and _focus_car:
+		stage_dressing.update(_focus_pos, Vector3(_focus_car.vx, 0.0, _focus_car.vy), night)
 	_update_camera(delta)
 	_tv_warm_up()
 	_place_rain()
@@ -1454,6 +1476,8 @@ func _build_track() -> void:
 	furniture.build(self)
 	roadside_props = ROADSIDE_PROPS.new()
 	roadside_props.build(self)
+	stage_dressing = STAGE_DRESSING.new()
+	stage_dressing.build(self)
 	if track.cfg.theme == "city":
 		if not (surroundings and surroundings.has_buildings()):
 			_build_city_blocks()

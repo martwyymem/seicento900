@@ -55,9 +55,10 @@ static func control(phys: Physics, tr: Track, car: RaceCar, tg: Dictionary, mu: 
 	var v_ref: float = tg.vT
 	var lead := v * 0.12
 	var K: float = tg.K
+	var prof := car.prof if not car.prof.is_empty() else tr.PROF # the car's own class (Race.make_car)
 	var x := 5
 	while x < 140:
-		var va := tr.sample(tr.PROF, car.s + lead + x) * K
+		var va := tr.sample(prof, car.s + lead + x) * K
 		var lim := sqrt(va * va + 2.0 * aB * x)
 		if lim < v_ref:
 			v_ref = lim

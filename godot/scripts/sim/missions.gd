@@ -1,5 +1,6 @@
 ## Campaign missions: the events beside the stages (Campaign.STAGES) that are not plain lap races: sprints,
-## knockouts, rallies, drag races, drift attacks and an off-road race. Each opens once a stage is cleared, so they
+## knockouts, rallies, drag races, drift attacks and an off-road race. Each opens once a stage is cleared and the player
+## holds enough live-event medal points (MEDALS_NEEDED, 2026-11-24), so they
 ## spread over the three acts, and the seven that award a car are spaced along the career about every second stage
 ## (cars are only ever won here, never bought). Each is a beacon in the open world at the real place it starts (the route's own
 ## start line, worked out from the track at load). A mission is addressed by a campaign index of BASE + its place
@@ -167,17 +168,82 @@ static func rally_def(index: int) -> Dictionary:
 		return {"key": String(m.id), "name": String(m.get("rally_name", m.title)), "stages": m.rally_stages}
 	return Rally.event(String(m.get("rally", "")))
 
-## Whether the stage a mission waits for is cleared (its trophy won, or the chain already past it), or an older
-## arc's save had the mission open already (Campaign.migrate).
-static func is_unlocked(index: int, prog: Dictionary = {}) -> bool:
+## Whether a mission is open: the stage it waits for is cleared (stage_reached) and the player holds enough
+## live-event medal points for it (MEDALS_NEEDED; points: medal_points of WorldProgress.live, read from the open-world
+## save when not given). A mission the save already reached (open flag, raced or won) never needs the medals, and a
+## save from before the medal gate (no "gate" key, see Campaign.migrate) has none.
+static func is_unlocked(index: int, prog: Dictionary = {}, points := -1) -> bool:
 	if not is_mission(index):
 		return false
 	if prog.is_empty():
 		prog = Campaign.load_progress()
+	if not stage_reached(index, prog):
+		return false
+	if not gated(prog) or reached(index, prog):
+		return true
+	return (points if points >= 0 else live_points()) >= medals_needed(index)
+
+## The stage a mission waits for is cleared (its trophy won, or the chain already past it), or an older arc's save had
+## the mission open already (Campaign.migrate). (Before the medal gate this alone opened a mission.)
+static func stage_reached(index: int, prog: Dictionary) -> bool:
+	if not is_mission(index):
+		return false
 	var after := after_index(index)
-	var trophies: Array = prog.get("trophies", [])
+	var trophies: Array = prog.get("trophies", []) if prog.get("trophies", []) is Array else []
 	return int(prog.get("unlocked", 0)) > after or String(Campaign.STAGES[after].trophy) in trophies \
 		or bool(progress(prog, index).get("open", false))
+
+# ------------------------------------------------------------------ the live-event medal gate
+
+## Live-event medal points (LiveEvents medals in WorldProgress.live) the player must hold before each mission opens,
+## on top of its stage. Points never get spent: they rise with every medal won, so the ladder rises with the order of
+## play (bronze 1, silver 2, gold 3; about one more event per mission each act). Tune here.
+const MEDAL_VALUE := {"bronze": 1, "silver": 2, "gold": 3}
+const MEDALS_NEEDED := {"drag_quarter": 2, "sprint_rajsko": 4, "sprint_s1": 6, "drift_kopalnia": 9, "knockout_bor": 12,
+	"rally_bor": 15, "drift_babudy": 19, "drag_kilometre": 23, "knockout_rajsko": 27, "offroad_kolonia": 32, "rally_zima": 37}
+
+## The save has the medal gate: written by this version (Campaign.empty_progress / migrate set "gate").
+static func gated(prog: Dictionary) -> bool:
+	return SaveData.to_int(prog.get("gate", 0), 0) >= 1
+
+## The save already got to this mission (raced, won, or kept open from an older save): no medals needed for it.
+static func reached(index: int, prog: Dictionary) -> bool:
+	var p := progress(prog, index)
+	return bool(p.get("open", false)) or bool(p.get("cleared", false)) or int(p.get("tries", 0)) > 0 \
+		or int(p.get("fails", 0)) > 0
+
+static func medals_needed(index: int) -> int:
+	return int(MEDALS_NEEDED.get(String(get_def(index).id), 0)) if is_mission(index) else 0
+
+## A WorldProgress.live dictionary's medals as points (bronze 1, silver 2, gold 3).
+static func medal_points(live: Dictionary) -> int:
+	var n := 0
+	for k: String in MEDAL_VALUE:
+		n += maxi(SaveData.to_int(live.get(k, 0), 0), 0) * int(MEDAL_VALUE[k])
+	return n
+
+## The medal points in the open-world save (WorldProgress.live).
+static func live_points() -> int:
+	return medal_points(WorldProgress.load_progress().live)
+
+## The stage before a mission is cleared but its medals are still missing.
+static func medal_locked(index: int, prog: Dictionary, points: int) -> bool:
+	return stage_reached(index, prog) and not is_unlocked(index, prog, points)
+
+## What a medal-locked mission still needs, e.g. "Win live-event medals: 1/2 points (bronze 1, silver 2, gold 3)".
+static func medal_text(index: int, points: int) -> String:
+	return "Win live-event medals: %d/%d points (bronze 1, silver 2, gold 3)" % [mini(points, medals_needed(index)), medals_needed(index)]
+
+## The missions in the order they open (by the stage each waits for, then MEDALS_NEEDED): campaign indices.
+static func play_order() -> Array[int]:
+	var out: Array[int] = []
+	for k in MISSIONS.size():
+		out.append(BASE + k)
+	out.sort_custom(func(a: int, b: int) -> bool:
+		var sa := after_index(a)
+		var sb := after_index(b)
+		return sa < sb if sa != sb else medals_needed(a) < medals_needed(b))
+	return out
 
 static func is_cleared(index: int, prog: Dictionary = {}) -> bool:
 	if prog.is_empty():
@@ -333,10 +399,13 @@ static func place(index: int, map: TownMap) -> Array:
 		p = near.pos
 	return [p.x, p.y, float(pose[2])]
 
-## The briefing card in the open world: [subtitle, title, body, hint].
-static func card(index: int, fans_level: int) -> Array:
+## The briefing card in the open world: [subtitle, title, body, hint]. points: the live-event medal points held (the
+## card of a mission still waiting for them says how many; -1 reads the save).
+static func card(index: int, fans_level: int, points := -1) -> Array:
 	var m := as_stage(index)
 	var prog := Campaign.load_progress()
+	if points < 0:
+		points = live_points()
 	var p := progress(prog, index)
 	var tr_key := String(MapMissions.OFF_MAP.get(String(m.track), m.track)) # as raced on the map
 	var tr_name := Track.load_def(tr_key).display_name if String(m.kind) != "rally" else String(rally_def(index).get("name", ""))
@@ -352,7 +421,13 @@ static func card(index: int, fans_level: int) -> Array:
 		length_text(index), String(m.weather).capitalize(), field, target_text(index), best,
 		OpenWorldHud._thousands(reward(index, {"success": true, "pos": 1, "tier": 3}, true)), fans_level]
 	var sub := "%s MISSION · %s" % [KIND_NAMES[m.kind], String(m.act_name).to_upper()]
-	return [sub, String(m.title), body, "ENTER / B  ▸  START MISSION HERE ON THE MAP"]
+	var hint := "ENTER / B  ▸  START MISSION HERE ON THE MAP"
+	if medal_locked(index, prog, points):
+		body += "\nLocked: %s" % medal_text(index, points).to_lower()
+		hint = "LOCKED · %d/%d LIVE-EVENT MEDAL POINTS" % [mini(points, medals_needed(index)), medals_needed(index)]
+	elif not is_unlocked(index, prog, points):
+		hint = "LOCKED · clear %s first" % String(Campaign.STAGES[after_index(index)].title)
+	return [sub, String(m.title), body, hint]
 
 static func _k(n: int) -> String:
 	return OpenWorldHud._thousands(n)
