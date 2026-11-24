@@ -65,6 +65,8 @@ Everything from the original Pillars 1–9, Phases 0–4 core roadmap, and `0.5.
 
 - [ ] **H. Open-world event rivals use the race AI (user 2026-11-24, started, Opus high):** live events and map missions build a temporary race track from the event route and drive rivals with the race sim's bots (physics, overtaking, car-to-car contact, stewards) instead of `StreetRivals`' kinematic speed curves; **no rubber banding** (user); proper car-shaped contact (today a 2.1 m circle, `open_world.gd` ~1426, rivals pass through each other); the 0.5.9 chevron arrows + BRAKE cue on events. Risk: race bots only know the road edges, not buildings (narrow routes).
 
+- [ ] **0.6.0 extras (user 2026-11-24, started):** 400/500 m braking boards on every approach that needs more than 300 m (Haiku); F1-style start-light gantry at standing-start open-world events + spectators placed along the active event's route only while it runs, never permanent (Sonnet, after Neon failed to open). 0.6.0 ships when H lands, through the gate.
+
 **Hold (do not start):** new cars, circuits, open-world areas, live-event types, festival dressing, per-car hero stills; a big split of `game.gd` while worktrees are live; the WRC branch.
 
 - [ ] Night-rain High/Ultra frame time on the GP circuit: re-measure on an idle machine (windowed; this thread).
