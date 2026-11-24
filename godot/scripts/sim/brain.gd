@@ -137,10 +137,11 @@ func bin(s: float) -> int:
 func add_bot(car: RaceCar, spread: float) -> void:
 	var rng: SimUtil.Rng = race.rng
 	# talent: the pace this driver can hold without mistakes; learning can push a little beyond it
-	var talent := minf(0.999, car.skill + 0.008 + (spread + 0.006) * rng.next())
+	var boost: float = race.s.skill_boost # campaign stages past Alien lift the ceilings with the skill
+	var talent := minf(0.999 + boost, car.skill + 0.008 + (spread + 0.006) * rng.next())
 	var b := BotBrain.new()
 	b.talent = talent
-	b.cap = minf(1.004, talent + 0.012)
+	b.cap = minf(1.004 + boost, talent + 0.012)
 	b.floor_ = car.skill - 0.04
 	var e := PackedFloat32Array()
 	e.resize(nb)

@@ -15,6 +15,7 @@ extends Resource
 ## levels the field is moved from `difficulty` (DifficultyProfile.resolve: the player's rival step against the
 ## event's authored level), interpolated between Race.DIFFICULTY's rows; 0 keeps the row exactly
 @export var difficulty_shift := 0.0
+@export var skill_boost := 0.0 ## rivals' skill above Alien's 0.995 (and the bots' talent/cap ceilings with it): a campaign stage past Alien; 0 everywhere else
 @export_enum("pole", "middle", "back", "random") var grid := "middle" ## or "p<N>": start in slot N (campaign stages start where their target is)
 @export var collisions := true
 @export var draft := true ## slipstream: a car behind another one, close and in line, pulls less air and gains speed

@@ -7,7 +7,7 @@
 ##   MODE=old: the 0.5.9 layout (P3/P2/pole grids, the stage's base difficulty, a one-make Seicento field), to
 ##     calibrate H against the 2026-11-24 playtest (stages 1-12 won by 10-22 s).
 ## Overrides for trying a layout without editing the data (MODE=new): GRID=p8, OPP=7, RIVALS="sandero:2,stock:5",
-## SHIFT=0.5 (levels on top of the stage's own).
+## SHIFT=0.5 (levels on top of the stage's own), BOOST=0.03 (RaceSettings.skill_boost).
 ## STAGES=0,1,2 SEEDS=2 H=1.0 MODE=new godot --headless --path godot -s tests/_campaign_ladder_probe.gd
 extends SceneTree
 
@@ -52,6 +52,8 @@ func _initialize() -> void:
 				s.difficulty = String(st.base_difficulty)
 				s.difficulty_shift = 0.0
 			s.difficulty_shift += float(OS.get_environment("SHIFT")) if OS.get_environment("SHIFT") != "" else 0.0 # levels on top
+			if OS.get_environment("BOOST") != "":
+				s.skill_boost = float(OS.get_environment("BOOST"))
 			var models := {} if key == "stock" else {"car_model": CarCatalog.model(key)}
 			var race := Race.new(s, null, 1000 + seed, models)
 			race.set_autopilot(true)
