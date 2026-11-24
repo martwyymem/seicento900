@@ -406,6 +406,31 @@ func set_track(value: Track) -> void:
 	if ray_tracing:
 		ray_tracing.invalidate(true)
 
+## The model and paint each car of a race is drawn with: car id -> [CarCatalog key, paint]. A mixed-class field
+## (Race.mixed, the campaign stages) draws every car as the car it drives (RaceCar.car_key) in Race's paint; a
+## one-make race draws the player's car for the player and, unless one_make (the Seicento Cup) or the Hypercar,
+## its rivals as a deal of the real models (looks only: they all drive the player's car).
+static func field_looks(value: Race, one_make := false) -> Dictionary:
+	var out := {}
+	var player_key := value.s.car_class if CarCatalog.is_key(value.s.car_class) else "stock"
+	var mix_rivals := not one_make and player_key != "hypercar"
+	var field_seed := CarCatalog.rival_seed([value.s.track, player_key, value.s.opponents, value.s.laps])
+	var rival_slot := 0
+	var seen_models := {}
+	for car in value.cars:
+		var car_key := player_key
+		var paint := car.color
+		if value.mixed and CarCatalog.is_key(car.car_key):
+			car_key = car.car_key
+		elif not car.is_player and mix_rivals:
+			car_key = CarCatalog.rival_model(rival_slot, field_seed)
+			rival_slot += 1
+			var occ := int(seen_models.get(car_key, 0))
+			seen_models[car_key] = occ + 1
+			paint = CarCatalog.field_color(car_key, occ, value.s.player_color, field_seed + CarCatalog.index_of(car_key) * 3)
+		out[car.id] = [car_key, paint]
+	return out
+
 func set_race(value: Race) -> void:
 	race = value
 	if track != value.track:
@@ -420,21 +445,12 @@ func set_race(value: Race) -> void:
 	_reset_skids()
 	_repaint_racing_line(value)
 
-	var player_key := value.s.car_class if CarCatalog.is_key(value.s.car_class) else "stock"
-	var mix_rivals := not one_make and player_key != "hypercar"
-	var field_seed := CarCatalog.rival_seed([value.s.track, player_key, value.s.opponents, value.s.laps])
-	var rival_slot := 0
-	var seen_models := {}
+	var looks := field_looks(value, one_make)
 	for car in value.cars:
 		var visual := CAR_SCENE.instantiate()
-		var car_key := player_key
-		var paint := car.color
-		if not car.is_player and mix_rivals:
-			car_key = CarCatalog.rival_model(rival_slot, field_seed)
-			rival_slot += 1
-			var occ := int(seen_models.get(car_key, 0))
-			seen_models[car_key] = occ + 1
-			paint = CarCatalog.field_color(car_key, occ, value.s.player_color, field_seed + CarCatalog.index_of(car_key) * 3)
+		var car_key: String = looks[car.id][0]
+		var paint: Color = looks[car.id][1]
+		if not car.is_player:
 			car.color = paint # pit bands and timing swatch follow the rival's own model paint
 		visual.car_key = car_key
 		visuals[car.id] = visual

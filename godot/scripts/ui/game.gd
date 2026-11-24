@@ -328,6 +328,7 @@ var campaign_desc_label: Label
 var campaign_target_label: Label
 var campaign_trophy_label: Label
 var campaign_tip_label: Label
+var campaign_class_label: Label ## the stage's expected car class, its field, and the picked car against it (Campaign.class_line)
 var campaign_start_button: Button
 var campaign_cleared := false ## the last campaign race met its target: back at the menu, the briefing moves on
 var open_world: OpenWorld = null ## the campaign's free roam round Brzeszcze (scripts/world/open_world.gd), kept once built
@@ -954,6 +955,10 @@ func _build_setup() -> void:
 
 	campaign_trophy_label = _label("🏆 Trophy: Wilamowice Bronze Piston", 13, CmrStyle.AMBER)
 	obj_row.add_child(campaign_trophy_label)
+
+	campaign_class_label = _label("", 13, ACCENT)
+	campaign_class_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	obj_row.add_child(campaign_class_label)
 
 	campaign_desc_label = _label("", 13, CmrStyle.TEXT)
 	campaign_desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -2481,6 +2486,8 @@ func _on_car_class_selected(index: int) -> void:
 		status_label.text = "The %s %s." % [CarCatalog.display_name(picked), CarCatalog.unlock_hint(picked)]
 		status_label.modulate = DANGER
 	player_color_picker.color = CarCatalog.saved_paint(_picked_car(), player_color_picker.color) # the new car's factory paint
+	if is_campaign_mode:
+		_update_campaign_view() # the briefing's class advice follows the car
 	_apply_menu_car()
 	_update_menu_car_summary()
 	_update_information_page() # the lap record shown is the picked car's
@@ -4983,6 +4990,8 @@ func _open_loading_screen(settings: RaceSettings, qualifying := false) -> void:
 	var caption := "Circuit Length"
 	var length_km := track.L / 1000.0
 	var facts: Array = [["FIELD", field_text]]
+	if is_campaign_mode and settings.mode == "race":
+		facts.append(["CLASS", CampaignData.class_name_of(CampaignData.stage_class(CampaignData.get_stage(campaign_stage_index)))])
 	if settings.mode == "rally" and is_rally_mode:
 		var ev := _rally()
 		var i := mini(ev.stage_index, ev.stage_count() - 1)
@@ -5051,7 +5060,7 @@ func _show_results() -> void:
 		col.add_child(_label("OBJECTIVE FAILED — you did not finish. Retry to advance!", 14, DANGER))
 		col.add_child(_label(_award_stage_fans(int(dnf_res.fans)), 13, CmrStyle.AMBER))
 	elif is_campaign_mode:
-		var c_res := CampaignData.record_result(campaign_stage_index, me.pos)
+		var c_res := CampaignData.record_result(campaign_stage_index, me.pos, CampaignData.win_margin(rows))
 		campaign_cleared = c_res.success
 		var c_box := VBoxContainer.new()
 		c_box.add_theme_constant_override("separation", 3)
@@ -5067,6 +5076,8 @@ func _show_results() -> void:
 			var req_pos: int = CampaignData.get_stage(campaign_stage_index).target_pos
 			c_box.add_child(_label("OBJECTIVE FAILED — Finished P%d (Target: P%d or better). Retry to advance!" % [me.pos, req_pos], 14, DANGER))
 		c_box.add_child(_label(fan_line, 13, CmrStyle.AMBER))
+		if c_res.get("tightened", false):
+			c_box.add_child(_label("Won by %.1f s: the field will be tighter from now on." % float(c_res.margin), 13, CmrStyle.ORANGE_SOFT))
 	_add_record_note(col, race)
 	if race.brain:
 		var learned := race.brain.progress().filter(func(x): return x.gain > 0.05)
@@ -5650,23 +5661,38 @@ func _update_campaign_view() -> void:
 		campaign_title_label.text = str(st.get("title", ""))
 	var weather_name: String = str(st.get("weather", "dry")).capitalize()
 	if is_instance_valid(campaign_circuit_label):
-		campaign_circuit_label.text = "📍 %s  ·  %d Laps  ·  %s  ·  %d Rivals (%s)" % [
+		campaign_circuit_label.text = "📍 %s  ·  %d Laps  ·  %s  ·  %d Rivals (%s)  ·  Grid %s" % [
 			tr_name,
 			st.get("laps", 3),
 			weather_name,
 			st.get("opponents", 5),
-			str(st.get("difficulty", "medium")).capitalize()
+			CampaignData.level_name(st),
+			_grid_text(str(st.get("grid", "middle")), int(st.get("opponents", 5)) + 1)
 		]
 		if int(st.get("eased", 0)) > 0:
 			campaign_circuit_label.text += "  ·  eased from %s after %d tries" % [str(st.base_difficulty).capitalize(), int(st.fails)]
+		elif float(st.get("heat", 0.0)) > 0.0:
+			campaign_circuit_label.text += "  ·  field tightened after your big wins"
 	var target_pos: int = int(st.get("target_pos", 3))
 	if target_pos == 1:
 		campaign_target_label.text = "★ TARGET OBJECTIVE: Win the race (P1)"
 	else:
 		campaign_target_label.text = "★ TARGET OBJECTIVE: Finish P%d or higher" % target_pos
 	campaign_trophy_label.text = "🏆 Trophy: %s" % str(st.get("trophy", ""))
+	if is_instance_valid(campaign_class_label):
+		var forced := str(st.get("car_class", "")) # the Goliath puts everyone in the Hypercar
+		var advice := CampaignData.class_advice(_picked_car(), st) if forced == "" else ""
+		campaign_class_label.text = "🚗 %s%s" % [CampaignData.class_line(st), ("\n" + advice) if advice != "" else ""]
 	campaign_desc_label.text = str(st.get("desc", ""))
 	campaign_tip_label.text = "💡 Mechanic: \"%s\"" % str(st.get("tip", ""))
+
+## A stage's grid slot for its briefing: "P8 of 10", "pole".
+func _grid_text(grid: String, n: int) -> String:
+	if grid == "pole":
+		return "pole"
+	if grid.begins_with("p") and grid.substr(1).is_valid_int():
+		return "P%d of %d" % [clampi(grid.substr(1).to_int(), 1, n), n]
+	return grid
 
 ## The opponents number says when it means a solo run.
 func _update_opponents_label() -> void:

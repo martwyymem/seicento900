@@ -1,5 +1,6 @@
 ## QA probe (headless): races campaign stages with the co-driver (autopilot) driving the player and prints the
-## grid, the field's skills and the player's position lap by lap.
+## grid, the field's skills and the player's position lap by lap (the player in the stock Seicento; for the class
+## ladder and a human-pace projection see _campaign_ladder_probe.gd).
 ## STAGES=6,7,8 SEEDS=3 godot --headless --path godot -s tests/_qa_campaign_pace.gd
 extends SceneTree
 
@@ -12,15 +13,10 @@ func _initialize() -> void:
 		var st: Dictionary = Campaign.get_stage(int(si))
 		for seed in seeds:
 			var s := RaceSettings.new()
-			s.track = st.track
-			s.laps = st.laps
-			s.weather = st.weather
-			s.opponents = st.opponents
-			s.difficulty = diff_over if diff_over != "" else st.difficulty
-			s.start_hour = st.start_hour
-			s.wear_mult = st.wear_mult
-			s.fuel_mult = st.fuel_mult
-			s.grid = st.grid
+			Campaign.configure_stage(s, st, DifficultyProfile.AVERAGE) # the stage's grid, mixed-class field and pace
+			if diff_over != "":
+				s.difficulty = diff_over
+				s.difficulty_shift = 0.0
 			s.player_name = "PLAYER"
 			var race := Race.new(s, null, 1000 + seed)
 			race.set_autopilot(true)
