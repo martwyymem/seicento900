@@ -1939,7 +1939,17 @@ func _start_active_event() -> void:
 func _setup_open() -> bool:
 	return event_setup != null and is_instance_valid(event_setup)
 
-## Opens the pre-start settings pop-up for the open beacon the car stands at (campaign stages, sprints, Away Races
+func _describe_event(ev: Dictionary, car_key: String) -> Dictionary:
+	if ev.has("live"):
+		var lev := live.find(String(ev.live)) if live else {}
+		if lev.is_empty():
+			return {}
+		return EventSetupPanel.describe_live(lev, live, car_key, hour, WorldWeather.word(weather_state()))
+	if ev.has("mission"):
+		return EventSetupPanel.describe_mission(int(ev.stage), car_key)
+	return EventSetupPanel.describe_stage(int(ev.stage), car_key, ev.has("away"), bool(ev.get("done", false)))
+
+## Opens the pre-start event menu for the open beacon the car stands at (campaign stages, sprints, Away Races
 ## gate, campaign missions and live events), pausing the open world behind it; restarts on the results card go right in.
 func _prompt_active_event() -> void:
 	if not _result.is_empty():
@@ -1952,16 +1962,9 @@ func _prompt_active_event() -> void:
 		return
 	_close_event_setup()
 	var car_key := CarCatalog.key_at(progress.car_class) if progress else "stock"
-	var info: Dictionary
-	if ev.has("live"):
-		var lev := live.find(String(ev.live)) if live else {}
-		if lev.is_empty():
-			return
-		info = EventSetupPanel.describe_live(lev, live, car_key, hour, WorldWeather.word(weather_state()))
-	elif ev.has("mission"):
-		info = EventSetupPanel.describe_mission(int(ev.stage), car_key)
-	else:
-		info = EventSetupPanel.describe_stage(int(ev.stage), car_key, ev.has("away"), bool(ev.get("done", false)))
+	var info := _describe_event(ev, car_key)
+	if info.is_empty():
+		return
 	throttle = 0.0
 	brake = 0.0
 	handbrake = 0.0
@@ -1970,6 +1973,8 @@ func _prompt_active_event() -> void:
 		audio.update_car(null, false)
 	if surface_fx and car_visual:
 		surface_fx.silence(car_visual)
+	if hud:
+		hud.hide_event() # keep the beacon card from peeking out behind the event menu
 	var at := active_event
 	event_setup = EventSetupPanel.open_in(self, info)
 	event_setup.started.connect(func() -> void:
@@ -1983,6 +1988,20 @@ func _prompt_active_event() -> void:
 		if active_event == at:
 			active_event = -1
 			_check_events())
+	event_setup.garage_requested.connect(func() -> void:
+		if not _setup_open():
+			return
+		event_setup.hide()
+		var g := _open_garage()
+		g.tree_exited.connect(func() -> void:
+			if not _setup_open():
+				return
+			var next_car := CarCatalog.key_at(progress.car_class) if progress else "stock"
+			var next_info := _describe_event(ev, next_car)
+			event_setup.show()
+			if not next_info.is_empty():
+				event_setup.refresh_info(next_info)
+			event_setup.car_button.grab_focus()))
 
 func _close_event_setup() -> void:
 	if event_setup != null and is_instance_valid(event_setup):

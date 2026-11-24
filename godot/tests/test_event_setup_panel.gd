@@ -1,9 +1,8 @@
-## Pre-start event settings pop-up (EventSetupPanel): builds for campaign lap stages, A->B sprint stages,
-## Away Races stages, campaign missions and live events; displays stage/event info, expected class, grid and
-## live rival level; edits and saves DifficultyProfile.current (rival step, assist preset, expandable individual
-## aids, shifting, racing line, damage, auto-recover; fuel/tyre wear shown as "Off in campaign") with live fan
-## multiplier; controller-first navigation (focus opens on START, D-pad/stick, LB/RB and ◂ ▸, START/A/B/Esc,
-## focus never escapes); pauses OpenWorld behind it (car stops, time doesn't run) and triggers or cancels cleanly.
+## Pre-start event menu (EventSetupPanel): Forza Horizon-style 2x3 tile hub over the paused open world
+## (START RACE EVENT, OPTIONS, QUIT EVENT / DIFFICULTY, CAR, STARTING GRID) plus in-place Difficulty & Assists
+## and Starting Grid & Briefing sub-pages; builds for lap stages, A->B sprints, Away Races, missions and live events;
+## enforces strict bounded layout from frame 0 across aspect ratios and UI scales; saves DifficultyProfile.current
+## live with updated fan reward; controller-first 2D tile + sub-page navigation; pauses OpenWorld behind it.
 extends RefCounted
 
 var completed := false
@@ -68,19 +67,26 @@ func run() -> Array:
 	completed = true
 	return errors
 
-## Builds the panel for a lap stage, an A->B sprint stage, an Away Races stage, a mission, and a live event;
-## checks header fields, "Off in campaign" fuel/wear, and layout across 16:9, 4:3, 21:9 and 1.3x scale.
+## Builds the menu for a lap stage, A->B sprint, Away Races stage, mission, and live event; checks header fields,
+## hub tiles, sub-pages, and frame-0 + resized layout bounds across 16:9, 4:3, 21:9, 16:10 and 1.3x scale.
 func _test_headers_and_layout(profile_path: String) -> void:
 	var tree := Engine.get_main_loop() as SceneTree
 	var host := Control.new()
 	host.size = Vector2(1600, 900)
 	tree.root.add_child(host)
 
-	# 1. Lap stage (Bór, 2 laps)
+	# 1. Lap stage (Bór, 2 laps) — also verifies frame-0 layout WITHOUT manual _layout() call!
 	var bor_idx := Campaign.index_of("stage_3")
 	var bor_st := Campaign.get_stage(bor_idx)
 	var p := EventSetupPanel.open_in(host, EventSetupPanel.describe_stage(bor_idx, "stock"), profile_path)
 	await tree.process_frame
+	await tree.process_frame
+	check(p.page == "hub", "menu did not open on hub page: %s" % p.page)
+	var f0_rect := p.panel.get_global_rect()
+	check(f0_rect.size.y <= 900.0 and Rect2(Vector2.ZERO, host.size).grow(1.0).encloses(f0_rect),
+		"frame-0 hub panel overflowed viewport: %s" % f0_rect)
+	check(f0_rect.grow(1.0).encloses(p.start_button.get_global_rect()),
+		"frame-0 START tile outside panel: %s vs %s" % [p.start_button.get_global_rect(), f0_rect])
 	check(p.title_label.text == String(bor_st.title), "lap stage title: '%s'" % p.title_label.text)
 	check(p.meta_label.text.contains(Campaign.length_label(bor_st)), "lap stage length missing: '%s'" % p.meta_label.text)
 	check(p.meta_label.text.contains(String(bor_st.weather).capitalize()), "lap stage weather missing: '%s'" % p.meta_label.text)
@@ -89,14 +95,16 @@ func _test_headers_and_layout(profile_path: String) -> void:
 	check(p.rivals_label.text.contains("P7 of 9"), "lap stage grid slot missing: '%s'" % p.rivals_label.text)
 	check(p.rivals_label.text.contains("rivals"), "lap stage rival level missing: '%s'" % p.rivals_label.text)
 	check(p.fuel_wear_label.text == "Off in campaign", "fuel/wear label: '%s'" % p.fuel_wear_label.text)
-	check(p.start_button.visible and p.cancel_button.visible, "START/CANCEL not visible for lap stage")
+	check(p.start_button.visible and p.options_button.visible and p.cancel_button.visible
+		and p.difficulty_button.visible and p.car_button.visible and p.grid_button.visible,
+		"not all 6 hub tiles visible for lap stage")
 	p.cancel()
 	await tree.process_frame
 
 	# 2. A->B sprint stage (Wola sprint)
 	var wola_idx := Campaign.index_of("stage_wola")
 	var wola_st := Campaign.get_stage(wola_idx)
-	p = EventSetupPanel.open_in(host, EventSetupPanel.describe_stage(wola_idx, "stock"), profile_path)
+	p = EventSetupPanel.open_in(host, EventSetupPanel.describe_stage(wola_idx, "sandero"), profile_path)
 	await tree.process_frame
 	check(p.kicker_label.text.contains("SPRINT"), "sprint stage kicker: '%s'" % p.kicker_label.text)
 	check(p.meta_label.text.contains(Campaign.length_label(wola_st)) and p.meta_label.text.contains("km sprint"),
@@ -129,13 +137,14 @@ func _test_headers_and_layout(profile_path: String) -> void:
 	p = EventSetupPanel.open_in(host, EventSetupPanel.describe_mission(drift_idx, "stock"), profile_path)
 	await tree.process_frame
 	var before_drift_rivals := p.rivals_label.text
+	p.open_settings("step")
 	(p.controls.step as MenuSelector).step(2) # Average -> Expert scales drift targets
 	check(p.rivals_label.text != before_drift_rivals, "drift mission targets did not update on rival step change")
 	DifficultyProfile.current = DifficultyProfile.defaults()
 	p.cancel()
 	await tree.process_frame
 
-	# 5. Live event (sprint)
+	# 5. Live event (sprint) + multi-aspect layout checks on hub, settings (collapsed/expanded), and grid
 	var fake_live := {
 		"id": "live_99", "kind": "race", "mkind": "sprint", "title": "ul. Dworcowa ▸ ul. Bór",
 		"length": 2800.0, "rivals": 6, "target": 3, "difficulty": "medium", "color": Color("#ff3d8b"),
@@ -148,26 +157,41 @@ func _test_headers_and_layout(profile_path: String) -> void:
 	check(p.meta_label.text.contains("2.8 km") and p.meta_label.text.contains("Wet") and p.meta_label.text.contains("22:15"),
 		"live event meta: '%s'" % p.meta_label.text)
 	check(p.rivals_label.text.contains("6 rivals"), "live event rivals: '%s'" % p.rivals_label.text)
-	# Layout across canvases (collapsed and expanded): panel inside canvas, START/CANCEL always inside panel
-	for canvas: Vector2 in [Vector2(1600, 900), Vector2(1600, 1200), Vector2(2133, 900), Vector2(1231, 692)]:
+
+	for canvas: Vector2 in [Vector2(1600, 900), Vector2(1440, 900), Vector2(1600, 1200), Vector2(2133, 900), Vector2(1231, 692)]:
 		host.size = canvas
 		p.size = canvas
-		p._layout()
+		p.open_hub()
 		await tree.process_frame
 		var pr := p.panel.get_global_rect()
-		check(Rect2(Vector2.ZERO, canvas).grow(1.0).encloses(pr), "%s: panel leaves canvas (%s)" % [canvas, pr])
-		check(pr.grow(1.0).encloses(p.start_button.get_global_rect()), "%s: START outside panel" % canvas)
-		check(pr.grow(1.0).encloses(p.cancel_button.get_global_rect()), "%s: CANCEL outside panel" % canvas)
+		check(Rect2(Vector2.ZERO, canvas).grow(1.0).encloses(pr), "%s hub: panel leaves canvas (%s)" % [canvas, pr])
+		check(pr.grow(1.0).encloses(p.start_button.get_global_rect()), "%s hub: START outside panel" % canvas)
+		check(pr.grow(1.0).encloses(p.grid_button.get_global_rect()), "%s hub: GRID outside panel" % canvas)
+
+		p.open_settings("step")
+		await tree.process_frame
+		pr = p.panel.get_global_rect()
+		check(Rect2(Vector2.ZERO, canvas).grow(1.0).encloses(pr), "%s settings: panel leaves canvas (%s)" % [canvas, pr])
+		check(pr.grow(1.0).encloses(p.back_button.get_global_rect()), "%s settings: BACK outside panel" % canvas)
+		check(pr.grow(1.0).encloses(p.sub_start_button.get_global_rect()), "%s settings: START outside panel" % canvas)
 		p.set_aids_expanded(true)
 		await tree.process_frame
-		check(pr.grow(1.0).encloses(p.start_button.get_global_rect()), "%s (expanded): START pushed outside panel" % canvas)
-		check(pr.grow(1.0).encloses(p.cancel_button.get_global_rect()), "%s (expanded): CANCEL pushed outside panel" % canvas)
+		pr = p.panel.get_global_rect()
+		check(Rect2(Vector2.ZERO, canvas).grow(1.0).encloses(pr), "%s settings expanded: panel leaves canvas (%s)" % [canvas, pr])
+		check(pr.grow(1.0).encloses(p.sub_start_button.get_global_rect()), "%s settings expanded: START pushed outside panel" % canvas)
 		p.set_aids_expanded(false)
+
+		p.open_grid()
+		await tree.process_frame
+		pr = p.panel.get_global_rect()
+		check(Rect2(Vector2.ZERO, canvas).grow(1.0).encloses(pr), "%s grid: panel leaves canvas (%s)" % [canvas, pr])
+		check(pr.grow(1.0).encloses(p.grid_start_button.get_global_rect()), "%s grid: START outside panel" % canvas)
+
 	p.cancel()
 	host.queue_free()
 	await tree.process_frame
 
-## Changing every selector writes DifficultyProfile.current, saves to disk, and updates the fan multiplier.
+## Changing every selector on the Settings sub-page writes DifficultyProfile.current, saves to disk, and updates fan reward.
 func _test_profile_editing_and_save(profile_path: String) -> void:
 	DifficultyProfile.current = DifficultyProfile.defaults()
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(profile_path))
@@ -180,6 +204,11 @@ func _test_profile_editing_and_save(profile_path: String) -> void:
 
 	check(p.fans_label.text.contains("×1.00") and p.fans_label.text.contains("STANDARD"), "default fan multiplier: '%s'" % p.fans_label.text)
 	var base_rivals := p.rivals_label.text
+
+	# Open Difficulty sub-page via the DIFFICULTY tile
+	p.difficulty_button.pressed.emit()
+	await tree.process_frame
+	check(p.page == "settings", "DIFFICULTY tile did not open settings page")
 
 	# Rival step via LB / RB on the step selector
 	(p.controls.step as Control).grab_focus()
@@ -239,19 +268,23 @@ func _test_profile_editing_and_save(profile_path: String) -> void:
 	check(DifficultyProfile.load_profile(profile_path), "saved profile failed to load back")
 	check(DifficultyProfile.current == expected, "reloaded profile differs: %s vs %s" % [DifficultyProfile.current, expected])
 
+	# Esc on settings sub-page returns to hub (does NOT cancel whole event); second Esc cancels
+	p._input(_key(KEY_ESCAPE))
+	check(p.page == "hub" and not p.is_queued_for_deletion(), "Esc on settings did not return to hub")
+
 	p.cancel()
 	host.queue_free()
 	await tree.process_frame
 	DifficultyProfile.current = DifficultyProfile.defaults()
 
-## START emits started (and not cancelled); CANCEL / Esc / B emits cancelled (and not started).
+## START emits started (and not cancelled); QUIT / Esc / B on hub emits cancelled; CAR emits garage_requested.
 func _test_callbacks_and_buttons(profile_path: String) -> void:
 	var tree := Engine.get_main_loop() as SceneTree
 	var host := Control.new()
 	host.size = Vector2(1600, 900)
 	tree.root.add_child(host)
 
-	# START via Enter (opens focused on START)
+	# START via Enter (opens focused on START tile)
 	var counts := [0, 0] # [started, cancelled]
 	var p := EventSetupPanel.open_in(host, EventSetupPanel.describe_stage(0), profile_path)
 	p.started.connect(func(): counts[0] += 1)
@@ -272,18 +305,18 @@ func _test_callbacks_and_buttons(profile_path: String) -> void:
 	check(counts == [1, 0], "Pad A on START: counts=%s" % [counts])
 	await tree.process_frame
 
-	# Gamepad START button launches from anywhere in the panel
+	# Gamepad START launches from inside the Settings sub-page too
 	counts = [0, 0]
 	p = EventSetupPanel.open_in(host, EventSetupPanel.describe_stage(0), profile_path)
 	p.started.connect(func(): counts[0] += 1)
 	p.cancelled.connect(func(): counts[1] += 1)
 	await tree.process_frame
-	(p.controls.step as Control).grab_focus()
+	p.open_settings("step")
 	p._input(_pad(JOY_BUTTON_START))
-	check(counts == [1, 0], "Pad START from selector: counts=%s" % [counts])
+	check(counts == [1, 0], "Pad START from settings sub-page: counts=%s" % [counts])
 	await tree.process_frame
 
-	# CANCEL via Esc
+	# CANCEL via Esc on hub
 	counts = [0, 0]
 	p = EventSetupPanel.open_in(host, EventSetupPanel.describe_stage(0), profile_path)
 	p.started.connect(func(): counts[0] += 1)
@@ -293,7 +326,7 @@ func _test_callbacks_and_buttons(profile_path: String) -> void:
 	check(counts == [0, 1] and p.is_queued_for_deletion(), "Esc cancel: counts=%s" % [counts])
 	await tree.process_frame
 
-	# CANCEL via pad B
+	# CANCEL via pad B on hub
 	counts = [0, 0]
 	p = EventSetupPanel.open_in(host, EventSetupPanel.describe_stage(0), profile_path)
 	p.started.connect(func(): counts[0] += 1)
@@ -303,32 +336,37 @@ func _test_callbacks_and_buttons(profile_path: String) -> void:
 	check(counts == [0, 1], "Pad B cancel: counts=%s" % [counts])
 	await tree.process_frame
 
-	# CANCEL by stepping Right from START -> CANCEL and pressing Enter
+	# CANCEL by stepping Right twice on Row 1: START -> OPTIONS -> QUIT EVENT, then Enter
 	counts = [0, 0]
 	p = EventSetupPanel.open_in(host, EventSetupPanel.describe_stage(0), profile_path)
 	p.started.connect(func(): counts[0] += 1)
 	p.cancelled.connect(func(): counts[1] += 1)
 	await tree.process_frame
 	p._input(_pad(JOY_BUTTON_DPAD_RIGHT))
-	check(host.get_viewport().gui_get_focus_owner() == p.cancel_button, "Right from START did not focus CANCEL")
+	check(host.get_viewport().gui_get_focus_owner() == p.options_button, "Right from START did not focus OPTIONS")
+	p._input(_pad(JOY_BUTTON_DPAD_RIGHT))
+	check(host.get_viewport().gui_get_focus_owner() == p.cancel_button, "Right from OPTIONS did not focus QUIT EVENT")
 	p._input(_key(KEY_ENTER))
-	check(counts == [0, 1], "Enter on CANCEL: counts=%s" % [counts])
+	check(counts == [0, 1], "Enter on QUIT EVENT: counts=%s" % [counts])
 	await tree.process_frame
 
-	# Mouse press on START button triggers started
-	counts = [0, 0]
+	# CAR tile emits garage_requested; STARTING GRID opens grid sub-page and B returns to hub
+	var garage_hits := [0]
 	p = EventSetupPanel.open_in(host, EventSetupPanel.describe_stage(0), profile_path)
-	p.started.connect(func(): counts[0] += 1)
-	p.cancelled.connect(func(): counts[1] += 1)
+	p.garage_requested.connect(func(): garage_hits[0] += 1)
 	await tree.process_frame
-	p.start_button.pressed.emit()
-	check(counts == [1, 0], "Mouse click START: counts=%s" % [counts])
-	await tree.process_frame
+	p.car_button.pressed.emit()
+	check(garage_hits[0] == 1, "CAR tile did not emit garage_requested")
+	p.grid_button.pressed.emit()
+	check(p.page == "grid", "STARTING GRID tile did not open grid sub-page")
+	p._input(_pad(JOY_BUTTON_B))
+	check(p.page == "hub", "Pad B on grid sub-page did not return to hub")
+	p.cancel()
 
 	host.queue_free()
 	await tree.process_frame
 
-## Focus starts on START, moves with D-pad/stick/Tab, recovers if released or hidden, and never leaves the panel.
+## Focus starts on START, moves cleanly in 2D on the hub and vertically on sub-pages, and never leaves the panel.
 func _test_controller_focus_and_stick(profile_path: String) -> void:
 	var tree := Engine.get_main_loop() as SceneTree
 	var host := Control.new()
@@ -343,30 +381,27 @@ func _test_controller_focus_and_stick(profile_path: String) -> void:
 	var vp := host.get_viewport()
 	check(vp.gui_get_focus_owner() == p.start_button, "focus did not start on START")
 
-	# Down from START wraps to first setting (step); Up from START goes to last setting (recover)
+	# 2D hub navigation: START -> Down -> DIFFICULTY -> Right -> CAR -> Right -> STARTING GRID -> Up -> OPTIONS
 	p._input(_pad(JOY_BUTTON_DPAD_DOWN))
-	check(vp.gui_get_focus_owner() == p.controls.step, "Down from START did not land on step")
+	check(vp.gui_get_focus_owner() == p.difficulty_button, "Down from START did not land on DIFFICULTY")
+	p._input(_pad(JOY_BUTTON_DPAD_RIGHT))
+	check(vp.gui_get_focus_owner() == p.car_button, "Right from DIFFICULTY did not land on CAR")
+	p._input(_pad(JOY_BUTTON_DPAD_RIGHT))
+	check(vp.gui_get_focus_owner() == p.grid_button, "Right from CAR did not land on STARTING GRID")
 	p._input(_pad(JOY_BUTTON_DPAD_UP))
-	check(vp.gui_get_focus_owner() == p.start_button, "Up from step did not return to START")
-	p._input(_pad(JOY_BUTTON_DPAD_UP))
-	check(vp.gui_get_focus_owner() == p.controls.recover, "Up from START did not land on recover")
+	check(vp.gui_get_focus_owner() == p.options_button, "Up from STARTING GRID did not land on OPTIONS")
 
-	# Walk through every focusable item via D-pad Down: focus stays inside panel at every step
-	var items := p.focus_items()
-	for _i in items.size() + 3:
-		p._input(_pad(JOY_BUTTON_DPAD_DOWN))
-		var cur := vp.gui_get_focus_owner()
-		check(cur != null and p.focus_items().has(cur) and cur != outside, "focus escaped panel during Down walk: %s" % cur)
-
-	# Left stick latch & deadzone
-	p.start_button.grab_focus()
-	p._input(_axis(JOY_AXIS_LEFT_Y, 0.8)) # Down -> step
-	check(vp.gui_get_focus_owner() == p.controls.step, "stick down did not move focus")
+	# Left stick latch & deadzone on Settings sub-page
+	p.open_settings("step")
+	await tree.process_frame
+	check(vp.gui_get_focus_owner() == p.controls.step, "settings did not open focused on step")
+	p._input(_axis(JOY_AXIS_LEFT_Y, 0.8)) # Down -> preset
+	check(vp.gui_get_focus_owner() == p.controls.preset, "stick down did not move focus to preset")
 	p._input(_axis(JOY_AXIS_LEFT_Y, 0.9)) # held -> latched, should not move again
-	check(vp.gui_get_focus_owner() == p.controls.step, "held stick moved focus twice")
+	check(vp.gui_get_focus_owner() == p.controls.preset, "held stick moved focus twice")
 	p._input(_axis(JOY_AXIS_LEFT_Y, 0.1)) # release
-	p._input(_axis(JOY_AXIS_LEFT_Y, 0.8)) # next push -> preset
-	check(vp.gui_get_focus_owner() == p.controls.preset, "stick after release did not move to preset")
+	p._input(_axis(JOY_AXIS_LEFT_Y, 0.8)) # next push -> aids_toggle
+	check(vp.gui_get_focus_owner() == p.aids_toggle, "stick after release did not move to aids_toggle")
 
 	# Focus recovery if focus is externally cleared or moved outside
 	outside.grab_focus()
@@ -386,8 +421,8 @@ func _test_controller_focus_and_stick(profile_path: String) -> void:
 	host.queue_free()
 	await tree.process_frame
 
-## OpenWorld hooks: Enter at a beacon opens the settings pop-up and pauses sim + clock; Cancel returns to free roam;
-## Start applies DifficultyProfile changes and launches the stage / away cutscene / mission / live event.
+## OpenWorld hooks: Enter at a beacon opens the event menu, hides the beacon card, pauses sim + clock;
+## Cancel returns to free roam; Start applies DifficultyProfile changes and launches stage / mission / live event.
 func _test_open_world_integration() -> void:
 	var map := TownMap.load_map(OpenWorld.MAP_KEY)
 	check(map != null, "open world map failed to load")
@@ -397,7 +432,7 @@ func _test_open_world_integration() -> void:
 	var saved_world: Variant = FileAccess.get_file_as_string(world_file) if FileAccess.file_exists(world_file) else null
 	DifficultyProfile.current = DifficultyProfile.defaults()
 	Campaign.reset_progress()
-	Story.mark_seen([Story.before_key(0)]) # focus on the setup pop-up flow
+	Story.mark_seen([Story.before_key(0)])
 
 	var tree := Engine.get_main_loop() as SceneTree
 	var ow := OpenWorld.new()
@@ -418,7 +453,7 @@ func _test_open_world_integration() -> void:
 	ow.world.add_child(ow.camera)
 	ow.built = true
 	ow.active = true
-	ow.set_process(false) # partial headless world (no traffic/train): drive _process explicitly while testing pause
+	ow.set_process(false)
 	ow.show()
 	ow.hour = 14.0
 	ow._refresh_events()
@@ -426,7 +461,7 @@ func _test_open_world_integration() -> void:
 	var asked: Array[int] = []
 	ow.stage_requested.connect(func(i: int): asked.append(i))
 
-	# 1. Stage beacon (stage 0 sprint): Enter opens EventSetupPanel, pauses car & clock, Esc cancels, START launches
+	# 1. Stage beacon (stage 0 sprint): Enter opens EventSetupPanel, hides beacon card, pauses car & clock
 	var s0 := -1
 	for k in ow.events.size():
 		if not ow.events[k].has("live") and not ow.events[k].has("mission") and int(ow.events[k].stage) == 0:
@@ -440,20 +475,23 @@ func _test_open_world_integration() -> void:
 		ow._input(_key(KEY_ENTER))
 		await tree.process_frame
 		check(ow._setup_open() and asked.is_empty(), "Enter at stage beacon did not open EventSetupPanel")
+		check(not ow.hud.card.visible, "open-world event card stayed visible behind EventSetupPanel")
 		# Open world is paused behind it: car does not move and hour does not advance
 		var pos0 := Vector2(ow.drive.car.x, ow.drive.car.y)
 		var hour0 := ow.hour
 		ow._process(0.5)
 		check(Vector2(ow.drive.car.x, ow.drive.car.y).distance_to(pos0) < 1e-4, "car moved while EventSetupPanel was open")
 		check(is_equal_approx(ow.hour, hour0), "clock advanced while EventSetupPanel was open (%.4f -> %.4f)" % [hour0, ow.hour])
-		# Cancel closes pop-up without starting stage
+		# Cancel closes menu without starting stage
 		ow.event_setup._input(_key(KEY_ESCAPE))
 		await tree.process_frame
 		check(not ow._setup_open() and asked.is_empty(), "Esc did not cancel EventSetupPanel cleanly")
-		# Open again, change shifting to manual, press Enter on START -> applies to drive & emits stage_requested
+		# Open again, open Settings, switch shifting to manual, back to hub, press Enter on START
 		ow._input(_key(KEY_ENTER))
 		await tree.process_frame
+		ow.event_setup.open_settings("shifting")
 		(ow.event_setup.controls.shifting as MenuSelector).step(1)
+		ow.event_setup.open_hub()
 		ow.event_setup._input(_key(KEY_ENTER))
 		await tree.process_frame
 		check(not ow._setup_open() and asked == [0], "START did not launch stage 0: asked=%s" % [asked])
