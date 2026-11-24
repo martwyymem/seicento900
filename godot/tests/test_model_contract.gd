@@ -27,6 +27,8 @@ const CONTRACT := {
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
 	"res://models/zafira.glb": {"objects": ["Body", "Bonnet"] + DAMAGE_PARTS + ["Details", "Stripes", "Wheel", "Cabin", "Martini", "Abarth", "Marlboro"],
 		"materials": ["Paint", "Taillight", "Glass", "Headlight", "LampGlass", "TailGlass", "TailBulb", "Plate", "Bumper", "Trim", "Gasket", "Grille"]},
+	"res://models/driver.glb": {"objects": ["DriverBody", "DriverHead", "DriverArmL", "DriverArmR", "SteeringWheel"], # RaceCarVisual._build_driver
+		"materials": ["Suit", "Helmet", "Visor", "Wheel"]},
 	"res://models/town.glb": {"objects": ["Headframe", "ChurchSpire", "Streetlamp", "TrafficLight", "BusShelter", "LevelCrossing",
 		"FestivalStage", "FestivalArch", "Tent", "FlagPole", "CarHatch", "CarSedan", "CarVan", "Maluch"], "materials": ["Paint", "Lamp", "Banner"]},
 	"res://models/traffic_cars.glb": {"objects": ["CarSeicento", "CarGolf4", "CarLogan", "CarV50", "CarI20", "CarSandero", "CarFocus", "CarZafira"],

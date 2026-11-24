@@ -1050,6 +1050,99 @@ def spectator(pose="stand"):
 	return mb
 
 
+def executive(pose="stand"):
+	"""Festival executive in a suit (~1.80 m, facing +Y -> Godot -Z); same vertex-colour encoding as spectator() so the
+	spectator shader drives it in suit mode (jacket = instance tint, dark trousers, calmer idle). Part 1.0 is paper
+	(clipboard / lanyard badge) and does not glow in suit mode.
+	  stand: hands clasped in front; clip: left arm up holding a clipboard; talk: right arm gesturing."""
+	mb = MB()
+	for sx in (-1, 1):
+		_spectator_limb(mb, (sx * 0.11, 0.0, 0.0), (sx * 0.10, 0.0, 0.88), 0.074, 0.088, (0.50, 0.0, 0.5), (0.50, 0.04, 0.5), segs=5)
+	# jacket: hip-length box over the trousers, shoulders z=1.43
+	mb.box((-0.235, -0.13, 0.66), (0.235, 0.14, 1.43), "Spectator", col=(0.0, 0.25, 0.5))
+	# shirt front stripe and tie read as dark trousers colour, lanyard badge as paper
+	mb.box((-0.035, 0.139, 0.95), (0.035, 0.152, 1.40), "Spectator", col=(0.50, 0.25, 0.5))
+	mb.box((-0.06, 0.139, 0.98), (0.06, 0.158, 1.12), "Spectator", col=(1.0, 0.25, 0.5))
+	mb.box((-0.115, -0.115, 1.45), (0.115, 0.115, 1.69), "Spectator", col=(0.25, 0.40, 0.5))
+	mb.box((-0.122, -0.122, 1.62), (0.122, 0.12, 1.75), "Spectator", col=(0.75, 0.40, 0.5))
+	arms = {
+		"stand": [((-1), [(-0.24, 0.0, 1.37), (-0.27, 0.07, 1.08), (-0.07, 0.20, 1.02)]),
+			((1), [(0.24, 0.0, 1.37), (0.27, 0.07, 1.08), (0.07, 0.20, 1.02)])],
+		"clip": [((-1), [(-0.24, 0.0, 1.37), (-0.30, 0.10, 1.12), (-0.12, 0.26, 1.28)]),
+			((1), [(0.24, 0.0, 1.37), (0.28, 0.02, 1.05), (0.27, 0.06, 0.78)])],
+		"talk": [((-1), [(-0.24, 0.0, 1.37), (-0.30, 0.03, 1.08), (-0.20, 0.10, 0.92)]),
+			((1), [(0.24, 0.0, 1.38), (0.40, 0.12, 1.16), (0.36, 0.30, 1.38)])],
+	}[pose]
+	for sx, (sh, el, hd) in arms:
+		side_b = 0.0 if sx < 0 else 1.0
+		_spectator_limb(mb, sh, el, 0.064, 0.054, (0.0, 0.30, side_b), (0.0, 0.45, side_b), segs=5)
+		_spectator_limb(mb, el, hd, 0.052, 0.046, (0.25, 0.50, side_b), (0.25, 0.65, side_b), segs=5)
+	if pose == "clip":
+		mb.box((-0.17, 0.25, 1.15), (0.01, 0.28, 1.43), "Spectator", col=(1.0, 0.8, 0.0))
+	return mb
+
+
+def festival_trailer():
+	"""Organisers' trailer, 8.4 x 2.6 x 3.3 m: white box body on a tandem axle with a SEICENTO FEST livery (tintable Banner
+	stripe), a serving hatch, awning on two posts and a table on the service side (+Y -> Godot -Z, towards the road),
+	door at the +X end and the tow bar beyond it; the long +Y side faces the road."""
+	mb = MB()
+	hl, hw = 4.2, 1.3
+	z0, z1 = 0.55, 3.0
+	# chassis, wheels, tow bar, stabiliser feet
+	cube(mb, (-hl + 0.4, -hw + 0.2, 0.40), (hl - 0.2, hw - 0.2, z0), "Trim")
+	bar(mb, (hl - 0.2, 0, 0.5), (hl + 1.6, 0, 0.62), 0.14, "Trim")
+	cube(mb, (hl + 1.45, -0.09, 0.55), (hl + 1.75, 0.09, 0.80), "Steel")
+	for ax in (-0.5, 0.45):
+		for sy in (-1, 1):
+			y0, y1 = sorted((sy * (hw - 0.05), sy * (hw + 0.12)))
+			mb.tube((ax, y0, 0.46), (ax, y1, 0.46), 0.46, "Tyre", segs=14)
+			mb.tube((ax, sy * (hw + 0.11), 0.46), (ax, sy * (hw + 0.125), 0.46), 0.24, "Alloy", segs=10)
+	for x in (-hl + 0.7, hl - 0.7):
+		for sy in (-1, 1):
+			cube(mb, (x - 0.14, sy * (hw - 0.3) - 0.14, 0.0), (x + 0.14, sy * (hw - 0.3) + 0.14, 0.45), "Steel")
+	# body shell with an overhanging roof
+	cube(mb, (-hl, -hw, z0), (hl, hw, z1), "Sign")
+	cube(mb, (-hl - 0.08, -hw - 0.08, z1), (hl + 0.08, hw + 0.08, z1 + 0.10), "Trim")
+	cube(mb, (-2.6, -0.6, z1 + 0.10), (-1.2, 0.6, z1 + 0.42), "Steel")  # roof air conditioning
+	cube(mb, (0.3, -0.5, z1 + 0.10), (1.5, 0.5, z1 + 0.22), "Steel")
+	# livery stripe along both long sides, plus the SEICENTO FEST lettering
+	for sy in (-1, 1):
+		y = sy * (hw + 0.012)
+		mb.quad((-hl, y, 0.95), (hl, y, 0.95), (hl, y, 1.28), (-hl, y, 1.28), "Banner", (0, sy, 0))
+		mb.quad((-hl, y, 1.34), (hl, y, 1.34), (hl, y, 1.40), (-hl, y, 1.40), "Red", (0, sy, 0))
+		au = (-1, 0, 0) if sy > 0 else (1, 0, 0)  # reads left to right seen from outside
+		# service side: the lettering sits between the awning and the door; the far side has the whole wall
+		tx, big, small = (1.45, 0.27, 0.15) if sy > 0 else (0.0, 0.46, 0.26)
+		kit.text_mesh(mb, "SEICENTO FEST", (tx, y + sy * 0.004, 2.55), big, "Red", axis_u=au, axis_v=(0, 0, 1))
+		kit.text_mesh(mb, "ORGANISERS", (tx, y + sy * 0.004, 2.55 - big * 1.1), small, "Trim", axis_u=au, axis_v=(0, 0, 1))
+	# serving hatch (glass) with shutter frame, door and steps at the +X end
+	y = hw + 0.012
+	mb.quad((-2.9, y + 0.004, 1.50), (-0.3, y + 0.004, 1.50), (-0.3, y + 0.004, 2.30), (-2.9, y + 0.004, 2.30), "Glass", (0, 1, 0))
+	cube(mb, (-3.0, hw, 1.44), (-0.2, hw + 0.05, 1.50), "Trim")
+	cube(mb, (-3.0, hw, 2.30), (-0.2, hw + 0.05, 2.36), "Trim")
+	cube(mb, (-3.0, hw, 1.50), (-2.94, hw + 0.05, 2.30), "Trim")
+	cube(mb, (-0.26, hw, 1.50), (-0.2, hw + 0.05, 2.30), "Trim")
+	cube(mb, (-3.0, hw, 1.40), (-0.2, hw + 0.45, 1.46), "Wood")  # counter
+	mb.quad((3.0, y + 0.004, 0.62), (4.0, y + 0.004, 0.62), (4.0, y + 0.004, 2.45), (3.0, y + 0.004, 2.45), "Trim", (0, 1, 0))
+	mb.quad((3.07, y + 0.008, 0.70), (3.93, y + 0.008, 0.70), (3.93, y + 0.008, 2.38), (3.07, y + 0.008, 2.38), "Sign", (0, 1, 0))
+	cube(mb, (3.05, hw, 0.62), (3.95, hw + 0.7, 0.70), "Steel")
+	cube(mb, (3.05, hw + 0.7, 0.28), (3.95, hw + 1.1, 0.34), "Steel")
+	# awning over the hatch on two posts (sloping down away from the wall), tintable Banner
+	ax0, ax1, ay = -3.3, 0.1, hw + 1.35
+	mb.quad((ax0, hw, 2.85), (ax1, hw, 2.85), (ax1, ay, 2.45), (ax0, ay, 2.45), "Banner", (0, 0.2, 1))
+	cube(mb, (ax0, ay - 0.02, 2.30), (ax1, ay + 0.04, 2.46), "Banner")
+	for x in (ax0 + 0.1, ax1 - 0.1):
+		mb.tube((x, ay - 0.05, 0.0), (x, ay - 0.05, 2.46), 0.04, "Steel", segs=6)
+	mb.quad((ax0 + 0.2, hw + 0.25, 2.40), (ax1 - 0.2, hw + 0.25, 2.40), (ax1 - 0.2, ay - 0.2, 2.40), (ax0 + 0.2, ay - 0.2, 2.40), "Lamp", (0, 0, -1))
+	# a pavilion table with two stools in front (the executives stand around it)
+	tx, ty = -1.6, hw + 2.3
+	mb.tube((tx, ty, 0.0), (tx, ty, 0.72), 0.07, "Steel", segs=6)
+	mb.tube((tx, ty, 0.72), (tx, ty, 0.76), 0.50, "Wood", segs=12)
+	mb.tube((tx, ty, 0.0), (tx, ty, 0.03), 0.30, "Trim", segs=10)
+	return mb
+
+
 def beacon():
 	"""Event marker: a 6 m flat ring (Banner) and a 30 m light column (Lamp)."""
 	mb = MB()
@@ -1693,6 +1786,8 @@ PIECES = {
 	"FestivalStage": festival_stage, "FlagPole": flag_pole, "Tent": tent,
 	"CrowdBarrier": crowd_barrier, "InflatableArch": inflatable_arch, "MerchStall": merch_stall, "SponsorFlag": sponsor_flag,
 	"SpectatorStand": lambda: spectator("stand"), "SpectatorCheer": lambda: spectator("cheer"), "SpectatorWave": lambda: spectator("wave"),
+	"FestTrailer": festival_trailer,
+	"FestExecStand": lambda: executive("stand"), "FestExecClip": lambda: executive("clip"), "FestExecTalk": lambda: executive("talk"),
 	"CarHatch": lambda: car(CAR_HATCH), "CarSedan": lambda: car(CAR_SEDAN), "CarVan": real_van,
 	"Maluch": real_maluch,
 	"Bench": bench, "Fence": fence, "LevelCrossing": level_crossing,
@@ -1700,7 +1795,7 @@ PIECES = {
 	"TrainCab": lambda: en57(True), "TrainCar": lambda: en57(False),
 }
 KEEP_ORIGIN = {"LevelCrossingBoom", "TrainCab", "TrainCar"}  # pivots: neither grounded nor centred
-NOT_CENTRED = {"Fence", "LevelCrossing", "Streetlamp", "StreetlampPark", "TrafficLight", "FlagPole", "SponsorFlag"}
+NOT_CENTRED = {"Fence", "LevelCrossing", "Streetlamp", "StreetlampPark", "TrafficLight", "FlagPole", "SponsorFlag", "FestTrailer", "FestExecStand", "FestExecClip", "FestExecTalk"}  # trailer origin = body centre, execs = hip centre
 CARS = {"CarHatch", "CarSedan", "CarVan", "Maluch"}
 
 
@@ -1779,6 +1874,9 @@ def main():
 		preview_copy(objs["CrowdBarrier"], (-6.25 + k * 2.5, 158, 0), tints=ban if k % 2 else ban2)
 	for k, nm in enumerate(("SpectatorStand", "SpectatorCheer", "SpectatorWave", "SpectatorStand", "SpectatorCheer", "SpectatorWave")):
 		preview_copy(objs[nm], (-5.0 + k * 2.0, 156.8, 0))
+	preview_copy(objs["FestTrailer"], (0, 200, 0), tints={"Banner": "#e8541e"})
+	for k, nm in enumerate(("FestExecStand", "FestExecClip", "FestExecTalk")):
+		preview_copy(objs[nm], (-3.0 + k * 1.3, 203.6, 0), rot=0.0)
 	preview_copy(objs["Billboard"], (22, 138, 0), rot=-0.6, tints={"Banner": "#2a7de1"})
 	# street
 	Y = 250
@@ -1807,6 +1905,9 @@ def main():
 	R("headframe_side.png", (-95, -10, 16), (-40, -2, 20), 55)
 	R("church.png", (22, 32, 8), (0, 0, 27), 62)
 	R("festival.png", (20, 178, 7), (0, 132, 5), 58)
+	R("trailer.png", (9, 213, 3.6), (0, 200, 1.8), 55)
+	R("trailer_rear.png", (-9, 192, 3.6), (0, 200, 1.8), 55)
+	R("execs.png", (-1.8, 206.4, 1.9), (-1.7, 203.6, 1.0), 40)
 	R("street.png", (2, 262, 3.5), (0, 250, 2.2), 75)
 	R("lamps.png", (2.0, 251.5, 7.0), (-6.5, 251.0, 6.0), 55)
 	R("crossing.png", (-12, 258, 3.0), (-15, 250, 1.6), 55)

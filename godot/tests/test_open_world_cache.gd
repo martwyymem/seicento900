@@ -226,6 +226,15 @@ func _festival(errors: Array[String]) -> void:
 	else:
 		if cf.stats.get("spectators", 0) < 1000 or cf.stats.get("barriers", 0) < 100:
 			errors.append("the cold festival placed unexpectedly few props: %s" % [cf.stats])
+		# every campaign mission start (two missions can share one) gets a long crowd and the organisers' trailer with its six
+		# executives (suit-mode spectator shader: a second material that the night/proximity driver also updates)
+		var trailers: int = cf.stats.get("mission_trailers", 0)
+		if trailers < 6 or cf.stats.get("trailers", 0) != trailers or cf.stats.get("executives", 0) != trailers * FestivalDressing.EXEC_SPOTS.size():
+			errors.append("the mission starts got %s trailers and %s executives: %s" % [trailers, cf.stats.get("executives", 0), cf.stats])
+		if cf.stats.get("mission_crowd_people", 0) < 1500 or cf.stats.get("mission_crowd_people", 0) > FestivalDressing.START_CROWD_CAP * 1.4 * cf.stats.get("mission_starts", 0):
+			errors.append("the mission start crowds hold %s spectators over %s starts" % [cf.stats.get("mission_crowd_people", 0), cf.stats.get("mission_starts", 0)])
+		if cf.exec_mat == null or not is_equal_approx(float(cf.exec_mat.get_shader_parameter("suit")), 1.0) or cf.spectator_mat.get_shader_parameter("suit") != null:
+			errors.append("the executives' suit material is not set up beside the spectators'")
 		if wf.stats != cf.stats:
 			errors.append("a warm festival's stats differ from the cold build's: %s vs %s" % [wf.stats, cf.stats])
 		if wf.crowd_zones != cf.crowd_zones:
