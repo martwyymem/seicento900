@@ -64,6 +64,8 @@ const SPOT_SHORT := {"exit_wilamowice": "the S1 exit south to Wilamowice", "indu
 static func where(index: int) -> String:
 	if stage_is_away(index):
 		return "the Away Races gate at the Fest"
+	if OpenWorld.is_sprint_spot(Campaign.STAGES[index]): # a sprint on the map's roads: its start line, by its note
+		return "the start on " + String(Campaign.STAGES[index].get("note", "its beacon")).split(":")[0]
 	var spot := String(OpenWorld.STAGE_SPOTS.get(String(Campaign.STAGES[index].track), "festival"))
 	return String(SPOT_SHORT.get(spot, String(OpenWorld.SPOT_NOTE.get(spot, "its beacon")).split(":")[0]))
 

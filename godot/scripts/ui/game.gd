@@ -2903,7 +2903,7 @@ func _update_menu_car_summary() -> void:
 		race_label = "ROUND %02d / %02d" % [_champ_round() + 1, _calendar().size()]
 	elif is_campaign_mode:
 		var st := CampaignData.get_stage(campaign_stage_index)
-		race_label = "STAGE %02d / %02d  ·  %d LAPS" % [campaign_stage_index + 1, CampaignData.STAGES.size(), st.laps]
+		race_label = "STAGE %02d / %02d  ·  %s" % [campaign_stage_index + 1, CampaignData.STAGES.size(), CampaignData.length_label(st).to_upper()]
 	elif is_rally_mode:
 		var ev := _rally()
 		var i := mini(ev.stage_index, ev.stage_count() - 1)
@@ -4432,7 +4432,7 @@ func _update_information_page() -> void:
 	elif is_campaign_mode:
 		var st := CampaignData.get_stage(campaign_stage_index)
 		track_key = st.track
-		race_length = "%s · %d lap%s" % [st.title, st.laps, "" if st.laps == 1 else "s"]
+		race_length = "%s · %s" % [st.title, CampaignData.length_label(st)]
 	elif is_rally_mode:
 		var ev := _rally()
 		race_length = "Rally · stage %d of %d" % [mini(ev.stage_index + 1, ev.stage_count()), ev.stage_count()]
@@ -5700,9 +5700,9 @@ func _update_campaign_view() -> void:
 		campaign_title_label.text = str(st.get("title", ""))
 	var weather_name: String = str(st.get("weather", "dry")).capitalize()
 	if is_instance_valid(campaign_circuit_label):
-		campaign_circuit_label.text = "📍 %s  ·  %d Laps  ·  %s  ·  %d Rivals (%s)  ·  Grid %s" % [
+		campaign_circuit_label.text = "📍 %s  ·  %s  ·  %s  ·  %d Rivals (%s)  ·  Grid %s" % [
 			tr_name,
-			st.get("laps", 3),
+			CampaignData.length_label(st).capitalize(),
 			weather_name,
 			st.get("opponents", 5),
 			CampaignData.level_name(st),

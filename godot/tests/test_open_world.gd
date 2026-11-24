@@ -47,8 +47,15 @@ func _data(map: TownMap, errors: Array[String]) -> void:
 		if not map.bounds.has_point(Vector2(s[0], s[1])):
 			errors.append("spot %s is outside the drivable area" % spot)
 	for st in Campaign.STAGES:
-		if not OpenWorld.STAGE_SPOTS.has(st.track):
+		if not OpenWorld.STAGE_SPOTS.has(st.track) and not OpenWorld.is_sprint_spot(st):
 			errors.append("campaign track %s has no open-world spot" % st.track)
+		elif OpenWorld.is_sprint_spot(st):
+			# a sprint on the map's own roads: its beacon at its start line A, on the road and inside the play area
+			var a := OpenWorld.stage_spot(map, st)
+			if a.is_empty() or map.road_at(a[0], a[1], -INF, 2.0).is_empty():
+				errors.append("the %s sprint's start %s is not on a road" % [st.id, a])
+			elif not TownMap.inside(Vector2(a[0], a[1]), map.play):
+				errors.append("the %s sprint's start %s is outside the play area" % [st.id, a])
 	# the road's own surface, grass in a field
 	var s: Array = map.spots.industrial_sprint
 	var hit := map.road_at(s[0], s[1])

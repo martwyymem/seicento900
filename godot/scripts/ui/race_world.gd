@@ -440,6 +440,7 @@ func set_race(value: Race) -> void:
 		race = value
 	if roadside_props:
 		roadside_props.set_rally(value.s.mode == "rally")
+	_place_sprint_lines(value)
 	if stage_dressing:
 		stage_dressing.configure_race(value)
 	# a restart on the same circuit reuses the scenery but not the previous field
@@ -2123,6 +2124,42 @@ func _brick_texture(count: int) -> ImageTexture:
 				img.set_pixel(x, row * 4 + y, Color("#8f8b84") if mortar else col)
 	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
+
+var _sprint_lines: Node3D = null
+## An A->B sprint's lines across the road (RaceSettings.sprint): a white start line at A and a chequered finish
+## line at B, painted like a street stage's start line. Rebuilt with each race (a restart reuses the scenery).
+func _place_sprint_lines(r: Race) -> void:
+	if is_instance_valid(_sprint_lines):
+		_sprint_lines.queue_free()
+	_sprint_lines = null
+	if not r.s.sprint or not track_root:
+		return
+	_sprint_lines = Node3D.new()
+	_sprint_lines.name = "SprintLines"
+	track_root.add_child(_sprint_lines)
+	var squares := maxi(4, roundi(track.width / 0.7))
+	for k in 2:
+		var at := track.wrap_s(r.s.stage_from if k == 0 else r.s.stage_to)
+		var xy := track.pos(at, 0.0)
+		var line := MeshInstance3D.new()
+		line.name = "SprintStart" if k == 0 else "SprintFinish"
+		var strip := PlaneMesh.new()
+		strip.size = Vector2(track.width, 0.6 if k == 0 else 1.4)
+		line.mesh = strip
+		line.position = _world_pos(xy[0], xy[1], at) - Vector3.UP * 0.03
+		line.rotation.y = -track.heading(at) - PI / 2.0
+		line.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var mat := _material(Color("#efece4"), 0.6)
+		if k == 1:
+			var checker := Image.create(squares, 2, false, Image.FORMAT_RGB8)
+			for x in squares:
+				for y in 2:
+					checker.set_pixel(x, y, Color("#efece4") if (x + y) % 2 == 0 else Color("#16181a"))
+			mat.albedo_color = Color.WHITE
+			mat.albedo_texture = ImageTexture.create_from_image(checker)
+			mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+		line.material_override = mat
+		_sprint_lines.add_child(line)
 
 func _build_start_finish_gantry() -> void:
 	var s0_pos := _world_pos(track.X[0], track.Y[0], 0)

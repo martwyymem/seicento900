@@ -265,7 +265,8 @@ func _migration(errors: Array[String]) -> void:
 	var oswiecim := Campaign.index_of("stage_6")
 	if int(prog.get("arc", 0)) != Campaign.ARC or int(prog.unlocked) != krakow:
 		errors.append("migration: arc %s, unlocked %s (want %d)" % [prog.get("arc"), prog.get("unlocked"), krakow])
-	if _ints(prog.best_pos) != {"0": 1, "4": 2, str(oswiecim): 2, str(krakow): 5} or _ints(prog.fails) != {str(krakow): 2}:
+	var bielsko := Campaign.index_of("stage_5")
+	if _ints(prog.best_pos) != {"0": 1, str(bielsko): 2, str(oswiecim): 2, str(krakow): 5} or _ints(prog.fails) != {str(krakow): 2}:
 		errors.append("migration: best_pos %s, fails %s" % [prog.best_pos, prog.fails])
 	if prog.cars != cars or prog.story.seen != ["intro", "stage_1_won"] or int(prog.car.used) != 3 or prog.trophies != old_trophies:
 		errors.append("migration: cars, story, carried car or trophies changed: %s" % prog)
@@ -278,9 +279,10 @@ func _migration(errors: Array[String]) -> void:
 	var lv0 := float(maxi(Campaign.LEVELS.find(String(Campaign.STAGES[krakow].difficulty)), 0)) + float(Campaign.STAGES[krakow].get("pace", 0.0))
 	if int(st.fails) != 2 or int(st.eased) != mini(2, ceili(lv0 - 0.001)) or not is_equal_approx(float(st.level), maxf(0.0, lv0 - 2.0)):
 		errors.append("migration: Kraków's failed tries did not follow it (%d fails, eased %d, level %.2f)" % [int(st.fails), int(st.eased), float(st.level)])
-	var rewanz := Campaign.index_of("stage_rewanz")
-	if not Campaign.is_unlocked(rewanz) or String(Campaign.STAGES[rewanz].trophy) in prog.trophies:
-		errors.append("migration: the new stage behind the old frontier should be open and not won")
+	for id in ["stage_rewanz", "stage_wola", "stage_gora"]:
+		var at := Campaign.index_of(id)
+		if not Campaign.is_unlocked(at) or String(Campaign.STAGES[at].trophy) in prog.trophies:
+			errors.append("migration: the new stage %s behind the old frontier should be open and not won" % id)
 	if Campaign.is_unlocked(krakow + 1):
 		errors.append("migration: a stage past the old frontier opened")
 	# the old arc had every mission up to rally_bor open: all stay open, even the ones this arc moved later
@@ -305,6 +307,7 @@ func _migration(errors: Array[String]) -> void:
 	Campaign.save_progress({"unlocked": 9, "best_pos": {}, "trophies": []})
 	if int(Campaign.load_progress().unlocked) != Campaign.STAGES.size() - 1:
 		errors.append("migration: an old open-everything save should open the whole chain")
+	_migration_arc2(errors)
 	# a save from this arc is not touched
 	Campaign.save_progress({"unlocked": 6, "best_pos": {"6": 1}, "trophies": [], "arc": Campaign.ARC})
 	prog = Campaign.load_progress()
@@ -315,6 +318,35 @@ func _migration(errors: Array[String]) -> void:
 	if int(prog.unlocked) != 0 or int(prog.get("arc", 0)) != Campaign.ARC or prog.has("missions") or not (prog.trophies as Array).is_empty():
 		errors.append("migration: reset should leave an empty save of this arc: %s" % prog)
 	DirAccess.remove_absolute(SaveData.path(TEST_SAVE))
+
+## A save from the second, fourteen-stage arc ("arc": 2, before the Wola and Góra sprints) loads onto this arc by
+## stage id: its frontier, results and failed tries follow their stages, the sprints new before the frontier are open
+## to race, the ones past it are not, and its missions (already keyed to stage ids) are left as they were.
+func _migration_arc2(errors: Array[String]) -> void:
+	var won := []
+	for id in ["stage_1", "stage_2", "stage_3", "stage_4", "stage_5"]:
+		won.append(String(Campaign.STAGES[Campaign.index_of(id)].trophy))
+	# arc 2: index 5 is stage_rewanz (open, failed once), index 2 Bór won at P1, index 4 Bielsko at P3
+	Campaign.save_progress({"unlocked": 5, "best_pos": {"2": 1, "4": 3}, "fails": {"5": 1}, "trophies": won, "arc": 2,
+		"missions": {"sprint_s1": {"cleared": true, "best": 1}}, "cars": ["sandero"]})
+	var prog := Campaign.load_progress()
+	var rewanz := Campaign.index_of("stage_rewanz")
+	if int(prog.get("arc", 0)) != Campaign.ARC or int(prog.unlocked) != rewanz:
+		errors.append("migration arc 2: arc %s, unlocked %s (want %d)" % [prog.get("arc"), prog.get("unlocked"), rewanz])
+	var want_best := {str(Campaign.index_of("stage_3")): 1, str(Campaign.index_of("stage_5")): 3}
+	if _ints(prog.best_pos) != want_best or _ints(prog.fails) != {str(rewanz): 1}:
+		errors.append("migration arc 2: best_pos %s (want %s), fails %s" % [prog.best_pos, want_best, prog.fails])
+	if not bool(prog.missions.sprint_s1.cleared) or prog.cars != ["sandero"] or prog.trophies != won:
+		errors.append("migration arc 2: missions, cars or trophies changed: %s" % prog)
+	for id in ["stage_wola", "stage_gora"]:
+		if not Campaign.is_unlocked(Campaign.index_of(id)):
+			errors.append("migration arc 2: %s, new behind the frontier, should be open" % id)
+	if Campaign.is_unlocked(rewanz + 1):
+		errors.append("migration arc 2: a stage past the old frontier opened")
+	# arc 2's open-everything save (the Tokyo stage, index 12) still opens the whole chain before the finale
+	Campaign.save_progress({"unlocked": 12, "best_pos": {}, "trophies": [], "arc": 2})
+	if int(Campaign.load_progress().unlocked) != Campaign.index_of("stage_9"):
+		errors.append("migration arc 2: the old frontier at Tokyo should stay at Tokyo")
 
 ## A save's {key: number} with the numbers as ints (JSON reads every number back as a float).
 func _ints(d: Dictionary) -> Dictionary:

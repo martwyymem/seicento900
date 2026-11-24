@@ -226,7 +226,7 @@ func run() -> Array:
 ## page in its own mode, and a campaign stage's briefing hides what the stage dictates.
 func _check_menu_modes(errors: Array[String], game_script: GDScript) -> void:
 	for st in CampaignData.STAGES:
-		if not (st.track in game_script.TRACK_KEYS):
+		if not (st.track in game_script.TRACK_KEYS) and not Race.get_track(st.track).cfg.point_to_point: # (a baked sprint: campaign only)
 			errors.append("Campaign stage '%s' track '%s' is not in TRACK_KEYS" % [st.id, st.track])
 	if game_script.FRONT_MENU.any(func(e): return e.id == "single_race"):
 		errors.append("FRONT_MENU still has a separate single race entry")

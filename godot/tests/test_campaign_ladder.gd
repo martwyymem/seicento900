@@ -362,7 +362,7 @@ func _save_sanitizing() -> void:
 	f.close()
 	var prog := Campaign.load_progress()
 	check("an old save has no heat", not prog.has("heat") and not prog.has("streak"))
-	var st := Campaign.get_stage(3)
+	var st := Campaign.get_stage(Campaign.index_of("stage_4")) # (arc 2's index 3)
 	check("an old save's stage carries no heat", is_zero_approx(float(st.heat)))
 	check("an old save's failures still ease", int(st.eased) == 1)
 	var r := Campaign.record_result(0, 1, 9.0)

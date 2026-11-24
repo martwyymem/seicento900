@@ -1,0 +1,7 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+    gp_autopilot: 60900 ticks (js 60889) in 132941 ms, first drift > 0.000001 at tick -1, worst 0.00 m (tick 7068 Krzysztof Wiśniewski)
+    monaco_scripted: 12600 ticks (js 5400) in 10585 ms, first drift > 0.000001 at tick -1, worst 0.00 m (tick 4452 Marek Kowalski)
+    spa_rail_wet: 77291 ticks (js 77291) in 24837 ms, first drift > 0.000001 at tick -1, worst 0.00 m (tick 13080 Paolo Esposito)
+    191146 values checked
+completed=true errors=0

@@ -114,6 +114,20 @@ const BEATS := {
 		["mirek", "You braked when you saw the corner. Brake when you know it's there. Fog only hides what you haven't learned."],
 		["ola", "Next time I'll stand at every junction with a torch."],
 	],
+	"stage_wola_brief": [["ola", "Wola: my cousin's village. One long straight, then the whole place out on Pszczyńska."]],
+	"stage_wola_before": [
+		["ola", "No laps today: Babudy to Wola, start line to finish line. Starorzeczna under the S1, then the fields, then the village."],
+		["mirek", "A sprint is one go. No second lap to fix the first. Get the start right and keep it on the tarmac."],
+		["kamil", "Wola? There's a duck pond and a bus shelter. I'll wait for you at the duck pond."],
+	],
+	"stage_wola_won": [
+		["ola", "My cousin's whole street was on the fence at the school. They're naming a goat after you."],
+		["kamil", "The straight. You had the tow on the straight. That's all it was."],
+	],
+	"stage_wola_miss": [
+		["mirek", "In a sprint the race is over at the flag, not at the next lap. You saved it for a lap that never came."],
+		["ola", "The right onto Mokra. Everyone gets it wrong once. Next time brake at the bus shelter."],
+	],
 	"stage_3_brief": [["ola", "Bór: pines, guardrail, two level crossings. I'll count the trains for you."]],
 	"stage_3_before": [
 		["mirek", "I grew up on ul. Bór. My dad drove the bus through these woods; I wanted his job more than anything."],
@@ -159,6 +173,20 @@ const BEATS := {
 	"stage_5_miss": [
 		["mirek", "Too much brake on Karbowa, too little time in the draft. Stay in the tow until it hurts."],
 		["kamil", "Not bad for a shopping car. That's not a compliment. Mostly."],
+	],
+	"stage_gora_brief": [["kamil", "Góra. The Babudy drift lads want a proper race: narrow lanes, ponds, no room to be polite."]],
+	"stage_gora_before": [
+		["ola", "Start on Długa, finish by the Babudy ponds. Topolowa is the only place wide enough to pass."],
+		["kamil", "These lads drive their dads' tractors down Topolowa every harvest. They don't brake for anything."],
+		["mirek", "Ditches both sides and the ponds at the end. Put a wheel in the grass and you'll be fishing."],
+	],
+	"stage_gora_won": [
+		["kamil", "The Góra lads gave you their cap. They've never given me their cap."],
+		["mirek", "No mud on the sills. You stayed on the road the whole way. I'm almost proud."],
+	],
+	"stage_gora_miss": [
+		["ola", "You can't win it in the kinks by the ponds. Win it on Topolowa, then just stay on the road."],
+		["mirek", "They know where the ditches are. You have to learn them the hard way. Again."],
 	],
 	"stage_rewanz_brief": [["kamil", "Pszczyna again. At night, in the rain. My park, my rules, my rematch."]],
 	"stage_rewanz_before": [
@@ -447,7 +475,8 @@ const BEATS := {
 ## One-line phone messages, shown on the HUD banner when a stage or mission opens.
 const RADIO := {
 	"open_stage_2": ["mirek", "Next is home: the fog round the mine. The beacon's on ul. Dworcowa by KWK Brzeszcze."],
-	"open_stage_3": ["ola", "Stage 3 is in Bór, down ul. Bór. Bring sandwiches, the forest is long."],
+	"open_stage_wola": ["ola", "A sprint to Wola, my cousin's village! The start's on ul. Korfantego in Babudy. No laps, just go."],
+	"open_stage_3": ["ola", "Next is Bór, down ul. Bór. Bring sandwiches, the forest is long."],
 	"open_stage_4": ["kamil", "Pszczyna's next. My town. West on the DW933, try not to get lost."],
 	"open_stage_5": ["mirek", "Regional round one: Bielsko. South on ul. Bielska. The car's going home to where it was born."],
 	"open_stage_6": ["ola", "Oświęcim next: east on the DW933. Grandad says bring an umbrella."],
@@ -462,6 +491,7 @@ const RADIO := {
 	"open_knockout_bor": ["kamil", "Kamil here. Mały Bór, a knockout, my Golf against your Seicento. Unless you're scared."],
 	"open_rally_bor": ["ola", "Rajd Borów entries are open and I've entered us already. Obviously."],
 	"open_drag_kilometre": ["halina", "My test drivers want a standing kilometre on the S1 tonight. Bring your best gear change."],
+	"open_stage_gora": ["kamil", "Kamil. The Góra lads have closed their village for a sprint. Start's on ul. Długa. Bring a towel."],
 	"open_stage_rewanz": ["kamil", "Kamil. Pszczyna, Saturday night, in the rain. One rematch, same beacon on the DW933. Unless you're scared."],
 	"open_stage_monza": ["halina", "Monza, Fiat's home crowd. The flight leaves from Katowice: north on the S1 to the airport."],
 	"open_stage_eifel": ["ola", "The Nürburgring next! Night train west from Jawiszowice station. I've packed sandwiches for three countries."],

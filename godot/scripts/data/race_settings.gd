@@ -46,6 +46,9 @@ extends Resource
 ## Campaign missions (Missions): Godot-only race rules, all off by default (the parity tests never set them).
 @export var knockout := false ## each time the leader completes a lap, the last running car is out (field N: N-1 laps)
 @export var finish_distance := 0.0 ## m: > 0 ends each car's race once it has covered this far from its grid spot (a drag race)
+## An A->B sprint (campaign "format": "sprint"): the whole field grids behind stage_from and races to a fixed finish
+## line at stage_to (both m after the track's start line; to <= from runs on over the line); no laps are counted.
+@export var sprint := false
 @export var loose_spans := false ## the track's baked dirt and gravel spans grip as they look (as TrackDef.loose_grip), for an off-road race
 @export var drift_score := false ## the player's slides score drift points (Race.drift, DriftScore)
 @export var drift_tiers := PackedInt32Array() ## the drift mission's bronze, silver and gold scores (the HUD shows the next one)

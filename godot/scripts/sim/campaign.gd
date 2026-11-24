@@ -1,8 +1,11 @@
-## Campaign mode ("The Seicento Odyssey"): a 14-stage racing career tracing a grassroots Polish racer's journey
+## Campaign mode ("The Seicento Odyssey"): a 16-stage racing career tracing a grassroots Polish racer's journey
 ## from Silesian village lanes through Monza, the Nürburgring, Le Mans and Tokyo, and home to Brzeszcze for the
 ## Goliath. The map missions beside the stages (Missions) award the cars. The story told round it is Story.
 ## The save (campaign.json) indexes stages by their place in STAGES; "arc" says which layout it was written for, and
-## a save from the first, ten-stage arc is mapped onto this one by stage id when it loads (migrate).
+## a save from an older arc (the first, ten-stage one, or the second, fourteen-stage one) is mapped onto this one by
+## stage id when it loads (migrate). A stage is a lap race ("laps"), or with "format": "sprint" an A->B sprint against
+## the whole field from point A to point B on the track's road ("from" / "to", m after the track's start line, or
+## "baked": true for the span a point-to-point track carries, Rally.baked_span): no laps, results by finishing order.
 class_name Campaign
 extends RefCounted
 
@@ -17,6 +20,9 @@ const STAGES := [
 		"title": "Stage 1: Rookie Shakedown",
 		"track": "wilamowice",
 		"laps": 1,
+		"format": "sprint",
+		"from": 250.0,
+		"to": 6000.0,
 		"weather": "dry",
 		"time_of_day": 14.0,
 		"start_hour": 14.0,
@@ -30,7 +36,7 @@ const STAGES := [
 		"class": "city",
 		"rivals": {"stock": 5},
 		"pace": 1.0, ## levels over its difficulty (tuned with tests/_campaign_ladder_probe.gd)
-		"desc": "Wujek Mirek handed you the keys to Ciocia Basia's stock 1998 Fiat Seicento 900 (39 bhp). Prove your racecraft round Wilamowice: from the Rynek past Holy Trinity church, down Kęcka and Krakowska into Hecznarowice, back through the fields and the esses by the pond.",
+		"desc": "Wujek Mirek handed you the keys to Ciocia Basia's stock 1998 Fiat Seicento 900 (39 bhp). Prove your racecraft in a sprint across Wilamowice: from the Rynek past Holy Trinity church, down Kęcka and Krakowska into Hecznarowice, back through the fields to the flag by the pond on Sobieskiego.",
 		"tip": "The lefts at Hecznarowice and Handlowa are sharp: brake early, then carry momentum along the open field lane."
 	},
 	{
@@ -40,6 +46,9 @@ const STAGES := [
 		"title": "Stage 2: Coal & Crossroads",
 		"track": "brzeszcze",
 		"laps": 1,
+		"format": "sprint",
+		"from": 150.0,
+		"to": 5300.0,
 		"weather": "fog",
 		"time_of_day": 8.0,
 		"start_hour": 8.0,
@@ -53,14 +62,40 @@ const STAGES := [
 		"class": "city",
 		"rivals": {"stock": 6, "sandero": 1},
 		"pace": 1.0, ## levels over its difficulty (tuned with tests/_campaign_ladder_probe.gd)
-		"desc": "Dense morning fog blankets the mining town: up ul. Ofiar Oświęcimia past the Andrzej shafts, round Leśna, Kościuszki and Piastowska, and back by Daszyńskiego.",
+		"desc": "Dense morning fog blankets the mining town. A sprint from the Andrzej shafts on ul. Ofiar Oświęcimia, round Leśna, Kościuszki and Piastowska, back by Daszyńskiego to the flag on Przecieszyńska.",
 		"tip": "The town's right-angle junctions loom out of the fog late: brake while the corner is still a guess, not when you see it."
+	},
+	{
+		"id": "stage_wola",
+		"act": 1,
+		"act_name": "Act I: Silesian Grassroots",
+		"title": "Stage 3: Sprint do Woli",
+		"track": "wola_sprint",
+		"laps": 1,
+		"format": "sprint",
+		"baked": true,
+		"weather": "dry",
+		"time_of_day": 17.5,
+		"start_hour": 17.5,
+		"wear_mult": 0.0,
+		"fuel_mult": 0.0,
+		"opponents": 7,
+		"difficulty": "easy",
+		"target_pos": 3,
+		"grid": "p6",
+		"trophy": "Wola Fishpond Pennant",
+		"class": "city",
+		"rivals": {"stock": 6, "sandero": 1},
+		"pace": 0.75, ## levels over its difficulty (tuned with tests/_campaign_ladder_probe.gd)
+		"note": "ul. Wojciecha Korfantego, Babudy: the start of the sprint to Wola",
+		"desc": "Village roads, closed for an evening: from Babudy north up ul. Starorzeczna under the S1 and across the fields into Wola, east on Mokra, up Powstańców, then flat out down ul. Pszczyńska through the village past the school to the flag at the Kopalniana junction.",
+		"tip": "Starorzeczna is a long straight: get in the tow early. The right onto Mokra comes at the end of it, and Pszczyńska through the village is faster than it looks."
 	},
 	{
 		"id": "stage_3",
 		"act": 1,
 		"act_name": "Act I: Silesian Grassroots",
-		"title": "Stage 3: The Forest of Bór",
+		"title": "Stage 4: The Forest of Bór",
 		"track": "bor",
 		"laps": 2,
 		"weather": "variable",
@@ -83,7 +118,7 @@ const STAGES := [
 		"id": "stage_4",
 		"act": 1,
 		"act_name": "Act I: Silesian Grassroots",
-		"title": "Stage 4: Castle Park Trophy",
+		"title": "Stage 5: Castle Park Trophy",
 		"track": "pszczyna",
 		"laps": 2,
 		"weather": "dry",
@@ -106,9 +141,12 @@ const STAGES := [
 		"id": "stage_5",
 		"act": 2,
 		"act_name": "Act II: Regional Championship",
-		"title": "Stage 5: Factory Homecoming",
+		"title": "Stage 6: Factory Homecoming",
 		"track": "bielsko",
-		"laps": 2,
+		"laps": 1,
+		"format": "sprint",
+		"from": 2500.0,
+		"to": 1900.0,
 		"weather": "variable",
 		"time_of_day": 12.0,
 		"start_hour": 12.0,
@@ -122,14 +160,40 @@ const STAGES := [
 		"class": "supermini",
 		"rivals": {"i20": 4, "sandero": 4, "golf4": 1},
 		"pace": 1.0, ## levels over its difficulty (tuned with tests/_campaign_ladder_probe.gd)
-		"desc": "Back in the Seicento's home town, at the foot of Szyndzielnia. Climb al. Armii Krajowej to the cable-car car park at Rondo Fieldorfa, then plunge 70 m down Karbowa past the Dębowiec ski slope, over the Kamieniczanka and home along Gościnna.",
+		"desc": "Back in the Seicento's home town, at the foot of Szyndzielnia. A sprint from ul. Gościnna by the Kamieniczanka: climb al. Armii Krajowej to the cable-car car park at Rondo Fieldorfa, then plunge 70 m down Karbowa past the Dębowiec ski slope to the flag on Karpacka.",
 		"tip": "Use the draft up the long Armii Krajowej drag, then brake hard for Rondo Fieldorfa at the top: the descent to Karpacka comes at you fast."
+	},
+	{
+		"id": "stage_gora",
+		"act": 2,
+		"act_name": "Act II: Regional Championship",
+		"title": "Stage 7: Sprint przez Górę",
+		"track": "gora_sprint",
+		"laps": 1,
+		"format": "sprint",
+		"baked": true,
+		"weather": "variable",
+		"time_of_day": 10.0,
+		"start_hour": 10.0,
+		"wear_mult": 0.0,
+		"fuel_mult": 0.0,
+		"opponents": 9,
+		"difficulty": "medium",
+		"target_pos": 3,
+		"grid": "p7",
+		"trophy": "Góra Church Bell",
+		"class": "supermini",
+		"rivals": {"i20": 4, "sandero": 4, "golf4": 1},
+		"pace": 1.0, ## levels over its difficulty (tuned with tests/_campaign_ladder_probe.gd)
+		"note": "ul. Długa, Góra: the start of the sprint through the village",
+		"desc": "The regional series comes to the Góra lads' own roads: from ul. Długa west and up ul. Krótka, north on Topolowa across the DW933 and past the church lane, then Zapadź and Dąbrowa between the Babudy fishponds to the flag at the Bażantów junction.",
+		"tip": "Narrow village lanes with ditches either side: no room to pass in the bends, so make your move on Topolowa's straights and brake early for the kinks by the ponds."
 	},
 	{
 		"id": "stage_rewanz",
 		"act": 2,
 		"act_name": "Act II: Regional Championship",
-		"title": "Stage 6: Kamil's Rematch",
+		"title": "Stage 8: Kamil's Rematch",
 		"track": "pszczyna",
 		"laps": 2,
 		"weather": "wet",
@@ -152,7 +216,7 @@ const STAGES := [
 		"id": "stage_6",
 		"act": 2,
 		"act_name": "Act II: Regional Championship",
-		"title": "Stage 7: Riverbank Grand Prix",
+		"title": "Stage 9: Riverbank Grand Prix",
 		"track": "oswiecim",
 		"laps": 2,
 		"weather": "wet",
@@ -175,7 +239,7 @@ const STAGES := [
 		"id": "stage_7",
 		"act": 2,
 		"act_name": "Act II: Regional Championship",
-		"title": "Stage 8: The Royal Crown",
+		"title": "Stage 10: The Royal Crown",
 		"track": "krakow",
 		"laps": 2,
 		"weather": "dry",
@@ -198,7 +262,7 @@ const STAGES := [
 		"id": "stage_8",
 		"act": 3,
 		"act_name": "Act III: Global Legends",
-		"title": "Stage 9: Proving Grounds Trial",
+		"title": "Stage 11: Proving Grounds Trial",
 		"track": "fiat",
 		"laps": 4,
 		"weather": "dry",
@@ -221,7 +285,7 @@ const STAGES := [
 		"id": "stage_monza",
 		"act": 3,
 		"act_name": "Act III: Global Legends",
-		"title": "Stage 10: Temple of Speed",
+		"title": "Stage 12: Temple of Speed",
 		"track": "monza",
 		"laps": 2,
 		"weather": "dry",
@@ -245,7 +309,7 @@ const STAGES := [
 		"id": "stage_eifel",
 		"act": 3,
 		"act_name": "Act III: Global Legends",
-		"title": "Stage 11: The Green Hell",
+		"title": "Stage 13: The Green Hell",
 		"track": "nordschleife",
 		"laps": 1,
 		"weather": "fog",
@@ -269,7 +333,7 @@ const STAGES := [
 		"id": "stage_lemans",
 		"act": 3,
 		"act_name": "Act III: Global Legends",
-		"title": "Stage 12: Through the Night",
+		"title": "Stage 14: Through the Night",
 		"track": "lemans",
 		"laps": 1,
 		"weather": "dry",
@@ -293,7 +357,7 @@ const STAGES := [
 		"id": "stage_9",
 		"act": 3,
 		"act_name": "Act III: Global Legends",
-		"title": "Stage 13: Midnight Showdown",
+		"title": "Stage 15: Midnight Showdown",
 		"track": "tokyo",
 		"laps": 1,
 		"weather": "dry",
@@ -316,7 +380,7 @@ const STAGES := [
 		"id": "stage_10",
 		"act": 4,
 		"act_name": "Finale: Seicento Legend",
-		"title": "Stage 14: The Goliath",
+		"title": "Stage 16: The Goliath",
 		"track": "goliath",
 		"laps": 1,
 		"weather": "dry",
@@ -360,10 +424,14 @@ const HEAT_STEP := 0.25 ## levels a big win adds (the second big win in a row ad
 const HEAT_MAX := 1.0 ## at most one full level (Medium -> Hard)
 const HEAT_FAIL := 0.5 ## levels a failed try takes off
 
-## The stage layout a save was written for: 1 (no "arc" key) is the first, ten-stage arc; 2 is this one.
-const ARC := 2
+## The stage layout a save was written for: 1 (no "arc" key) is the first, ten-stage arc; 2 the fourteen-stage one
+## (before the Wola and Góra sprints); 3 is this one.
+const ARC := 3
 ## The first arc's stages in their old order: a save without "arc" keys unlocked, best_pos and fails by these places.
 const ARC1_ORDER := ["stage_1", "stage_2", "stage_3", "stage_4", "stage_5", "stage_6", "stage_7", "stage_8", "stage_9", "stage_10"]
+## The second arc's stages in their order: an arc-2 save's unlocked, best_pos and fails are by these places.
+const ARC2_ORDER := ["stage_1", "stage_2", "stage_3", "stage_4", "stage_5", "stage_rewanz", "stage_6", "stage_7", "stage_8",
+	"stage_monza", "stage_eifel", "stage_lemans", "stage_9", "stage_10"]
 ## The stage (its place in ARC1_ORDER) each first-arc mission waited for: a mission an old save had open stays open.
 const ARC1_MISSION_AFTER := {"drag_quarter": 0, "sprint_s1": 1, "drift_babudy": 2, "offroad_kolonia": 3, "knockout_bor": 4,
 	"rally_bor": 5, "drag_kilometre": 7}
@@ -421,28 +489,33 @@ static func index_of(id: String) -> int:
 			return i
 	return -1
 
-## A save from an older arc, in this arc's terms (a save already on it comes back as it is). The ten-stage arc's
+## A save from an older arc, in this arc's terms (a save already on it comes back as it is). The older arcs'
 ## stages keep their ids, so the stage indices (unlocked, best_pos, fails) are mapped through them: the furthest
 ## stage it had open stays the furthest open, and the stages new to this arc before it are open to race. Trophies,
-## missions, cars, the story and the carried car are keyed by name and carry over untouched; a mission that was
-## open stays open (its "open" flag) even where this arc opens it later. Saved back with "arc" the next time the
+## missions, cars, the story and the carried car are keyed by name and carry over untouched; a first-arc mission that
+## was open stays open (its "open" flag) even where this arc opens it later. Saved back with "arc" the next time the
 ## campaign writes the file.
 static func migrate(prog: Dictionary) -> Dictionary:
-	if int(prog.get("arc", 1)) >= ARC:
+	var arc := int(prog.get("arc", 1))
+	if arc >= ARC:
 		return prog
+	var order: Array = ARC1_ORDER if arc <= 1 else ARC2_ORDER
 	var out := prog.duplicate(true)
-	var old_unlocked := clampi(int(prog.get("unlocked", 0)), 0, ARC1_ORDER.size() - 1)
-	out["unlocked"] = maxi(_arc1_index(old_unlocked), 0)
+	var old_unlocked := clampi(int(prog.get("unlocked", 0)), 0, order.size() - 1)
+	out["unlocked"] = maxi(_old_index(order, old_unlocked), 0)
 	for field: String in ["best_pos", "fails"]:
 		var src = prog.get(field, {})
 		if not src is Dictionary:
 			continue
 		var dst := {}
 		for k in (src as Dictionary):
-			var at: int = _arc1_index(int(String(k))) if String(k).is_valid_int() else -1
+			var at: int = _old_index(order, int(String(k))) if String(k).is_valid_int() else -1
 			if at >= 0:
 				dst[str(at)] = src[k]
 		out[field] = dst
+	out["arc"] = ARC
+	if arc >= 2:
+		return out # (the second arc's missions already wait for stage ids: nothing to open by hand)
 	var trophies: Array = prog.get("trophies", []) if prog.get("trophies", []) is Array else []
 	var all = out.get("missions", {})
 	if not all is Dictionary:
@@ -456,7 +529,6 @@ static func migrate(prog: Dictionary) -> Dictionary:
 			all[id] = p
 	if not (all as Dictionary).is_empty():
 		out["missions"] = all
-	out["arc"] = ARC
 	return out
 
 ## The live-event medal gate on the missions (Missions.MEDALS_NEEDED): 1 in every save written since it came in.
@@ -487,9 +559,57 @@ static func migrate_gate(prog: Dictionary) -> Dictionary:
 
 ## Where a first-arc stage index is in STAGES now (-1 for none).
 static func _arc1_index(old: int) -> int:
-	if old < 0 or old >= ARC1_ORDER.size():
+	return _old_index(ARC1_ORDER, old)
+
+## Where stage `old` of an older arc's order is in STAGES now (-1 for none).
+static func _old_index(order: Array, old: int) -> int:
+	if old < 0 or old >= order.size():
 		return -1
-	return index_of(ARC1_ORDER[old])
+	return index_of(String(order[old]))
+
+## Whether a stage is an A->B sprint ("format": "sprint") rather than a lap race.
+static func is_sprint(stage: Dictionary) -> bool:
+	return String(stage.get("format", "laps")) == "sprint"
+
+## A sprint's start A and finish B as Vector2(from, to), m after its track's start line (to <= from runs on over the
+## line): its own "from" / "to", or with "baked" the span its point-to-point track carries (Rally.baked_span).
+static func sprint_span(stage: Dictionary) -> Vector2:
+	if stage.get("baked", false):
+		var b := Rally.baked_span(String(stage.track))
+		if b.size() == 2:
+			return Vector2(float(b[0]), float(b[1]))
+	return Vector2(float(stage.get("from", 0.0)), float(stage.get("to", 0.0)))
+
+## A sprint's length from A to B, m (0 for a lap race).
+static func sprint_length(stage: Dictionary) -> float:
+	if not is_sprint(stage):
+		return 0.0
+	var sp := sprint_span(stage)
+	return (sp.y if sp.y > sp.x else sp.y + Race.get_track(String(stage.track)).L) - sp.x
+
+## How a stage's distance reads in the menus: "2 laps", "1 lap" or "5.2 km sprint".
+static func length_label(stage: Dictionary) -> String:
+	if is_sprint(stage):
+		return "%.1f km sprint" % (sprint_length(stage) / 1000.0)
+	var laps := int(stage.get("laps", 1))
+	return "%d lap%s" % [laps, "" if laps == 1 else "s"]
+
+## Puts a stage's format on the race settings the game built for it (after the stage's own fields, so a sprint's
+## rules win): an A->B sprint grids the field behind A, finishes at B and counts no laps (RaceSettings.sprint), with
+## the HUD's progress panel; a lap race is left as it is. No pit rules either way in a sprint: it never sees the pits.
+static func apply_format(st: RaceSettings, stage: Dictionary) -> void:
+	st.sprint = is_sprint(stage)
+	if not st.sprint:
+		return
+	var sp := sprint_span(stage)
+	st.stage_from = sp.x
+	st.stage_to = sp.y
+	st.laps = 1
+	st.format = "laps"
+	st.mission = "sprint"
+	st.mandatory_stop = false
+	st.two_compounds = false
+	st.refuel = false
 
 const LEVELS := ["easy", "medium", "hard", "alien"]
 const FAILS_PER_EASE := 1 ## failed tries on a stage before its field drops one difficulty level
@@ -565,6 +685,7 @@ static func configure_stage(st: RaceSettings, stage: Dictionary, rival_step := D
 	arcade.fuel = false
 	arcade.wear = false
 	DifficultyProfile.apply_sim(st, arcade)
+	apply_format(st, stage) # an A->B sprint: grid behind A, finish at B, no laps
 
 ## The rivals' level: DifficultyProfile.resolve for the stage's level name, moved by `extra` levels (the stage's
 ## level_shift); with no extra it is resolve's own answer.
