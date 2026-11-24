@@ -296,6 +296,7 @@ def tyre_wall_belt():
 
 PIECES = {"MarshalPost": marshal_post, "BrakeBoard_100": lambda: brake_board("100"),
 	"BrakeBoard_200": lambda: brake_board("200"), "BrakeBoard_300": lambda: brake_board("300"),
+	"BrakeBoard_400": lambda: brake_board("400"), "BrakeBoard_500": lambda: brake_board("500"),
 	"BridgeSpan": bridge_span, "BridgeTower": bridge_tower, "Transporter": transporter,
 	"TransporterLivery": transporter_livery, "TyreWall": tyre_wall, "TyreWallBelt": tyre_wall_belt}
 
@@ -314,7 +315,7 @@ def main():
 	if out:
 		cam = kit.setup_preview(ground=120.0)
 		kit.place(objs["MarshalPost"], (-12, 0, 0))
-		for i, k in enumerate(("300", "200", "100")):
+		for i, k in enumerate(("500", "400", "300", "200", "100")):
 			kit.place(objs["BrakeBoard_" + k], (-6 + i * 2.0, -2, 0))
 		kit.place(objs["Transporter"], (6, 6, 0))
 		kit.place(objs["TransporterLivery"], (6, 6, 0))

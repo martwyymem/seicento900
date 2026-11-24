@@ -13,6 +13,11 @@ const POST_SPACING := 320.0 ## m of track between marshal posts
 const TRANSPORTER_LENGTH := 16.5 ## m: a team transporter in the paddock
 const TYRE_SEGMENT := 4.0 ## the TyreWall piece's length, two track samples
 const TYRE_DEPTH := 1.36 ## how far it reaches behind the barrier line
+const BOARD_DISTS := [100, 200, 300, 400, 500] ## m before a braking zone: the boards (build_furniture.py has each)
+const FAR_STRAIGHT := 540.0 ## m of straight looked for before a corner, enough for a 500 m board and its 30 m clearance
+const BRAKE_DECEL := 0.92 * 9.81 ## m/s²: the braking the speed profile allows on a dry road (Track.profile_for, grip 1)
+## a far board (400, 500 m) where the fastest car brakes over more metres than this from the straight's top speed
+const FAR_BOARD_BRAKING := {400: 250.0, 500: 350.0}
 ## colours of the belt covers, by how many of every 20 stretches wear them
 const BELT_COLOURS := [[Color("#1b1c1e"), 11], [Color("#d9d9d6"), 3], [Color("#b3151b"), 3], [Color("#1c3f94"), 3]]
 
@@ -165,9 +170,11 @@ func _build_marshal_posts() -> void:
 # --------------------------------------------------------------------------------------------- braking boards
 
 ## 300, 200 and 100 m boards before each corner that ends a straight, on the outside of the corner, turned to
-## the cars coming.
+## the cars coming. The 400 and 500 m boards come from _build_far_boards().
 func _build_braking_boards() -> void:
-	var boards := {"BrakeBoard_100": [] as Array[Transform3D], "BrakeBoard_200": [] as Array[Transform3D], "BrakeBoard_300": [] as Array[Transform3D]}
+	var boards := {}
+	for dist in BOARD_DISTS:
+		boards["BrakeBoard_%d" % dist] = [] as Array[Transform3D]
 	var s := 0.0
 	var step := 10.0
 	while s < track.L:
@@ -185,19 +192,92 @@ func _build_braking_boards() -> void:
 			for dist in [100, 200, 300]:
 				if dist + 30 > straight:
 					continue
-				var bs: float = s - dist
-				var d: float = side * (track.half + 2.2)
-				if _taken(bs, d, track.half + 1.0):
-					continue
-				var p := track.pos(bs, d)
-				var at := _at(p) - Vector3.UP * 0.05
-				# where the road runs on a bank over the surroundings' ground (street stages), a board on that ground
-				# stood up to 3 m below the road, hidden behind the barrier: it stands at the road's height instead
-				at.y = maxf(at.y, world._road_y(bs) - world.ROAD_REF + track.bank_rise(bs, d) - 0.3)
-				(boards["BrakeBoard_%d" % dist] as Array[Transform3D]).append(Transform3D(_facing(-_tangent(bs)), at))
+				_place_board(boards, dist, s - dist, side)
 		s += 150.0 # past this corner
+	_build_far_boards(boards)
 	for part in boards:
 		_add(part, boards[part])
+
+## The 400 and 500 m boards, before each braking zone the fastest car (Track.profile_for of the Hypercar) needs them for
+## (far_board_dists). A zone is any bend tighter than 1000 m, which a fast car must slow for; the braking distance
+## decides which ones get a far board. Its start is the start of the tight corner (130 m) when one begins within 100 m,
+## so the far boards line up with the nearer ones, and otherwise the start of the bend.
+func _build_far_boards(boards: Dictionary) -> void:
+	for st in far_board_stations(track.profile_for(Hypercar.model())):
+		_place_board(boards, st[0], st[1], st[2])
+
+## The far boards the fastest car's speed profile wants, as [dist, bs, side]: dist 400 or 500, bs the lap distance
+## the board stands at, side the side of the bend it stands on (before the taken-spot checks of _place_board).
+func far_board_stations(prof: PackedFloat64Array) -> Array:
+	var out := []
+	var s := 0.0
+	while s < track.L:
+		var kc := _curvature(s + 20.0, 20.0)
+		if absf(kc) < 1.0 / 1000.0:
+			s += 10.0
+			continue
+		var ref := s
+		var t := s
+		while t <= s + 100.0:
+			var kt := _curvature(t + 20.0, 20.0)
+			if absf(kt) >= 1.0 / 130.0:
+				ref = t
+				kc = kt
+				break
+			t += 10.0
+		var straight := 0.0
+		while straight < FAR_STRAIGHT and absf(_curvature(ref - straight - 15.0, 15.0)) < 1.0 / 400.0:
+			straight += 10.0
+		var dists: Array[int] = []
+		if straight >= 160.0:
+			dists = far_board_dists(ref, straight, prof)
+		var side := -signf(kc)
+		for dist in dists:
+			if dist + 30 > straight:
+				continue
+			out.append([dist, ref - dist, side])
+		s += 150.0 # past this zone
+	return out
+
+## The distances of the far boards (400 and 500 m) a braking zone at s wants, given the straight of straight m before it
+## and prof, the speed profile of the fastest car. The car brakes from the top speed on the straight to the zone's speed
+## (the lowest in the first 150 m of it) at BRAKE_DECEL; a board at FAR_BOARD_BRAKING[dist] is wanted once that braking
+## distance exceeds its threshold.
+func far_board_dists(s: float, straight: float, prof: PackedFloat64Array) -> Array[int]:
+	var v_top := 0.0
+	var a := s - straight
+	while a <= s:
+		v_top = maxf(v_top, _prof_at(prof, a))
+		a += 10.0
+	var v_corner := INF
+	a = s
+	while a <= s + 150.0:
+		v_corner = minf(v_corner, _prof_at(prof, a))
+		a += 2.0
+	var brake := (v_top * v_top - v_corner * v_corner) / (2.0 * BRAKE_DECEL)
+	var out: Array[int] = []
+	for dist in FAR_BOARD_BRAKING:
+		if brake > FAR_BOARD_BRAKING[dist]:
+			out.append(dist)
+	out.sort()
+	return out
+
+## The profile's value at lap distance s (m/s).
+func _prof_at(prof: PackedFloat64Array, s: float) -> float:
+	return prof[posmod(roundi(s / track.step), track.n)]
+
+## A board for the distance dist, standing bs m before the corner, on the outside of it (side, the sign of its bend), unless
+## the spot is taken.
+func _place_board(boards: Dictionary, dist: int, bs: float, side: float) -> void:
+	var d: float = side * (track.half + 2.2)
+	if _taken(bs, d, track.half + 1.0):
+		return
+	var p := track.pos(bs, d)
+	var at := _at(p) - Vector3.UP * 0.05
+	# where the road runs on a bank over the surroundings' ground (street stages), a board on that ground
+	# stood up to 3 m below the road, hidden behind the barrier: it stands at the road's height instead
+	at.y = maxf(at.y, world._road_y(bs) - world.ROAD_REF + track.bank_rise(bs, d) - 0.3)
+	(boards["BrakeBoard_%d" % dist] as Array[Transform3D]).append(Transform3D(_facing(-_tangent(bs)), at))
 
 # --------------------------------------------------------------------------------------------- tyre walls
 
