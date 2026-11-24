@@ -670,6 +670,13 @@ func _drive(live: LiveEvents, path: PackedVector2Array, v: float, max_t := 4000.
 			return live.last_result
 		if not live.holding():
 			s += v * dt
+		# every rival home with the player still out there: its place is settled (last), no need to drive on
+		var rv = live.rivals()
+		if rv is EventField and not (rv as EventField).knockout and (rv as EventField).finished_count() == (rv as EventField).count():
+			var res := {"ev": live.run.ev, "pos": (rv as EventField).count() + 1, "finished": true, "knocked": false,
+				"line": "every rival home first", "time": null}
+			live.abandon()
+			return res
 	return {}
 
 func _race_run(map: TownMap, ev: Dictionary, errors: Array[String]) -> void:

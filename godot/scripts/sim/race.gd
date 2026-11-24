@@ -213,6 +213,7 @@ var external_player := false
 var stop_at := INF ## m along the lap where cars home park (EventField: the end of the road past the finish); INF: they drive on
 var collide_finished := false ## cars home still touch the others (EventField: parked past the finish line)
 const PARK_GAP := 6.5 ## m between two parked cars on one side
+var pass_wall := 0.0 ## > 0: a bot may pull out to overtake as far as this inside its wall (Track.reach), past the road's edge where the wall stands back (EventTrack: a single-track lane's verge)
 var grip_mul := 1.0 ## every car's grip (grip()) scaled: EventField puts the open world's weather grip (FreeCar.mu) here
 var mechanical_damage := false ## crashes cost power, grip and parts for every car (RaceSettings.mechanical_damage, or a rally stage); else cosmetic only
 var rc: RaceControl = null ## flags, safety car, stewards and damage (null: contact is just physics, as before)
@@ -1486,6 +1487,8 @@ func park_spot(car: RaceCar) -> Vector2:
 func traffic(car: RaceCar, vT: float, rl: float, dt: float) -> Dictionary:
 	var tr := track
 	var lim := tr.half_at(car.s) - 1.0
+	if pass_wall > 0.0: # (a lane too narrow for two: pass on its verge, this far inside the wall)
+		lim = maxf(lim, minf(tr.reach(car.s, 1.0), tr.reach(car.s, -1.0)) - pass_wall)
 	var ahead: RaceCar = null
 	var ahead_gap := INF
 	var drag := 1.0

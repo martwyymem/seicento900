@@ -17,7 +17,7 @@ const DT := 1.0 / 120.0
 ## The bots' pace on the map's roads by the event's level: a scale on the race's own skill (Race.DIFFICULTY, moved by
 ## the player's rival step), so a field finishes about where the old StreetRivals bands had it against the reference
 ## driver (LiveEvents.pace_time): measured with tests/_event_field_probe.gd (2026-11-24).
-const PACE := {"easy": 0.95, "medium": 1.02, "hard": 1.08}
+const PACE := {"easy": 0.92, "medium": 1.01, "hard": 1.095}
 const MAX_SKILL := 1.1 ## the most a bot's skill (its share of the speed profile) is scaled to, at the top rival step
 const MAX_RIVALS := 9
 const GRID_ROW := 7.0 ## m between grid rows
@@ -116,6 +116,7 @@ func _init(path: PackedVector2Array, car_key: String, count: int, seed_value: in
 	race.lights_out_at = 0.0
 	race.grip_mul = clampf(float(opts.get("mu", 1.0)), 0.1, 1.2)
 	race.stop_at = et.park_s - PARK_BACK
+	race.pass_wall = EventTrack.PASS_WALL # (a single-track lane: past a slow car on its verge)
 	race.diff_params = race.diff_params.duplicate()
 	race.diff_params["band"] = 0.0 # no rubber banding (the user, 2026-11-24)
 	me = race.player

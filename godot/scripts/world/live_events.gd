@@ -945,6 +945,7 @@ func tick(dt: float, p: Vector2, v: float, slip: float, off: bool, crash: bool, 
 		(rv as EventField).step(dt, p, v, car, float(run.s))
 	elif rv:
 		rv.step(dt, p, v)
+	if rv:
 		if rv.player_out:
 			_finish_race(rv.player_out_pos, true)
 			return "done"

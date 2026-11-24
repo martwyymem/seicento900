@@ -15,6 +15,9 @@ const STEP := 2.0 ## m between samples (as the baked tracks)
 const LEAD := 40.0 ## m of straight before the start (whole samples)
 const STUB := 120.0 ## m of straight past the end of the road beyond the finish
 const VERGE := 1.0 ## m beyond the road's edge the bots' wall stands (a kerb and a strip of pavement)
+const PASS_VERGE := 2.4 ## m beyond the edge of a road too narrow for two the wall stands instead: a bot overtakes on the verge
+const PASS_WALL := 1.5 ## m inside the wall the overtaking line may go (Race.pass_wall): on a wide road no further than before
+const PASS_HALF := 2.6 ## m: a road narrower than this either side is too narrow for two
 const HALF_MIN := 1.4 ## m: the narrowest half width the bots are given
 const HALF_MAX := 12.0
 const COARSE := 5 ## the racing line relaxed on every 5th sample, then finished on all (Track.build_racing_line_span)
@@ -56,7 +59,7 @@ func _init(map: TownMap, path: PackedVector2Array, beyond: PackedVector2Array, k
 	def.key = key
 	def.display_name = key
 	def.street_stage = true
-	def.runoff = VERGE
+	def.runoff = 2.0 # (the bots' aim may reach 1 m past the edge, the verge's pass; REACH holds the walls)
 	def.runoff_surface = "grass"
 	def.loose_grip = true
 	def.pit_offset = 0.0
@@ -153,8 +156,9 @@ func _init(map: TownMap, path: PackedVector2Array, beyond: PackedVector2Array, k
 	tr.REACH.resize(2 * n)
 	tr.VKIND.resize(2 * n)
 	for i in n:
-		tr.REACH[2 * i] = tr.HW[i] + VERGE
-		tr.REACH[2 * i + 1] = tr.HW[i] + VERGE
+		var verge := VERGE if tr.HW[i] >= PASS_HALF else lerpf(PASS_VERGE, VERGE, clampf((tr.HW[i] - HALF_MIN) / (PASS_HALF - HALF_MIN), 0.0, 1.0))
+		tr.REACH[2 * i] = tr.HW[i] + verge
+		tr.REACH[2 * i + 1] = tr.HW[i] + verge
 		tr.VKIND[2 * i] = Track.VERGE_SOLID
 		tr.VKIND[2 * i + 1] = Track.VERGE_SOLID
 	tr.h_min = INF

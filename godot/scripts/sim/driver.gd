@@ -18,6 +18,10 @@ static func pursuit_steer(phys: Physics, tr: Track, car: RaceCar, mu: float, off
 	var v := maxf(0.0, car.vx * ch + car.vy * sh)
 	var lim := tr.half_at(car.s) + tr.cfg.runoff - 1.0
 	var Ld := clampf(5.0 + v * 0.42, 6.0, 26.0)
+	if tr.HW.size() == tr.n and tr.n > 0:
+		# a road of its own width per sample (EventTrack: the open world's streets and lanes): a point far up the line
+		# cuts a narrow road's bends onto the verge, so the narrower the road, the nearer the point
+		Ld = clampf(Ld * clampf(tr.half_at(car.s) / 4.0, 0.4, 1.0), 4.0, 26.0)
 	var sl := car.s + Ld
 	# a driving error builds up over a moment rather than snapping the line sideways
 	var err_d := 0.0
