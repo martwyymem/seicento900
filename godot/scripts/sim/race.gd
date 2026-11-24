@@ -462,10 +462,12 @@ func plan_grip(car: RaceCar) -> float:
 func build_field(player_plan) -> void:
 	var diff: Dictionary = DifficultyProfile.race_params(s.difficulty, s.difficulty_shift)
 	diff_params = diff
-	# a rally stage or a time trial has no race to plan (and no field): the player gets the one-stint fallback
-	var options: Array = strategy.plan(plan_opts({"diverse": true})) if s.mode == "race" else []
+	# a rally stage, time trial or arcade no-pit race has no pit strategy: everyone gets the one-stint fallback
+	var use_strategy := s.mode == "race" and s.pits_enabled
+	var options: Array = strategy.plan(plan_opts({"diverse": true})) if use_strategy else []
 	var wild := _wild_pool(options)
-	var fallback := {"stops": 0, "stints": [{"c": "W" if weather.wet > 0.4 else "M", "laps": R, "fuel": minf(spec.tank, Strategy.fuel_need(R, fpl))}]}
+	var single_c := "W" if weather.wet > 0.4 else ("S" if not s.pits_enabled else "M")
+	var fallback := {"stops": 0, "stints": [{"c": single_c, "laps": R, "fuel": minf(spec.tank, Strategy.fuel_need(R, fpl))}]}
 	var bots: Array[RaceCar] = []
 	for i in s.opponents:
 		var who: Dictionary = Drivers.ROSTER[i] if s.real_drivers else {}
@@ -519,11 +521,12 @@ func build_field(player_plan) -> void:
 	pl.skill = 0.97 # used only while on autopilot
 	fit_setup(pl, s.car_setup)
 	var solo_mode := s.mode != "race"
-	var pp: Dictionary = player_plan if player_plan and not solo_mode else (options[0] if options.size() else fallback)
+	var no_plan := solo_mode or not s.pits_enabled
+	var pp: Dictionary = player_plan if player_plan and not no_plan else (options[0] if options.size() else fallback)
 	if s.qualifying:
 		quali_fuel = minf(spec.tank, Strategy.fuel_need(R, fpl))
 		pp = {"stops": 0, "stints": [{"c": quali_compound(), "laps": R, "fuel": quali_fuel}]}
-	elif (not player_plan or solo_mode) and not pp.get("stints", []).is_empty():
+	elif (not player_plan or no_plan) and not pp.get("stints", []).is_empty():
 		pp = pp.duplicate(true)
 		pp.stints[0].c = s.starting_tyre
 	apply_plan(pl, pp)
@@ -1010,7 +1013,7 @@ func after_move(car: RaceCar, prev_p: float) -> void:
 		if prev_p < x and p >= x and p - prev_p < 60.0:
 			decide(car)
 		x = cfg.pit_entry
-		if (car.pit_request or (rc and rc.flag == "red")) and prev_p < x and p >= x and p - prev_p < 60.0:
+		if s.pits_enabled and (car.pit_request or (rc and rc.flag == "red")) and prev_p < x and p >= x and p - prev_p < 60.0:
 			enter_pit(car)
 	if car.mode == "pit" and car.pit.phase == "out" and p >= cfg.pit_exit and p - cfg.pit_exit < 60.0:
 		exit_pit(car)
@@ -1094,7 +1097,7 @@ func update_mix(car: RaceCar) -> void:
 ## F: the player switches between save and normal; the pick holds until the next stop.
 func player_cycle_mix() -> void:
 	var p := player
-	if not p or p.finished or p.dnf:
+	if not p or p.finished or p.dnf or not s.pits_enabled or s.fuel_mult <= 0.0:
 		return
 	if p.autopilot:
 		log_event("Fuel mix: the co-driver manages it while it drives", "info")
@@ -1148,8 +1151,8 @@ func _timed_laps_after(car: RaceCar) -> int:
 	return ceili(left / lap_t) if left > 0.0 else 0
 
 func decide(car: RaceCar) -> void:
-	if s.qualifying or s.mode != "race":
-		return # nobody pits in a qualifying run, a rally stage or a time trial
+	if s.qualifying or s.mode != "race" or not s.pits_enabled:
+		return # nobody pits in a qualifying run, a rally stage, a time trial or a no-pit arcade race
 	var dyn := s.dynamic_running
 	if dyn:
 		_observe_rates(car)
@@ -2653,7 +2656,7 @@ func results() -> Array:
 # ---------------- player pit-wall controls ----------------
 func player_toggle_pit() -> void:
 	var p := player
-	if p.mode == "pit" or p.finished or s.qualifying:
+	if p.mode == "pit" or p.finished or s.qualifying or not s.pits_enabled:
 		return
 	p.pit_request = not p.pit_request
 	if not p.service:
@@ -2662,7 +2665,7 @@ func player_toggle_pit() -> void:
 
 func player_cycle_compound(dir: int) -> void:
 	var p := player
-	if p.mode == "pit" and p.pit.phase != "in":
+	if not s.pits_enabled or (p.mode == "pit" and p.pit.phase != "in"):
 		return
 	if not p.service:
 		p.service = default_service(p)
@@ -2674,7 +2677,7 @@ func player_cycle_compound(dir: int) -> void:
 
 func player_adjust_fuel(delta: float) -> void:
 	var p := player
-	if not rules.refuel or (p.mode == "pit" and p.pit.phase != "in"):
+	if not s.pits_enabled or not rules.refuel or (p.mode == "pit" and p.pit.phase != "in"):
 		return
 	if not p.service:
 		p.service = default_service(p)
@@ -2682,6 +2685,8 @@ func player_adjust_fuel(delta: float) -> void:
 	p.service_edited = true
 
 func player_replan() -> void:
+	if not s.pits_enabled:
+		return
 	var p := player
 	p.plan_stale = true
 	p.service_edited = false
@@ -2722,6 +2727,8 @@ func set_autopilot(on: bool) -> void:
 
 ## Lap the player's next planned stop is after (1-based), or -1.
 func player_next_stop_lap() -> int:
+	if not s.pits_enabled:
+		return -1
 	var p := player
 	if p.stint_idx >= p.plan.size() - 1:
 		return -1

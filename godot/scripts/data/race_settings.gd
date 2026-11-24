@@ -19,6 +19,7 @@ extends Resource
 @export var collisions := true
 @export var draft := true ## slipstream: a car behind another one, close and in line, pulls less air and gains speed
 @export var race_control := true ## flags, safety car, red flags, stewards' penalties and crash damage
+@export var safety_car := true ## when race_control is on: safety car and red-flag neutralisations may deploy (off in arcade campaign stages; local yellows and stewards' penalties stay)
 ## Crashes cost power, drag, grip and parts, the same for the player and every AI car (Service). Off (the default),
 ## circuit races only dent and scuff the bodywork. A rally stage always has it on; a championship turns it on with
 ## its Damage & Repairs setting; quick races and campaign circuits keep it as the player chose (opt-in).
@@ -58,6 +59,7 @@ extends Resource
 @export var dynamic_running := true ## wear and fuel follow the real load, and stops follow the live state instead of the starting plan
 
 @export_group("Rules and pits")
+@export var pits_enabled := true ## off in arcade campaign stages: no pit stops, no pit strategy, no strategist pit calls
 @export var mandatory_stop := true
 @export var two_compounds := false
 @export var refuel := true
