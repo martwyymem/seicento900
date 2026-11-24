@@ -27,7 +27,7 @@ var park_s := 0.0 ## the end of the road past the finish (the cars home park sho
 var build_ms := 0.0
 var phase_ms := {} ## build time by phase (centre, road, frames, line, profile)
 
-## path: the event's route; beyond: the road on past its finish (may be empty); key: the track's key (cache and
+## map: the open world's TownMap (null: a flat road 4 m either side, for synthetic tests); path: the event's route; beyond: the road on past its finish (may be empty); key: the track's key (cache and
 ## corner-profile key, unique per event); z0: the height of the start (the deck the route sets off on).
 func _init(map: TownMap, path: PackedVector2Array, beyond: PackedVector2Array, key := "event", z0 := -INF) -> void:
 	var t0 := Time.get_ticks_usec()
@@ -93,7 +93,7 @@ func _init(map: TownMap, path: PackedVector2Array, beyond: PackedVector2Array, k
 		var dir := (pts[mini(i + 1, n - 1)] - pts[maxi(i - 1, 0)]).normalized()
 		hw[i] = 4.0
 		kinds[i] = 0
-		var hit := map.road_at(p.x, p.y, z, 3.0) if i >= i_lo and i < i_hi else {}
+		var hit := map.road_at(p.x, p.y, z, 3.0) if map != null and i >= i_lo and i < i_hi else {}
 		if not hit.is_empty():
 			var ri := int(hit.road)
 			var rp: PackedVector2Array = map.road_pts[ri]
@@ -109,6 +109,9 @@ func _init(map: TownMap, path: PackedVector2Array, beyond: PackedVector2Array, k
 			else:
 				hw[i] = -1.0 # a junction: the width of the way on, filled in below
 				kinds[i] = 255
+		elif map == null:
+			tr.H[i] = 0.0 # no map (synthetic tests): flat, 4 m either side, the race's own tarmac
+			have[i] = 1
 		elif i >= i_lo and i < i_hi:
 			tr.H[i] = map.ground(p.x, p.y)
 			have[i] = 1

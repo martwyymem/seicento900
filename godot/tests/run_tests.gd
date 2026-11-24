@@ -81,6 +81,7 @@ const SUITES := [
 	"res://tests/test_mission_weather.gd",
 	"res://tests/test_world_weather.gd",
 	"res://tests/test_street_rivals.gd",
+	"res://tests/test_event_field.gd",
 	"res://tests/test_car_panel_plates.gd",
 	"res://tests/test_playtest_fixes.gd",
 	"res://tests/test_difficulty_profile.gd",

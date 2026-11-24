@@ -108,7 +108,7 @@ const PAUSE_ITEMS := [["resume", "RESUME"], ["car", "CAR: SEICENTO"], ["mods", "
 	["time", "SKIP TO NEXT TIME OF DAY"], ["menu", "MAIN MENU"]]
 var loading: OpenWorldCover ## the Forza-style cover the town builds behind
 var help_label: Label
-var tower: Control ## a race's running order on the map (StreetRivals.standings), top right
+var tower: Control ## a race's running order on the map (EventField / StreetRivals standings), top right
 var _standings: Array = []
 var _standings_color := Color.WHITE
 var stats_box: VBoxContainer

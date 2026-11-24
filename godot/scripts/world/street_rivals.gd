@@ -1,30 +1,22 @@
-## Rivals of a race on the open-world map (LiveEvents, MapMissions): cars on a grid behind and beside the player,
-## driving the event's route (no walls, no physics). Their line is the route polyline moved onto the road it runs
-## along (the `profile` LiveEvents.route_profile measures: the road's centre and half width, its surface grip), each
-## at a lateral offset kept inside the road. Each has a speed profile in the spirit of LiveEvents.pace_time (corner
-## speeds from grip, acceleration falling off to the top speed, braking in time) scaled by its own pace factor from
-## the event's difficulty band. They follow the car ahead and pull out to pass it (rivals and the player alike),
-## coast on past the finish instead of stopping on the line, and rubber-band mildly. A drag field is calibrated to the
-## car's own measured standing-start times (LiveEvents.drag_time). Scene-free: OpenWorld draws and collides them.
+## The field of a drag race on the open-world map (LiveEvents, MapMissions' drag missions): every car abreast on one
+## line, each in its own lane for good, down a straight. Each rival's launch is calibrated to the driven car's own
+## measured standing-start times (LiveEvents.drag_time) by the event's level (DRAG_BANDS): nothing in a drag for the
+## race AI to do, so the drags keep this kinematic field while every other race on the map runs the race sim's bots
+## (EventField). Its line is the route moved onto the road's centre (the `profile` LiveEvents.route_profile measures);
+## past the finish the cars roll on and park. Scene-free: OpenWorld draws them and pushes them with a two-car circle.
 class_name StreetRivals
 extends RefCounted
 
 const STEP := 5.0 ## m between profile samples
-const PACE_RANGE := Vector2(0.84, 0.95) ## medium: slowest .. fastest rival against the reference driver (gold is 1/1.04)
+const PACE_RANGE := Vector2(0.84, 0.95) ## a rival's top speed and grip against the reference driver before the launch is calibrated
 const PACE_BANDS := {"easy": Vector2(0.80, 0.91), "medium": Vector2(0.84, 0.95), "hard": Vector2(0.89, 0.99)}
 ## A drag field: each rival's time over the distance against the car's own measured standing start (drag_time),
 ## slowest .. fastest. Easy is won by any clean launch, hard needs a near-perfect one.
 const DRAG_BANDS := {"easy": Vector2(1.12, 1.04), "medium": Vector2(1.08, 1.02), "hard": Vector2(1.05, 1.005)}
-const BAND := 0.03 ## rubber band: at most this fraction faster / slower
-const BAND_GAP := 150.0 ## m ahead of / behind the player where the band is fully on
-const GRID := [Vector2(0.0, 2.6), Vector2(-7.0, -1.3), Vector2(-7.0, 1.3), Vector2(-14.0, -1.3), Vector2(-14.0, 1.3),
-	Vector2(-21.0, -1.3), Vector2(-21.0, 1.3), Vector2(-28.0, -1.3), Vector2(-28.0, 1.3), Vector2(-35.0, -1.3)] ## (along, across) m from the player's spot: 2 abreast, rows 7 m apart
-const LANES := [1.2, -1.2, 0.4, -0.4, 1.6, -1.6, 0.8, -0.8, 0.0] ## racing offsets across the road (m)
 const MAX_RIVALS := 9
 const CAR_L := 4.4 ## m nose to tail with a little room: closer than this along the road is side by side
 const CAR_W := 1.9 ## m across with a little room: closer than this across is the same line
 const EDGE := 0.85 ## m a rival's centre keeps from the road's edge
-const HELD_MAX := 3.0 ## s held up behind a car before a rival noses past it regardless
 const LAT_RATE := 1.4 ## m/s a rival moves across the road
 const DRAG_PLAYER_LAT := -1.8
 const RUNOUT_MAX := 60.0 ## m a car home rolls on past the finish at most (LiveEvents.beyond is this long)
@@ -44,15 +36,11 @@ var player_s := 0.0
 var player_lat := 0.0 ## the player's offset from the road's centre (as a rival's lat)
 var drag_lane := 3.6 ## m between two cars on a drag grid
 var runout := 0.0 ## m of road on past the finish (opts.beyond) a car home parks in
-var drag := false ## every car on one line at s = 0, each in its own lane for good
-var knockout := false
-var lap_length := 0.0
-var player_out := false
-var player_out_pos := 0 ## the player's place when knocked out (rivals still running + 1)
-var out_order: Array = [] ## who went out, in order: the rival index, or -1 for the player
-var _next_lap := 1 ## the next lap boundary (a multiple of lap_length) that knocks a car out
+var drag := true ## every car on one line at s = 0, each in its own lane for good (always: the only field this is)
+var player_out := false ## (a drag knocks nobody out; LiveEvents reads it of any field)
+var player_out_pos := 0
 
-## opts: grid "drag" (one line, own lanes, see player_grid), knockout (bool) with lap_length (m), difficulty
+## opts: difficulty
 ## ("easy" / "medium" / "hard": the pace band), profile (LiveEvents.route_profile of the path at STEP: the road's
 ## centre, half width and grip; without it the polyline is the road's centre, 4 m either side, tarmac), drag_time
 ## (s: the car's own standing-start time over the route, which a drag field is calibrated against), beyond (the
@@ -107,9 +95,6 @@ func _init(path: PackedVector2Array, car_key: String, count: int, seed_value: in
 		centre.append(bc[j] if j < bc.size() else 0.0)
 		half.append(bh[j] if j < bh.size() else h_end)
 		grip.append(g_end)
-	drag = String(opts.get("grid", "")) == "drag"
-	knockout = bool(opts.get("knockout", false))
-	lap_length = float(opts.get("lap_length", 0.0))
 	var diff := String(opts.get("difficulty", "medium"))
 	# the player's rival step moves the field off the event's own level (DifficultyProfile.band), never past the
 	# reference driver
@@ -130,17 +115,12 @@ func _init(path: PackedVector2Array, car_key: String, count: int, seed_value: in
 	var dlats := []
 	for k in n + 1:
 		dlats.append((float(k) - float(n) * 0.5) * drag_lane)
-	var slots := _grid_slots(n)
-	_player_grid = slots[0]
 	for k in n:
 		var f := lerpf(band.y, band.x, float(k) / maxf(n - 1, 1)) + rng.randf_range(-0.012, 0.012)
-		var g: Vector2 = Vector2(0.0, float(dlats[k + 1 if k >= 1 else 0])) if drag else slots[k + 1]
-		var lane: float = g.y if drag else float(LANES[k])
+		var g := Vector2(0.0, float(dlats[k + 1 if k >= 1 else 0]))
+		var lane: float = g.y
 		var r := {"s": g.x, "v": 0.0, "lat": g.y, "lane": lane, "f": f, "vmax": float(pc[0]) * f,
 			"acc": float(pc[1]) * f, "env": _envelope(float(pc[0]) * f, float(pc[2]) * f * f, float(pc[3]) * f), "t_done": -1.0, "out": false}
-		if not drag:
-			r.lat = _fit(r.s, r.lat)
-			r.lane = _fit(r.s, r.lane)
 		rivals.append(r)
 	# names and numbers from the circuit races' field (Drivers.ROSTER), a run of them picked by the seed (no rng drawn,
 	# so the field's pace is as before)
@@ -149,7 +129,7 @@ func _init(path: PackedVector2Array, car_key: String, count: int, seed_value: in
 		var who: Dictionary = Drivers.ROSTER[(at + k) % Drivers.ROSTER.size()]
 		rivals[k].name = String(who.name)
 		rivals[k].number = int(who.number)
-	if drag:
+	if true:
 		_player_lat0 = float(dlats[1]) if n >= 1 else 0.0
 		var dt_ref := float(opts.get("drag_time", 0.0))
 		if dt_ref > 0.0:
@@ -179,33 +159,9 @@ static func drag_half(halves: PackedFloat32Array, n: int) -> float:
 static func drag_rivals_fit(half_w: float) -> int:
 	return maxi(1, int(floorf((2.0 * half_w - 2.0 * EDGE) / CAR_W + 0.001)))
 
-## Where the player should be put at the start, (along, across from the road's centre): the default grid has it
-## at the route's start, a drag grid in its own lane.
+## Where the player should be put at the start, (along, across from the road's centre): in its own lane.
 func player_grid() -> Vector2:
-	return Vector2(0.0, _player_lat0) if drag else _player_grid
-
-var _player_grid := Vector2.ZERO
-
-## The grid on the route itself (never behind its start, where the road may bend away): rows ROW m apart running
-## forward to the front row, two abreast where the road takes two cars side by side, single file where it doesn't.
-## Slot 0 is the player's (pole), then the rivals': [(along, across)].
-func _grid_slots(n: int) -> Array:
-	const ROW := 7.0
-	var lim := INF # the narrowest the road gets over the grid's length
-	for i in range(0, mini(int(ROW * (n + 1) / STEP) + 1, half.size())):
-		lim = minf(lim, maxf(half[i] - EDGE, 0.3))
-	if not is_finite(lim):
-		lim = 0.3
-	var two := lim >= 1.25
-	var a := clampf(lim, 1.25, 1.5)
-	var rows := ceili((n + 1) / 2.0) if two else n + 1
-	var out := []
-	for j in n + 1:
-		var row := j / 2 if two else j
-		var s := float(rows - 1 - row) * ROW
-		var lat := (a if j % 2 == 1 else -a) if two else 0.0
-		out.append(Vector2(s, _fit(s, lat)))
-	return out
+	return Vector2(0.0, _player_lat0)
 
 ## A drag rival's acceleration (and with it its top speed) scaled so that it covers the route in `want` s
 ## (bisection on a 20 Hz run of the same motion as step()).
@@ -247,15 +203,12 @@ func _at(arr: PackedFloat32Array, s: float) -> float:
 	var i := _index(clampf(s, 0.0, length))
 	return lerpf(arr[i], arr[mini(i + 1, arr.size() - 1)], clampf((s - cum[i]) / maxf(cum[i + 1] - cum[i], 0.01), 0.0, 1.0))
 
-## Lap (0 for the first) a distance along the route lies in; always 0 outside a knockout.
-func lap_of(s: float) -> int:
-	if not knockout or lap_length <= 0.0:
-		return 0
-	var laps := maxi(int(ceilf(length / lap_length - 0.001)), 1)
-	return clampi(int(maxf(s, 0.0) / lap_length), 0, laps - 1)
+## A drag has no laps or sectors (LiveEvents reads it of any field).
+func lap_of(_s: float) -> int:
+	return 0
 
 func player_lap() -> int:
-	return lap_of(player_s)
+	return 0
 
 ## True once the race is over for the player: knocked out, or home.
 func player_done() -> bool:
@@ -359,173 +312,16 @@ func step(dt: float, p: Vector2, pv: float) -> void:
 			r.s = minf(s + v * dt, maxf(stop, s))
 			r.lat = move_toward(float(r.lat), side * (1.0 if slot % 2 == 0 else -1.0), LAT_RATE * 0.5 * dt)
 			continue
-		var gap := s - player_s
-		var band := 1.0 if drag else 1.0 - BAND * clampf(gap / BAND_GAP, -1.0, 1.0)
 		var env: PackedFloat32Array = r.env
 		var i := _index(s)
-		var cap := lerpf(env[i], env[i + 1], clampf((s - cum[i]) / maxf(cum[i + 1] - cum[i], 0.01), 0.0, 1.0)) * band
-		if not drag:
-			cap = _traffic(k, r, cap, pv, dt)
-		var a := float(r.acc) * (DRAG_LAUNCH if drag else 1.0) * band * maxf(0.08, 1.0 - v / (float(r.vmax) * band))
+		var cap := lerpf(env[i], env[i + 1], clampf((s - cum[i]) / maxf(cum[i + 1] - cum[i], 0.01), 0.0, 1.0))
+		var a := float(r.acc) * DRAG_LAUNCH * maxf(0.08, 1.0 - v / float(r.vmax))
 		v = minf(v + a * dt, cap) if v < cap else move_toward(v, cap, 9.0 * dt)
 		r.v = maxf(v, 0.0)
 		r.s = s + float(r.v) * dt
-		if not drag:
-			_no_overlap(k, r, s, float(r.lat))
-			r.lane = _fit(float(r.s), float(r.lane))
-			# never snapped across (no jump), and no faster than a car at that speed can move over
-			var lat0 := float(r.lat)
-			r.lat = move_toward(lat0, float(r.lane), minf(LAT_RATE * 2.0, 0.5 + 0.25 * float(r.v)) * dt)
-			_no_overlap(k, r, float(r.s), lat0)
-
 		if float(r.s) >= length:
 			r.t_done = t
 			r.park = finished_count() - 1 # (counts itself)
-	if not drag:
-		separate(dt)
-	if knockout and lap_length > 0.0:
-		_knock_out()
-
-## A rival's move from (s0 along, lat0 across) to where it is now undone as far as it would run into another
-## rival: it stops at the tail of the car ahead on its line, and it doesn't move across into a car alongside.
-func _no_overlap(k: int, r: Dictionary, s0: float, lat0: float) -> void:
-	for j in rivals.size():
-		if j == k or bool(rivals[j].out) or float(rivals[j].t_done) >= 0.0: # (home: pulled over past the line)
-			continue
-		var o: Dictionary = rivals[j]
-		var ds := float(o.s) - float(r.s)
-		if absf(ds) >= CAR_L or absf(float(o.lat) - float(r.lat)) >= CAR_W:
-			continue
-		if absf(float(o.lat) - lat0) >= CAR_W:
-			r.lat = lat0 # the move across ran into it
-			r.lane = lat0
-		elif float(o.s) > s0:
-			r.s = maxf(s0, float(o.s) - CAR_L) # caught up with it: on its tail
-			r.v = minf(float(r.v), float(o.v))
-
-## Contact between rivals: no two running cars overlap. Side by side where the road takes both they are eased apart
-## across it; where it doesn't, the car behind drops back to the one ahead's tail and its pace.
-func separate(dt := 0.1) -> void:
-	var live_k := []
-	for k in rivals.size():
-		if not bool(rivals[k].out) and float(rivals[k].t_done) < 0.0:
-			live_k.append(k)
-	for pass_i in 2:
-		for a in live_k.size():
-			for b in range(a + 1, live_k.size()):
-				var ra: Dictionary = rivals[live_k[a]]
-				var rb: Dictionary = rivals[live_k[b]]
-				var ds := float(rb.s) - float(ra.s)
-				var dl := float(rb.lat) - float(ra.lat)
-				if absf(ds) >= CAR_L or absf(dl) >= CAR_W:
-					continue
-				var front := rb if ds >= 0.0 else ra
-				var back := ra if ds >= 0.0 else rb
-				var s_mid := 0.5 * (float(ra.s) + float(rb.s))
-				var lim := maxf(_at(half, s_mid) - EDGE, 0.3)
-				var dir := 1.0 if dl >= 0.0 else -1.0 # b goes this way across, a the other
-				var fits := 2.0 * lim >= CAR_W + 0.05
-				if fits and absf(ds) > 1.0:
-					# eased apart across the road (as fast as a car steers: no jump), each towards its own side
-					var step_l := minf(LAT_RATE, 0.3 + 0.15 * minf(float(ra.v), float(rb.v))) * dt
-					ra.lat = clampf(float(ra.lat) - dir * step_l, -lim, lim)
-					rb.lat = clampf(float(rb.lat) + dir * step_l, -lim, lim)
-					ra.lane = ra.lat
-					rb.lane = rb.lat
-				else:
-					# no room: the one behind backs off (eased, no jump) and slows below the one ahead's pace
-					var overlap := CAR_L - (float(front.s) - float(back.s))
-					back.s = float(back.s) - minf(overlap, 2.5 * dt)
-					back.v = minf(float(back.v), float(front.v) * 0.9)
-
-## The cars round a rival (the other rivals and the player): one close ahead on its line holds it to its speed
-## while it pulls out to pass on the side with room; one alongside, overlapping, pushes it across. Returns the
-## speed cap.
-func _traffic(k: int, r: Dictionary, cap: float, pv: float, dt: float) -> float:
-	var s: float = r.s
-	var lat: float = r.lat
-	var others := []
-	for j in rivals.size():
-		# (a car already home has pulled over past the line: no longer in anyone's way)
-		if j != k and not bool(rivals[j].out) and float(rivals[j].t_done) < 0.0:
-			others.append([float(rivals[j].s), float(rivals[j].lat), float(rivals[j].v), false])
-	if not player_out:
-		others.append([player_s, player_lat, pv, true])
-	var lim := maxf(_at(half, s) - EDGE, 0.3)
-	var held := false
-	for o in others:
-		var ds: float = float(o[0]) - s
-		var dl: float = float(o[1]) - lat
-		if absf(dl) >= CAR_W:
-			continue
-		if ds > 0.0 and ds < CAR_L + 7.0:
-			# on its line ahead: pick the side with room to pass (on a lane too narrow for two, the wider side, to
-			# squeeze by) and follow, closing gently on a slower car. Held up long behind the player it noses on past
-			# (a shove, OpenWorld's contact: a crawling player never blocks the whole field); behind another rival it
-			# waits for room (separate() keeps two rivals from ever overlapping)
-			var left := float(o[1]) + CAR_W + 0.2
-			var right := float(o[1]) - CAR_W - 0.2
-			var room_l := left <= lim
-			var room_r := right >= -lim
-			if room_l and (not room_r or absf(left - lat) <= absf(right - lat)):
-				r.lane = left
-			elif room_r:
-				r.lane = right
-			else:
-				r.lane = lim if lim - float(o[1]) >= float(o[1]) + lim else -lim
-			if not bool(o[3]) or float(r.get("held", 0.0)) < HELD_MAX or float(o[2]) > float(r.v) + 3.0:
-				cap = minf(cap, float(o[2]) + maxf(ds - CAR_L, 0.0) * 0.6)
-				held = true
-		elif absf(ds) <= CAR_L:
-			# alongside and overlapping: shoved apart across the road
-			var away := -1.0 if dl > 0.0 else 1.0
-			r.lane = _fit(s, lat + away * CAR_W)
-			if ds > 0.0 and (not bool(o[3]) or float(r.get("held", 0.0)) < HELD_MAX):
-				cap = minf(cap, float(o[2]))
-				held = true
-	var h := float(r.get("held", 0.0))
-	if held and cap < float(r.v) + 2.0:
-		h += dt
-		if h >= HELD_MAX:
-			h = HELD_MAX + 4.0 # a few seconds to get by before it would wait again
-	else:
-		h = maxf(h - dt, 0.0)
-	r.held = h
-	return cap
-
-## Each time the leader (the player or a running rival) crosses a new multiple of the lap, short of the end of
-## the last lap, the last running car is out.
-func _knock_out() -> void:
-	var lead := 0.0 if player_out else player_s
-	for r in rivals:
-		if not bool(r.out):
-			lead = maxf(lead, float(r.s))
-	while _next_lap * lap_length < length - 1.0 and lead >= _next_lap * lap_length:
-		_next_lap += 1
-		var alive := 0
-		for r in rivals:
-			if not bool(r.out):
-				alive += 1
-		if alive + (0 if player_out else 1) <= 1:
-			break
-		var low := INF if player_out else player_s
-		var who := -2 if player_out else -1
-		for k in rivals.size():
-			var r: Dictionary = rivals[k]
-			if bool(r.out) or float(r.t_done) >= 0.0:
-				continue
-			if float(r.s) < low:
-				low = float(r.s)
-				who = k
-		if who == -2:
-			break
-		out_order.append(who)
-		if who == -1:
-			player_out = true
-			player_out_pos = alive + 1
-		else:
-			rivals[who].out = true
-			rivals[who].v = 0.0
 
 ## A knock from the player's car: pushed `across` m sideways and slowed by dv m/s.
 func knock(k: int, across: float, dv: float) -> void:
@@ -584,8 +380,7 @@ func field() -> int:
 	return n
 
 ## The running order for the HUD's timing list, first to last: {name, number, player, gap ("" for the leader, "+1.4"
-## seconds to the car ahead, a time once home, "OUT"), out, done}. The player sits where position() has it; cars
-## knocked out come last, the latest out first.
+## seconds to the car ahead, a time once home), out, done}. The player sits where position() has it.
 func standings() -> Array:
 	var live_rows: Array = []
 	for k in rivals.size():
@@ -622,16 +417,6 @@ func standings() -> Array:
 			var ahead: Dictionary = rows[i - 1]
 			var d := float(ahead.s) - float(row.s) if not bool(ahead.done) else maxf(length - float(row.s), 0.0)
 			row.gap = "+%.1f" % maxf(d / v, 0.0)
-	for j in range(out_order.size() - 1, -1, -1):
-		var who := int(out_order[j])
-		if who == -1:
-			me.gap = "OUT"
-			me.done = true
-			rows.append(me)
-		else:
-			var r: Dictionary = rivals[who]
-			rows.append({"name": String(r.get("name", "Rival %d" % (who + 1))), "number": int(r.get("number", 0)),
-				"player": false, "gap": "OUT", "out": true, "done": true})
 	return rows
 
 ## The fastest rival time home so far, or -1.

@@ -95,23 +95,25 @@ func _race_field() -> void:
 		check("the field is faster at step %d" % i, float(means[i]) >= float(means[i - 1]) - 1e-9, "(%.4f vs %.4f)" % [means[i], means[i - 1]])
 	check("Novice to Unbeatable spans a real gap", float(means[6]) - float(means[0]) > 0.04, "(%.4f .. %.4f)" % [means[0], means[6]])
 
-## Open-world events: the street rivals' pace and drag times, the rally crews' stage times.
+## Open-world events: the race field's pace (EventField), the drag times, the rally crews' stage times.
 func _open_world_fields() -> void:
 	var path := PackedVector2Array()
 	for i in 60:
 		path.append(Vector2(i * 50.0, sin(i * 0.4) * 40.0))
 	var prev := -INF
 	for step in DifficultyProfile.STEPS.size():
-		var sr := StreetRivals.new(path, "stock", 5, 9, {"difficulty": "medium", "difficulty_shift": DifficultyProfile.shift_of(step)})
+		# the race sim's bots on the event's track (EventField): the race's own skill, scaled by the event's level
+		var ef := EventField.new(path, "stock", 5, 9, {"difficulty": "medium", "difficulty_shift": DifficultyProfile.shift_of(step)})
 		var f := 0.0
-		for rv in sr.rivals:
-			f += float(rv.f)
+		for b in ef.bots:
+			f += b.skill
 		f /= 5.0
-		check("street rivals no slower at step %d" % step, f >= prev - 0.01, "(%.3f after %.3f)" % [f, prev])
-		check("street rivals never beat the reference driver at step %d" % step, sr.rivals.all(func(rv): return float(rv.f) <= 1.013))
+		check("event field no slower at step %d" % step, f >= prev - 0.002, "(%.3f after %.3f)" % [f, prev])
+		check("event field within the alien limit at step %d" % step, ef.bots.all(func(b: RaceCar): return b.skill <= 1.12))
 		prev = f
-	var avg_band: Vector2 = DifficultyProfile.band(StreetRivals.PACE_BANDS, "medium", 0.0)
-	check("street band at Average is the authored one", avg_band == StreetRivals.PACE_BANDS.medium)
+		ef.dispose()
+	var avg_k: float = DifficultyProfile.band(EventField.PACE, "medium", 0.0)
+	check("event pace at Average is the authored one", is_equal_approx(avg_k, float(EventField.PACE.medium)))
 	var ev := {"difficulty": "medium", "rivals": 4, "stages": [{"path": path}]}
 	var last := INF
 	for step in DifficultyProfile.STEPS.size():

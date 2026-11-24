@@ -652,12 +652,12 @@ func _map_starts(errors: Array[String]) -> void:
 		var g := live.grid_pose(ev)
 		if map.road_at(g[0].x, g[0].y, -INF, 0.2).is_empty():
 			errors.append("%s: the player's grid spot is off the road" % ev.id)
-		var rv := live.rivals()
+		var rv = live.rivals()
 		if rv:
 			if String(ev.difficulty) != String(Missions.as_stage(idx).difficulty):
 				errors.append("%s: the field does not take the mission's difficulty" % ev.id)
 			for j in rv.rivals.size():
-				var ps: Array = rv.pose(float(rv.rivals[j].s), float(rv.rivals[j].lat))
+				var ps: Array = rv.car_pose(j) if rv is EventField else rv.pose(float(rv.rivals[j].s), float(rv.rivals[j].lat))
 				if map.road_at(ps[0].x, ps[0].y, -INF, 0.5).is_empty():
 					errors.append("%s: rival %d's grid spot is off the road" % [ev.id, j])
 				if (ps[0] as Vector2).distance_to(g[0]) < 2.0:

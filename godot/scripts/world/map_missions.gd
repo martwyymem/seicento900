@@ -1,6 +1,6 @@
 ## The campaign missions (Missions) raced on the open-world map itself, Forza Horizon style: no track is loaded, the
 ## mission's route is taken from its baked track file (data/tracks/<key>.json is in the open world's own metres, the
-## routes were planned on the same map) and LiveEvents runs it in free roam with StreetRivals as the field.
+## routes were planned on the same map) and LiveEvents runs it in free roam with an EventField (StreetRivals for a drag).
 ##   drag      the first finish_distance m of the S1 from the mission's `at`, four abreast
 ##   sprint    one lap of the S1 Sprint, 7 rivals
 ##   offroad   one lap of Kolonia Stawowa, 5 rivals
