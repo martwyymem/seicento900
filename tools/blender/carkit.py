@@ -966,7 +966,9 @@ def sparsify_glb(path, eps_pos=5e-4, eps_nrm=8e-3, quantize=True):
 		for kind, ai in t.items():
 			a = acc[ai]
 			if ai in done or a["componentType"] != 5126 or a["type"] != "VEC3" \
+					or ("sparse" in a and "bufferView" not in a) \
 					or ("bufferView" in a and views[a["bufferView"]].get("byteStride", 12) != 12):
+				# (a sparse accessor with no dense base was written here already: a second pass leaves it as it is)
 				continue
 			ok[kind] = ai
 		if not ok:
@@ -1008,6 +1010,35 @@ def sparsify_glb(path, eps_pos=5e-4, eps_nrm=8e-3, quantize=True):
 					a["min"] = [min(0.0, min(sv[k::3])) for k in range(3)]
 					a["max"] = [max(0.0, max(sv[k::3])) for k in range(3)]
 			a["sparse"] = {"count": len(idx), "indices": {"bufferView": iview, "componentType": ict}, "values": {"bufferView": voff}}
+	# a target that moves none of a mesh's vertices (a rear crush site on the front bumper, ...) is dropped from that mesh:
+	# Godot imports every blend shape dense (20 bytes per vertex per shape), so the ~2/3 of shapes that are empty on the
+	# small parts cost ~25% of each car scene. RaceCarVisual looks shapes up by name and skips the missing ones.
+	pruned = 0
+	for m in j["meshes"]:
+		prims = m["primitives"]
+		nt = len(prims[0].get("targets", []))
+		if nt == 0 or any(len(p.get("targets", [])) != nt for p in prims):
+			continue
+		live = [t for t in range(nt)
+			if any("bufferView" in acc[ai] or "sparse" in acc[ai] for p in prims for ai in p["targets"][t].values())]
+		if len(live) == nt:
+			continue
+		pruned += nt - len(live)
+		for p in prims:
+			p["targets"] = [p["targets"][t] for t in live]
+			if not p["targets"]:
+				del p["targets"]
+		ex = m.get("extras", {})
+		if "targetNames" in ex:
+			ex["targetNames"] = [ex["targetNames"][t] for t in live]
+			if not live:
+				del ex["targetNames"]
+		if "weights" in m:
+			m["weights"] = [m["weights"][t] for t in live]
+			if not live:
+				del m["weights"]
+	if pruned:
+		print("pruned %d empty morph targets" % pruned)
 	# every view still referenced keeps its bytes (accessors, sparse parts, images), in a fresh packed buffer
 	chunks = []
 	new_views = []

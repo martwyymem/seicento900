@@ -88,16 +88,24 @@ func _model() -> void:
 		var names := _surface_names(meshes["Body"])
 		var ps := names.find("Paint")
 		check(ps >= 0 and ps != names.find("Plate") and ps != names.find("Glass"), "Paint surface index clashes with another slot")
-	# dent and crush blend shapes the visual animates exist on every mesh it drives
+	# dent and crush blend shapes the visual animates: the Body spans every site and keeps them all; carkit.sparsify_glb
+	# drops a shape from a smaller mesh when it moves none of its vertices, so the others keep only some
 	for obj in ["Body", "Details", "Stripes"] + VISUAL.PANELS + VISUAL.GLASS:
 		if not meshes.has(obj):
 			continue
 		var shapes := []
 		for i in meshes[obj].get_blend_shape_count():
 			shapes.append(String(meshes[obj].get_blend_shape_name(i)))
-		check(shapes.has("dent_front"), "seicento.glb/%s has no dent_* blend shapes" % obj)
-		for k in VISUAL.CRUSH_SITES:
-			check(shapes.has("crush_" + k), "seicento.glb/%s has no crush_%s blend shape" % [obj, k])
+		if obj == "Body":
+			for k in ["front", "rear", "left", "right"]:
+				check(shapes.has("dent_" + k), "seicento.glb/Body has no dent_%s blend shape" % k)
+			for k in VISUAL.CRUSH_SITES:
+				check(shapes.has("crush_" + k), "seicento.glb/Body has no crush_%s blend shape" % k)
+		else:
+			check(shapes.any(func(n): return n.begins_with("dent_")), "seicento.glb/%s has no dent_* blend shapes" % obj)
+		for n in shapes:
+			check(n.begins_with("dent_") or (n.begins_with("crush_") and VISUAL.CRUSH_SITES.has(n.substr(6))),
+				"seicento.glb/%s has an unknown blend shape %s" % [obj, n])
 
 func _atlas() -> void:
 	var tex := load(VISUAL.DECALS_TEX_PATH) as Texture2D

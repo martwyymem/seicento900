@@ -158,7 +158,8 @@ func run() -> Array:
 			var shapes := []
 			for i in panel.mesh.get_blend_shape_count():
 				shapes.append(String(panel.mesh.get_blend_shape_name(i)))
-			if not shapes.has("dent_front") or not shapes.has("crush_fl") or not shapes.has("crush_r4"):
+			# shapes that move none of a panel's vertices are pruned (carkit.sparsify_glb), so a panel keeps only its own
+			if not shapes.any(func(n): return n.begins_with("dent_")) or not shapes.any(func(n): return n.begins_with("crush_")):
 				errors.append("%s/%s lacks the dent_* / crush_* blend shapes (%s)" % [path, panel_name, shapes])
 		for want in CONTRACT[path].materials:
 			if not mats.has(want):

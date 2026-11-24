@@ -75,7 +75,8 @@ The cars after the Seicento are catalogue entries (`godot/scripts/data/car_catal
    stations, the boot lid's or tailgate's leading station) cut the loose panels `Bonnet DoorL DoorR BumperF BumperR Boot` (each with
    `<panel>Details` and `<panel><livery>` pieces) and the glass `Windscreen WindowL WindowR RearWindow` out of the Body; every mesh but
    Wheel and Cabin takes `add_damage_keys(ob, dent_delta, sites)` (dent_* plus the local crush_* keys), and the GLB goes through
-   `carkit.sparsify_glb`. `--wreck` renders the car crushed with a door open, the bumper sagging and the boot up; look at it.
+   `carkit.sparsify_glb` (sparse deltas; a shape that moves none of a mesh's vertices is dropped from that mesh, since Godot
+   imports blend shapes dense). `--wreck` renders the car crushed with a door open, the bumper sagging and the boot up; look at it.
 2. **Physics**: a spec script like [`golf4.gd`](godot/scripts/data/golf4.gd) (a duplicate of `seicento.tres` with `resource_name` set to
    the key: a non-empty name is what makes `Track.profile_for`, `Race` (brake_k) and the strategist treat it as another car) and
    measure it: `godot --headless --path godot -s tests/_car_probe.gd` prints 0-100, 400 m, top speed, braking from 100 km/h and
