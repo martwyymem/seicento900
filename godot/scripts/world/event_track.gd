@@ -197,10 +197,22 @@ static func _on_centre(map: TownMap, path: PackedVector2Array) -> PackedVector2A
 		out.append(pts[i] + Vector2(-d.y, d.x) * off)
 	# the corners where one street meets the next rounded (the router turns on the junction's node; the junction's
 	# own tarmac lets a car round it): a few passes of a 3-point average, the ends held
+	var raw := out.duplicate()
 	for pass_i in ROUND_PASSES:
 		var prev := out.duplicate()
 		for i in range(1, n - 1):
 			out[i] = prev[i] * 0.5 + (prev[i - 1] + prev[i + 1]) * 0.25
+	# never off the drawn road where the route was on it (a hairpin's rounding would cut its inside): pulled back
+	if map != null:
+		for i in range(1, n - 1):
+			if not map.road_at(out[i].x, out[i].y, -INF, 0.3).is_empty() or map.road_at(raw[i].x, raw[i].y, -INF, 0.3).is_empty():
+				continue
+			var q := out[i]
+			for k in 4:
+				q = q.lerp(raw[i], 0.5)
+				if not map.road_at(q.x, q.y, -INF, 0.3).is_empty():
+					break
+			out[i] = q
 	return out
 
 ## Junction samples (hw < 0) take the width of the road either side of them; samples with no height take the
