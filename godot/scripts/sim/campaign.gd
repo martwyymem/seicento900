@@ -317,14 +317,15 @@ const STAGES := [
 		"start_hour": 8.5,
 		"wear_mult": 0.0,
 		"fuel_mult": 0.0,
-		"opponents": 11,
+		"opponents": 14,
 		"difficulty": "hard",
 		"target_pos": 3,
-		"grid": "p11",
+		"grid": "p15",
 		"trophy": "Eifel Forest Medal",
 		"class": "touring",
-		"rivals": {"v50": 5, "focus": 4, "zafira": 2},
-		"pace": 0.5, ## levels over its difficulty (tuned with tests/_campaign_ladder_probe.gd)
+		"rivals": {"v50": 8, "focus": 5, "zafira": 1}, ## the V50 is the quickest touring car here (Focus ~10 s a lap slower)
+		"pace": 1.0, ## levels over its difficulty (tuned with tests/_campaign_ladder_probe.gd): Alien
+		"boost": 0.065, ## rivals' skill above Alien's, in full at the Alien level (Campaign.skill_boost): the V50s top out at Alien otherwise
 		"note": "Brzeszcze Jawiszowice station: the night train west to the Eifel",
 		"desc": "One lap of the Nürburgring Nordschleife in the morning fog: twenty kilometres through the Eifel forests, from Hatzenbach and Flugplatz down the Fuchsröhre, through Adenauer Forst, the Karussell and Brünnchen, over Pflanzgarten and home up the Döttinger Höhe.",
 		"tip": "Learn it as a string of short stages: the Karussell's concrete banking wants you in it and staying in it, and the Döttinger Höhe is the one place to use the tow."
@@ -661,6 +662,7 @@ static func configure_stage(st: RaceSettings, stage: Dictionary, rival_step := D
 	st.weather = String(stage.weather)
 	st.opponents = int(stage.opponents)
 	st.field_classes = field_classes(stage)
+	st.skill_boost = skill_boost(stage)
 	var rivals := resolve_level(String(stage.difficulty), float(stage.get("level_shift", 0.0)), rival_step)
 	st.difficulty = String(rivals.difficulty)
 	st.difficulty_shift = float(rivals.shift)
@@ -686,6 +688,11 @@ static func configure_stage(st: RaceSettings, stage: Dictionary, rival_step := D
 	arcade.wear = false
 	DifficultyProfile.apply_sim(st, arcade)
 	apply_format(st, stage) # an A->B sprint: grid behind A, finish at B, no laps
+
+## The rivals' skill above Alien's (RaceSettings.skill_boost) for a stage that has a "boost": in full at the Alien level
+## and fading to none a level lower, so failed tries (get_stage) take it off first. 0 for a stage without one.
+static func skill_boost(stage: Dictionary) -> float:
+	return float(stage.get("boost", 0.0)) * clampf(float(stage.get("level", 0.0)) - 2.0, 0.0, 1.0)
 
 ## The rivals' level: DifficultyProfile.resolve for the stage's level name, moved by `extra` levels (the stage's
 ## level_shift); with no extra it is resolve's own answer.

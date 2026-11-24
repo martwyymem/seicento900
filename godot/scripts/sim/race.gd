@@ -553,9 +553,11 @@ func build_field(player_plan) -> void:
 			car = make_car(i + 1, who.name, Color(who.color), who.number, false, ck)
 			# the driver's own pace against the field, around the difficulty's level, and a little form on the day
 			car.skill = diff.skill + (who.pace - 0.6) * diff.spread * 0.9 + (rng.next() - 0.5) * diff.spread * 0.3
+			car.skill += s.skill_boost
 		else:
 			car = make_car(i + 1, BOTS[i][0], Color(BOTS[i][1]), BOT_NUMBERS[i], false, ck)
 			car.skill = diff.skill + (rng.next() - 0.6) * diff.spread
+			car.skill += s.skill_boost
 		# the field wears the driven car's factory paints (CarCatalog.PALETTES), the player's own left out; no rng drawn
 		car.color = CarCatalog.field_color(car_key, i, s.player_color) if car.car_key == car_key else \
 			CarCatalog.field_color(car.car_key, _class_count(i), s.player_color, CarCatalog.index_of(car.car_key) * 3)
