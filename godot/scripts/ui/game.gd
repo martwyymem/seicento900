@@ -4761,30 +4761,9 @@ func _start_race(restart := false) -> void:
 	if shown and shown != world_view.race:
 		shown.dispose()
 
-func _set_up_race() -> void:
-	status_label.text = "Configuring car and optimizing race strategy..."
-	status_label.modulate = ACCENT
-	campaign_cleared = false
-	if not is_inside_tree():
-		return
-	await get_tree().process_frame
-	if not is_inside_tree():
-		return
-
-	if _strategy_pending and not is_championship_mode and not is_campaign_mode and not is_rally_mode and not is_time_trial_mode:
-		status_label.text = "The strategist is still working out the plans — try again in a moment."
-		return
+func _build_race_settings(quali_run := false) -> RaceSettings:
 	var settings := RaceSettings.new()
-	var plan = current_plan
-	var quali_run := false
 	if is_championship_mode:
-		if _next_round() >= _calendar().size():
-			champ_data = {"round": 0, "scored": false, "table": {}, "config": _season()} # a new season on the same settings
-		if champ_data.get("scored", false):
-			champ_data["round"] = int(champ_data.get("round", 0)) + 1
-			champ_data["scored"] = false
-		_save_championship()
-		quali_run = quali_picker.selected != 2 and _round_quali().is_empty()
 		var round_idx := int(champ_data.get("round", 0))
 		var t_key: String = _calendar()[round_idx]
 		settings.track = t_key
@@ -4801,27 +4780,12 @@ func _set_up_race() -> void:
 		settings.format = "laps"
 		settings.start_hour = start_hour_picker.value
 	elif is_campaign_mode:
-		var stage: Dictionary = CampaignData.get_stage(campaign_stage_index)
-		settings.track = stage.track
-		settings.laps = stage.laps
-		settings.format = "laps"
-		settings.weather = stage.weather
-		settings.opponents = stage.opponents
-		# the stage's own (eased) level, moved by the player's rival step (exactly as authored at Average)
-		var rivals := DifficultyProfile.resolve(String(stage.difficulty), int(DifficultyProfile.current.step))
-		settings.difficulty = rivals.difficulty
-		settings.difficulty_shift = rivals.shift
-		settings.start_hour = stage.start_hour
-		settings.wear_mult = stage.get("wear_mult", 2.0)
-		settings.fuel_mult = stage.get("fuel_mult", 1.0)
+		settings.track = String(CampaignData.get_stage(campaign_stage_index).track)
 	elif is_rally_mode:
-		if _rally().is_over():
-			_new_rally(_rally().key) # the rally was finished: run it again from the first stage
 		var sd := _rally().stage_def()
 		settings.track = sd.track
 		settings.laps = 1
 		settings.start_hour = float(sd.get("hour", 12.0))
-		plan = {} # a stage has no strategy: the race gives the car its one-stint fallback
 	else:
 		settings.track = TRACK_KEYS[track_picker.selected]
 		settings.laps = int(laps_picker.value)
@@ -4853,7 +4817,7 @@ func _set_up_race() -> void:
 		settings.finish = car_livery.finish
 	settings.ai_learning = "off" if ai_learning_picker.selected == 1 else "on"
 	settings.bot_physics = ["on", "off", "near"][bot_physics_picker.selected]
-	settings.grid = str(CampaignData.get_stage(campaign_stage_index).get("grid", "middle")) if is_campaign_mode else ["pole", "middle", "back", "random"][grid_picker.selected] # a stage sets its own grid
+	settings.grid = ["pole", "middle", "back", "random"][grid_picker.selected]
 	settings.mandatory_stop = mandatory_stop_toggle.button_pressed
 	settings.two_compounds = two_compounds_toggle.button_pressed
 	settings.refuel = refuel_toggle.button_pressed
@@ -4871,34 +4835,60 @@ func _set_up_race() -> void:
 		Qualifying.configure(settings)
 	elif is_championship_mode and not _round_quali().is_empty():
 		settings.quali_grid = _round_quali().grid # the round's qualifying sets the grid
-	if is_rally_mode:
+	if is_campaign_mode:
+		CampaignData.configure_stage(settings, CampaignData.get_stage(campaign_stage_index), int(DifficultyProfile.current.step))
+	elif is_rally_mode:
 		Rally.configure_stage(settings, _rally().stage_def(), _rally().difficulty)
 	elif is_time_trial_mode:
 		TimeTrial.configure(settings, tt_start_picker.selected == 1)
-		plan = {}
 	# the profile's switches (fuel use, tyre wear, damage, auto-recover) over what the mode set
 	DifficultyProfile.apply_sim(settings, DifficultyProfile.current)
+	return settings
+
+func _set_up_race() -> void:
+	status_label.text = "Configuring car and optimizing race strategy..."
+	status_label.modulate = ACCENT
+	campaign_cleared = false
+	if not is_inside_tree():
+		return
+	await get_tree().process_frame
+	if not is_inside_tree():
+		return
+
+	if _strategy_pending and not is_championship_mode and not is_campaign_mode and not is_rally_mode and not is_time_trial_mode:
+		status_label.text = "The strategist is still working out the plans — try again in a moment."
+		return
+	var plan = current_plan
+	var quali_run := false
+	if is_championship_mode:
+		if _next_round() >= _calendar().size():
+			champ_data = {"round": 0, "scored": false, "table": {}, "config": _season()} # a new season on the same settings
+		if champ_data.get("scored", false):
+			champ_data["round"] = int(champ_data.get("round", 0)) + 1
+			champ_data["scored"] = false
+		_save_championship()
+		quali_run = quali_picker.selected != 2 and _round_quali().is_empty()
+	elif is_rally_mode:
+		if _rally().is_over():
+			_new_rally(_rally().key) # the rally was finished: run it again from the first stage
+	var settings := _build_race_settings(quali_run)
 
 	await _open_loading_screen(settings, quali_run)
-	if quali_run or is_time_trial_mode or is_rally_mode:
+	if quali_run or is_time_trial_mode or is_rally_mode or not settings.pits_enabled:
 		plan = {} # the session builds its own one-run plan
-	elif is_championship_mode or is_campaign_mode or settings.car_class != "stock" or DifficultyProfile.alters_strategy(DifficultyProfile.current):
+	elif is_championship_mode or settings.car_class != "stock" or DifficultyProfile.alters_strategy(DifficultyProfile.current):
 		# every round is planned by the strategist for that circuit's race length, tyre wear and fuel use
-		var opts := _plan_opts(Race.get_track(settings.track), settings.laps, settings.wear_mult, settings.weather if is_campaign_mode or is_championship_mode else "")
+		var opts := _plan_opts(Race.get_track(settings.track), settings.laps, settings.wear_mult, settings.weather if is_championship_mode else "")
 		opts.fuel_mult = settings.fuel_mult
 		opts.rules.refuel = settings.refuel
 		var options: Array = _models_for(settings.car_class).strategy.plan(opts)
 		plan = options[0] if options.size() else null
 
 	if plan == null:
-		if is_campaign_mode:
-			# (Tyres.KEYS: "soft"/"wet" were no compound at all, so every tyre lookup failed; a drag mission lands here)
-			plan = {"stints": [{"c": "W" if settings.weather in ["wet", "snow", "hail"] else "S", "laps": settings.laps}]}
-		else:
-			status_label.text = "No valid pit strategy for these settings — pick a plan or fix the custom one."
-			status_label.modulate = DANGER
-			loading_screen.hide()
-			return
+		status_label.text = "No valid pit strategy for these settings — pick a plan or fix the custom one."
+		status_label.modulate = DANGER
+		loading_screen.hide()
+		return
 	_save_race_settings()
 	await _loading_progress(0.35)
 	race = Race.new(settings, (plan as Dictionary).duplicate(true), -1, _models_for(settings.car_class))
@@ -6594,19 +6584,19 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	get_viewport().set_input_as_handled()
 
 func _cycle_pit_tyre(direction: int) -> void:
-	if race:
+	if race and race.s.pits_enabled:
 		race.player_cycle_compound(direction)
 		if is_instance_valid(audio):
 			audio.beep(780.0, 1)
 
 func _cycle_mix() -> void:
-	if race:
+	if race and race.s.pits_enabled and race.s.fuel_mult > 0.0:
 		race.player_cycle_mix()
 		if is_instance_valid(audio):
 			audio.beep(560.0, 1)
 
 func _adjust_pit_fuel(delta_litres: float) -> void:
-	if race:
+	if race and race.s.pits_enabled:
 		race.player_adjust_fuel(delta_litres)
 		if is_instance_valid(audio):
 			audio.beep(680.0, 1)
@@ -6628,11 +6618,11 @@ func _change_warp(direction: int) -> void:
 	race.log_event("Time warp ×%d" % race.warp if race.warp > 1 else "Real time", "info")
 
 func _pit() -> void:
-	if race:
+	if race and race.s.pits_enabled:
 		race.player_toggle_pit()
 
 func _replan() -> void:
-	if race:
+	if race and race.s.pits_enabled:
 		race.player_replan()
 		if is_instance_valid(audio):
 			audio.beep(850.0, 1)

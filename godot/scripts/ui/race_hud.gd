@@ -60,10 +60,14 @@ const QUICK_HELP_SECS := 7.0 ## s of racing the key strip stays up
 const GUIDE := [["W / ↑", "Throttle"], ["S / ↓", "Brake, reverse"], ["Space · pad A", "Handbrake"], ["A / D / ← →", "Steer"], ["E / Q", "Gear (manual)"],
 	["R / Backspace", "Reset car"], ["C · B", "Camera · look back"], ["V", "Speed limiter"], ["O", "Autopilot"],
 	["G · L", "Ghost · racing line"], ["M", "Mute"], ["P", "Request box"], ["[ ]  − =  F", "Tyre · fuel · mix"], ["Esc", "Pause"]]
+const GUIDE_NO_PIT := [["W / ↑", "Throttle"], ["S / ↓", "Brake, reverse"], ["Space · pad A", "Handbrake"], ["A / D / ← →", "Steer"], ["E / Q", "Gear (manual)"],
+	["R / Backspace", "Reset car"], ["C · B", "Camera · look back"], ["V", "Speed limiter"], ["O", "Autopilot"],
+	["G · L", "Ghost · racing line"], ["M", "Mute"], ["Esc", "Pause"]]
 var _guide: Control
 var _feed_cache: Array = []
 var _feed_cache_n := -1
 const HELP_TEXT := "DRIVING:  W / ↑ Throttle  ·  S / ↓ Brake  ·  Space Handbrake  ·  A / D / ← → Steer  ·  Backspace / R Reset Car  ·  E / Q Gear (Manual)\nVIEW & AIDS:  C Camera  ·  L Racing Line  ·  V Speed Limiter  ·  O Autopilot  ·  G Ghost Car  ·  M Mute  ·  Esc Pause\nPIT & STRATEGY:  P Request Box  ·  [ ] Next Tyre  ·  − / = Fuel  ·  F Fuel Mix  ·  Shift+R Replan  ·  H Toggle Help"
+const HELP_TEXT_NO_PIT := "DRIVING:  W / ↑ Throttle  ·  S / ↓ Brake  ·  Space Handbrake  ·  A / D / ← → Steer  ·  Backspace / R Reset Car  ·  E / Q Gear (Manual)\nVIEW & AIDS:  C Camera  ·  L Racing Line  ·  V Speed Limiter  ·  O Autopilot  ·  G Ghost Car  ·  M Mute  ·  H Toggle Help  ·  Esc Pause"
 
 var race: Race
 var drift_meter: DriftMeter ## the drift readout in the centre column, under the stack (DriftMeter)
@@ -351,14 +355,21 @@ func set_hints(on: bool) -> void:
 		_help_key = ""
 		_fit_help()
 
+func _pits_active() -> bool:
+	return race != null and race.s.mode == "race" and not race.s.qualifying and race.s.pits_enabled
+
+func _guide_entries() -> Array:
+	return GUIDE if _pits_active() else GUIDE_NO_PIT
+
 func toggle_help() -> void:
+	var full_text := HELP_TEXT if _pits_active() else HELP_TEXT_NO_PIT
 	if not help.visible:
 		help.visible = true
 		_help_full = true
-		if _help_label: _help_label.text = HELP_TEXT
+		if _help_label: _help_label.text = full_text
 	elif not _help_full:
 		_help_full = true
-		if _help_label: _help_label.text = HELP_TEXT
+		if _help_label: _help_label.text = full_text
 	else:
 		help.visible = false
 		_help_full = false
@@ -695,20 +706,22 @@ func _draw_guide() -> void:
 	_guide.draw_string(_bold, Vector2(0, 14), "CONTROLS", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, YELLOW)
 	_guide.draw_string(_font, Vector2(0, 14), "H  close", HORIZONTAL_ALIGNMENT_RIGHT, W, 11, MUTED)
 	_guide.draw_rect(Rect2(0, 19, W, 1), Color(YELLOW, 0.5))
-	var rows := ceili(GUIDE.size() / 2.0)
+	var entries := _guide_entries()
+	var rows := ceili(entries.size() / 2.0)
 	var colw := W * 0.5
-	for i in GUIDE.size():
+	for i in entries.size():
 		var x := (i / rows) * colw
 		var y := 36.0 + (i % rows) * 16.0
-		_guide.draw_string(_bold, Vector2(x, y), GUIDE[i][0], HORIZONTAL_ALIGNMENT_LEFT, colw * 0.46, 12, TEXT)
-		_guide.draw_string(_font, Vector2(x + colw * 0.46, y), GUIDE[i][1], HORIZONTAL_ALIGNMENT_LEFT, colw * 0.54 - 8.0, 12, MUTED)
+		_guide.draw_string(_bold, Vector2(x, y), entries[i][0], HORIZONTAL_ALIGNMENT_LEFT, colw * 0.46, 12, TEXT)
+		_guide.draw_string(_font, Vector2(x + colw * 0.46, y), entries[i][1], HORIZONTAL_ALIGNMENT_LEFT, colw * 0.54 - 8.0, 12, MUTED)
 
 func _fit_help() -> void:
 	var W := safe_frame.size.x if safe_frame else size.x
 	var H := safe_frame.size.y if safe_frame else size.y
 	if not _help_label or W < 1.0:
 		return
-	var key := "%d|%d|%s|%s|%s" % [int(W), int(H), pitwall.visible, _help_label.text.hash(), _help_full]
+	var entries := _guide_entries()
+	var key := "%d|%d|%s|%s|%s|%d" % [int(W), int(H), pitwall.visible, _help_label.text.hash(), _help_full, entries.size()]
 	if key == _help_key:
 		return
 	_help_key = key
@@ -722,7 +735,7 @@ func _fit_help() -> void:
 	var bottom_pad := 12.0
 	if _help_full:
 		var gw := clampf(room, 300.0, 600.0)
-		var rows := ceili(GUIDE.size() / 2.0)
+		var rows := ceili(entries.size() / 2.0)
 		_guide.custom_minimum_size = Vector2(gw, 24.0 + rows * 16.0)
 		_guide.queue_redraw()
 		help.offset_left = -(gw + 36.0) * 0.5
@@ -1685,11 +1698,11 @@ func _update_banner() -> void:
 		else:
 			big = "FINISHED P%d" % p.pos
 			small = "Enter / Ⓐ — skip to results"
-	elif p.mode == "pit" and p.pit and p.pit.phase == "service":
+	elif race.s.pits_enabled and p.mode == "pit" and p.pit and p.pit.phase == "service":
 		big = "PIT STOP %.1f s" % p.pit.left
-	elif p.out_of_fuel:
+	elif race.s.fuel_mult > 0.0 and p.out_of_fuel:
 		big = "OUT OF FUEL"
-	elif p.pit_request:
+	elif race.s.pits_enabled and p.pit_request:
 		big = "BOX  BOX"
 		box = true
 	elif p.control == "free" and absf(p.speed) > 3.0 and cos(p.heading - tr.heading(p.s)) < -0.35:
@@ -1803,7 +1816,7 @@ func _damage_row() -> bool:
 
 ## Whether the pit wall has anything to say: a race with a stop planned or required, a box requested, or the car in the pits.
 func _pit_relevant() -> bool:
-	if not race or race.s.qualifying or race.s.mode != "race":
+	if not race or race.s.qualifying or race.s.mode != "race" or not race.s.pits_enabled:
 		return false
 	var p := race.player
 	if p.finished or p.dnf:

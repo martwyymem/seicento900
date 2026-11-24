@@ -20,8 +20,8 @@ const STAGES := [
 		"weather": "dry",
 		"time_of_day": 14.0,
 		"start_hour": 14.0,
-		"wear_mult": 2.0,
-		"fuel_mult": 1.0,
+		"wear_mult": 0.0,
+		"fuel_mult": 0.0,
 		"opponents": 5,
 		"difficulty": "easy",
 		"target_pos": 3,
@@ -40,8 +40,8 @@ const STAGES := [
 		"weather": "fog",
 		"time_of_day": 8.0,
 		"start_hour": 8.0,
-		"wear_mult": 2.0,
-		"fuel_mult": 1.0,
+		"wear_mult": 0.0,
+		"fuel_mult": 0.0,
 		"opponents": 7,
 		"difficulty": "easy",
 		"target_pos": 3,
@@ -60,8 +60,8 @@ const STAGES := [
 		"weather": "variable",
 		"time_of_day": 16.5,
 		"start_hour": 16.5,
-		"wear_mult": 2.0,
-		"fuel_mult": 1.0,
+		"wear_mult": 0.0,
+		"fuel_mult": 0.0,
 		"opponents": 8,
 		"difficulty": "easy",
 		"target_pos": 3,
@@ -80,8 +80,8 @@ const STAGES := [
 		"weather": "dry",
 		"time_of_day": 18.0,
 		"start_hour": 18.0,
-		"wear_mult": 2.0,
-		"fuel_mult": 1.0,
+		"wear_mult": 0.0,
+		"fuel_mult": 0.0,
 		"opponents": 9,
 		"difficulty": "medium",
 		"target_pos": 3,
@@ -100,8 +100,8 @@ const STAGES := [
 		"weather": "variable",
 		"time_of_day": 12.0,
 		"start_hour": 12.0,
-		"wear_mult": 2.0,
-		"fuel_mult": 1.0,
+		"wear_mult": 0.0,
+		"fuel_mult": 0.0,
 		"opponents": 9,
 		"difficulty": "medium",
 		"target_pos": 2,
@@ -120,8 +120,8 @@ const STAGES := [
 		"weather": "wet",
 		"time_of_day": 21.5,
 		"start_hour": 21.5,
-		"wear_mult": 2.0,
-		"fuel_mult": 1.0,
+		"wear_mult": 0.0,
+		"fuel_mult": 0.0,
 		"opponents": 7,
 		"difficulty": "medium",
 		"target_pos": 2,
@@ -140,8 +140,8 @@ const STAGES := [
 		"weather": "wet",
 		"time_of_day": 15.0,
 		"start_hour": 15.0,
-		"wear_mult": 2.0,
-		"fuel_mult": 1.0,
+		"wear_mult": 0.0,
+		"fuel_mult": 0.0,
 		"opponents": 9,
 		"difficulty": "medium",
 		"target_pos": 3,
@@ -160,8 +160,8 @@ const STAGES := [
 		"weather": "dry",
 		"time_of_day": 19.5,
 		"start_hour": 19.5,
-		"wear_mult": 2.0,
-		"fuel_mult": 1.0,
+		"wear_mult": 0.0,
+		"fuel_mult": 0.0,
 		"opponents": 11,
 		"difficulty": "medium",
 		"target_pos": 3,
@@ -176,12 +176,12 @@ const STAGES := [
 		"act_name": "Act III: Global Legends",
 		"title": "Stage 9: Proving Grounds Trial",
 		"track": "fiat",
-		"laps": 6,
+		"laps": 4,
 		"weather": "dry",
 		"time_of_day": 13.0,
 		"start_hour": 13.0,
-		"wear_mult": 2.0,
-		"fuel_mult": 1.0,
+		"wear_mult": 0.0,
+		"fuel_mult": 0.0,
 		"opponents": 11,
 		"difficulty": "medium",
 		"target_pos": 3,
@@ -200,8 +200,8 @@ const STAGES := [
 		"weather": "dry",
 		"time_of_day": 11.0,
 		"start_hour": 11.0,
-		"wear_mult": 2.0,
-		"fuel_mult": 1.0,
+		"wear_mult": 0.0,
+		"fuel_mult": 0.0,
 		"opponents": 11,
 		"difficulty": "medium",
 		"target_pos": 2,
@@ -221,8 +221,8 @@ const STAGES := [
 		"weather": "fog",
 		"time_of_day": 8.5,
 		"start_hour": 8.5,
-		"wear_mult": 1.0,
-		"fuel_mult": 1.0,
+		"wear_mult": 0.0,
+		"fuel_mult": 0.0,
 		"opponents": 11,
 		"difficulty": "hard",
 		"target_pos": 3,
@@ -242,8 +242,8 @@ const STAGES := [
 		"weather": "dry",
 		"time_of_day": 22.5,
 		"start_hour": 22.5,
-		"wear_mult": 1.0,
-		"fuel_mult": 1.0,
+		"wear_mult": 0.0,
+		"fuel_mult": 0.0,
 		"opponents": 11,
 		"difficulty": "hard",
 		"target_pos": 2,
@@ -263,8 +263,8 @@ const STAGES := [
 		"weather": "dry",
 		"time_of_day": 0.0,
 		"start_hour": 0.0,
-		"wear_mult": 2.0,
-		"fuel_mult": 1.0,
+		"wear_mult": 0.0,
+		"fuel_mult": 0.0,
 		"opponents": 11,
 		"difficulty": "hard",
 		"target_pos": 1,
@@ -283,8 +283,8 @@ const STAGES := [
 		"weather": "dry",
 		"time_of_day": 18.5,
 		"start_hour": 18.5,
-		"wear_mult": 1.0,
-		"fuel_mult": 1.0,
+		"wear_mult": 0.0,
+		"fuel_mult": 0.0,
 		"opponents": 11,
 		"difficulty": "hard",
 		"target_pos": 1,
@@ -418,10 +418,47 @@ static func get_stage(index: int) -> Dictionary:
 	if not st.has("start_hour"):
 		st["start_hour"] = st.get("time_of_day", 14.0)
 	if not st.has("wear_mult"):
-		st["wear_mult"] = 2.0
+		st["wear_mult"] = 0.0
 	if not st.has("fuel_mult"):
-		st["fuel_mult"] = 1.0
+		st["fuel_mult"] = 0.0
 	return st
+
+## Configures RaceSettings for a campaign stage (arcade rules): the stage owns its track, laps, weather,
+## opponents, difficulty (shifted by rival_step), start hour and grid; no pit stops, no tyre wear, no fuel
+## use, and no circuit safety car or red flags (local yellows, stewards' penalties and damage stay).
+## Call after Quick Race defaults and before DifficultyProfile.apply_sim so the player's damage mode and
+## auto-recover still apply.
+static func configure_stage(st: RaceSettings, stage: Dictionary, rival_step := DifficultyProfile.AVERAGE) -> void:
+	st.mode = "race"
+	st.track = String(stage.track)
+	st.laps = int(stage.laps)
+	st.format = "laps"
+	st.weather = String(stage.weather)
+	st.opponents = int(stage.opponents)
+	var rivals := DifficultyProfile.resolve(String(stage.difficulty), rival_step)
+	st.difficulty = String(rivals.difficulty)
+	st.difficulty_shift = float(rivals.shift)
+	st.start_hour = float(stage.get("start_hour", stage.get("time_of_day", 14.0)))
+	st.grid = String(stage.get("grid", "middle"))
+	st.qualifying = false
+	st.quali_grid = {}
+	st.mandatory_stop = false
+	st.two_compounds = false
+	st.refuel = false
+	st.pits_enabled = false
+	st.auto_strategist = false
+	st.dynamic_running = false
+	st.collisions = true
+	st.draft = true
+	st.race_control = true
+	st.safety_car = false
+	st.mechanical_damage = false # DifficultyProfile.apply_sim may still turn it on if the player picked Full mechanical
+	st.starting_tyre = "W" if st.weather in ["wet", "snow", "hail"] else "S"
+	# Reuse DifficultyProfile's accessibility switches for fuel use off and tyre wear off.
+	var arcade := DifficultyProfile.defaults()
+	arcade.fuel = false
+	arcade.wear = false
+	DifficultyProfile.apply_sim(st, arcade)
 
 ## fans: the player's fan total (read from the open-world save when not given). A "fan_lock" stage (the Goliath)
 ## opens at the top fan level instead of after the stage before it.
