@@ -21,6 +21,7 @@ const SURROUNDINGS := preload("res://scripts/ui/surroundings.gd")
 const FAR_LAND := preload("res://scripts/ui/far_land.gd")
 const FURNITURE := preload("res://scripts/ui/trackside_furniture.gd")
 const ROADSIDE_PROPS := preload("res://scripts/ui/roadside_props.gd")
+const STAGE_DRESSING := preload("res://scripts/ui/stage_dressing.gd")
 const LIGHTING := preload("res://scripts/ui/lighting_presets.gd")
 const ALTITUDE_SCALE := 1.0 ## heights at their real scale (the physics ignores elevation)
 const ASPHALT_LIFT := 0.04 ## m: the asphalt ribbon stands this far over the track's ground height
@@ -138,6 +139,7 @@ var far_land: RefCounted ## far_land.gd: the hills and sea on the horizon, null 
 ## Marshal posts, braking boards, bridges and the paddock (trackside_furniture.gd)
 var furniture: RefCounted
 var roadside_props: RefCounted
+var stage_dressing: RefCounted ## street/rally stage arches, tape, chevrons, warnings & spectators (stage_dressing.gd)
 ## Barrier segments built as tyre walls (trackside_furniture.gd tyre_cells), left out of the plain barrier
 var tyre_cells := {}
 ## The detailed terrain's grid (_build_terrain): corner, spacing, and per point its height, squared distance to
@@ -399,6 +401,8 @@ func set_race(value: Race) -> void:
 		race = value
 	if roadside_props:
 		roadside_props.set_rally(value.s.mode == "rally")
+	if stage_dressing:
+		stage_dressing.configure_race(value)
 	# a restart on the same circuit reuses the scenery but not the previous field
 	for old in visuals.values():
 		old.queue_free()
@@ -524,6 +528,8 @@ func _process(delta: float) -> void:
 			_skid_last.erase(car.id)
 
 	_update_start_lights()
+	if stage_dressing and _focus_car:
+		stage_dressing.update(_focus_pos, Vector3(_focus_car.vx, 0.0, _focus_car.vy), night)
 	_update_camera(delta)
 	_tv_warm_up()
 	_place_rain()
@@ -1426,6 +1432,8 @@ func _build_track() -> void:
 	furniture.build(self)
 	roadside_props = ROADSIDE_PROPS.new()
 	roadside_props.build(self)
+	stage_dressing = STAGE_DRESSING.new()
+	stage_dressing.build(self)
 	if track.cfg.theme == "city":
 		if not (surroundings and surroundings.has_buildings()):
 			_build_city_blocks()

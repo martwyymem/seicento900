@@ -83,7 +83,8 @@ const SUITES := [
 	"res://tests/test_car_panel_plates.gd",
 	"res://tests/test_playtest_fixes.gd",
 	"res://tests/test_difficulty_profile.gd",
-	"res://tests/test_save_safety.gd"
+	"res://tests/test_save_safety.gd",
+	"res://tests/test_stage_dressing.gd"
 ]
 
 const SURROUNDINGS := preload("res://scripts/ui/surroundings.gd")
@@ -242,6 +243,7 @@ static func release(tree: SceneTree) -> void:
 	SURROUNDINGS._landmark_meshes.clear()
 	FURNITURE._meshes.clear()
 	preload("res://scripts/ui/roadside_props.gd")._meshes.clear()
+	preload("res://scripts/ui/stage_dressing.gd")._spectator_meshes.clear()
 	CAR_VISUAL._shared.clear()
 	WORLD._noise.clear()
 	WORLD._trackside.clear()
