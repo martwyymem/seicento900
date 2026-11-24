@@ -260,12 +260,14 @@ func _check_menu_modes(errors: Array[String], game_script: GDScript) -> void:
 			if game.active_menu_page != "world" or game.open_world == null or not game.open_world.active:
 				errors.append("Menu 'campaign' should open the open world, got '%s'" % game.active_menu_page)
 			else:
-				# the stages and, beside them, the campaign missions (Missions), each once
+				# the stages at home and one Away Races gate for those abroad (CampaignObjective.AWAY) and, beside them, the
+				# campaign missions (Missions), each once
 				var n_missions: int = game.open_world.events.filter(func(e: Dictionary) -> bool: return e.has("mission")).size()
 				var n_live: int = game.open_world.events.filter(func(e: Dictionary) -> bool: return e.has("live")).size() # LiveEvents come and go
-				if game.open_world.events.size() - n_missions - n_live != CampaignData.STAGES.size() or n_missions != Missions.MISSIONS.size():
-					errors.append("The open world shows %d stage and %d mission beacons for %d stages and %d missions" % [
-						game.open_world.events.size() - n_missions, n_missions, CampaignData.STAGES.size(), Missions.MISSIONS.size()])
+				var n_stages: int = CampaignData.STAGES.filter(func(st: Dictionary) -> bool: return not CampaignObjective.is_away(String(st.track))).size() + 1
+				if game.open_world.events.size() - n_missions - n_live != n_stages or n_missions != Missions.MISSIONS.size():
+					errors.append("The open world shows %d stage and %d mission beacons for %d stages and gate and %d missions" % [
+						game.open_world.events.size() - n_missions - n_live, n_missions, n_stages, Missions.MISSIONS.size()])
 			if game.open_world:
 				game.open_world.suspend()
 			game._on_world_leave("stages")

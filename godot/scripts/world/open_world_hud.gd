@@ -33,6 +33,7 @@ const SPEEDO_RIGHT := 24.0 ## legacy reference constant
 const SPEEDO_BOTTOM := 14.0 ## legacy reference constant
 const BANNERS_W := 500.0
 const CARD_W := 480.0
+const OBJECTIVE_W := 440.0 ## the campaign objective panel, top left (set_objective)
 const TOWER_W := 316.0 ## the race timing list, top right (set_standings)
 const TOWER_ROW := 29.0
 const TOWER_HEADER := 52.0 ## Unbound-style big P1/8 position readout above the rows
@@ -111,6 +112,12 @@ var tower: Control ## a race's running order on the map (StreetRivals.standings)
 var _standings: Array = []
 var _standings_color := Color.WHITE
 var stats_box: VBoxContainer
+var objective_plate: Panel ## the campaign objective, top left above the fans card and the notices (set_objective)
+var objective_box: VBoxContainer
+var objective_head: Label
+var objective_line: Label
+var objective_side: Label
+var _objective_on := true ## off while an event runs (show_objective)
 var fans_gain: Label ## "+1 234" beside the count while fans come in
 var drift_meter: DriftMeter ## the drift readout under the top-centre chain (OpenWorld feeds it)
 ## The fans card (top left) hides while you drive and comes in when fans are added: the count ticks up to the new
@@ -238,6 +245,31 @@ func _build() -> void:
 	stats.add_child(roads_label)
 	clock_label = _label("", 14, HudLayout.neon_primary().lightened(0.25), 800, true)
 	stats.add_child(clock_label)
+	# the campaign objective, top left: what to do and where to drive next (OpenWorld._update_objective)
+	objective_plate = Panel.new()
+	objective_plate.name = "ObjectivePlate"
+	objective_plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	objective_plate.add_theme_stylebox_override("panel", _objective_plate_box())
+	objective_plate.visible = false
+	corners_group.add_child(objective_plate)
+	objective_box = VBoxContainer.new()
+	objective_box.name = "Objective"
+	objective_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	objective_box.add_theme_constant_override("separation", 1)
+	objective_box.visible = false
+	corners_group.add_child(objective_box)
+	objective_head = _label("", 13, HudLayout.neon_primary(), 900, true)
+	objective_box.add_child(objective_head)
+	objective_line = _label("", 19, Color.WHITE, 900, true)
+	objective_line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	objective_line.max_lines_visible = 2
+	objective_line.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	objective_box.add_child(objective_line)
+	objective_side = _label("", 14, HudLayout.neon_boost(), 800, true)
+	objective_side.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	objective_side.max_lines_visible = 1
+	objective_side.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	objective_box.add_child(objective_side)
 	# skill chain & live event readout, top centre — dark neon glass pill + bold italic type
 	live_plate = Panel.new()
 	live_plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -335,7 +367,7 @@ func _build() -> void:
 	card.offset_top = _inset.y + 116.0
 	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	corners_group.add_child(card)
-	_corner_panels = [minimap, stats_plate, stats_box, tower, card]
+	_corner_panels = [minimap, stats_plate, stats_box, tower, card, objective_plate, objective_box]
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 6)
 	card.add_child(col)
@@ -377,6 +409,38 @@ func _stats_plate_box() -> StyleBoxFlat:
 	var sb := HudLayout.neon_box(HudLayout.neon_primary(), 0.78, 5, -0.08, 10, 14.0, 8.0)
 	sb.bg_color = HudLayout.glass_plate(0.76)
 	return sb
+
+func _objective_plate_box() -> StyleBoxFlat:
+	var sb := HudLayout.neon_box(HudLayout.neon_boost(), 0.78, 5, -0.08, 10, 14.0, 8.0)
+	sb.bg_color = HudLayout.glass_plate(0.76)
+	return sb
+
+## The campaign objective top left: a caption (head), what to do and where (line, up to two lines) and a smaller second
+## objective (side, one line, "" for none). An empty line hides the panel.
+func set_objective(head: String, line: String, side := "") -> void:
+	if objective_line == null or (objective_head.text == head and objective_line.text == line and objective_side.text == side):
+		return
+	objective_head.text = head
+	objective_line.text = line
+	objective_side.text = side
+	objective_side.visible = side != ""
+	_sync_objective()
+
+## Shows or hides the objective panel without forgetting it (hidden while an event runs: it has its own readout).
+func show_objective(on: bool) -> void:
+	if on == _objective_on:
+		return
+	_objective_on = on
+	_sync_objective()
+
+func objective_shown() -> bool:
+	return objective_box != null and objective_box.visible
+
+func _sync_objective() -> void:
+	var vis := _objective_on and objective_line.text != ""
+	objective_box.visible = vis
+	objective_plate.visible = vis
+	_layout()
 
 func _live_plate_box(accent: Color) -> StyleBoxFlat:
 	var sb := HudLayout.neon_box(accent, 0.76, 5, -0.10, 12, 18.0, 8.0)
@@ -675,13 +739,33 @@ func _layout() -> void:
 	speedo.offset_right = -mx
 	speedo.offset_top = -my - sp_h
 	speedo.offset_bottom = -my
+	# the campaign objective at the very top left; the fans card and the notices go under it while it shows
+	var obj_h := 0.0
+	var obj_w := 0.0
+	var ly := my ## where the left column (fans card, notices) starts
+	if is_instance_valid(objective_box) and objective_box.visible:
+		obj_w = minf(roundf(OBJECTIVE_W * s), maxf(280.0, floorf(W * 0.32)))
+		objective_head.add_theme_font_size_override("font_size", maxi(11, roundi(13.0 * s)))
+		objective_line.add_theme_font_size_override("font_size", maxi(14, roundi(19.0 * s)))
+		objective_side.add_theme_font_size_override("font_size", maxi(11, roundi(14.0 * s)))
+		objective_box.position = Vector2(mx + 14.0, my + 8.0)
+		objective_box.custom_minimum_size.x = obj_w - 28.0
+		objective_box.size = Vector2(obj_w - 28.0, 0.0)
+		var lines := 0.0
+		for l: Label in [objective_head, objective_line, objective_side]:
+			if l.visible and l.text != "":
+				lines += _line_h(l) * (mini(l.get_line_count(), l.max_lines_visible) if l.autowrap_mode != TextServer.AUTOWRAP_OFF else 1)
+		obj_h = maxf(objective_box.get_combined_minimum_size().y, lines) + 16.0
+		objective_plate.position = Vector2(mx, my)
+		objective_plate.size = Vector2(obj_w, obj_h)
+		ly += obj_h + 10.0
 	# top-left stats box & slanted neon plate behind it
-	stats_box.position = Vector2(mx + 14.0, my + 8.0)
+	stats_box.position = Vector2(mx + 14.0, ly + 8.0)
 	var stats_min := stats_box.get_combined_minimum_size()
 	var stats_w := maxf(240.0 * s, stats_min.x)
 	var stats_h := maxf(104.0 * s, stats_min.y)
 	if is_instance_valid(stats_plate):
-		stats_plate.position = Vector2(mx, my)
+		stats_plate.position = Vector2(mx, ly)
 		stats_plate.size = Vector2(stats_w + 26.0, stats_h + 16.0)
 	# hidden while driving (see FANS_SHOW): it slides in from the left as it fades up
 	var card_ease := _card_a * _card_a * (3.0 - 2.0 * _card_a)
@@ -703,7 +787,7 @@ func _layout() -> void:
 	var bw := minf(roundf(BANNERS_W * s), maxf(300.0, floorf(W * 0.34)))
 	var cw := minf(roundf(CARD_W * s), maxf(320.0, floorf(W * 0.34)))
 	# the notices sit under the fans card while it shows and move up into its place when it goes
-	banners.position = Vector2(mx, lerpf(my, my + stats_h + 28.0, card_ease))
+	banners.position = Vector2(mx, lerpf(ly, ly + stats_h + 28.0, card_ease))
 	banners.custom_minimum_size.x = bw
 	banners.size = Vector2(bw, 0.0) # height back to what the stack needs (a Control only grows on its own)
 	card.offset_left = -mx - cw
@@ -727,7 +811,7 @@ func _layout() -> void:
 	street_plate.visible = _street != ""
 	# top-centre skill chain & live event readout between stats and right column
 	var right_top_w := tw if tower.visible else (cw if card.visible else 0.0)
-	var chain_half := clampf(minf(cx - (mx + stats_w + 38.0), (W - mx - right_top_w - 16.0) - cx), 150.0, 320.0)
+	var chain_half := clampf(minf(cx - (mx + maxf(stats_w, obj_w) + 38.0), (W - mx - right_top_w - 16.0) - cx), 150.0, 320.0)
 	chain_box.offset_left = -chain_half
 	chain_box.offset_right = chain_half
 	# below the rear-view mirror when it shows (it sits top centre, RearMirror.screen_bottom)
@@ -1028,6 +1112,10 @@ func _skin_changed() -> void:
 	_fit_pause_skew()
 	if is_instance_valid(stats_plate):
 		stats_plate.add_theme_stylebox_override("panel", _stats_plate_box())
+	if is_instance_valid(objective_plate):
+		objective_plate.add_theme_stylebox_override("panel", _objective_plate_box())
+		objective_head.add_theme_color_override("font_color", HudLayout.neon_primary())
+		objective_side.add_theme_color_override("font_color", HudLayout.neon_boost())
 	if is_instance_valid(live_plate):
 		live_plate.add_theme_stylebox_override("panel", _live_plate_box(_live_color if live_title.visible else HudLayout.neon_primary()))
 	street_plate.add_theme_stylebox_override("panel", _street_plate_box())

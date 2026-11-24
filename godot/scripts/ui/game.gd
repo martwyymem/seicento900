@@ -2318,6 +2318,12 @@ func _dev_campaign_entries(add: Callable) -> void:
 	add.call("CAMPAIGN", "Open every stage and mission (the whole chain open up to the last stage)", func() -> void:
 		var prog := Campaign.load_progress()
 		prog["unlocked"] = maxi(int(prog.get("unlocked", 0)), Campaign.STAGES.size() - 1)
+		var all: Dictionary = prog.get("missions", {}) if prog.get("missions", {}) is Dictionary else {}
+		for m in Missions.MISSIONS: # past the live-event medal gate too
+			var p: Dictionary = (all.get(String(m.id), {}) as Dictionary).duplicate() if all.get(String(m.id), {}) is Dictionary else {}
+			p["open"] = true
+			all[String(m.id)] = p
+		prog["missions"] = all
 		Campaign.save_progress(prog)
 		_dev_refresh_world())
 	for key in CarCatalog.KEYS:
@@ -5162,6 +5168,27 @@ func _show_results() -> void:
 				next_label = "NEXT: %s QUALIFYING ▸" % next_name.to_upper()
 			primary = _button(next_label, ACCENT)
 			primary.pressed.connect(_start_race)
+	elif is_campaign_mode and OpenWorld.available():
+		# the campaign lives in the open world: the way on is back to Brzeszcze and the drive to the next beacon
+		for spec in campaign_result_actions(campaign_cleared, campaign_stage_index >= CampaignData.STAGES.size() - 1, true):
+			var btn := _button(String(spec[0]), ACCENT if primary == null else CmrStyle.FIELD)
+			match String(spec[1]):
+				"world":
+					btn.pressed.connect(func() -> void:
+						if world_return < 0:
+							world_return = campaign_stage_index # a stage started from the stage list: back at its beacon
+						_return_to_setup())
+				"retry":
+					btn.pressed.connect(_start_race)
+				"menu":
+					btn.pressed.connect(func() -> void:
+						world_return = -1 # the stage list, not the map
+						_return_to_setup())
+			if primary == null:
+				primary = btn
+			else:
+				btn.custom_minimum_size.y = 44
+				buttons.add_child(btn)
 	elif is_campaign_mode:
 		if campaign_cleared and campaign_stage_index < CampaignData.STAGES.size() - 1 and CampaignData.is_unlocked(campaign_stage_index + 1, _fan_total()):
 			primary = _button("NEXT STAGE ▸", ACCENT)
@@ -5188,13 +5215,25 @@ func _show_results() -> void:
 		primary.pressed.connect(_go_to_service)
 	primary.custom_minimum_size.y = 44
 	buttons.add_child(primary)
-	var back := _button("BACK TO MENU", CmrStyle.FIELD)
-	back.custom_minimum_size.y = 44
-	back.pressed.connect(_return_to_setup)
-	buttons.add_child(back)
+	buttons.move_child(primary, 0)
+	if not (is_campaign_mode and OpenWorld.available() and not service_next):
+		var back := _button("BACK TO MENU", CmrStyle.FIELD)
+		back.custom_minimum_size.y = 44
+		back.pressed.connect(_return_to_setup)
+		buttons.add_child(back)
 	col.add_child(buttons)
 	primary.grab_focus()
 	_fit_result_panel(col)
+
+## A campaign stage's results buttons, in order (the first is the primary): [label, action] with action "world" (back
+## to Brzeszcze: the open world, at the stage's beacon, where the objective panel says where to drive next), "retry"
+## (the same stage again) or "menu" (the stage list). There is no NEXT STAGE: the next stage starts from its beacon on
+## the map (user, 2026-11-24). world: the open world is there (OpenWorld.available); without it the old flow stands.
+static func campaign_result_actions(cleared: bool, last: bool, world: bool) -> Array:
+	if not world:
+		return []
+	var again := "RETRY STAGE" if not cleared else ("RACE THE FINALE AGAIN" if last else "RACE AGAIN")
+	return [["BACK TO BRZESZCZE ▸", "world"], [again, "retry"], ["STAGE LIST", "menu"]]
 
 ## This round's saved qualifying ({round, grid, pos, rows, simulated}), or {} when it hasn't been run.
 func _round_quali() -> Dictionary:

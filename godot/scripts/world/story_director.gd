@@ -35,6 +35,10 @@ static func brief_text(index: int, body: String) -> String:
 func _fans() -> int:
 	return int(ow.progress.fans) if ow and ow.progress else 0
 
+## The live-event medal points held (this world's copy of WorldProgress.live: newer than the save between writes).
+func _points() -> int:
+	return Missions.medal_points(ow.progress.live) if ow and ow.progress else -1
+
 func _process(delta: float) -> void:
 	if ow == null:
 		return
@@ -42,7 +46,7 @@ func _process(delta: float) -> void:
 		if card.is_open():
 			card.play([]) # dropped quietly: the race or menu took over
 		return
-	if not ow.built or ow.paused or ow.hud.map_open or card.is_open() or ow.drive == null:
+	if not ow.built or ow.paused or ow.hud.map_open or card.is_open() or ow.drive == null or ow.cutscene != null:
 		return
 	_t -= delta
 	if _t > 0.0:
@@ -60,7 +64,7 @@ func _process(delta: float) -> void:
 	var fest = ow.map.spots.get("festival", []) if ow.map else []
 	if fest is Array and (fest as Array).size() >= 2:
 		near = Vector2(float(fest[0]), float(fest[1])).distance_to(Vector2(ow.drive.car.x, ow.drive.car.y)) < FEST_REACH
-	var keys := Story.pending(prog, fans, near)
+	var keys := Story.pending(prog, fans, near, _points())
 	if Story.needs_catch_up(prog):
 		Story.mark_seen(keys)
 		ow.hud.notify("STORY", "Catch up on the story so far: pause ▸ STORY", Color(Story.NARRATOR_COLOR))

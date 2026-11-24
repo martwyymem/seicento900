@@ -87,7 +87,8 @@ const SUITES := [
 	"res://tests/test_save_safety.gd",
 	"res://tests/test_campaign_arcade.gd",
 	"res://tests/test_campaign_ladder.gd",
-	"res://tests/test_stage_dressing.gd"
+	"res://tests/test_stage_dressing.gd",
+	"res://tests/test_campaign_world.gd"
 ]
 
 const SURROUNDINGS := preload("res://scripts/ui/surroundings.gd")
