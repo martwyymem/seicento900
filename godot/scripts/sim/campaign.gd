@@ -307,7 +307,7 @@ const ARC1_MISSION_AFTER := {"drag_quarter": 0, "sprint_s1": 1, "drift_babudy": 
 	"rally_bor": 5, "drag_kilometre": 7}
 
 static func empty_progress() -> Dictionary:
-	return {"unlocked": 0, "best_pos": {}, "trophies": [], "arc": ARC}
+	return {"unlocked": 0, "best_pos": {}, "trophies": [], "arc": ARC, "gate": GATE}
 
 static func load_progress() -> Dictionary:
 	var path := SaveData.read_path(save_file)
@@ -315,16 +315,16 @@ static func load_progress() -> Dictionary:
 		return empty_progress()
 	var json = SaveData.read_json(path)
 	if json is Dictionary:
-		return migrate(clean_progress(json))
+		return migrate_gate(migrate(clean_progress(json)))
 	return empty_progress()
 
 ## A loaded save with every field the game reads as the type it expects (a damaged or hand-edited file may hold
 ## anything under a key): a field of the wrong kind is dropped (or reset for the stage counters) so its default applies.
 static func clean_progress(json: Dictionary) -> Dictionary:
 	var out := json.duplicate()
-	for k: String in ["unlocked", "arc"]:
+	for k: String in ["unlocked", "arc", "gate"]:
 		if out.has(k):
-			out[k] = SaveData.to_int(out[k], 0 if k == "unlocked" else 1)
+			out[k] = SaveData.to_int(out[k], 1 if k == "arc" else 0)
 	for k: String in ["best_pos", "fails", "missions", "car", "story"]:
 		if out.has(k) and not (out[k] is Dictionary):
 			out.erase(k)
@@ -389,6 +389,32 @@ static func migrate(prog: Dictionary) -> Dictionary:
 	if not (all as Dictionary).is_empty():
 		out["missions"] = all
 	out["arc"] = ARC
+	return out
+
+## The live-event medal gate on the missions (Missions.MEDALS_NEEDED): 1 in every save written since it came in.
+const GATE := 1
+
+## A save from before the medal gate (no "gate" key): every mission its stages had already opened is kept open (its
+## "open" flag, as migrate does for an older arc), so nobody is locked out of a mission they had reached; from then on
+## the save carries "gate" and the missions after those wait for their medals. Saved back the next time the campaign
+## writes the file. A save that has the key comes back as it is.
+static func migrate_gate(prog: Dictionary) -> Dictionary:
+	if prog.has("gate"):
+		return prog
+	var out := prog.duplicate(true)
+	var all = out.get("missions", {})
+	if not all is Dictionary:
+		all = {}
+	for k in Missions.MISSIONS.size():
+		var idx := Missions.BASE + k
+		if Missions.stage_reached(idx, out):
+			var id := String(Missions.MISSIONS[k].id)
+			var p: Dictionary = (all.get(id, {}) as Dictionary).duplicate() if all.get(id, {}) is Dictionary else {}
+			p["open"] = true
+			all[id] = p
+	if not (all as Dictionary).is_empty():
+		out["missions"] = all
+	out["gate"] = GATE
 	return out
 
 ## Where a first-arc stage index is in STAGES now (-1 for none).

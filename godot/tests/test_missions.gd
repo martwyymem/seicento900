@@ -221,7 +221,7 @@ func _arc(errors: Array[String]) -> void:
 			moved = true
 		for k in Missions.MISSIONS.size():
 			var idx := Missions.BASE + k
-			if Missions.is_unlocked(idx) and not Missions.is_cleared(idx):
+			if Missions.is_unlocked(idx, {}, 999) and not Missions.is_cleared(idx): # (the live-event medals: tests/test_campaign_world.gd)
 				Missions.record(idx, {"pos": 1, "success": true, "tier": 3, "score": 99999, "time": 30.0})
 				moved = true
 		if not moved:
