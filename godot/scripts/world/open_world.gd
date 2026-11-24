@@ -2,8 +2,10 @@
 ## freely in the Seicento between the campaign's events, Forza Horizon style. Each campaign stage is a beacon
 ## where it really starts (the Bór stage on ul. Bór, the industrial sprint by Szyb Andrzej on Dworcowa) or on
 ## the road out of town towards its venue (Pszczyna west on the DW933, Oświęcim east, Bielsko-Biała south,
-## Wilamowice down the S1, Tychy's Fiat test track up it, Kraków by train from the station, Tokyo from the
-## festival). Pull into a beacon and press Enter to race the stage; the results bring you back to the same spot.
+## Wilamowice down the S1, Tychy's Fiat test track up it, Kraków by train from the station; the stages abroad, Monza,
+## the Nordschleife, Le Mans and Tokyo, from one Away Races gate by the Fest, through a short trip by train or plane,
+## AwayCutscene). Pull into a beacon and press Enter to race the stage; the results bring you back to the same spot,
+## and the objective panel top left (CampaignObjective) says what to do next and puts the GPS on it.
 ## Between events: traffic, speed traps, landmarks to discover, every road to drive, a skill chain (drifts,
 ## jumps off the embankments, near misses, speed) that earns fans, and a day that turns to night.
 class_name OpenWorld
@@ -22,12 +24,13 @@ const WORLD := preload("res://scripts/ui/race_world.gd")
 const STAGE_SPOTS := {"wilamowice": "exit_wilamowice", "brzeszcze": "industrial_sprint", "bor": "bor_stage",
 	"pszczyna": "exit_pszczyna", "bielsko": "exit_bielsko", "oswiecim": "exit_oswiecim", "krakow": "station",
 	"fiat": "exit_tychy", "tokyo": "festival", "goliath": "festival", "monza": "exit_tychy", "nordschleife": "station",
-	"lemans": "festival"} ## a stage's own "note" says where a shared spot takes it (Campaign.STAGES)
+	"lemans": "festival"} ## a stage's own "note" says where a shared spot takes it (Campaign.STAGES); the stages abroad
+	## (CampaignObjective.AWAY: Monza, the Nordschleife, Le Mans, Tokyo) start from the one Away Races gate on the Fest's road
 const SPOT_NOTE := {"exit_wilamowice": "South on the S1 towards Wilamowice", "industrial_sprint": "ul. Dworcowa by KWK Brzeszcze",
 	"bor_stage": "ul. Bór, Brzeszcze-Bór", "exit_pszczyna": "West on the DW933 to Pszczyna",
 	"exit_bielsko": "South on ul. Bielska to Bielsko-Biała", "exit_oswiecim": "East on the DW933 to Oświęcim",
 	"station": "Brzeszcze Jawiszowice station: the train to Kraków", "exit_tychy": "North on the S1 to Tychy",
-	"festival": "Seicento Fest at the KS Górnik stadium: the flight to Tokyo"}
+	"festival": "Seicento Fest at the KS Górnik stadium"}
 const DISCOVER_KINDS := ["mineshaft", "church", "stadium", "station", "museum", "cinema", "monument", "water_tower", "chimney"]
 const AREA_KINDS := ["place_town", "place_village", "place_neighbourhood", "place_hamlet", "place_suburb"]
 const DAY_RATE := 1.0 / 80.0 ## game hours per real second: a day in 32 minutes
@@ -124,6 +127,7 @@ const LAMP_POOL_GLOW := 0.7 ## emission at the middle of a lamp's pool on the gr
 
 var events: Array = [] ## [{stage, spot, pos: Vector2, heading, title, ...}]; a live event has "live": its id
 var live: LiveEvents ## the generated events round the car (scripts/world/live_events.gd)
+var event_dressing: EventDressing ## the driven event's start gantry and spectators, only while it runs (scripts/world/event_dressing.gd)
 var _crashed_frame := false
 var _rival_nodes: Array[Node3D] = [] ## the field of a mission raced on the map (StreetRivals), drawn
 const RIVAL_PAINTS := ["#1565c0", "#f9a825", "#2e7d32", "#6a1b9a", "#ef6c00", "#00838f", "#ad1457", "#4e342e", "#eceff1"]
@@ -138,6 +142,10 @@ var _reset_armed := false ## RESET CAMPAIGN was pressed once and waits for its c
 var _saved_hour := -1.0 ## the clock before a mission set its own hour (put back when the run ends), -1 none
 var _saved_weather := {} ## the weather before a mission set its own (weather_state(), put back when the run ends), {} none
 var _result := {} ## the results card after an event: {pos (where the car finished), mission (index) or live (event)}
+var cutscene: AwayCutscene ## the trip to a stage abroad playing (from the Away Races gate), null otherwise
+var _away_index := -1 ## the stage that trip leads to
+var _fade: ColorRect ## black over everything while a trip fades in and out
+var objective := {} ## CampaignObjective.current: what the panel top left says and where the GPS goes
 var _gate_nodes: Array[Node3D] = [] ## the posts of the next checkpoint gate and, dimmer, the one after
 const RESULT_LEAVE := 30.0 ## m the car drives on from the finish before the results card goes (CONTINUE)
 var route := PackedVector2Array()
@@ -243,13 +251,20 @@ func open(spawn = "", opts := {}) -> void:
 		drive.no_damage = no_damage
 	if surface_fx:
 		surface_fx.reset_car_bus()
+	if _fade:
+		_fade.visible = false # (a trip abroad left it black over the stage's loading)
 	_refresh_events()
+	if not gps_waypoint:
+		gps_target = _next_open_event() # back from a stage: the GPS on what the campaign asks next
 	_t_log("graphics and events", t)
 	t = Time.get_ticks_msec()
 	_spawn(spawn)
 	_t_log("spawn", t)
 	t = Time.get_ticks_msec()
 	_live_open()
+	if not gps_waypoint and gps_target < 0 and _objective_event() >= 0:
+		gps_target = _objective_event() # the medals and fans objectives point at a live event: the board is up now
+		_recompute_route()
 	_t_log("live-event board", t)
 	t = Time.get_ticks_msec()
 	if not CarCatalog.unlocked(CarCatalog.key_at(progress.car_class), progress.fans):
@@ -268,6 +283,7 @@ func open(spawn = "", opts := {}) -> void:
 func suspend() -> void:
 	if not active:
 		return
+	_end_cutscene(_fade != null and _fade.visible)
 	_save()
 	active = false
 	if live and live.is_running():
@@ -814,6 +830,8 @@ func _refresh_events() -> void:
 	var trophies: Array = prog.get("trophies", [])
 	for i in Campaign.STAGES.size():
 		var st: Dictionary = Campaign.get_stage(i)
+		if CampaignObjective.is_away(String(st.track)):
+			continue # one Away Races gate for all of them (_add_away_event)
 		var spot_name: String = STAGE_SPOTS.get(st.track, String(st.track) if is_sprint_spot(st) else "festival")
 		var spot: Array = stage_spot(map, st)
 		if spot.is_empty():
@@ -833,10 +851,84 @@ func _refresh_events() -> void:
 		if open_:
 			var label := "%s%s" % ["★ " if done else "", String(st.title).to_upper()]
 			builder.add_beacon("stage_%d" % i, pos, colour, label)
+	_add_away_event(prog)
 	_add_mission_events(prog)
 	_add_live_events()
 	_live_cp_beacon()
+	_update_objective(prog)
 	_update_markers()
+
+## The stages abroad (CampaignObjective.AWAY) share one gate on the Fest's road, a little along from the Fest's own
+## beacon: its event's stage is the one it holds (CampaignObjective.away_stage), "away" marks it. Entering it plays the
+## trip there (AwayCutscene) before the stage loads.
+func _add_away_event(prog: Dictionary) -> void:
+	var pose := away_pose()
+	if pose.is_empty():
+		return
+	var i := CampaignObjective.away_stage(prog, progress.fans)
+	var open_ := i >= 0
+	if i < 0:
+		i = CampaignObjective.first_away()
+	if i < 0:
+		return
+	var st: Dictionary = Campaign.get_stage(i)
+	var done: bool = st.trophy in (prog.get("trophies", []) as Array)
+	var colour := OpenWorldHud.GOLD if done else (OpenWorldHud.ORANGE if open_ else Color(0.5, 0.5, 0.55))
+	var pos := Vector2(pose[0], pose[1])
+	events.append({"stage": i, "away": true, "spot": CampaignObjective.AWAY_SPOT, "pos": pos, "heading": float(pose[2]),
+		"done": done, "open": open_, "color": colour, "title": String(st.title), "act": String(st.act_name)})
+	if open_:
+		builder.add_beacon("away", pos, colour, "%s · %s" % [CampaignObjective.AWAY_TITLE.to_upper(),
+			Track.load_def(String(st.track)).display_name.to_upper()])
+
+## Where the Away Races gate stands: [x, y, heading] on the road nearest AWAY_ALONG m on from the Fest's spot; [] when
+## the map has no Fest spot.
+func away_pose() -> Array:
+	var spot: Array = map.spots.get(CampaignObjective.AWAY_SPOT, [])
+	if spot.size() < 3:
+		return []
+	var h := float(spot[2])
+	var p := Vector2(spot[0], spot[1]) + Vector2.from_angle(h) * CampaignObjective.AWAY_ALONG
+	var near := map.nearest_road(p, 60.0)
+	if not near.is_empty():
+		p = near.pos
+		var d: Vector2 = near.dir
+		h = d.angle() if d.dot(Vector2.from_angle(h)) >= 0.0 else (-d).angle()
+	return [p.x, p.y, h]
+
+## The objective panel (top left) and, through _next_open_event, the GPS: what the campaign asks next.
+func _update_objective(prog: Dictionary = {}) -> void:
+	if prog.is_empty():
+		prog = Campaign.load_progress()
+	objective = CampaignObjective.current(prog, progress.fans, Missions.medal_points(progress.live))
+	if hud:
+		hud.set_objective(String(objective.head), String(objective.line), String(objective.side))
+
+## The event the objective points at: its stage's beacon (the Away Races gate for one abroad), its mission's, or for
+## medals and fans the nearest live event; -1 for none.
+func _objective_event() -> int:
+	var kind := String(objective.get("kind", ""))
+	var idx := int(objective.get("index", -1))
+	if kind == "stage" or kind == "mission":
+		for k in events.size():
+			if not events[k].has("live") and int(events[k].stage) == idx and events[k].open:
+				return k
+		return -1
+	if kind == "medals" or kind == "fans":
+		var best := -1
+		var best_d := INF
+		var cp := Vector2(drive.car.x, drive.car.y) if drive else Vector2.ZERO
+		for k in events.size():
+			if events[k].has("live"):
+				var d := (events[k].pos as Vector2).distance_to(cp)
+				var lev: Dictionary = live.find(String(events[k].live)) if live else {}
+				if int(lev.get("best_tier", 0)) > 0:
+					d += 1.0e6 # one already won comes after every one still to win
+				if d < best_d:
+					best_d = d
+					best = k
+		return best
+	return -1
 
 func _update_markers() -> void:
 	var list := []
@@ -848,7 +940,12 @@ func _update_markers() -> void:
 			list.append(_live_marker(e))
 			continue
 		var st: Dictionary = Campaign.get_stage(e.stage)
-		var info := "%s · %s · %s" % [e.title, String(st.get("note", SPOT_NOTE.get(e.spot, ""))), "Done" if e.done else ("Open" if e.open else "Locked")]
+		var state := "Done" if e.done else ("Open" if e.open else "Locked")
+		if e.has("away"):
+			list.append({"pos": e.pos, "color": e.color, "label": "%s · %s" % [CampaignObjective.AWAY_TITLE, String(st.track).capitalize()],
+				"info": "%s · %s · %s" % [e.title, CampaignObjective.upper_first(String(CampaignObjective.travel(int(e.stage)).get("line", ""))), state]})
+			continue
+		var info := "%s · %s · %s" % [e.title, String(st.get("note", SPOT_NOTE.get(e.spot, ""))), state]
 		list.append({"pos": e.pos, "color": e.color, "label": "%d. %s" % [e.stage + 1, String(st.track).capitalize()], "info": info})
 	if wp_on and wp_poi == "":
 		list.append({"pos": wp_pos, "color": OpenWorldHud.PURPLE, "label": "WAYPOINT", "kind": "waypoint", "info": "Your waypoint"})
@@ -860,6 +957,7 @@ func _update_markers() -> void:
 ## The campaign missions (Missions) as beacons of their own colour at the places they start, once open; their
 ## events carry stage = Missions.BASE + k, so the route, spawn and start code takes them like stages.
 func _add_mission_events(prog: Dictionary) -> void:
+	var points := Missions.medal_points(progress.live)
 	for k in Missions.MISSIONS.size():
 		var idx := Missions.BASE + k
 		# where the mission starts on the map (MapMissions: the knockout and the rally start off the old Bór circuit)
@@ -869,7 +967,8 @@ func _add_mission_events(prog: Dictionary) -> void:
 		var pose := [mev.pos.x, mev.pos.y, float(mev.heading)]
 		if pose.is_empty() or not map.in_play(Vector2(pose[0], pose[1])):
 			continue
-		var open_ := Missions.is_unlocked(idx, prog)
+		var open_ := Missions.is_unlocked(idx, prog, points)
+		var medals := Missions.medal_locked(idx, prog, points) # its stage is won, its live-event medals are missing
 		var done := Missions.is_cleared(idx, prog)
 		var m: Dictionary = Missions.MISSIONS[k]
 		var pos := Vector2(pose[0], pose[1])
@@ -880,13 +979,19 @@ func _add_mission_events(prog: Dictionary) -> void:
 		var title := "%s: %s" % [String(Missions.KIND_NAMES[m.kind]).capitalize(), m.title]
 		# heading points back along the road, as a stage spot's does: the car comes back facing on down the route
 		events.append({"stage": idx, "mission": k, "spot": "", "pos": pos, "heading": float(pose[2]) + PI, "done": done,
-			"open": open_, "color": colour, "title": title, "act": Missions.ACT_NAMES[clampi(int(m.act) - 1, 0, 2)]})
+			"open": open_, "medals": medals, "color": colour, "title": title, "act": Missions.ACT_NAMES[clampi(int(m.act) - 1, 0, 2)]})
 		if open_:
 			builder.add_beacon("mission_%d" % k, pos, colour, "%s%s" % ["★ " if done else "", title.to_upper()])
+		elif medals: # shown, greyed, with what it waits for: the card says how many medals
+			builder.add_beacon("mission_%d" % k, pos, colour, "MEDALS %d/%d · %s" % [mini(points, Missions.medals_needed(idx)),
+				Missions.medals_needed(idx), title.to_upper()])
 
 func _mission_marker(e: Dictionary) -> Dictionary:
 	var m: Dictionary = Missions.MISSIONS[int(e.mission)]
-	var info := "%s · %s · %s" % [e.title, Missions.target_text(int(e.stage)), "Done" if e.done else ("Open" if e.open else "Locked")]
+	var state := "Done" if e.done else ("Open" if e.open else "Locked")
+	if bool(e.get("medals", false)):
+		state = "Locked: %s" % Missions.medal_text(int(e.stage), Missions.medal_points(progress.live)).to_lower()
+	var info := "%s · %s · %s" % [e.title, Missions.target_text(int(e.stage)), state]
 	return {"pos": e.pos, "color": e.color, "label": "%s · %s" % [Missions.KIND_NAMES[m.kind], m.title], "info": info, "kind": "mission"}
 
 # ------------------------------------------------------------------------------------------ live events
@@ -1042,6 +1147,8 @@ func _end_run(title := "", sub := "") -> void:
 ## The world after a run, however it ended: no checkpoint beacon, gates, rivals or event HUD; the clock a mission
 ## moved put back; the GPS back on the next campaign target (traffic returns by itself once the roads reopen).
 func _after_run() -> void:
+	if event_dressing:
+		event_dressing.clear()
 	_live_cp_beacon()
 	_event_beacons(true)
 	if hud:
@@ -1168,6 +1275,7 @@ func _update_live(delta: float) -> void:
 	if live == null:
 		return
 	live.set_world(live_world())
+	_event_dressing_tick(delta)
 	var cp := Vector2(drive.car.x, drive.car.y)
 	if live.is_running():
 		var car := drive.car
@@ -1219,6 +1327,19 @@ func _update_live(delta: float) -> void:
 	if _live_ids() != before:
 		_live_sync()
 
+## The driven event's start gantry and spectators (EventDressing): built on the frame a run begins, lit with its countdown,
+## freed when it ends or is abandoned (_after_run).
+func _event_dressing_tick(delta: float) -> void:
+	if world == null or map == null or builder == null:
+		return
+	if event_dressing == null:
+		if not live.is_running():
+			return
+		event_dressing = EventDressing.new(map, builder)
+		world.add_child(event_dressing)
+	var pos := car_visual.position if car_visual else Vector3(drive.car.x, drive.z, drive.car.y)
+	event_dressing.update(live, delta * _time_rate, pos, Vector3(drive.car.vx, drive.vz, drive.car.vy))
+
 func _live_ids() -> String:
 	var ids := PackedStringArray()
 	for lev in live.board:
@@ -1236,8 +1357,11 @@ func _live_finished() -> void:
 	var rec := live.settle(res)
 	var tier := int(rec.tier)
 	var name := LiveEvents.kind_name(lev)
+	var prog := Campaign.load_progress()
+	var points_before := Missions.medal_points(progress.live)
 	progress.record_live(LiveEvents.stat_kind(lev), tier)
 	_after_run()
+	_medals_opened(prog, points_before)
 	var target := live.target_text(lev, CarCatalog.key_at(progress.car_class))
 	if bool(rec.success):
 		hud.notify("%s · LIVE %s CLEARED" % [LiveEvents.TIER_NAMES[tier], name], String(rec.line), LiveEvents.TIER_COLORS[tier])
@@ -1449,6 +1573,25 @@ func _update_rivals(delta: float) -> void:
 			var side := signf(Vector2(-dir.y, dir.x).dot(p - me))
 			rv.knock(k, 0.5 * (side if side != 0.0 else 1.0), clampf(rel.length() * 0.3, 0.0, 6.0))
 
+## After a live-event medal: a mission whose medals are now all there opens (its beacon lights, a banner says so), and
+## the objective panel counts the medal either way.
+func _medals_opened(prog: Dictionary, points_before: int) -> void:
+	var points := Missions.medal_points(progress.live)
+	var opened: Array[int] = []
+	for idx in Missions.play_order():
+		if Missions.medal_locked(idx, prog, points_before) and Missions.is_unlocked(idx, prog, points):
+			opened.append(idx)
+	if opened.is_empty():
+		_update_objective(prog)
+		return
+	_refresh_events()
+	for idx in opened:
+		hud.notify("MISSION OPEN · %s" % String(Missions.get_def(idx).title).to_upper(), "%d live-event medal points: drive to its beacon" % points,
+			Missions.COLOR)
+	if not gps_waypoint:
+		gps_target = _next_open_event()
+		_recompute_route()
+
 ## A mission run over: recorded in the campaign save like a raced one (Missions.record), its result as banners,
 ## the beacons recoloured, the traffic back.
 func _mission_finished(res: Dictionary) -> void:
@@ -1513,6 +1656,9 @@ func _check_waypoint_reached() -> void:
 ## The first open stage that isn't cleared yet (the unlock cap stays on the last stage once the campaign is
 ## finished, so "unlocked" alone would point at stage 9 for ever); -1 when everything is done.
 func _next_open_event() -> int:
+	var at := _objective_event()
+	if at >= 0:
+		return at
 	for k in events.size():
 		if not events[k].has("live") and events[k].open and not events[k].done:
 			return k
@@ -1524,13 +1670,14 @@ func _spawn(spawn) -> void:
 	var roll := 0.0
 	var found := false
 	if spawn is int:
-		for e in events:
-			if e.stage == spawn:
-				# back at the beacon, rolled a little on (clear of its trigger), facing on towards the next target
-				h = e.heading + PI
-				p = e.pos
-				roll = SPAWN_ROLL
-				found = true
+		var at := spawn_event(spawn)
+		if at >= 0:
+			# back at the beacon, rolled a little on (clear of its trigger), facing on towards the next target
+			var e: Dictionary = events[at]
+			h = e.heading + PI
+			p = e.pos
+			roll = SPAWN_ROLL
+			found = true
 	elif spawn is String and spawn != "" and map.spots.has(spawn):
 		var s: Array = map.spots[spawn]
 		p = Vector2(s[0], s[1])
@@ -1554,6 +1701,16 @@ func _spawn(spawn) -> void:
 	snap_camera()
 	_apply_time()
 	_recompute_route()
+
+## The event a car coming back from a stage is put back at: the stage's beacon, or the Away Races gate for a stage
+## abroad (whichever stage the gate holds now); -1 for none.
+func spawn_event(stage: int) -> int:
+	var found := -1
+	for k in events.size():
+		var e: Dictionary = events[k]
+		if not e.has("live") and (int(e.stage) == stage or (e.has("away") and CampaignObjective.stage_is_away(stage))):
+			found = k
+	return found
 
 ## Puts the car at rest in first gear on the road nearest p (its right-hand lane), facing along that road: the way the
 ## GPS route to `to` sets off when there is one, else the way h points (a stage spot's road, the saved heading), and
@@ -1677,17 +1834,26 @@ func _check_events() -> void:
 			hud.show_event(String(c[0]), String(c[1]), String(c[2]), String(c[3]), ev.color)
 		return
 	if ev.has("mission"):
-		var c := Missions.card(int(ev.stage), FanLevels.level(progress.fans))
+		var c := Missions.card(int(ev.stage), FanLevels.level(progress.fans), Missions.medal_points(progress.live))
 		hud.show_event(String(c[0]), String(c[1]), StoryDirector.brief_text(int(ev.stage), String(c[2])), String(c[3]), ev.color)
 		return
 	var st: Dictionary = Campaign.get_stage(ev.stage)
 	var target := "Win the race" if int(st.target_pos) == 1 else "Finish P%d or better" % int(st.target_pos)
-	var body := "%s\n\n%s · %d laps · %s · %d rivals (%s)\nTarget: %s · Trophy: %s\nFan level %d recommended (you are level %d) · up to %s fans on a first clear" % [st.desc, String(st.get("note", SPOT_NOTE.get(ev.spot, ""))),
+	var where := String(st.get("note", SPOT_NOTE.get(ev.spot, "")))
+	if ev.has("away"):
+		where = CampaignObjective.upper_first("%s: %s" % [CampaignObjective.AWAY_NOTE, String(CampaignObjective.travel(int(ev.stage)).line)])
+	var body := "%s\n\n%s · %d laps · %s · %d rivals (%s)\nTarget: %s · Trophy: %s\nFan level %d recommended (you are level %d) · up to %s fans on a first clear" % [st.desc, where,
 		int(st.laps), String(st.weather).capitalize(), int(st.opponents), String(st.difficulty).capitalize(), target, st.trophy,
 		FanLevels.stage_level(int(ev.stage)), FanLevels.level(progress.fans),
 		OpenWorldHud._thousands(FanLevels.stage_reward(int(ev.stage), 1, int(st.target_pos), true))]
 	var hint := "ENTER / B  ▸  START STAGE" if ev.open else "LOCKED · clear the stages before it first"
-	hud.show_event(String(st.act_name).to_upper(), String(st.title), StoryDirector.brief_text(int(ev.stage), body), hint, ev.color)
+	var sub := String(st.act_name).to_upper()
+	if ev.has("away"):
+		sub = "%s · %s" % [CampaignObjective.AWAY_TITLE.to_upper(), sub]
+		if ev.open:
+			hint = "ENTER / B  ▸  %s TO %s" % ["FLY" if String(CampaignObjective.travel(int(ev.stage)).by) == "plane" else "TAKE THE TRAIN",
+				String(CampaignObjective.travel(int(ev.stage)).to).to_upper()]
+	hud.show_event(sub, String(st.title), StoryDirector.brief_text(int(ev.stage), body), hint, ev.color)
 
 func _start_active_event() -> void:
 	if not _result.is_empty():
@@ -1709,7 +1875,75 @@ func _start_active_event() -> void:
 		_begin_mission(int(ev.stage))
 		return
 	_save()
+	if ev.has("away"):
+		_start_away(int(ev.stage))
+		return
 	stage_requested.emit(int(ev.stage))
+
+# ------------------------------------------------------------------------------------------ the trip abroad
+
+## The trip to a stage abroad from the Away Races gate (AwayCutscene: a few seconds, skippable), then the stage.
+func _start_away(index: int) -> void:
+	_end_cutscene()
+	_away_index = index
+	var models := {}
+	if builder:
+		for name in ["TrainCab", "TrainCar"]:
+			if builder.has_model(name):
+				models[name] = builder.models[name]
+	cutscene = AwayCutscene.new()
+	cutscene.name = "AwayTrip"
+	cutscene.setup(String(CampaignObjective.travel(index).get("by", "train")), models, night)
+	if world:
+		world.add_child(cutscene)
+	if hud:
+		hud.hide_event()
+		hud.visible = false
+	if _fade == null:
+		_fade = ColorRect.new()
+		_fade.name = "TripFade"
+		_fade.color = Color.BLACK
+		_fade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_fade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		add_child(_fade)
+	move_child(_fade, get_child_count() - 1)
+	_fade.visible = true
+	_fade.modulate.a = 1.0
+	if audio:
+		audio.update_car(null, false)
+	if surface_fx and car_visual:
+		surface_fx.silence(car_visual)
+	_update_cutscene(0.0)
+
+## A frame of the trip: the car and the camera where it puts them, the fade; at its end, the stage.
+func _update_cutscene(delta: float) -> void:
+	if cutscene == null:
+		return
+	cutscene.step(delta)
+	if is_instance_valid(car_visual):
+		car_visual.global_transform = cutscene.car_xform
+	if camera:
+		camera.global_transform = cutscene.cam_xform
+		camera.fov = HudLayout.camera_fov_for(camera, 52.0)
+	if _fade:
+		_fade.modulate.a = cutscene.fade
+	if cutscene.done:
+		var index := _away_index
+		_end_cutscene(true)
+		stage_requested.emit(index)
+
+## Clears the trip away (finished, skipped into the stage, or the world suspended): the HUD back, the set gone. The
+## black stays up when the stage follows (keep_black), so the loading cover comes in over it.
+func _end_cutscene(keep_black := false) -> void:
+	if cutscene == null:
+		return
+	cutscene.queue_free()
+	cutscene = null
+	_away_index = -1
+	if hud:
+		hud.visible = true
+	if _fade and not keep_black:
+		_fade.visible = false
 
 # ================================================================================================ speed traps, discovery
 
@@ -1983,6 +2217,8 @@ func _add_fans(n: int, banner: String) -> void:
 		hud.notify("FAN LEVEL %d" % after, FanLevels.title(after).to_upper(), OpenWorldHud.GOLD)
 	elif banner != "":
 		hud.notify("+%s FANS" % OpenWorldHud._thousands(n), banner, OpenWorldHud.GOLD)
+	if String(objective.get("kind", "")) == "fans":
+		_update_objective() # its count, or the Goliath opening
 
 # ================================================================================================ GPS
 
@@ -2196,6 +2432,9 @@ func _off_route() -> bool:
 func _process(delta: float) -> void:
 	if not active or not built:
 		return
+	if cutscene:
+		_update_cutscene(delta) # the trip abroad: no driving, no HUD
+		return
 	if paused or hud.map_open:
 		_update_camera(delta)
 		if surface_fx:
@@ -2273,6 +2512,7 @@ func _process(delta: float) -> void:
 		_save()
 	hud.update_drive(drive.speed_kmh(), _gear_shown(), drive.car.rpm, drive.model.spec.limiter, Vector2(drive.car.x, drive.car.y), drive.car.heading, delta, drive.vz)
 	hud.set_stats(progress.fans, progress.roads.size(), map.road_pts.size(), hour, WorldWeather.word(weather_state()))
+	hud.show_objective(not (live and live.is_running()) and _result.is_empty()) # an event and its results card have their own
 	if audio:
 		audio.update_car(drive.car, true, null)
 
@@ -2562,6 +2802,11 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled() # zoom, pan, hop, filters and list (MapNav)
 		return
 	var act := _action_of(event)
+	if cutscene:
+		if act in ["accept", "back", "pause"] or (event is InputEventJoypadButton and event.pressed and event.button_index == JOY_BUTTON_A):
+			cutscene.skip()
+			get_viewport().set_input_as_handled()
+		return
 	if act == "":
 		return
 	get_viewport().set_input_as_handled()

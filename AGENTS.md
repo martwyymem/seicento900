@@ -181,6 +181,16 @@ Streets without kerbs lean across by at most 4% (`TownMap.level_extra`), drawn a
 bridges, not embankments. Building collision is the drawn walls (`TownMap.building_faces`). `test_open_world_roads.gd`
 also drives every mission route and both S1 carriageways flat out.
 
+The campaign lives on the map (user, 2026-11-24): a stage's results offer BACK TO BRZESZCZE (`Game.campaign_result_actions`,
+no NEXT STAGE), the objective panel top left (`OpenWorldHud.set_objective`) shows `CampaignObjective.current` (next stage and
+where its beacon is, else the next mission, else the live-event medals or fans it waits for) and `_next_open_event` puts the
+GPS on it. The stages abroad (`CampaignObjective.AWAY`: Monza, Nordschleife, Le Mans, Tokyo) share one Away Races gate on
+the Fest's road (`OpenWorld.away_pose`); entering it plays `AwayCutscene` (a box-built set 52 km out, beyond the camera's
+far plane: car up a ramp onto an EN57 car-carrier or into a cargo plane, ~6 s, skippable) before the stage loads. Each
+mission also needs live-event medal points (`Missions.MEDALS_NEEDED`, bronze 1 / silver 2 / gold 3, never spent); saves
+from before the gate (no `"gate"` key) keep every mission their stages had opened (`Campaign.migrate_gate`), and a mission
+already raced or won never needs medals. `tests/test_campaign_world.gd` covers it.
+
 Loading screens follow the car: `OpenWorldCover.SHOTS` per car key and `hero_<track>_<car>.jpg` for races, falling back
 to the car's cover stills, then to the stock set; render a new car's stills with `CAR=<key> tests/_cover_shots.gd`. Door
 numbers above 16 are composed from `models/car_door_plates.png` (blank plates + digits, `build_car_decals.py`).

@@ -188,16 +188,18 @@ func run() -> Array:
 	if test_res.trophy != CampaignData.get_stage(0).trophy:
 		errors.append("Expected trophy '%s', got '%s'" % [CampaignData.get_stage(0).trophy, test_res.trophy])
 
-	# a stage that keeps beating the player eases off: one difficulty level per two failed tries, reset on a win
+	# a stage that keeps beating the player eases off: one difficulty level per FAILS_PER_EASE failed tries, reset on
+	# a win. (B2: a stage's field is its difficulty plus its own "pace" in levels, so the check reads the effective
+	# level rather than the authored name: Oświęcim is Medium + 1.0, raced as Hard, eased to Medium.)
 	var ease_idx := 6
-	var base_level: String = CampaignData.STAGES[ease_idx].difficulty
+	var base_lv := float(CampaignData.get_stage(ease_idx).level)
 	for k in CampaignData.FAILS_PER_EASE:
 		CampaignData.record_result(ease_idx, 99)
 	var eased_st: Dictionary = CampaignData.get_stage(ease_idx)
-	if eased_st.eased != 1 or CampaignData.LEVELS.find(eased_st.difficulty) != maxi(0, CampaignData.LEVELS.find(base_level) - 1):
-		errors.append("Stage %d after %d failures: difficulty %s (base %s), eased %d" % [ease_idx, CampaignData.FAILS_PER_EASE, eased_st.difficulty, base_level, eased_st.eased])
+	if eased_st.eased != 1 or not is_equal_approx(float(eased_st.level), maxf(0.0, base_lv - 1.0)):
+		errors.append("Stage %d after %d failures: level %.2f (base %.2f), eased %d" % [ease_idx, CampaignData.FAILS_PER_EASE, float(eased_st.level), base_lv, eased_st.eased])
 	CampaignData.record_result(ease_idx, 1)
-	if CampaignData.get_stage(ease_idx).difficulty != base_level:
+	if not is_equal_approx(float(CampaignData.get_stage(ease_idx).level), base_lv):
 		errors.append("A win on stage %d should reset its easing" % ease_idx)
 	# no stage asks for a win against a Hard field from mid-grid (stage 7 used to: 13 Hard bots, P1 from P7)
 	for st in CampaignData.STAGES:
@@ -258,12 +260,14 @@ func _check_menu_modes(errors: Array[String], game_script: GDScript) -> void:
 			if game.active_menu_page != "world" or game.open_world == null or not game.open_world.active:
 				errors.append("Menu 'campaign' should open the open world, got '%s'" % game.active_menu_page)
 			else:
-				# the stages and, beside them, the campaign missions (Missions), each once
+				# the stages at home and one Away Races gate for those abroad (CampaignObjective.AWAY) and, beside them, the
+				# campaign missions (Missions), each once
 				var n_missions: int = game.open_world.events.filter(func(e: Dictionary) -> bool: return e.has("mission")).size()
 				var n_live: int = game.open_world.events.filter(func(e: Dictionary) -> bool: return e.has("live")).size() # LiveEvents come and go
-				if game.open_world.events.size() - n_missions - n_live != CampaignData.STAGES.size() or n_missions != Missions.MISSIONS.size():
-					errors.append("The open world shows %d stage and %d mission beacons for %d stages and %d missions" % [
-						game.open_world.events.size() - n_missions, n_missions, CampaignData.STAGES.size(), Missions.MISSIONS.size()])
+				var n_stages: int = CampaignData.STAGES.filter(func(st: Dictionary) -> bool: return not CampaignObjective.is_away(String(st.track))).size() + 1
+				if game.open_world.events.size() - n_missions - n_live != n_stages or n_missions != Missions.MISSIONS.size():
+					errors.append("The open world shows %d stage and %d mission beacons for %d stages and gate and %d missions" % [
+						game.open_world.events.size() - n_missions - n_live, n_missions, n_stages, Missions.MISSIONS.size()])
 			if game.open_world:
 				game.open_world.suspend()
 			game._on_world_leave("stages")

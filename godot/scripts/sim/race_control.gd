@@ -172,7 +172,7 @@ func hurt(car: RaceCar, dv: float, into_barrier := false, f := 0.0) -> bool:
 	if wheel >= 0:
 		car.wheel_bend[wheel] = minf(1.0, car.wheel_bend[wheel] + (dv - WHEEL_BEND_DV) / (WHEEL_OFF_DV - WHEEL_BEND_DV))
 	if car.is_player and add > 0.004:
-		var hint := " — box for repairs" if car.damage >= REPAIR_AT and race.s.mode == "race" else ""
+		var hint := " — box for repairs" if car.damage >= REPAIR_AT and race.s.mode == "race" and race.s.pits_enabled else ""
 		log_rc("%s hit: %s damaged. Car now %d%% damaged%s" % [Service.zone(f).capitalize(), _hurt_parts(car, parts_before), roundi(car.damage * 100.0), hint], "bad")
 	elif not car.is_player and before < 0.15 and car.damage >= 0.15 and _near_player(car):
 		log_rc("%s is damaged and limping" % car.name, "info")
@@ -472,7 +472,7 @@ func _recover(dt: float) -> void:
 		if not c.stranded or _speed(c) > 0.3:
 			continue
 		var on_track := absf(c.d) < track.half + 0.6
-		if on_track and flag == "green" and race.phase == "racing" and not race.winner:
+		if on_track and race.s.safety_car and flag == "green" and race.phase == "racing" and not race.winner:
 			continue # waiting for the safety car before anyone walks onto the track
 		c.recover_left -= dt
 		if c.recover_left <= 0.0:
@@ -497,6 +497,9 @@ func _stranded() -> int:
 
 ## Decide whether an accident calls for the safety car or a red flag.
 func _escalate() -> void:
+	if not race.s.safety_car:
+		_red_reason = ""
+		return
 	if race.winner:
 		_red_reason = ""
 		if flag == "sc":
@@ -531,7 +534,7 @@ func deploy_sc(reason: String) -> void:
 		c.overtake_t = 0.0
 		c.sc_waved = false
 		# an almost free pit stop: a crash reshuffles everyone's strategy
-		if not _running(c):
+		if not _running(c) or not race.s.pits_enabled:
 			continue
 		c.plan_stale = true
 		if c.is_player or c.pit_request or race.R - c.lap <= 2:
@@ -546,7 +549,7 @@ func deploy_sc(reason: String) -> void:
 			c.pit_request = true
 			c.service = race.default_service(c)
 	var p := race.player
-	if _running(p) and not p.pit_request and race.player_next_stop_lap() > 0 and race.player_next_stop_lap() - p.lap <= 3:
+	if race.s.pits_enabled and _running(p) and not p.pit_request and race.player_next_stop_lap() > 0 and race.player_next_stop_lap() - p.lap <= 3:
 		log_rc("Strategist: cheap stop under the safety car — press P to box", "box")
 
 func _sc_in(why := "") -> void:
@@ -796,8 +799,9 @@ func limit_speed(car: RaceCar, t: Dictionary, mu: float) -> void:
 	if neutral:
 		var pace := RED_PACE if flag == "red" else DELTA_PACE
 		var v_race := vT
-		var v_prof := track.sample(track.PROF, car.s + car.v * 0.12) * sqrt(mu)
-		vT = minf(vT, track.sample(track.PROF, car.s + car.v * 0.12) * sqrt(mu) * pace)
+		var prof := car.prof if not car.prof.is_empty() else track.PROF # the car's own class
+		var v_prof := track.sample(prof, car.s + car.v * 0.12) * sqrt(mu)
+		vT = minf(vT, track.sample(prof, car.s + car.v * 0.12) * sqrt(mu) * pace)
 		# close up to whatever is physically ahead: the safety car or the next car in the queue
 		var ahead := _queue_ahead(car)
 		var gap: float = ahead[0]
@@ -967,6 +971,8 @@ func _player_rules(dt: float) -> void:
 
 ## Pit wall: call damaged cars in for repairs.
 func _teams() -> void:
+	if not race.s.pits_enabled:
+		return
 	for c in race.cars:
 		if not _running(c) or c.repair_asked or c.damage < REPAIR_AT or flag == "red":
 			continue

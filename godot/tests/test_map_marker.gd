@@ -104,13 +104,6 @@ func _check_inside(errors: Array[String]) -> void:
 
 ## Race minimap zoom choice, heading-up car-below-centre projection/transform, and polyline culling.
 func _check_race_minimap(errors: Array[String]) -> void:
-	# Short circuits keep the full overview; long tracks switch to the zoomed heading-up follow view
-	for short_case in [["monaco", 3288.0, 966.0], ["monza", 5767.0, 2156.0], ["spa", 6960.0, 2053.0]]:
-		if MapMarker.race_use_follow(short_case[1], short_case[2]):
-			errors.append("short track %s should keep full minimap view" % short_case[0])
-	for long_case in [["goliath", 27000.0, 7391.0], ["nordschleife", 20688.0, 6076.0], ["lemans", 13550.0, 5354.0], ["s1_sprint", 9616.0, 3591.0]]:
-		if not MapMarker.race_use_follow(long_case[1], long_case[2]):
-			errors.append("long track %s should use zoomed follow minimap" % long_case[0])
 	# Speed-based zoom: clamped to [400, 1500] m and shows ~RACE_LOOK_SECS of road ahead in the middle range
 	var z0 := MapMarker.race_zoom_span(0.0)
 	var z_slow := MapMarker.race_zoom_span(25.0)

@@ -21,6 +21,7 @@ const SURROUNDINGS := preload("res://scripts/ui/surroundings.gd")
 const FAR_LAND := preload("res://scripts/ui/far_land.gd")
 const FURNITURE := preload("res://scripts/ui/trackside_furniture.gd")
 const ROADSIDE_PROPS := preload("res://scripts/ui/roadside_props.gd")
+const STAGE_DRESSING := preload("res://scripts/ui/stage_dressing.gd")
 const LIGHTING := preload("res://scripts/ui/lighting_presets.gd")
 const ALTITUDE_SCALE := 1.0 ## heights at their real scale (the physics ignores elevation)
 const ASPHALT_LIFT := 0.04 ## m: the asphalt ribbon stands this far over the track's ground height
@@ -138,6 +139,7 @@ var far_land: RefCounted ## far_land.gd: the hills and sea on the horizon, null 
 ## Marshal posts, braking boards, bridges and the paddock (trackside_furniture.gd)
 var furniture: RefCounted
 var roadside_props: RefCounted
+var stage_dressing: RefCounted ## street/rally stage arches, tape, chevrons, warnings & spectators (stage_dressing.gd)
 ## Barrier segments built as tyre walls (trackside_furniture.gd tyre_cells), left out of the plain barrier
 var tyre_cells := {}
 ## The detailed terrain's grid (_build_terrain): corner, spacing, and per point its height, squared distance to
@@ -239,11 +241,24 @@ static var _trackside := {} ## Blender trackside meshes by object name
 var _crowd_material: ShaderMaterial ## the grandstands' crowd (_stand_crowd_material), for _crowd_material_track
 var _crowd_material_track: Track
 
-## Racing line assist
-var racing_line_node: MeshInstance3D
+## Dynamic racing-line chevron assist (MultiMesh pool updated each frame from the player's current speed)
+const ARROW_POOL := 64 ## fixed MultiMesh pool (no per-frame allocation)
+const ARROW_SPACING := 5.0 ## m between consecutive chevrons along the racing line
+const ARROW_START := 6.0 ## m ahead of the player car for the nearest chevron
+const ARROW_REACH := 230.0 ## m ahead of the player car the chevrons extend (capped at 45% of lap length)
+const ARROW_LIFT := ASPHALT_LIFT + 0.06 ## m over track elevation (6 cm above asphalt, clear of z-fighting)
+const ARROW_GREEN := Color("#2ee86c")
+const ARROW_YELLOW := Color("#ffd028")
+const ARROW_RED := Color("#ff2a22")
+var racing_line_node: MultiMeshInstance3D
+var _racing_arrows_mm: MultiMesh
 var show_racing_line := true
-var racing_line_mode := "full" ## DifficultyProfile.LINE_MODES: full, braking (only the braking zones drawn), off
-var _racing_line_key := "" ## which car's speeds the racing line was painted from ("" = the stock reference)
+var racing_line_mode := "full" ## DifficultyProfile.LINE_MODES: full, braking (only yellow/red braking zones), off
+var _rl_d := PackedFloat64Array() ## smoothed racing-line lateral offset per track sample
+var _rl_y := PackedFloat64Array() ## smoothed racing-line elevation (world Y before banking) per track sample
+var _rl_corner_v := PackedFloat64Array() ## car-specific cornering speed limit per track sample (PaceNotes.corner_profile)
+var _rl_zones := PackedInt32Array() ## scratch buffer for per-arrow BrakeZone (size ARROW_POOL)
+var _rl_buffer := PackedFloat32Array() ## pre-allocated MultiMesh buffer (ARROW_POOL * 16 floats: 3x4 xf + RGBA)
 
 ## Night headlight beams and the per-frame nearest-car ranking that assigns them (reused, no allocation)
 var beams: Array[SpotLight3D] = []
@@ -383,14 +398,40 @@ func set_track(value: Track) -> void:
 	_lamp_material = null
 	_lights_lit = -1
 	_skid_instance = null
+	racing_line_node = null
+	_racing_arrows_mm = null
 	_atmos_key = Vector3(-1.0, -1.0, -1.0) # the new materials pick up the current weather
 
-	_racing_line_key = ":" + racing_line_mode # _build_track paints it from the stock reference
 	_build_track()
 	_reset_skids()
 	position_overview()
 	if ray_tracing:
 		ray_tracing.invalidate(true)
+
+## The model and paint each car of a race is drawn with: car id -> [CarCatalog key, paint]. A mixed-class field
+## (Race.mixed, the campaign stages) draws every car as the car it drives (RaceCar.car_key) in Race's paint; a
+## one-make race draws the player's car for the player and, unless one_make (the Seicento Cup) or the Hypercar,
+## its rivals as a deal of the real models (looks only: they all drive the player's car).
+static func field_looks(value: Race, one_make := false) -> Dictionary:
+	var out := {}
+	var player_key := value.s.car_class if CarCatalog.is_key(value.s.car_class) else "stock"
+	var mix_rivals := not one_make and player_key != "hypercar"
+	var field_seed := CarCatalog.rival_seed([value.s.track, player_key, value.s.opponents, value.s.laps])
+	var rival_slot := 0
+	var seen_models := {}
+	for car in value.cars:
+		var car_key := player_key
+		var paint := car.color
+		if value.mixed and CarCatalog.is_key(car.car_key):
+			car_key = car.car_key
+		elif not car.is_player and mix_rivals:
+			car_key = CarCatalog.rival_model(rival_slot, field_seed)
+			rival_slot += 1
+			var occ := int(seen_models.get(car_key, 0))
+			seen_models[car_key] = occ + 1
+			paint = CarCatalog.field_color(car_key, occ, value.s.player_color, field_seed + CarCatalog.index_of(car_key) * 3)
+		out[car.id] = [car_key, paint]
+	return out
 
 func set_race(value: Race) -> void:
 	race = value
@@ -400,6 +441,8 @@ func set_race(value: Race) -> void:
 	if roadside_props:
 		roadside_props.set_rally(value.s.mode == "rally")
 	_place_sprint_lines(value)
+	if stage_dressing:
+		stage_dressing.configure_race(value)
 	# a restart on the same circuit reuses the scenery but not the previous field
 	for old in visuals.values():
 		old.queue_free()
@@ -407,21 +450,12 @@ func set_race(value: Race) -> void:
 	_reset_skids()
 	_repaint_racing_line(value)
 
-	var player_key := value.s.car_class if CarCatalog.is_key(value.s.car_class) else "stock"
-	var mix_rivals := not one_make and player_key != "hypercar"
-	var field_seed := CarCatalog.rival_seed([value.s.track, player_key, value.s.opponents, value.s.laps])
-	var rival_slot := 0
-	var seen_models := {}
+	var looks := field_looks(value, one_make)
 	for car in value.cars:
 		var visual := CAR_SCENE.instantiate()
-		var car_key := player_key
-		var paint := car.color
-		if not car.is_player and mix_rivals:
-			car_key = CarCatalog.rival_model(rival_slot, field_seed)
-			rival_slot += 1
-			var occ := int(seen_models.get(car_key, 0))
-			seen_models[car_key] = occ + 1
-			paint = CarCatalog.field_color(car_key, occ, value.s.player_color, field_seed + CarCatalog.index_of(car_key) * 3)
+		var car_key: String = looks[car.id][0]
+		var paint: Color = looks[car.id][1]
+		if not car.is_player:
 			car.color = paint # pit bands and timing swatch follow the rival's own model paint
 		visual.car_key = car_key
 		visuals[car.id] = visual
@@ -456,6 +490,9 @@ func set_race(value: Race) -> void:
 func release_race() -> void:
 	race = null
 	overview = true
+	_focus_car = null
+	if _racing_arrows_mm:
+		_racing_arrows_mm.visible_instance_count = 0
 	for old in visuals.values():
 		old.queue_free()
 	visuals.clear()
@@ -472,6 +509,8 @@ func _process(delta: float) -> void:
 		_hide_beams()
 		_hide_lamp_lights()
 		_hide_own_tower(-1)
+		if _racing_arrows_mm:
+			_racing_arrows_mm.visible_instance_count = 0
 		camera.global_position = camera.global_position.lerp(overview_target, 1.0 - exp(-2.4 * delta))
 		camera.look_at(Vector3(overview_target.x, 0, overview_target.z), Vector3.FORWARD)
 		return
@@ -524,7 +563,10 @@ func _process(delta: float) -> void:
 		elif _skid_last.has(car.id):
 			_skid_last.erase(car.id)
 
+	_update_racing_arrows()
 	_update_start_lights()
+	if stage_dressing and _focus_car:
+		stage_dressing.update(_focus_pos, Vector3(_focus_car.vx, 0.0, _focus_car.vy), night)
 	_update_camera(delta)
 	_tv_warm_up()
 	_place_rain()
@@ -1238,18 +1280,26 @@ func _update_beams() -> void:
 		beam.light_energy = 24.0 * level * Service.lamp(_rank_cars[i], race.clock) # damaged electrics dim and flicker
 		beam.visible = true
 
-## The player's racing-line display (Difficulty & Assists): the whole line, its braking zones only, or none.
-## L still shows or hides it in a race. The line is repainted at the next set_race.
+## The player's racing-line display (Difficulty & Assists): chevrons everywhere ahead, braking zones only, or off.
+## L still shows or hides it in a race.
 func set_racing_line_mode(mode: String) -> void:
 	racing_line_mode = mode if mode in ["full", "braking", "off"] else "full"
 	show_racing_line = racing_line_mode != "off"
 	if is_instance_valid(racing_line_node):
 		racing_line_node.visible = show_racing_line
+	if not show_racing_line and _racing_arrows_mm:
+		_racing_arrows_mm.visible_instance_count = 0
+	elif race and not overview:
+		_update_racing_arrows()
 
 func toggle_racing_line() -> bool:
 	show_racing_line = not show_racing_line
 	if is_instance_valid(racing_line_node):
 		racing_line_node.visible = show_racing_line
+	if not show_racing_line and _racing_arrows_mm:
+		_racing_arrows_mm.visible_instance_count = 0
+	elif race and not overview:
+		_update_racing_arrows()
 	return show_racing_line
 
 func _build_environment() -> void:
@@ -1427,6 +1477,8 @@ func _build_track() -> void:
 	furniture.build(self)
 	roadside_props = ROADSIDE_PROPS.new()
 	roadside_props.build(self)
+	stage_dressing = STAGE_DRESSING.new()
+	stage_dressing.build(self)
 	if track.cfg.theme == "city":
 		if not (surroundings and surroundings.has_buildings()):
 			_build_city_blocks()
@@ -3138,114 +3190,165 @@ func _sweep_box(st: SurfaceTool, s0: float, s1: float, d0: float, d1: float, y_r
 			_quad(st, ring[0], ring[1], ring[2], ring[3])
 		prev = ring
 
-## The speeds the racing line's braking zones are read from for the player's car in race r: the stock
-## Seicento's reference lap (track.cal) unless the player drives another car, then that car's own reference
-## lap (Track.cal_alt, by spec) or, before it is calibrated, its grip-limit profile (Track.profile_for).
-## Empty means the stock colours.
-static func racing_line_speeds(t: Track, r: Race) -> PackedFloat64Array:
-	if r == null or r.player == null or r.player.model == null:
-		return PackedFloat64Array()
-	var cm: CarModel = r.player.model
-	if cm.spec.resource_name == "": # the stock Seicento
-		return PackedFloat64Array()
-	var cal: Dictionary = t.cal_alt.get(cm.spec.get_instance_id(), {})
-	if cal.has("vs") and (cal.vs as PackedFloat64Array).size() == t.n:
-		return cal.vs
-	return t.profile_for(cm)
-
-## Rebuilds the racing line for the player's car when it is not the stock Seicento (a hypercar brakes far
-## later and harder: the stock reference painted its braking zones metres before the corner, too late to use).
-func _repaint_racing_line(r: Race) -> void:
-	var vs := racing_line_speeds(track, r)
-	var key := str(vs.size()) + ":" + str(r.player.model.spec.get_instance_id()) if not vs.is_empty() else ""
-	key += ":" + racing_line_mode
-	if key == _racing_line_key:
-		return
-	_racing_line_key = key
-	if is_instance_valid(racing_line_node):
-		racing_line_node.queue_free()
-	_build_racing_line(vs)
-
-func _build_racing_line(car_vs := PackedFloat64Array()) -> void:
-	var verts := PackedVector3Array()
-	var colors := PackedColorArray()
-	var indices := PackedInt32Array()
-
-	# Braking red, held at the cornering limit amber, flat-out green, read off the strategy's reference
-	# lap in this car rather than the grip-limit profile: that one is capped at 216 km/h and brakes from
-	# speeds a Seicento never reaches, which painted most of every lap red. The sim's offsets and speeds
-	# are sampled per metre-ish step and jitter, so smooth them circularly before drawing.
-	var n: int = track.n
-	var win := maxi(2, int(round(6.0 / track.step)))
-	var d_s := _smooth_loop(track.RLD, win)
-	var vs: PackedFloat64Array = car_vs if car_vs.size() == track.n else track.cal.get("vs", track.PROF)
-	# the amber "held at the limit" test compares against the grip profile of the same car
-	var prof: PackedFloat64Array = track.PROF
-	if car_vs.size() == track.n and race and race.player and race.player.model:
-		prof = track.profile_for(race.player.model)
-	var y_s := PackedFloat64Array()
-	y_s.resize(n)
-	var brake := PackedFloat64Array()
-	brake.resize(n)
-	var held := PackedFloat64Array()
-	held.resize(n)
-	for i in n:
-		y_s[i] = (track.H[i] - elevation_base) * ALTITUDE_SCALE + 0.055
-		var j := (i + 1) % n
-		var decel := (vs[i] * vs[i] - vs[j] * vs[j]) / (2.0 * maxf(track.RDS[i], 0.01))
-		brake[i] = clampf(decel / (0.35 * 9.81), 0.0, 1.0)
-		held[i] = 1.0 if vs[j] >= prof[j] - 0.05 else 0.0
-	y_s = _smooth_loop(y_s, win)
-	brake = _smooth_loop(brake, win)
-	held = _smooth_loop(held, win * 2)
-
-	var green := Color("#38df75")
-	var amber := Color("#ffc233")
-	var brake_red := Color("#ff3228")
-
-	for i in n:
-		var s := i * track.step
-		var d := d_s[i]
-		var p_left := track.pos(s, d - 0.36)
-		var p_right := track.pos(s, d + 0.36)
-
-		verts.append(Vector3(p_left[0] - world_center.x, y_s[i] + track.bank_rise(s, d - 0.24), p_left[1] - world_center.y))
-		verts.append(Vector3(p_right[0] - world_center.x, y_s[i] + track.bank_rise(s, d + 0.24), p_right[1] - world_center.y))
-
-		var c := green.lerp(amber, held[i]).lerp(brake_red, minf(brake[i] * 2.0, 1.0))
-		if racing_line_mode == "braking":
-			c.a = clampf(brake[i] * 3.0 - 0.15, 0.0, 1.0) # only the braking zones, fading in and out
-		colors.append(c)
-		colors.append(c)
-
-	for i in track.n:
-		var a := i * 2
-		var b := a + 1
-		var c := ((i + 1) % track.n) * 2
-		var d := c + 1
-		indices.append_array(PackedInt32Array([a, c, b, b, c, d]))
-
+## Swept-chevron mesh (matching the open world's GPS waypoint arrows), pointing along local -Z with +Y up.
+static func _build_chevron_mesh() -> ArrayMesh:
+	var tip := Vector3(0.0, 0.0, -1.35)
+	var notch := Vector3(0.0, 0.0, -0.15)
+	var wing_r := Vector3(0.95, 0.0, 0.50)
+	var wing_l := Vector3(-0.95, 0.0, 0.50)
+	var verts := PackedVector3Array([tip, wing_r, notch, tip, notch, wing_l])
+	var norms := PackedVector3Array([Vector3.UP, Vector3.UP, Vector3.UP, Vector3.UP, Vector3.UP, Vector3.UP])
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_COLOR] = colors
-	arrays[Mesh.ARRAY_INDEX] = indices
-
+	arrays[Mesh.ARRAY_NORMAL] = norms
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
 
-	racing_line_node = MeshInstance3D.new()
-	racing_line_node.name = "RacingLine"
-	racing_line_node.mesh = mesh
+## Refreshes the cached per-car cornering speed profile when a race begins (or restarts with another car).
+func _repaint_racing_line(r: Race) -> void:
+	if track == null or r == null:
+		return
+	_rl_corner_v = PaceNotes.corner_profile(track, r.brake_k, r.brake_aero, r._loose)
+
+## Builds the fixed-pool MultiMesh of dynamic chevron arrows and caches the smoothed racing-line curve for track.
+func _build_racing_line() -> void:
+	var n: int = track.n
+	var win := maxi(2, int(round(6.0 / track.step)))
+	_rl_d = _smooth_loop(track.RLD, win)
+	var y_raw := PackedFloat64Array()
+	y_raw.resize(n)
+	for i in n:
+		y_raw[i] = (track.H[i] - elevation_base) * ALTITUDE_SCALE + ARROW_LIFT
+	_rl_y = _smooth_loop(y_raw, win)
+	_rl_corner_v = PaceNotes.corner_profile(track, 1.0, 0.0, false)
+	if _rl_zones.size() != ARROW_POOL:
+		_rl_zones.resize(ARROW_POOL)
+	if _rl_buffer.size() != ARROW_POOL * 16:
+		_rl_buffer.resize(ARROW_POOL * 16)
+		_rl_buffer.fill(0.0)
+
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = _build_chevron_mesh()
+	mm.instance_count = ARROW_POOL
+	mm.visible_instance_count = 0
+	mm.custom_aabb = AABB(Vector3(-50000.0, -5000.0, -50000.0), Vector3(100000.0, 10000.0, 100000.0))
+	_racing_arrows_mm = mm
+
 	var rl_mat := StandardMaterial3D.new()
 	rl_mat.vertex_color_use_as_albedo = true
 	rl_mat.vertex_color_is_srgb = true
 	rl_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	rl_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	rl_mat.albedo_color = Color(1.1, 1.1, 1.1, 0.85)
+	rl_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	rl_mat.disable_fog = true
+	rl_mat.albedo_color = Color(1.05, 1.05, 1.05, 0.90)
+
+	racing_line_node = MultiMeshInstance3D.new()
+	racing_line_node.name = "RacingLine"
+	racing_line_node.multimesh = mm
 	racing_line_node.material_override = rl_mat
+	racing_line_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	racing_line_node.visible = show_racing_line
 	track_root.add_child(racing_line_node)
+
+## Allocation-free world point on the smoothed racing line at track distance s.
+func _rl_point(s: float) -> Vector3:
+	var n: int = track.n
+	var u := track.wrap_s(s) / track.step
+	var fu := floorf(u)
+	var i := int(fu) % n
+	var j := (i + 1) % n
+	var f := u - fu
+	var d := _rl_d[i] + (_rl_d[j] - _rl_d[i]) * f
+	var nx := track.NX[i] + (track.NX[j] - track.NX[i]) * f
+	var ny := track.NY[i] + (track.NY[j] - track.NY[i]) * f
+	var wx := track.X[i] + (track.X[j] - track.X[i]) * f + nx * d
+	var wy := track.Y[i] + (track.Y[j] - track.Y[i]) * f + ny * d
+	var y := _rl_y[i] + (_rl_y[j] - _rl_y[i]) * f + track.bank_rise(s, d)
+	return Vector3(wx - world_center.x, y, wy - world_center.y)
+
+## Updates the dynamic racing-line chevron pool ahead of the player from their current speed, braking
+## capability and grip. Zero per-frame heap allocations.
+func _update_racing_arrows() -> void:
+	if _racing_arrows_mm == null:
+		return
+	if not show_racing_line or not is_instance_valid(racing_line_node) or not racing_line_node.visible:
+		_racing_arrows_mm.visible_instance_count = 0
+		return
+	if track == null or race == null or _rl_d.is_empty():
+		_racing_arrows_mm.visible_instance_count = 0
+		return
+	var p: RaceCar = _focus_car if _focus_car != null else race.player
+	if p == null or p.mode != "race" or p.finished or p.dnf:
+		_racing_arrows_mm.visible_instance_count = 0
+		return
+
+	var car_s: float = _focus_s if _focus_car != null else p.s
+	var spd := maxf(0.0, p.speed if p.control == "free" else p.v)
+	var mu := race.plan_grip(p) if (race.tyres and race.weather) else 1.0
+	var reach := minf(ARROW_REACH, track.L * 0.45)
+	# Divide lap length into an integer number of ~ARROW_SPACING steps so chevrons stay planted on the
+	# asphalt with no phase jump across the start/finish line.
+	var spacing := track.L / maxf(1.0, roundf(track.L / ARROW_SPACING))
+	var first_k := ceilf((car_s + ARROW_START) / spacing)
+	var s0 := first_k * spacing
+	var first_ahead := s0 - car_s
+	var count := clampi(int(floorf((reach - first_ahead) / spacing)) + 1, 0, ARROW_POOL)
+	if count <= 0:
+		_racing_arrows_mm.visible_instance_count = 0
+		return
+
+	PaceNotes.fill_arrow_zones(track, _rl_corner_v, s0, spacing, count, spd,
+		race.brake_k * p.fx_brake, race.brake_aero * p.fx_brake, mu, _rl_zones)
+
+	var braking_only := racing_line_mode == "braking"
+	var fade_start := reach * 0.65
+	var used := 0
+	var buf := _rl_buffer
+	for k in count:
+		var zone := _rl_zones[k]
+		if braking_only and zone == PaceNotes.BrakeZone.GREEN:
+			continue
+		var ahead := first_ahead + float(k) * spacing
+		var s := s0 + float(k) * spacing
+		var pos := _rl_point(s)
+		var p_prev := _rl_point(s - 1.5)
+		var p_next := _rl_point(s + 1.5)
+		var fwd := p_next - p_prev
+		var flen := fwd.length()
+		if flen < 1e-4:
+			continue
+		fwd /= flen
+		var d := track.sample(_rl_d, s)
+		var sl := track.bank_slope(s, d)
+		var up_raw := Vector3.UP if sl == 0.0 else Vector3(-sl * track.sample(track.NX, s), 1.0, -sl * track.sample(track.NY, s)).normalized()
+		var right := fwd.cross(up_raw)
+		var rlen := right.length()
+		if rlen < 1e-4:
+			continue
+		right /= rlen
+		var up := right.cross(fwd).normalized()
+
+		var col := ARROW_RED if zone == PaceNotes.BrakeZone.RED else (ARROW_YELLOW if zone == PaceNotes.BrakeZone.YELLOW else ARROW_GREEN)
+		var near_a := smoothstep(ARROW_START - 1.0, ARROW_START + 5.0, ahead)
+		var far_a := 1.0 - smoothstep(fade_start, reach, ahead)
+		var alpha := clampf(near_a * far_a, 0.0, 1.0)
+		if alpha <= 0.01:
+			continue
+
+		var o := used * 16
+		buf[o] = right.x; buf[o + 1] = up.x; buf[o + 2] = -fwd.x; buf[o + 3] = pos.x
+		buf[o + 4] = right.y; buf[o + 5] = up.y; buf[o + 6] = -fwd.y; buf[o + 7] = pos.y
+		buf[o + 8] = right.z; buf[o + 9] = up.z; buf[o + 10] = -fwd.z; buf[o + 11] = pos.z
+		buf[o + 12] = col.r; buf[o + 13] = col.g; buf[o + 14] = col.b; buf[o + 15] = alpha
+		used += 1
+	if used > 0:
+		_racing_arrows_mm.buffer = buf
+	_racing_arrows_mm.visible_instance_count = used
 
 ## Circular moving average over +-win samples, repeated twice for a soft, wobble-free curve.
 func _smooth_loop(src: PackedFloat64Array, win: int) -> PackedFloat64Array:

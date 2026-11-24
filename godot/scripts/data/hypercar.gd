@@ -52,8 +52,13 @@ static func spec() -> CarSpec:
 	s.reverse_ratio = 3.2
 	s.reverse_power = 0.3 ## the brake held past a stop selects reverse: back up like the Seicento (23 km/h in 2.5 s), not at 65
 	s.steer_lock = 0.4
-	s.steer_fast = 0.45 ## a full key press asks the fronts for their peak slip at speed, not a third past it
-	s.steer_fast_from = 22.0
+	# a full key press (or full stick) asks the fronts for their peak slip at speed, not past it: from 200 km/h up the lock
+	# is ~3 deg (the fronts at 0.94 of their peak slip, 1.66-1.97 g, the most the car makes), fading in from 30 km/h.
+	# With 0.45 from 80 km/h a held key asked 1.3-1.8x the peak (washing the nose out), and each key press turned the car
+	# so far at 200-300 km/h that a keyboard driver weaved under braking and on the S1 (B3, tests/_hypercar_goliath_kb.gd)
+	s.steer_fast = 0.3
+	s.steer_fast_from = 8.0
+	s.steer_fast_to = 55.0
 	s.esc_grip = 1.3 ## stability control knows the slicks and the wings (it took 1.1 g for the limit and braked a wheel in every fast bend)
 	s.esc_aero = 0.00017
 	s.grip_k = 1.75

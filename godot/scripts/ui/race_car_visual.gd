@@ -1149,9 +1149,10 @@ func _show_dents(target: Dictionary, dt: float) -> void:
 			if idx.has("dent_" + k):
 				mi.set_blend_shape_value(idx["dent_" + k], _dents_shown[k] * DENT_SCALE)
 
-## Crash damage dulls and darkens the paint (scuffs, dirt and bent panels at a glance).
+## The paint keeps its colour at any damage: crashes show as dents, scrapes, cracked glass and torn panels,
+## and the clear coat dulls with them. Repair restores the gloss (damage 0).
 func _apply_paint() -> void:
-	var c := _base_paint().lerp(Color("#3a3632"), _damage_shown * 0.8)
+	var c := _base_paint()
 	c.a = 0.55 if _ghost else 1.0
 	paint_material.albedo_color = c
 	paint_material.clearcoat = 1.0 - 0.9 * _damage_shown

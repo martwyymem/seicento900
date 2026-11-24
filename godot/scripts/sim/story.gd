@@ -615,9 +615,12 @@ static func _stage_open(prog: Dictionary, i: int, fans: int) -> bool:
 
 ## The beats the save has earned and not yet shown, in the order they should play: the intro, the first visit to
 ## the Fest, results (stages, then missions), cars won, act changes, the epilogue, then the phone messages.
-static func pending(prog: Dictionary, fans: int, near_festival := false) -> Array[String]:
+## points: the live-event medal points held (a mission's phone message waits for its medals); -1 reads the save.
+static func pending(prog: Dictionary, fans: int, near_festival := false, points := -1) -> Array[String]:
 	if prog.is_empty():
 		prog = {"unlocked": 0} # never read from disk here (Missions' lookups do that for an empty one)
+	if points < 0:
+		points = Missions.live_points() if Missions.gated(prog) else 0
 	var seen := seen_keys(prog)
 	var out: Array[String] = []
 	_add(out, seen, "intro")
@@ -655,7 +658,7 @@ static func pending(prog: Dictionary, fans: int, near_festival := false) -> Arra
 			_add(out, seen, "open_" + String(Campaign.STAGES[i].id))
 	for k in Missions.MISSIONS.size():
 		var idx := Missions.BASE + k
-		if Missions.is_unlocked(idx, prog) and not Missions.is_cleared(idx, prog):
+		if Missions.is_unlocked(idx, prog, points) and not Missions.is_cleared(idx, prog):
 			_add(out, seen, "open_" + String(Missions.MISSIONS[k].id))
 	return out
 
@@ -689,8 +692,10 @@ static func act_name(prog: Dictionary, _fans := 0) -> String:
 		return String(Campaign.STAGES[last].act_name)
 	return String(Campaign.STAGES[clampi(int(prog.get("unlocked", 0)), 0, last - 1)].act_name)
 
-## What the story asks next, one line.
-static func next_step(prog: Dictionary, fans: int) -> String:
+## What the story asks next, one line. points: the live-event medal points held (-1 reads the save).
+static func next_step(prog: Dictionary, fans: int, points := -1) -> String:
+	if points < 0:
+		points = Missions.live_points() if Missions.gated(prog) else 0
 	var last := Campaign.STAGES.size() - 1
 	for i in Campaign.STAGES.size():
 		if _stage_open(prog, i, fans) and not _won(prog, i):
@@ -698,8 +703,11 @@ static func next_step(prog: Dictionary, fans: int) -> String:
 			return "Next: %s. %s" % [String(Campaign.STAGES[i].title), String(b[0][1])]
 	for k in Missions.MISSIONS.size():
 		var idx := Missions.BASE + k
-		if Missions.is_unlocked(idx, prog) and not Missions.is_cleared(idx, prog):
+		if Missions.is_unlocked(idx, prog, points) and not Missions.is_cleared(idx, prog):
 			return "Next: %s (mission). %s" % [String(Missions.MISSIONS[k].title), String(brief_line(idx)[1])]
+	for idx in Missions.play_order():
+		if Missions.medal_locked(idx, prog, points):
+			return "Next: %s (mission). %s." % [String(Missions.get_def(idx).title), Missions.medal_text(idx, points)]
 	if _won(prog, last):
 		return "The story is told. Ciocia Basia would like her car back on Saturdays."
 	if _won(prog, last - 1):

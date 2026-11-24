@@ -19,3 +19,6 @@ tools/open_world/cache/brzeszcze_gugik.json
 /js/
 /css/
 /vendor/
+
+# per-agent user:// folders for isolated test runs (tools/release_gate.sh, worktree delegates)
+.gate_home/

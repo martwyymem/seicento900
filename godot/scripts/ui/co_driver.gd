@@ -30,6 +30,13 @@ func _init(race_: Race) -> void:
 	if not _cache.has(key):
 		_cache[key] = PaceNotes.new(race.track)
 	notes = _cache[key]
+	# a rally stage calls its finish: the stage's own notes, from its span (not cached: the stage's finish is per race)
+	if race.s.mode == "rally":
+		var from: float = race.s.stage_from
+		var to: float = race.s.stage_to
+		var length := (to if to > from else to + race.track.L) - from
+		if length > 300.0:
+			notes = PaceNotes.with_finish(notes, race.track.wrap_s(from + length))
 	# find the voice now, while the race loads: listing the system's voices takes some 70 ms, a visible
 	# stutter if it waited for the first call
 	can_speak()
@@ -119,7 +126,10 @@ func update(muted: bool, warp: int) -> void:
 		if live.has(_next):
 			break
 		var prev_linked: bool = not live.is_empty() and notes.notes[live[-1]].link != ""
-		if ahead > reach and not (prev_linked and ahead < reach + 120.0):
+		# a finish call is made as the car reaches its mark (note.call), never early on a link
+		var fixed: bool = note.has("call")
+		var call_at := float(note.get("call", reach))
+		if ahead > call_at and (fixed or not (prev_linked and ahead < reach + 120.0)):
 			break
 		if ahead > -10.0:
 			live.append(_next)

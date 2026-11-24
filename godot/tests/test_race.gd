@@ -128,11 +128,34 @@ func run_scenario(sc: Dictionary) -> void:
 			errors.append("%s %s: total %.3f, want %.3f" % [name, w.name, g.total, w.total])
 	race.dispose()
 
+## A stop's remaining time never goes below 0 (the HUD shows it), even when a large step lands past the end of the work.
+func check_pit_left_clamp(sc: Dictionary) -> void:
+	var models := {"car_model": preload("res://tests/test_physics.gd").js_car_model()}
+	var race := Race.new(settings_for(sc), null, int(sc.seed), models)
+	var car: RaceCar = race.cars[0]
+	car.mode = "pit"
+	car.pit = {"phase": "in", "entered_at": 0.0, "hold": 0.0, "wait": 0.0}
+	car.service = race.make_service(car, car.tyre.c, car.fuel)
+	race.start_service(car)
+	var steps := 0
+	while car.pit.phase == "service" and steps < 60:
+		race.step_rail(car, 2.0) # far longer than the stop: the crew finishes, or the car is held in the lane
+		steps += 1
+		checked += 1
+		if car.pit.left < 0.0:
+			errors.append("pit stop: left %.3f s after a 2 s step, want >= 0" % car.pit.left)
+			break
+	checked += 1
+	if steps == 0:
+		errors.append("pit stop: the service phase never started")
+	race.dispose()
+
 func run() -> Array:
 	Brain.use_disk = false
 	var ref: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://tests/ref/race.json"))
 	for sc in ref.scenarios:
 		run_scenario(sc)
+	check_pit_left_clamp(ref.scenarios[0])
 	print("    %d values checked" % checked)
 	completed = true
 	return errors

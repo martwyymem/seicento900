@@ -328,6 +328,7 @@ var campaign_desc_label: Label
 var campaign_target_label: Label
 var campaign_trophy_label: Label
 var campaign_tip_label: Label
+var campaign_class_label: Label ## the stage's expected car class, its field, and the picked car against it (Campaign.class_line)
 var campaign_start_button: Button
 var campaign_cleared := false ## the last campaign race met its target: back at the menu, the briefing moves on
 var open_world: OpenWorld = null ## the campaign's free roam round Brzeszcze (scripts/world/open_world.gd), kept once built
@@ -954,6 +955,10 @@ func _build_setup() -> void:
 
 	campaign_trophy_label = _label("🏆 Trophy: Wilamowice Bronze Piston", 13, CmrStyle.AMBER)
 	obj_row.add_child(campaign_trophy_label)
+
+	campaign_class_label = _label("", 13, ACCENT)
+	campaign_class_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	obj_row.add_child(campaign_class_label)
 
 	campaign_desc_label = _label("", 13, CmrStyle.TEXT)
 	campaign_desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -2313,6 +2318,12 @@ func _dev_campaign_entries(add: Callable) -> void:
 	add.call("CAMPAIGN", "Open every stage and mission (the whole chain open up to the last stage)", func() -> void:
 		var prog := Campaign.load_progress()
 		prog["unlocked"] = maxi(int(prog.get("unlocked", 0)), Campaign.STAGES.size() - 1)
+		var all: Dictionary = prog.get("missions", {}) if prog.get("missions", {}) is Dictionary else {}
+		for m in Missions.MISSIONS: # past the live-event medal gate too
+			var p: Dictionary = (all.get(String(m.id), {}) as Dictionary).duplicate() if all.get(String(m.id), {}) is Dictionary else {}
+			p["open"] = true
+			all[String(m.id)] = p
+		prog["missions"] = all
 		Campaign.save_progress(prog)
 		_dev_refresh_world())
 	for key in CarCatalog.KEYS:
@@ -2481,6 +2492,8 @@ func _on_car_class_selected(index: int) -> void:
 		status_label.text = "The %s %s." % [CarCatalog.display_name(picked), CarCatalog.unlock_hint(picked)]
 		status_label.modulate = DANGER
 	player_color_picker.color = CarCatalog.saved_paint(_picked_car(), player_color_picker.color) # the new car's factory paint
+	if is_campaign_mode:
+		_update_campaign_view() # the briefing's class advice follows the car
 	_apply_menu_car()
 	_update_menu_car_summary()
 	_update_information_page() # the lap record shown is the picked car's
@@ -4761,30 +4774,9 @@ func _start_race(restart := false) -> void:
 	if shown and shown != world_view.race:
 		shown.dispose()
 
-func _set_up_race() -> void:
-	status_label.text = "Configuring car and optimizing race strategy..."
-	status_label.modulate = ACCENT
-	campaign_cleared = false
-	if not is_inside_tree():
-		return
-	await get_tree().process_frame
-	if not is_inside_tree():
-		return
-
-	if _strategy_pending and not is_championship_mode and not is_campaign_mode and not is_rally_mode and not is_time_trial_mode:
-		status_label.text = "The strategist is still working out the plans — try again in a moment."
-		return
+func _build_race_settings(quali_run := false) -> RaceSettings:
 	var settings := RaceSettings.new()
-	var plan = current_plan
-	var quali_run := false
 	if is_championship_mode:
-		if _next_round() >= _calendar().size():
-			champ_data = {"round": 0, "scored": false, "table": {}, "config": _season()} # a new season on the same settings
-		if champ_data.get("scored", false):
-			champ_data["round"] = int(champ_data.get("round", 0)) + 1
-			champ_data["scored"] = false
-		_save_championship()
-		quali_run = quali_picker.selected != 2 and _round_quali().is_empty()
 		var round_idx := int(champ_data.get("round", 0))
 		var t_key: String = _calendar()[round_idx]
 		settings.track = t_key
@@ -4801,27 +4793,12 @@ func _set_up_race() -> void:
 		settings.format = "laps"
 		settings.start_hour = start_hour_picker.value
 	elif is_campaign_mode:
-		var stage: Dictionary = CampaignData.get_stage(campaign_stage_index)
-		settings.track = stage.track
-		settings.laps = stage.laps
-		settings.format = "laps"
-		settings.weather = stage.weather
-		settings.opponents = stage.opponents
-		# the stage's own (eased) level, moved by the player's rival step (exactly as authored at Average)
-		var rivals := DifficultyProfile.resolve(String(stage.difficulty), int(DifficultyProfile.current.step))
-		settings.difficulty = rivals.difficulty
-		settings.difficulty_shift = rivals.shift
-		settings.start_hour = stage.start_hour
-		settings.wear_mult = stage.get("wear_mult", 2.0)
-		settings.fuel_mult = stage.get("fuel_mult", 1.0)
+		settings.track = String(CampaignData.get_stage(campaign_stage_index).track)
 	elif is_rally_mode:
-		if _rally().is_over():
-			_new_rally(_rally().key) # the rally was finished: run it again from the first stage
 		var sd := _rally().stage_def()
 		settings.track = sd.track
 		settings.laps = 1
 		settings.start_hour = float(sd.get("hour", 12.0))
-		plan = {} # a stage has no strategy: the race gives the car its one-stint fallback
 	else:
 		settings.track = TRACK_KEYS[track_picker.selected]
 		settings.laps = int(laps_picker.value)
@@ -4853,7 +4830,7 @@ func _set_up_race() -> void:
 		settings.finish = car_livery.finish
 	settings.ai_learning = "off" if ai_learning_picker.selected == 1 else "on"
 	settings.bot_physics = ["on", "off", "near"][bot_physics_picker.selected]
-	settings.grid = str(CampaignData.get_stage(campaign_stage_index).get("grid", "middle")) if is_campaign_mode else ["pole", "middle", "back", "random"][grid_picker.selected] # a stage sets its own grid
+	settings.grid = ["pole", "middle", "back", "random"][grid_picker.selected]
 	settings.mandatory_stop = mandatory_stop_toggle.button_pressed
 	settings.two_compounds = two_compounds_toggle.button_pressed
 	settings.refuel = refuel_toggle.button_pressed
@@ -4871,36 +4848,60 @@ func _set_up_race() -> void:
 		Qualifying.configure(settings)
 	elif is_championship_mode and not _round_quali().is_empty():
 		settings.quali_grid = _round_quali().grid # the round's qualifying sets the grid
-	if is_rally_mode:
+	if is_campaign_mode:
+		CampaignData.configure_stage(settings, CampaignData.get_stage(campaign_stage_index), int(DifficultyProfile.current.step))
+	elif is_rally_mode:
 		Rally.configure_stage(settings, _rally().stage_def(), _rally().difficulty)
 	elif is_time_trial_mode:
 		TimeTrial.configure(settings, tt_start_picker.selected == 1)
-		plan = {}
-	if is_campaign_mode:
-		CampaignData.apply_format(settings, CampaignData.get_stage(campaign_stage_index)) # an A->B sprint stage
 	# the profile's switches (fuel use, tyre wear, damage, auto-recover) over what the mode set
 	DifficultyProfile.apply_sim(settings, DifficultyProfile.current)
+	return settings
+
+func _set_up_race() -> void:
+	status_label.text = "Configuring car and optimizing race strategy..."
+	status_label.modulate = ACCENT
+	campaign_cleared = false
+	if not is_inside_tree():
+		return
+	await get_tree().process_frame
+	if not is_inside_tree():
+		return
+
+	if _strategy_pending and not is_championship_mode and not is_campaign_mode and not is_rally_mode and not is_time_trial_mode:
+		status_label.text = "The strategist is still working out the plans — try again in a moment."
+		return
+	var plan = current_plan
+	var quali_run := false
+	if is_championship_mode:
+		if _next_round() >= _calendar().size():
+			champ_data = {"round": 0, "scored": false, "table": {}, "config": _season()} # a new season on the same settings
+		if champ_data.get("scored", false):
+			champ_data["round"] = int(champ_data.get("round", 0)) + 1
+			champ_data["scored"] = false
+		_save_championship()
+		quali_run = quali_picker.selected != 2 and _round_quali().is_empty()
+	elif is_rally_mode:
+		if _rally().is_over():
+			_new_rally(_rally().key) # the rally was finished: run it again from the first stage
+	var settings := _build_race_settings(quali_run)
 
 	await _open_loading_screen(settings, quali_run)
-	if quali_run or is_time_trial_mode or is_rally_mode:
+	if quali_run or is_time_trial_mode or is_rally_mode or not settings.pits_enabled:
 		plan = {} # the session builds its own one-run plan
-	elif is_championship_mode or is_campaign_mode or settings.car_class != "stock" or DifficultyProfile.alters_strategy(DifficultyProfile.current):
+	elif is_championship_mode or settings.car_class != "stock" or DifficultyProfile.alters_strategy(DifficultyProfile.current):
 		# every round is planned by the strategist for that circuit's race length, tyre wear and fuel use
-		var opts := _plan_opts(Race.get_track(settings.track), settings.laps, settings.wear_mult, settings.weather if is_campaign_mode or is_championship_mode else "")
+		var opts := _plan_opts(Race.get_track(settings.track), settings.laps, settings.wear_mult, settings.weather if is_championship_mode else "")
 		opts.fuel_mult = settings.fuel_mult
 		opts.rules.refuel = settings.refuel
 		var options: Array = _models_for(settings.car_class).strategy.plan(opts)
 		plan = options[0] if options.size() else null
 
 	if plan == null:
-		if is_campaign_mode:
-			# (Tyres.KEYS: "soft"/"wet" were no compound at all, so every tyre lookup failed; a drag mission lands here)
-			plan = {"stints": [{"c": "W" if settings.weather in ["wet", "snow", "hail"] else "S", "laps": settings.laps}]}
-		else:
-			status_label.text = "No valid pit strategy for these settings — pick a plan or fix the custom one."
-			status_label.modulate = DANGER
-			loading_screen.hide()
-			return
+		status_label.text = "No valid pit strategy for these settings — pick a plan or fix the custom one."
+		status_label.modulate = DANGER
+		loading_screen.hide()
+		return
 	_save_race_settings()
 	await _loading_progress(0.35)
 	race = Race.new(settings, (plan as Dictionary).duplicate(true), -1, _models_for(settings.car_class))
@@ -4995,6 +4996,8 @@ func _open_loading_screen(settings: RaceSettings, qualifying := false) -> void:
 	var caption := "Circuit Length"
 	var length_km := track.L / 1000.0
 	var facts: Array = [["FIELD", field_text]]
+	if is_campaign_mode and settings.mode == "race":
+		facts.append(["CLASS", CampaignData.class_name_of(CampaignData.stage_class(CampaignData.get_stage(campaign_stage_index)))])
 	if settings.mode == "rally" and is_rally_mode:
 		var ev := _rally()
 		var i := mini(ev.stage_index, ev.stage_count() - 1)
@@ -5063,7 +5066,7 @@ func _show_results() -> void:
 		col.add_child(_label("OBJECTIVE FAILED — you did not finish. Retry to advance!", 14, DANGER))
 		col.add_child(_label(_award_stage_fans(int(dnf_res.fans)), 13, CmrStyle.AMBER))
 	elif is_campaign_mode:
-		var c_res := CampaignData.record_result(campaign_stage_index, me.pos)
+		var c_res := CampaignData.record_result(campaign_stage_index, me.pos, CampaignData.win_margin(rows))
 		campaign_cleared = c_res.success
 		var c_box := VBoxContainer.new()
 		c_box.add_theme_constant_override("separation", 3)
@@ -5079,6 +5082,8 @@ func _show_results() -> void:
 			var req_pos: int = CampaignData.get_stage(campaign_stage_index).target_pos
 			c_box.add_child(_label("OBJECTIVE FAILED — Finished P%d (Target: P%d or better). Retry to advance!" % [me.pos, req_pos], 14, DANGER))
 		c_box.add_child(_label(fan_line, 13, CmrStyle.AMBER))
+		if c_res.get("tightened", false):
+			c_box.add_child(_label("Won by %.1f s: the field will be tighter from now on." % float(c_res.margin), 13, CmrStyle.ORANGE_SOFT))
 	_add_record_note(col, race)
 	if race.brain:
 		var learned := race.brain.progress().filter(func(x): return x.gain > 0.05)
@@ -5163,6 +5168,27 @@ func _show_results() -> void:
 				next_label = "NEXT: %s QUALIFYING ▸" % next_name.to_upper()
 			primary = _button(next_label, ACCENT)
 			primary.pressed.connect(_start_race)
+	elif is_campaign_mode and OpenWorld.available():
+		# the campaign lives in the open world: the way on is back to Brzeszcze and the drive to the next beacon
+		for spec in campaign_result_actions(campaign_cleared, campaign_stage_index >= CampaignData.STAGES.size() - 1, true):
+			var btn := _button(String(spec[0]), ACCENT if primary == null else CmrStyle.FIELD)
+			match String(spec[1]):
+				"world":
+					btn.pressed.connect(func() -> void:
+						if world_return < 0:
+							world_return = campaign_stage_index # a stage started from the stage list: back at its beacon
+						_return_to_setup())
+				"retry":
+					btn.pressed.connect(_start_race)
+				"menu":
+					btn.pressed.connect(func() -> void:
+						world_return = -1 # the stage list, not the map
+						_return_to_setup())
+			if primary == null:
+				primary = btn
+			else:
+				btn.custom_minimum_size.y = 44
+				buttons.add_child(btn)
 	elif is_campaign_mode:
 		if campaign_cleared and campaign_stage_index < CampaignData.STAGES.size() - 1 and CampaignData.is_unlocked(campaign_stage_index + 1, _fan_total()):
 			primary = _button("NEXT STAGE ▸", ACCENT)
@@ -5189,13 +5215,25 @@ func _show_results() -> void:
 		primary.pressed.connect(_go_to_service)
 	primary.custom_minimum_size.y = 44
 	buttons.add_child(primary)
-	var back := _button("BACK TO MENU", CmrStyle.FIELD)
-	back.custom_minimum_size.y = 44
-	back.pressed.connect(_return_to_setup)
-	buttons.add_child(back)
+	buttons.move_child(primary, 0)
+	if not (is_campaign_mode and OpenWorld.available() and not service_next):
+		var back := _button("BACK TO MENU", CmrStyle.FIELD)
+		back.custom_minimum_size.y = 44
+		back.pressed.connect(_return_to_setup)
+		buttons.add_child(back)
 	col.add_child(buttons)
 	primary.grab_focus()
 	_fit_result_panel(col)
+
+## A campaign stage's results buttons, in order (the first is the primary): [label, action] with action "world" (back
+## to Brzeszcze: the open world, at the stage's beacon, where the objective panel says where to drive next), "retry"
+## (the same stage again) or "menu" (the stage list). There is no NEXT STAGE: the next stage starts from its beacon on
+## the map (user, 2026-11-24). world: the open world is there (OpenWorld.available); without it the old flow stands.
+static func campaign_result_actions(cleared: bool, last: bool, world: bool) -> Array:
+	if not world:
+		return []
+	var again := "RETRY STAGE" if not cleared else ("RACE THE FINALE AGAIN" if last else "RACE AGAIN")
+	return [["BACK TO BRZESZCZE ▸", "world"], [again, "retry"], ["STAGE LIST", "menu"]]
 
 ## This round's saved qualifying ({round, grid, pos, rows, simulated}), or {} when it hasn't been run.
 func _round_quali() -> Dictionary:
@@ -5662,23 +5700,38 @@ func _update_campaign_view() -> void:
 		campaign_title_label.text = str(st.get("title", ""))
 	var weather_name: String = str(st.get("weather", "dry")).capitalize()
 	if is_instance_valid(campaign_circuit_label):
-		campaign_circuit_label.text = "📍 %s  ·  %s  ·  %s  ·  %d Rivals (%s)" % [
+		campaign_circuit_label.text = "📍 %s  ·  %s  ·  %s  ·  %d Rivals (%s)  ·  Grid %s" % [
 			tr_name,
 			CampaignData.length_label(st).capitalize(),
 			weather_name,
 			st.get("opponents", 5),
-			str(st.get("difficulty", "medium")).capitalize()
+			CampaignData.level_name(st),
+			_grid_text(str(st.get("grid", "middle")), int(st.get("opponents", 5)) + 1)
 		]
 		if int(st.get("eased", 0)) > 0:
 			campaign_circuit_label.text += "  ·  eased from %s after %d tries" % [str(st.base_difficulty).capitalize(), int(st.fails)]
+		elif float(st.get("heat", 0.0)) > 0.0:
+			campaign_circuit_label.text += "  ·  field tightened after your big wins"
 	var target_pos: int = int(st.get("target_pos", 3))
 	if target_pos == 1:
 		campaign_target_label.text = "★ TARGET OBJECTIVE: Win the race (P1)"
 	else:
 		campaign_target_label.text = "★ TARGET OBJECTIVE: Finish P%d or higher" % target_pos
 	campaign_trophy_label.text = "🏆 Trophy: %s" % str(st.get("trophy", ""))
+	if is_instance_valid(campaign_class_label):
+		var forced := str(st.get("car_class", "")) # the Goliath puts everyone in the Hypercar
+		var advice := CampaignData.class_advice(_picked_car(), st) if forced == "" else ""
+		campaign_class_label.text = "🚗 %s%s" % [CampaignData.class_line(st), ("\n" + advice) if advice != "" else ""]
 	campaign_desc_label.text = str(st.get("desc", ""))
 	campaign_tip_label.text = "💡 Mechanic: \"%s\"" % str(st.get("tip", ""))
+
+## A stage's grid slot for its briefing: "P8 of 10", "pole".
+func _grid_text(grid: String, n: int) -> String:
+	if grid == "pole":
+		return "pole"
+	if grid.begins_with("p") and grid.substr(1).is_valid_int():
+		return "P%d of %d" % [clampi(grid.substr(1).to_int(), 1, n), n]
+	return grid
 
 ## The opponents number says when it means a solo run.
 func _update_opponents_label() -> void:
@@ -6596,19 +6649,19 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	get_viewport().set_input_as_handled()
 
 func _cycle_pit_tyre(direction: int) -> void:
-	if race:
+	if race and race.s.pits_enabled:
 		race.player_cycle_compound(direction)
 		if is_instance_valid(audio):
 			audio.beep(780.0, 1)
 
 func _cycle_mix() -> void:
-	if race:
+	if race and race.s.pits_enabled and race.s.fuel_mult > 0.0:
 		race.player_cycle_mix()
 		if is_instance_valid(audio):
 			audio.beep(560.0, 1)
 
 func _adjust_pit_fuel(delta_litres: float) -> void:
-	if race:
+	if race and race.s.pits_enabled:
 		race.player_adjust_fuel(delta_litres)
 		if is_instance_valid(audio):
 			audio.beep(680.0, 1)
@@ -6630,11 +6683,11 @@ func _change_warp(direction: int) -> void:
 	race.log_event("Time warp ×%d" % race.warp if race.warp > 1 else "Real time", "info")
 
 func _pit() -> void:
-	if race:
+	if race and race.s.pits_enabled:
 		race.player_toggle_pit()
 
 func _replan() -> void:
-	if race:
+	if race and race.s.pits_enabled:
 		race.player_replan()
 		if is_instance_valid(audio):
 			audio.beep(850.0, 1)

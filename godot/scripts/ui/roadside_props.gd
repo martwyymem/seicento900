@@ -94,12 +94,18 @@ func set_rally(enabled: bool) -> void:
 	if not enabled:
 		return
 	var track: Track = world.track
-	var p: PackedFloat64Array = track.pos(0.0, 0.0)
-	var y: float = world.surroundings.ground_height(p[0], p[1]) if world.surroundings else world._ground_at(p[0], p[1])
-	var center := Vector3(p[0] - world.world_center.x, y, p[1] - world.world_center.y)
-	var tangent := Vector3(cos(track.heading(0.0)), 0.0, sin(track.heading(0.0)))
-	var board := Transform3D(Basis(Vector3.UP, atan2(tangent.x, tangent.z)), center + tangent * 8.0)
-	var boards: Array[Transform3D] = [board]
+	var start_s: float = world.race.s.stage_from if (world.race and world.race.s) else 0.0
+	var edge := track.half + track.cfg.runoff
+	var boards: Array[Transform3D] = []
+	for side: float in [1.0, -1.0]:
+		var p: PackedFloat64Array = track.pos(start_s, side * (edge + 1.6))
+		if not world._clear_of_track(_lookup, p[0], p[1], edge + 0.9):
+			continue
+		var y: float = world.surroundings.ground_height(p[0], p[1]) if world.surroundings else world._ground_at(p[0], p[1])
+		var pos := Vector3(p[0] - world.world_center.x, y, p[1] - world.world_center.y)
+		var tangent := Vector3(cos(track.heading(start_s)), 0.0, sin(track.heading(start_s)))
+		boards.append(Transform3D(Basis(Vector3.UP, atan2(-tangent.x, -tangent.z)), pos))
+		break
 	_board_mesh = _add("RallyBoard", boards)
 
 func _add(part: String, transforms: Array[Transform3D]) -> MultiMeshInstance3D:

@@ -71,18 +71,12 @@ static func shape_points(shape: String, c: Vector2, r: float) -> PackedVector2Ar
 	var h := r * 0.9
 	return PackedVector2Array([c + Vector2(-h, -h), c + Vector2(h, -h), c + Vector2(h, h), c + Vector2(-h, h)])
 
-## Race minimap: long tracks switch from the whole-circuit overview to a zoomed heading-up view centred
-## ahead of the player car (placed below centre at RACE_CAR_Y_FRAC of the box height).
-const RACE_FOLLOW_LEN := 8000.0 ## m: laps longer than this use the zoomed heading-up view
-const RACE_FOLLOW_SPAN := 2600.0 ## m: tracks wider/taller than this use the zoomed heading-up view
+## Race minimap: a zoomed heading-up view centred ahead of the player car on every track (placed below centre
+## at RACE_CAR_Y_FRAC of the box height). The whole-circuit overview is no longer chosen.
 const RACE_ZOOM_MIN := 400.0 ## m across at low speeds
 const RACE_ZOOM_MAX := 1500.0 ## m across at extreme speeds
 const RACE_LOOK_SECS := 7.0 ## s of road visible ahead of the car
 const RACE_CAR_Y_FRAC := 0.72 ## fraction down from the top of the minimap box where the player sits
-
-## Whether a circuit is too large to read in full on the race minimap and should use the zoomed follow view.
-static func race_use_follow(track_len: float, span: float) -> bool:
-	return track_len > RACE_FOLLOW_LEN or span > RACE_FOLLOW_SPAN
 
 ## Visible span across the zoomed race minimap (metres), sized to show ~RACE_LOOK_SECS of road ahead of the car.
 static func race_zoom_span(speed_mps: float) -> float:
