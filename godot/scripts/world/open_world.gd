@@ -83,6 +83,7 @@ var race_arrows: RacingArrows ## a race's racing-line chevrons on the map (Event
 var route_mat: StandardMaterial3D
 var hud: OpenWorldHud
 var story: StoryDirector ## the campaign's story: dialogue card, phone messages, journal (scripts/world/story_director.gd)
+var event_setup: EventSetupPanel ## pre-start settings pop-up before starting a stage, mission or live event
 
 var built := false
 var building := false
@@ -208,7 +209,7 @@ func _add_view_fx() -> void:
 	# own_world_3d: viewport.world_3d itself is null, so the mirror rendered the race scene's world
 	mirror.setup(viewport.find_world_3d(), func() -> Node3D:
 		# (not over the full-screen map either: it covered the map's title and hint row)
-		return car_visual if visible and not paused and not (hud and hud.map_open) and is_instance_valid(car_visual) else null)
+		return car_visual if visible and not paused and not _setup_open() and not (hud and hud.map_open) and is_instance_valid(car_visual) else null)
 
 static func available() -> bool:
 	return FileAccess.file_exists("res://data/world/%s.json" % MAP_KEY)
@@ -284,6 +285,7 @@ func open(spawn = "", opts := {}) -> void:
 func suspend() -> void:
 	if not active:
 		return
+	_close_event_setup()
 	_end_cutscene(_fade != null and _fade.visible)
 	_save()
 	active = false
@@ -1934,6 +1936,70 @@ func _start_active_event() -> void:
 		return
 	stage_requested.emit(int(ev.stage))
 
+func _setup_open() -> bool:
+	return event_setup != null and is_instance_valid(event_setup)
+
+## Opens the pre-start settings pop-up for the open beacon the car stands at (campaign stages, sprints, Away Races
+## gate, campaign missions and live events), pausing the open world behind it; restarts on the results card go right in.
+func _prompt_active_event() -> void:
+	if not _result.is_empty():
+		_start_active_event()
+		return
+	if active_event < 0 or active_event >= events.size():
+		return
+	var ev: Dictionary = events[active_event]
+	if not ev.open:
+		return
+	_close_event_setup()
+	var car_key := CarCatalog.key_at(progress.car_class) if progress else "stock"
+	var info: Dictionary
+	if ev.has("live"):
+		var lev := live.find(String(ev.live)) if live else {}
+		if lev.is_empty():
+			return
+		info = EventSetupPanel.describe_live(lev, live, car_key, hour, WorldWeather.word(weather_state()))
+	elif ev.has("mission"):
+		info = EventSetupPanel.describe_mission(int(ev.stage), car_key)
+	else:
+		info = EventSetupPanel.describe_stage(int(ev.stage), car_key, ev.has("away"), bool(ev.get("done", false)))
+	throttle = 0.0
+	brake = 0.0
+	handbrake = 0.0
+	steer = 0.0
+	if audio:
+		audio.update_car(null, false)
+	if surface_fx and car_visual:
+		surface_fx.silence(car_visual)
+	var at := active_event
+	event_setup = EventSetupPanel.open_in(self, info)
+	event_setup.started.connect(func() -> void:
+		event_setup = null
+		_apply_profile()
+		if active_event == at:
+			_start_active_event())
+	event_setup.cancelled.connect(func() -> void:
+		event_setup = null
+		_apply_profile()
+		if active_event == at:
+			active_event = -1
+			_check_events())
+
+func _close_event_setup() -> void:
+	if event_setup != null and is_instance_valid(event_setup):
+		event_setup.queue_free()
+	event_setup = null
+
+func _apply_profile() -> void:
+	gearbox = String(DifficultyProfile.current.get("shifting", "auto"))
+	assists = DifficultyProfile.tier_name(DifficultyProfile.current)
+	aids = DifficultyProfile.aids(DifficultyProfile.current)
+	no_damage = String(DifficultyProfile.current.get("damage", "event")) == "off"
+	if drive:
+		drive.gearbox = gearbox
+		drive.assists = assists
+		drive.aids = aids
+		drive.no_damage = no_damage
+
 # ------------------------------------------------------------------------------------------ the trip abroad
 
 ## The trip to a stage abroad from the Away Races gate (AwayCutscene: a few seconds, skippable), then the stage.
@@ -2489,7 +2555,7 @@ func _process(delta: float) -> void:
 	if cutscene:
 		_update_cutscene(delta) # the trip abroad: no driving, no HUD
 		return
-	if paused or hud.map_open:
+	if paused or hud.map_open or _setup_open():
 		_update_camera(delta)
 		if surface_fx:
 			surface_fx.silence(car_visual)
@@ -2618,7 +2684,7 @@ func _update_camera(delta: float) -> void:
 	var d3 := Vector3(cam_vel_dir.x, 0.0, cam_vel_dir.y)
 	var kmh := absf(car.speed) * 3.6
 	var fov_extra := GfxFx.update(kmh, delta)
-	look.update(delta, not paused and not hud.map_open)
+	look.update(delta, not paused and not hud.map_open and not _setup_open())
 	# swung round the car, the chase camera looks along the view and, more and more, at the car itself
 	var view := look.turn(d3)
 	var at_car := smoothstep(0.0, 1.2, absf(look.yaw)) * 0.7
@@ -2853,6 +2919,8 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventJoypadButton or event is InputEventJoypadMotion:
 		if gamepad_device < 0:
 			gamepad_device = event.device
+	if _setup_open():
+		return
 	if hud.map_open and not paused and hud.map_event(event):
 		get_viewport().set_input_as_handled() # zoom, pan, hop, filters and list (MapNav)
 		return
@@ -2903,7 +2971,7 @@ func _input(event: InputEvent) -> void:
 		"pause", "back":
 			_set_paused(true)
 		"accept":
-			_start_active_event()
+			_prompt_active_event()
 		"map":
 			hud.map_sel = maxi(gps_target, 0)
 			hud.toggle_map(true)

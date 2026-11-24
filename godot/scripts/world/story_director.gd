@@ -46,7 +46,7 @@ func _process(delta: float) -> void:
 		if card.is_open():
 			card.play([]) # dropped quietly: the race or menu took over
 		return
-	if not ow.built or ow.paused or ow.hud.map_open or card.is_open() or ow.drive == null or ow.cutscene != null:
+	if not ow.built or ow.paused or ow.hud.map_open or ow._setup_open() or card.is_open() or ow.drive == null or ow.cutscene != null:
 		return
 	_t -= delta
 	if _t > 0.0:
