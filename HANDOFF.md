@@ -13,7 +13,7 @@ open-world rivals on the race AI (H), harder Nordschleife (skill_boost). Full su
   If red: fix on main. Then run the full gate (with exports) on the final HEAD.
 
 ## User answers (2026-11-24 evening)
-- Pop-up: run it on **Gemini 4 Neon** (antigravity_2). Still "Provider is not authenticated" at ~19:40 UTC: retry delegate_task on Neon after the reset; if still unauthenticated, tell the user (don't switch models unasked).
+- Pop-up: DONE on Neon and MERGED into main (EventSetupPanel, branch t3/29b48b3f, 87/87 suites green on its branch). Everything for 0.6.0 is merged: next is the full gate with exports, then ship.
 - Stage 1: **no Zafira, Seicentos only.** Leave the stage-1 field as Seicentos.
 - Permanent live-event arches/spectators: **keep them** (no change).
 - The no-export gate run on 247d6ca was cut off by the session end: rerun the full gate on HEAD.
