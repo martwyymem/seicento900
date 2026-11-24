@@ -10,6 +10,9 @@ func run() -> Array:
 	_notes(errors)
 	_calls(errors, "fiat") # two corners on a short lap: notes more than half a lap ahead
 	_calls(errors, "monaco")
+	_jumps(errors)
+	_narrows(errors)
+	_finish_calls(errors)
 	_braking_cues(errors)
 	_service(errors)
 	_splits(errors)
@@ -108,6 +111,116 @@ func _unique(a: Array) -> int:
 	for x in a:
 		d[x] = true
 	return d.size()
+
+## The middle of the longest straight on a track's pace notes (m).
+func _straight_mid(pn: PaceNotes, tr: Track) -> float:
+	var best := 0.0
+	var at := 0.0
+	var m := pn.notes.size()
+	for i in m:
+		var a: Dictionary = pn.notes[i]
+		var b: Dictionary = pn.notes[(i + 1) % m]
+		var gap := tr.wrap_s(float(b.s) - float(a.e))
+		if gap > best:
+			best = gap
+			at = tr.wrap_s(float(a.e) + gap / 2.0)
+	return at
+
+## A jump is a crest the car leaves the road over: at 34 m/s a crest that unloads the wheels by JUMP_G g. A crest
+## with a gentler load is a plain "over crest". Both on Monza's longest straight, on a fresh track with its speed
+## profile held at 34 m/s.
+func _jumps(errors: Array[String]) -> void:
+	var v := 34.0
+	var thr := PaceNotes.JUMP_G * PaceNotes.G / (v * v) # the curvature that puts the car off the road at v
+	for c in [["jump", thr * 1.5], ["crest", (PaceNotes.CREST_K + thr) / 2.0]]:
+		var tr := Track.new(Track.load_def("monza"))
+		var s_mid := _straight_mid(PaceNotes.new(tr), tr)
+		tr.PROF.fill(v)
+		# a smooth hump of curvature c[1] (1/m) over the 40 m either side of s_mid
+		for i in tr.n:
+			var d := clampf(tr.rel(i * tr.step - s_mid), -40.0, 40.0)
+			tr.H[i] += -0.5 * float(c[1]) * d * d
+		var near := {}
+		for nt in PaceNotes.new(tr).notes:
+			if nt.dir == 0 and absf(tr.rel(float(nt.apex) - s_mid)) <= 30.0:
+				near = nt
+		if near.is_empty() or near.grade != c[0]:
+			errors.append("a %s on a straight at 34 m/s should be called '%s', got %s" % [c[0], c[0], near.get("grade", "nothing")])
+		elif PaceNotes.spoken(near) != ("jump" if c[0] == "jump" else "over crest") or PaceNotes.label(near) != ("JUMP" if c[0] == "jump" else "CREST"):
+			errors.append("the %s call should say '%s', got '%s'" % [c[0], c[0], PaceNotes.spoken(near)])
+
+## Narrows: a road that loses a quarter of its half width within 50 m is called ahead of the narrow, once; a
+## smaller loss, or a road of one width, is not called.
+func _narrows(errors: Array[String]) -> void:
+	var tr := Track.new(Track.load_def("monza"))
+	var s_mid := _straight_mid(PaceNotes.new(tr), tr)
+	var a := roundi(s_mid / tr.step)
+	for c in [[4.0, 1], [5.2, 0], [6.0, 0]]:
+		tr.HW.resize(tr.n)
+		tr.HW.fill(6.0)
+		for i in range(a, tr.n):
+			tr.HW[i] = c[0]
+		var calls := PaceNotes.new(tr).notes.filter(func(nt): return nt.grade == "narrows")
+		if calls.size() != c[1]:
+			errors.append("a road narrowing to %.1f m of 6.0 should give %d narrows call(s), got %d" % [c[0], c[1], calls.size()])
+		elif c[1] == 1 and absf(tr.rel(float(calls[0].apex) - (s_mid - 50.0))) > 6.0:
+			errors.append("narrows should be called about 50 m before the narrow, got %.0f m from it" % tr.rel(float(calls[0].apex) - s_mid))
+		elif c[1] == 1 and PaceNotes.spoken(calls[0]) != "narrows":
+			errors.append("the narrows call should say 'narrows', got '%s'" % PaceNotes.spoken(calls[0]))
+	tr.HW.clear()
+
+## A rally stage calls its finish: "200 to finish" as the car reaches 200 m out, "flying finish" 100 m out. The
+## calls belong to that race only; the track's own notes (cached) have none.
+func _finish_calls(errors: Array[String]) -> void:
+	var st := RaceSettings.new()
+	st.track = "monza"
+	st.mode = "rally"
+	st.stage_from = 1000.0
+	st.stage_to = 3000.0
+	st.opponents = 0
+	st.race_control = false
+	var race := Race.new(st, null, 7)
+	race.phase = "racing"
+	var p := race.player
+	p.mode = "race"
+	p.control = "rail"
+	p.v = 30.0
+	var cd := CoDriver.new(race)
+	cd.voice_on = false
+	var tr := race.track
+	var fin := tr.wrap_s(3000.0)
+	var sayings := []
+	for nt in cd.notes.notes:
+		if nt.has("say"):
+			sayings.append(nt.say)
+	if not (sayings.has("200 to finish") and sayings.has("flying finish")):
+		errors.append("a rally stage should call its finish, got %s" % [sayings])
+	for nt in PaceNotes.new(tr).notes:
+		if nt.has("say"):
+			errors.append("a track's own pace notes should not carry the finish calls, got '%s'" % nt.say)
+	p.s = tr.wrap_s(fin - 250.0)
+	cd.update(true, 1)
+	if _called(cd, "200 to finish"):
+		errors.append("'200 to finish' should not be called 250 m out")
+	p.s = tr.wrap_s(fin - 199.0)
+	cd.update(true, 1)
+	if not _called(cd, "200 to finish"):
+		errors.append("'200 to finish' should be called 199 m out")
+	if _called(cd, "flying finish"):
+		errors.append("'flying finish' should not be called 199 m out")
+	p.s = tr.wrap_s(fin - 150.0) # (in steps: a jump of more than CoDriver.JUMP restarts the calls)
+	cd.update(true, 1)
+	p.s = tr.wrap_s(fin - 99.0)
+	cd.update(true, 1)
+	if not _called(cd, "flying finish"):
+		errors.append("'flying finish' should be called 99 m out")
+	race.dispose()
+
+func _called(cd: CoDriver, say: String) -> bool:
+	for nt in cd.current():
+		if nt.has("say") and nt.say == say:
+			return true
+	return false
 
 ## Braking-distance lead time, distance countdown, BRAKE cue gating, and early hypercar callouts on Goliath.
 func _braking_cues(errors: Array[String]) -> void:

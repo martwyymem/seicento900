@@ -25,20 +25,28 @@ const DIST_MAX := 500.0 ## ... and beyond which the straight speaks for itself
 const LONG_LEN := 110.0 ## m: a corner at least this long (and turning SQUARE_TURN or more) is long
 const CREST_K := 1.0 / 550.0 ## vertical curvature (1/m) over the top of a rise that lightens the car (0.25 g at 38 m/s)
 const CREST_WIN := 10 ## samples either side of a point the vertical curvature is measured over
+## A crest is a jump where the car, at the speed its profile gives it there, has its wheels unloaded by at least this
+## many g (v² k >= JUMP_G g). No circuit or stage reaches 1 g at profile speed (the highest is 0.94 g, Tokyo), so 0.5 g.
+const JUMP_G := 0.5
+const NARROW_DROP := 0.25 ## a road that loses this share of its half width (Track.HW) ...
+const NARROW_M := 50.0 ## ... within this many metres is called "narrows" ahead of the narrow
+const FINISH_CALLS := [[200.0, "200 to finish", "200 TO FINISH"], [100.0, "flying finish", "FLYING FINISH"]] ## [m before the line, say, tag]
 const V_TOP := 39.0 ## m/s: about a Seicento's top speed, for the caution calls
 const BRAKE_REACTION := 2.5 ## s of reaction time added before a corner's braking point for early callouts
 const LEAD_CAP := 650.0 ## m: upper bound on dynamic callout lead distance
 const BRAKE_MARGIN := 1.12 ## safety factor on braking distance when lighting the BRAKE cue
 const BRAKE_MIN_DROP := 3.5 ## m/s: ignore tiny speed trims where a lift is enough
 
-## [{s, e, apex, dir (+1 right / -1 left, 0 crest), grade, turn (rad), radius (m), mods: [String],
-##   caution, link ("into" | "and" | ""), dist (m, 0 = none)}] sorted by s, the start of the corner.
+## [{s, e, apex, dir (+1 right / -1 left, 0 straight: crest, jump, narrows or a finish call), grade, turn (rad),
+##   radius (m), mods: [String], caution, link ("into" | "and" | ""), dist (m, 0 = none)}] sorted by s, the start of the corner.
+## The straight calls also carry say (spoken) and tag (HUD label).
 var notes: Array = []
 var track: Track
 
-func _init(track_: Track) -> void:
+func _init(track_: Track, build := true) -> void:
 	track = track_
-	_build()
+	if build:
+		_build()
 
 # ---------------- building ----------------
 func _build() -> void:
@@ -118,6 +126,7 @@ func _build() -> void:
 		note.apex = track.wrap_s(note.apex)
 	notes.sort_custom(func(a, b): return a.s < b.s)
 	_add_crests(k)
+	_add_narrows()
 	_link()
 
 ## The grade for a corner whose tightest radius is radius (m) and that turns turn (rad) all told.
@@ -132,7 +141,8 @@ static func grade_for(radius: float, turn: float) -> String:
 	return "tight"
 
 ## The tops of rises the car goes light over: "over crest" on a corner there, a crest note of its own on
-## a straight (only where the car is quick enough for it to matter).
+## a straight (only where the car is quick enough for it to matter). A crest the car leaves the road over (JUMP_G)
+## at the speed the profile carries it is a "jump" instead.
 func _add_crests(k: PackedFloat64Array) -> void:
 	var n := track.n
 	var step := track.step
@@ -141,7 +151,7 @@ func _add_crests(k: PackedFloat64Array) -> void:
 	kv.resize(n)
 	for i in n:
 		kv[i] = (track.H[(i + CREST_WIN) % n] - 2.0 * track.H[i] + track.H[(i - CREST_WIN + n) % n]) / (span * span)
-	var crests: Array = []
+	var crests: Array = [] ## [s, jump]
 	var i := 0
 	while i < n:
 		if kv[i] < -CREST_K:
@@ -152,29 +162,101 @@ func _add_crests(k: PackedFloat64Array) -> void:
 				if kv[j % n] < kv[best % n]:
 					best = j
 				j += 1
-			crests.append(track.wrap_s(best * step))
+			var c_s := track.wrap_s(best * step)
+			var v_top := track.sample(track.PROF, c_s)
+			crests.append([c_s, v_top * v_top * -kv[best % n] >= JUMP_G * G])
 			i = j + 1
 		else:
 			i += 1
 	var added: Array = []
 	for c in crests:
-		var on_corner := false
-		for note in notes:
-			var into := track.rel(c - note.s)
-			if into >= -30.0 and into <= track.rel(note.e - note.s) + 10.0:
-				if not note.mods.has("over crest"):
-					note.mods.append("over crest")
-				on_corner = true
-				break
-		if on_corner:
+		var c_s: float = c[0]
+		var jump: bool = c[1]
+		var corner := _corner_at(c_s)
+		if not corner.is_empty():
+			var word := "jump" if jump else "over crest"
+			if not corner.mods.has(word):
+				corner.mods.append(word)
 			continue
 		# a crest on a straight only gets called where the car is going quickly and it's clear of the last one
-		var fast: bool = absf(k[int(c / step) % n]) < K_ON and track.sample(track.PROF, c) > 30.0
-		if fast and (added.is_empty() or track.rel(c - added[-1]) > 150.0):
-			added.append(c)
-			notes.append({"s": track.wrap_s(c - 10.0), "e": track.wrap_s(c + 10.0), "apex": c, "dir": 0,
-				"grade": "crest", "turn": 0.0, "radius": INF, "mods": [], "caution": false, "link": "", "dist": 0})
+		var fast: bool = absf(k[int(c_s / step) % n]) < K_ON and track.sample(track.PROF, c_s) > 30.0
+		if fast and (added.is_empty() or track.rel(c_s - added[-1]) > 150.0):
+			added.append(c_s)
+			notes.append(_straight_note(c_s, "jump" if jump else "crest", "jump" if jump else "over crest", "JUMP" if jump else "CREST"))
 	notes.sort_custom(func(a, b): return a.s < b.s)
+
+## Where the road narrows by NARROW_DROP or more within NARROW_M: called "narrows" ahead of the narrow, on the
+## corner there or on a straight. Needs the road's half width per sample (Track.HW); a track without it has none.
+func _add_narrows() -> void:
+	var n := track.n
+	if track.HW.size() != n:
+		return
+	var span := maxi(1, roundi(NARROW_M / track.step))
+	var starts: Array = []
+	var inside := _drop(n - 1, span) >= NARROW_DROP
+	for i in n:
+		var narrow := _drop(i, span) >= NARROW_DROP
+		if narrow and not inside:
+			starts.append(i)
+		inside = narrow
+	var added := NAN ## where the last straight narrows call was made
+	for i in starts:
+		var s_n: float = i * track.step
+		var corner := _corner_at(s_n)
+		if not corner.is_empty():
+			if not corner.mods.has("narrows"):
+				corner.mods.append("narrows")
+			continue
+		if is_nan(added) or track.rel(s_n - added) > 150.0:
+			added = s_n
+			notes.append(_straight_note(s_n, "narrows", "narrows", "NARROWS"))
+	notes.sort_custom(func(a, b): return a.s < b.s)
+
+## The share of the road's half width lost between sample i and span samples on.
+func _drop(i: int, span: int) -> float:
+	var n := track.n
+	return 1.0 - track.HW[(i + span) % n] / maxf(track.HW[i], 1e-6)
+
+## The corner (a note that turns) whose run, from 30 m before it starts to 10 m past its end, takes in s; {} if none.
+func _corner_at(s: float) -> Dictionary:
+	for note in notes:
+		if note.dir == 0:
+			continue
+		var into := track.rel(s - note.s)
+		if into >= -30.0 and into <= track.rel(note.e - note.s) + 10.0:
+			return note
+	return {}
+
+## A call on a straight at s (m): a 20 m note with what it says and the HUD tag. call: the distance (m) ahead at
+## which it is called (0 = as the car reaches it).
+func _straight_note(s: float, grade: String, say: String, tag: String, call := -1.0) -> Dictionary:
+	var note := {"s": track.wrap_s(s - 10.0), "e": track.wrap_s(s + 10.0), "apex": track.wrap_s(s), "dir": 0,
+		"grade": grade, "turn": 0.0, "radius": INF, "mods": [], "caution": false, "link": "", "dist": 0,
+		"say": say, "tag": tag}
+	if call >= 0.0:
+		note["call"] = call
+	return note
+
+## The notes of a rally stage that finishes finish_m (m from the start line): the track's notes plus "200 to
+## finish" and "flying finish" called before the line. A copy with its own links, so the cached track notes
+## stay as they are.
+static func with_finish(base: PaceNotes, finish_m: float) -> PaceNotes:
+	var pn := PaceNotes.new(base.track, false)
+	for note in base.notes:
+		var c: Dictionary = note.duplicate(true)
+		c.link = ""
+		c.dist = 0
+		c.caution = false
+		pn.notes.append(c)
+	for fc in FINISH_CALLS:
+		# called as the car reaches its mark, so the note starts on the mark (not 10 m before it, as a crest's does)
+		var fnote := pn._straight_note(finish_m - fc[0], "finish", fc[1], fc[2], 0.0)
+		fnote.s = pn.track.wrap_s(finish_m - fc[0])
+		fnote.e = pn.track.wrap_s(finish_m - fc[0] + 10.0)
+		pn.notes.append(fnote)
+	pn.notes.sort_custom(func(a, b): return a.s < b.s)
+	pn._link()
+	return pn
 
 ## How each note runs into the next, and where a corner needs a caution.
 func _link() -> void:
@@ -211,6 +293,8 @@ static func distance_call(gap: float) -> int:
 # ---------------- words ----------------
 ## What the co-driver says for a note, e.g. "caution, square right, tightens, into".
 static func spoken(note: Dictionary) -> String:
+	if note.dir == 0 and note.has("say"):
+		return note.say
 	var words: Array = []
 	if note.caution:
 		words.append("caution")
@@ -229,6 +313,8 @@ static func spoken(note: Dictionary) -> String:
 
 ## The note as the HUD prints it under the arrow box, e.g. "SQUARE RIGHT · TIGHTENS".
 static func label(note: Dictionary) -> String:
+	if note.dir == 0 and note.has("tag"):
+		return note.tag
 	var words: Array = ["CREST" if note.dir == 0 else "%s %s" % [note.grade.to_upper(), "RIGHT" if note.dir > 0 else "LEFT"]]
 	for mod in note.mods:
 		words.append(mod.to_upper())
@@ -241,7 +327,7 @@ static func label(note: Dictionary) -> String:
 ## HUD caption with an active distance countdown to the upcoming corner (e.g. "SQUARE LEFT 250"); once inside
 ## the corner (dist_to <= 0) falls back to label(note) so exit links ("INTO" / "AND") still show.
 static func hud_label(note: Dictionary, dist_to := 0) -> String:
-	if dist_to <= 0:
+	if dist_to <= 0 or (note.dir == 0 and note.has("tag")):
 		return label(note)
 	var words: Array = ["CREST" if note.dir == 0 else "%s %s" % [note.grade.to_upper(), "RIGHT" if note.dir > 0 else "LEFT"]]
 	for mod in note.mods:
