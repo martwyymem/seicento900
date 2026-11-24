@@ -29,6 +29,22 @@ const SHIRT_COLORS := [
 	"#e52521", "#ff6a1a", "#ffb703", "#00b4d8", "#7a3cff", "#e6197b", "#2a9d8f", "#f4f1ea",
 	"#1d3557", "#2b2d42", "#e76f51", "#457b9d", "#52b788", "#d62828", "#f77f00", "#6c757d",
 ]
+## The organisers' suits (jacket colour, linear via _col_lin) for the executives at every mission start's trailer.
+const EXEC_JACKETS := ["#1d2b4a", "#2b2b30", "#4a1d2b", "#1f3a33", "#51575e", "#3a2f27"]
+const EXEC_MODELS := ["FestExecStand", "FestExecClip", "FestExecTalk"]
+## Mission starts: the grid runs forward from the line (StreetRivals rows 7 m apart), so the barriers keep off it.
+const START_GRID_END := 16.0
+const START_CROWD_CAP := 380 ## spectators per mission start (frame budget: SPECTATOR_RANGE culls the rest)
+const TRAILER_ALONG := [8.0, 12.0, 4.0, 16.0, -8.0, 22.0]
+const TRAILER_LAT := [7.9, 9.2, 11.0, 13.0] ## m from the road edge to the trailer's long axis (its table and executives stand in between)
+const TRAILER_SAMPLES_X := [-4.4, -2.8, -1.2, 0.4, 2.0, 3.6, 5.2, 6.2]
+const TRAILER_SAMPLES_Z := [-5.1, -3.7, -2.3, -0.9, 0.5, 1.7]
+## Executives around the trailer's table and hatch in its local (x, z) with a pose index into EXEC_MODELS and the way they face.
+const EXEC_SPOTS := [
+	[Vector2(-2.5, -3.1), 0, Vector2(1, 0)], [Vector2(-0.75, -3.1), 1, Vector2(-1, 0)],
+	[Vector2(-1.6, -4.4), 2, Vector2(0, 1)], [Vector2(-1.9, -1.95), 1, Vector2(0, 1)],
+	[Vector2(2.3, -2.7), 0, Vector2(1, 0)], [Vector2(3.5, -2.7), 2, Vector2(-1, 0)],
+]
 const BULB_COLORS := ["#ffd27a", "#ff8c42", "#ff4d94", "#66e0ff", "#ffe599", "#a3ff7a"]
 const FIREWORK_COLORS := [
 	Color(1.0, 0.72, 0.18), Color(1.0, 0.22, 0.56), Color(0.18, 0.85, 1.0),
@@ -41,6 +57,7 @@ var festival_pos := Vector3.ZERO
 var festival_face := 0.0
 
 var spectator_mat: ShaderMaterial
+var exec_mat: ShaderMaterial ## the spectator shader in suit mode
 var lights_mat: ShaderMaterial
 var _banner_mat: StandardMaterial3D
 var _mesh_cache := {} ## model name -> [mesh, local_xf] with Banner tintable & Lamp driven
@@ -71,6 +88,10 @@ var _crowd_t := 0.0
 ## Placement accumulators during build()
 var _spec_xfs := [[], [], []] ## per pose: Stand, Cheer, Wave
 var _spec_custom := [[], [], []]
+var _exec_xfs := [[], [], []] ## per EXEC_MODELS pose
+var _exec_custom := [[], [], []]
+var _trailer_xfs := []
+var _trailer_cols := []
 var _barrier_xfs := []
 var _barrier_cols := []
 var _hay_xfs := []
@@ -91,6 +112,7 @@ var _bunting_cells := {} ## Vector2i -> MeshBatch
 var _bulb_cells := {} ## Vector2i -> MeshBatch
 var _placed_zones: Array[Vector2] = [] ## spacing guard for roadside clusters
 var _placed_arches: Array[Vector2] = [] ## spacing guard for arches
+var _dressed_starts: Array[Vector2] = [] ## mission starts already given crowds and a trailer (this build only)
 
 var stats := {} ## counts for diagnostics / tests
 
@@ -144,6 +166,8 @@ func _mark_dressing() -> Dictionary:
 		bulb_m[c] = (_bulb_cells[c] as MeshBatch).mark()
 	return {
 		"spec": [(_spec_xfs[0] as Array).size(), (_spec_xfs[1] as Array).size(), (_spec_xfs[2] as Array).size()],
+		"exec": [(_exec_xfs[0] as Array).size(), (_exec_xfs[1] as Array).size(), (_exec_xfs[2] as Array).size()],
+		"trailer": _trailer_xfs.size(),
 		"barrier": _barrier_xfs.size(),
 		"hay": _hay_xfs.size(),
 		"flag": _flag_xfs.size(),
@@ -211,6 +235,13 @@ func _capture_dressing(mark: Dictionary) -> Dictionary:
 		var n0: int = int(spec_n[p_i])
 		spec_xfs.append((_spec_xfs[p_i] as Array).slice(n0))
 		spec_custom.append((_spec_custom[p_i] as Array).slice(n0))
+	var exec_xfs: Array = []
+	var exec_custom: Array = []
+	var exec_n: Array = mark["exec"]
+	for p_i in 3:
+		var n0: int = int(exec_n[p_i])
+		exec_xfs.append((_exec_xfs[p_i] as Array).slice(n0))
+		exec_custom.append((_exec_custom[p_i] as Array).slice(n0))
 	var post_n: Dictionary = mark["post"]
 	var post_delta: Array = []
 	for ck in map._post_cells:
@@ -228,6 +259,10 @@ func _capture_dressing(mark: Dictionary) -> Dictionary:
 	return {
 		"spec_xfs": spec_xfs,
 		"spec_custom": spec_custom,
+		"exec_xfs": exec_xfs,
+		"exec_custom": exec_custom,
+		"trailer_xfs": _trailer_xfs.slice(int(mark["trailer"])),
+		"trailer_cols": _trailer_cols.slice(int(mark["trailer"])),
 		"barrier_xfs": _barrier_xfs.slice(int(mark["barrier"])),
 		"barrier_cols": _barrier_cols.slice(int(mark["barrier"])),
 		"hay_xfs": _hay_xfs.slice(int(mark["hay"])),
@@ -261,6 +296,13 @@ func _restore_dressing(data: Dictionary) -> void:
 	for p_i in 3:
 		(_spec_xfs[p_i] as Array).append_array(sx[p_i] as Array)
 		(_spec_custom[p_i] as Array).append_array(sc[p_i] as Array)
+	var ex: Array = data["exec_xfs"]
+	var ec: Array = data["exec_custom"]
+	for p_i in 3:
+		(_exec_xfs[p_i] as Array).append_array(ex[p_i] as Array)
+		(_exec_custom[p_i] as Array).append_array(ec[p_i] as Array)
+	_trailer_xfs.append_array(data["trailer_xfs"] as Array)
+	_trailer_cols.append_array(data["trailer_cols"] as Array)
 	_barrier_xfs.append_array(data["barrier_xfs"] as Array)
 	_barrier_cols.append_array(data["barrier_cols"] as Array)
 	_hay_xfs.append_array(data["hay_xfs"] as Array)
@@ -313,6 +355,10 @@ func _init_materials() -> void:
 	spectator_mat = ShaderMaterial.new()
 	spectator_mat.shader = SPECTATOR_SHADER
 	builder.night_materials.append(spectator_mat)
+	exec_mat = ShaderMaterial.new()
+	exec_mat.shader = SPECTATOR_SHADER
+	exec_mat.set_shader_parameter("suit", 1.0)
+	builder.night_materials.append(exec_mat)
 
 	lights_mat = ShaderMaterial.new()
 	lights_mat.shader = LIGHTS_SHADER
@@ -375,6 +421,11 @@ func _spectator_mesh(pose_idx: int) -> Array:
 	if builder.has_model(nm):
 		return builder.models[nm]
 	return [_fallback_spectator(), Transform3D.IDENTITY]
+
+
+func _exec_mesh(pose_idx: int) -> Array:
+	var nm: String = EXEC_MODELS[pose_idx]
+	return builder.models[nm] if builder.has_model(nm) else []
 
 
 static func _fallback_spectator() -> Mesh:
@@ -1085,7 +1136,8 @@ func _build_event_gates() -> void:
 		var p_start: Vector2 = mev.pos
 		var dir_start := Vector2(cos(float(mev.heading)), sin(float(mev.heading)))
 		if map.in_play(p_start):
-			_dress_gate_point(p_start, dir_start, 10 + k, false)
+			_dress_gate_point(p_start, dir_start, 10 + k, false, true)
+			_dress_mission_start(p_start, dir_start, k)
 			gates += 1
 		var path: PackedVector2Array = mev.get("path", PackedVector2Array())
 		if path.size() >= 2:
@@ -1098,7 +1150,109 @@ func _build_event_gates() -> void:
 	stats["event_gates"] = gates
 
 
-func _dress_gate_point(p: Vector2, dir: Vector2, col_idx: int, allow_stall: bool) -> void:
+# ================================================================================================ 4b. mission starts
+
+func _spec_count() -> int:
+	return (_spec_xfs[0] as Array).size() + (_spec_xfs[1] as Array).size() + (_spec_xfs[2] as Array).size()
+
+
+## Crowds along both sides of the road before and beyond a campaign mission's grid (never on the grid itself, which runs
+## START_GRID_END m forward from the line), capped at START_CROWD_CAP spectators, plus the organisers' trailer with its
+## executives on the open verge beside the grid. Called after _dress_gate_point, which put the arch and the first barriers.
+func _dress_mission_start(p: Vector2, dir: Vector2, k: int) -> void:
+	var near := map.nearest_road(p, 25.0)
+	var half := 3.6
+	if not near.is_empty():
+		p = near.pos
+		dir = near.dir
+		half = map.road_w[int(near.road)] * 0.5
+	for q in _dressed_starts:
+		if q.distance_to(p) < 40.0:
+			return # two missions starting on the same spot share one trailer and crowd
+	_dressed_starts.append(p)
+	var side := Vector2(-dir.y, dir.x)
+	var people0 := _spec_count()
+	var trailer := _place_trailer(p, dir, side, half, k)
+	var runs := 0
+	for sgn: float in [-1.0, 1.0]:
+		var out := side * sgn
+		for along: float in [-31.0, -42.0, -53.0, -64.0, START_GRID_END + 27.0, START_GRID_END + 38.0, START_GRID_END + 49.0,
+				START_GRID_END + 60.0, START_GRID_END + 71.0]:
+			if _spec_count() - people0 >= START_CROWD_CAP:
+				break
+			if _place_barrier_crowd_flex(p + dir * along, dir, out, half, 10.0, 3, k + runs, true, true, true):
+				runs += 1
+	stats["mission_starts"] = int(stats.get("mission_starts", 0)) + 1
+	stats["mission_crowd_runs"] = int(stats.get("mission_crowd_runs", 0)) + runs
+	stats["mission_crowd_people"] = int(stats.get("mission_crowd_people", 0)) + _spec_count() - people0
+	if trailer:
+		stats["mission_trailers"] = int(stats.get("mission_trailers", 0)) + 1
+
+
+## Trailer-local (x along its length, z from its centre line, -z = the service side facing the road) -> map point.
+static func _trailer_pt(c: Vector2, yaw: float, l: Vector2) -> Vector2:
+	return c + Vector2(cos(yaw) * l.x + sin(yaw) * l.y, -sin(yaw) * l.x + cos(yaw) * l.y)
+
+
+## The ground height under a trailer centred at c with `yaw` (the lowest body corner), or NAN when anything of its
+## footprint (body, awning, table, tow bar) lands on a road, building, water, rail, wall or post, or the ground is too uneven.
+func _trailer_ground(c: Vector2, yaw: float) -> float:
+	for lx: float in TRAILER_SAMPLES_X:
+		for lz: float in TRAILER_SAMPLES_Z:
+			var q := _trailer_pt(c, yaw, Vector2(lx, lz))
+			if not _clear_off_road(q, 1.1, 0.8) or not map.walls_near(q, 0.6).is_empty() or not map.posts_near(q, 0.7).is_empty():
+				return NAN
+	var lo := INF
+	var hi := -INF
+	for l: Vector2 in [Vector2(-4.2, -1.3), Vector2(4.2, -1.3), Vector2(-4.2, 1.3), Vector2(4.2, 1.3), Vector2(-1.6, -3.6), Vector2.ZERO]:
+		var q := _trailer_pt(c, yaw, l)
+		var g := _ground_y(q)
+		lo = minf(lo, g)
+		hi = maxf(hi, g)
+	return lo if hi - lo <= 0.9 else NAN
+
+
+## Parks one organisers' trailer beside the road near a mission start, its serving side towards the road, with the
+## executives around its table, wall collision on the body and posts for the awning, table and tow bar.
+func _place_trailer(p: Vector2, dir: Vector2, side: Vector2, half: float, k: int) -> bool:
+	if not builder.has_model("FestTrailer"):
+		return false
+	for sgn: float in ([1.0, -1.0] if k % 2 == 0 else [-1.0, 1.0]):
+		var out := side * sgn
+		var face := -out
+		var yaw := atan2(-face.x, -face.y)
+		for along: float in TRAILER_ALONG:
+			for lat: float in TRAILER_LAT:
+				var c := p + dir * along + out * (half + lat)
+				var y := _trailer_ground(c, yaw)
+				if is_nan(y):
+					continue
+				_trailer_xfs.append(Transform3D(Basis(Vector3.UP, yaw), Vector3(c.x, y, c.y)))
+				_trailer_cols.append(_col_lin(FEST_COLORS[(k + 3) % FEST_COLORS.size()]))
+				var cn: Array = [Vector2(-4.2, -1.3), Vector2(4.2, -1.3), Vector2(4.2, 1.3), Vector2(-4.2, 1.3)]
+				for i in 4:
+					map.add_wall(_trailer_pt(c, yaw, cn[i]), _trailer_pt(c, yaw, cn[(i + 1) % 4]), 0.22)
+				map.add_post(_trailer_pt(c, yaw, Vector2(-3.2, -2.6)), 0.14)
+				map.add_post(_trailer_pt(c, yaw, Vector2(0.0, -2.6)), 0.14)
+				map.add_post(_trailer_pt(c, yaw, Vector2(-1.6, -3.6)), 0.5)
+				map.add_post(_trailer_pt(c, yaw, Vector2(5.5, 0.0)), 0.35)
+				for e in EXEC_SPOTS.size():
+					var spot: Array = EXEC_SPOTS[e]
+					var w := _trailer_pt(c, yaw, spot[0])
+					var f: Vector2 = spot[2]
+					var yaw_e := yaw + atan2(-f.x, -f.y)
+					var jc := _col_lin(EXEC_JACKETS[(k + e) % EXEC_JACKETS.size()])
+					var seed_v := clampf(_h(w.x * 1.73, w.y * 1.29, 11.3 + float(e)), 0.01, 0.99)
+					var pose: int = spot[1]
+					_exec_xfs[pose].append(Transform3D(Basis(Vector3.UP, yaw_e), Vector3(w.x, _ground_y(w), w.y)))
+					_exec_custom[pose].append(Color(jc.r, jc.g, jc.b, seed_v))
+				return true
+	return false
+
+
+## start_grid: a campaign mission's start, where the rivals' grid runs forward from the line (START_GRID_END): the barriers
+## stand behind that stretch instead of beside it, and _dress_mission_start adds the longer crowds and the trailer.
+func _dress_gate_point(p: Vector2, dir: Vector2, col_idx: int, allow_stall: bool, start_grid := false) -> void:
 	var near := map.nearest_road(p, 25.0)
 	var half := 3.6
 	if not near.is_empty():
@@ -1118,7 +1272,10 @@ func _dress_gate_point(p: Vector2, dir: Vector2, col_idx: int, allow_stall: bool
 	for sgn: float in [-1.0, 1.0]:
 		var out := side * sgn
 		var placed_side := 0
-		for group_offs in [[-10.5, -14.5, -6.5, -19.0], [10.5, 14.5, 6.5, 19.0]]:
+		var groups := [[-10.5, -14.5, -6.5, -19.0], [10.5, 14.5, 6.5, 19.0]]
+		if start_grid:
+			groups = [[-9.5, -14.5, -19.5, -24.0], [START_GRID_END + 6.0, START_GRID_END + 11.0, START_GRID_END + 16.0, START_GRID_END + 21.0]]
+		for group_offs in groups:
 			for along_off: float in group_offs:
 				var cp := p + dir * along_off
 				if _place_barrier_crowd_flex(cp, dir, out, half, 10.0, 3, col_idx + (1 if sgn > 0 else 0), true, true, true):
@@ -1126,7 +1283,10 @@ func _dress_gate_point(p: Vector2, dir: Vector2, col_idx: int, allow_stall: bool
 					break
 		# Tight junction / ramp fallback: still pack cheering spectators on nearby clear verges so no gate looks empty
 		if placed_side == 0:
-			for along_off: float in [-10.0, 10.0, -16.0, 16.0, -4.5, 4.5]:
+			var fallback_offs: Array = [-10.0, 10.0, -16.0, 16.0, -4.5, 4.5]
+			if start_grid:
+				fallback_offs = [-10.0, START_GRID_END + 7.0, -16.0, START_GRID_END + 13.0, -5.0, START_GRID_END + 3.0]
+			for along_off: float in fallback_offs:
 				var got := 0
 				for lat_add: float in [2.0, 3.2, 4.6]:
 					got = _place_crowd_cluster(p + dir * along_off + out * (half + lat_add), dir, out, 7.5, 3, float(col_idx) + along_off + sgn)
@@ -1246,39 +1406,13 @@ func sync_live_events(board: Array) -> void:
 # ================================================================================================ 6. commit batches
 
 func _commit_batches() -> void:
-	# Spectators: 3 pose variants, chunked per 256 m cell, custom_data enabled, shadows OFF for max FPS
-	var total_specs := 0
-	var pose_names := ["SpectatorsStand", "SpectatorsCheer", "SpectatorsWave"]
-	for p_i in 3:
-		total_specs += _spec_xfs[p_i].size()
-		if _spec_xfs[p_i].is_empty():
-			continue
-		var sm := _spectator_mesh(p_i)
-		var local: Transform3D = sm[1]
-		var placed := []
-		for xf in _spec_xfs[p_i]:
-			placed.append((xf as Transform3D) * local)
-		var cells := _chunk_custom(placed, _spec_custom[p_i], SPEC_CHUNK)
-		for ci in cells.size():
-			var cell: Array = cells[ci]
-			var mm := MultiMesh.new()
-			mm.transform_format = MultiMesh.TRANSFORM_3D
-			mm.use_colors = false
-			mm.use_custom_data = true
-			mm.mesh = sm[0]
-			mm.instance_count = int(cell[1])
-			mm.buffer = cell[0]
-			var mmi := MultiMeshInstance3D.new()
-			mmi.name = pose_names[p_i] if ci == 0 else "%s%d" % [pose_names[p_i], ci]
-			mmi.multimesh = mm
-			mmi.material_override = spectator_mat
-			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			mmi.extra_cull_margin = 2.0
-			mmi.visibility_range_end = SPECTATOR_RANGE
-			mmi.visibility_range_end_margin = 20.0
-			builder._ranged.append([mmi, SPECTATOR_RANGE])
-			add_child(mmi)
+	# Spectators: 3 pose variants, chunked per 128 m cell, custom_data enabled, shadows OFF for max FPS
+	var total_specs := _commit_people(["SpectatorsStand", "SpectatorsCheer", "SpectatorsWave"], _spec_xfs, _spec_custom, spectator_mat, _spectator_mesh)
 	stats["spectators"] = total_specs
+	# The organisers' executives (same shader in suit mode) and their trailers
+	stats["executives"] = _commit_people(["ExecsStand", "ExecsClip", "ExecsTalk"], _exec_xfs, _exec_custom, exec_mat, _exec_mesh)
+	_commit_prop_mm("OrganiserTrailers", _prop_mesh("FestTrailer"), _trailer_xfs, _trailer_cols, ARCH_RANGE, true)
+	stats["trailers"] = _trailer_xfs.size()
 
 	# Festival props: all MultiMesh chunked by 256 m cell with visibility ranges
 	_commit_prop_mm("CrowdBarriers", _prop_mesh("CrowdBarrier"), _barrier_xfs, _barrier_cols, PROP_RANGE, false)
@@ -1340,6 +1474,9 @@ func _commit_batches() -> void:
 	# Free temporary accumulators
 	_spec_xfs = [[], [], []]
 	_spec_custom = [[], [], []]
+	_exec_xfs = [[], [], []]
+	_exec_custom = [[], [], []]
+	_trailer_xfs.clear(); _trailer_cols.clear()
 	_barrier_xfs.clear(); _barrier_cols.clear()
 	_hay_xfs.clear()
 	_flag_xfs.clear(); _flag_cols.clear()
@@ -1351,6 +1488,44 @@ func _commit_batches() -> void:
 	_fest_arch_xfs.clear(); _fest_arch_cols.clear()
 	_bunting_cells.clear()
 	_bulb_cells.clear()
+
+
+## One animated MultiMesh per pose and 128 m cell (INSTANCE_CUSTOM = tint + seed, see spectator.gdshader); returns the head count.
+func _commit_people(node_names: Array, xfs_by_pose: Array, custom_by_pose: Array, mat: ShaderMaterial, mesh_of: Callable) -> int:
+	var total := 0
+	for p_i in node_names.size():
+		var xfs: Array = xfs_by_pose[p_i]
+		total += xfs.size()
+		if xfs.is_empty():
+			continue
+		var sm: Array = mesh_of.call(p_i)
+		if sm.is_empty():
+			continue
+		var local: Transform3D = sm[1]
+		var placed := []
+		for xf in xfs:
+			placed.append((xf as Transform3D) * local)
+		var cells := _chunk_custom(placed, custom_by_pose[p_i], SPEC_CHUNK)
+		for ci in cells.size():
+			var cell: Array = cells[ci]
+			var mm := MultiMesh.new()
+			mm.transform_format = MultiMesh.TRANSFORM_3D
+			mm.use_colors = false
+			mm.use_custom_data = true
+			mm.mesh = sm[0]
+			mm.instance_count = int(cell[1])
+			mm.buffer = cell[0]
+			var mmi := MultiMeshInstance3D.new()
+			mmi.name = node_names[p_i] if ci == 0 else "%s%d" % [node_names[p_i], ci]
+			mmi.multimesh = mm
+			mmi.material_override = mat
+			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			mmi.extra_cull_margin = 2.0
+			mmi.visibility_range_end = SPECTATOR_RANGE
+			mmi.visibility_range_end_margin = 20.0
+			builder._ranged.append([mmi, SPECTATOR_RANGE])
+			add_child(mmi)
+	return total
 
 
 func _commit_prop_mm(node_name: String, mesh_xf: Array, xfs: Array, cols: Array, range_end: float, shadows: bool) -> void:
@@ -1511,6 +1686,9 @@ func update(delta: float, car_pos: Vector3, car_vel: Vector3, night: float, acti
 	if spectator_mat:
 		spectator_mat.set_shader_parameter("car_pos", car_pos)
 		spectator_mat.set_shader_parameter("car_vel", car_vel)
+	if exec_mat:
+		exec_mat.set_shader_parameter("car_pos", car_pos)
+		exec_mat.set_shader_parameter("car_vel", car_vel)
 	var lamps_on := clampf((night - 0.35) * 3.0, 0.0, 1.0)
 	if lamps_on != _lamps_shown:
 		_lamps_shown = lamps_on

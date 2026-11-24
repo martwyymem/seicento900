@@ -8,12 +8,16 @@
 //   A   = per-spectator random seed [0..1)
 // Driven cheaply in vertex() by player car proximity and speed: idle sway, cheering/waving/jumping as the
 // car passes, and a quick jump-back dodge if the car drives close.
+// suit = 1 (the organisers' FestExec* pieces, a second ShaderMaterial): INSTANCE_CUSTOM.rgb is the jacket, trousers are
+// dark business colours, nobody wears a cap, part 1.0 is paper (clipboard, lanyard badge: no night glow) and the
+// excitement is muted so they stay composed (they still dodge a close car).
 shader_type spatial;
 render_mode blend_mix, depth_draw_opaque, cull_back;
 
 uniform vec3 car_pos = vec3(0.0, -9999.0, 0.0);
 uniform vec3 car_vel = vec3(0.0);
 uniform float night = 0.0;
+uniform float suit = 0.0;
 
 varying vec3 tint;
 varying float glow_flag;
@@ -53,11 +57,21 @@ void vertex() {
 		vec3(0.34, 0.18, 0.09)
 	);
 	// ~30% wear bright festival caps matching or contrasting the shirt
-	if (h1 > 0.70) {
+	if (h1 > 0.70 && suit < 0.5) {
 		hair = mix(shirt, vec3(0.95, 0.78, 0.15), step(0.85, h1));
 	}
-	glow_flag = part > 3.5 ? 1.0 : 0.0;
-	tint = part < 0.5 ? shirt : part < 1.5 ? skin : part < 2.5 ? legs : part < 3.5 ? hair : vec3(0.85, 0.92, 1.0);
+	if (suit > 0.5) {
+		legs = pick6(h2,
+			vec3(0.05, 0.05, 0.07),
+			vec3(0.09, 0.10, 0.14),
+			vec3(0.14, 0.14, 0.16),
+			vec3(0.07, 0.08, 0.12),
+			vec3(0.11, 0.09, 0.09),
+			vec3(0.16, 0.17, 0.19)
+		);
+	}
+	glow_flag = (part > 3.5 && suit < 0.5) ? 1.0 : 0.0;
+	tint = part < 0.5 ? shirt : part < 1.5 ? skin : part < 2.5 ? legs : part < 3.5 ? hair : (suit > 0.5 ? vec3(0.93, 0.92, 0.86) : vec3(0.85, 0.92, 1.0));
 
 	// Subtle per-person height variation (~1.75 m average)
 	VERTEX.y *= 0.94 + h2 * 0.12;
@@ -70,6 +84,7 @@ void vertex() {
 	float car_spd = length(car_vel.xz);
 	float near_h = 1.0 - smoothstep(3.0, 48.0, dist);
 	float excite = near_h * clamp(0.35 + car_spd / 16.0, 0.35, 1.45) * (1.0 - smoothstep(4.0, 10.0, dy));
+	excite *= mix(1.0, 0.3, suit);
 
 	// Idle sway & rhythmic cheering/jumping
 	float phase = seed * 43.0;
