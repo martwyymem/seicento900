@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="Seicento 900 Cup"
-config/version="0.5.8"
+config/version="0.5.9"
 run/main_scene="res://ui/game.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
 
