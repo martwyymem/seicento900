@@ -15,6 +15,10 @@ const KEYS: Array[String] = ["stock", "hypercar", "golf4", "logan", "v50", "i20"
 ## {from, dir, up} cast at the Body mesh, so a new model needs no measuring by hand.
 const STOCK_VISUAL := {
 	"model": "res://models/seicento.glb", "wheel_radius": 0.2665, "wheelbase": 2.2, "half_track_front": 0.6315, "half_track_rear": 0.6315,
+	# the driver (RaceCarVisual): `seat` is the hip on the cushion and `wheel` the hub, both measured from the model's seat and wheel
+	# in tools/blender/build_seicento.py (-X: left-hand drive); `wheel_r` the rim's radius; `cabin_tilt` the baked-in wheel's tilt, so the
+	# visual can cut it out of the Cabin mesh and draw its own turning one; `scale` fits the figure under the roof
+	"driver": {"seat": Vector3(-0.36, 0.455, 0.49), "wheel": Vector3(-0.36, 0.93, -0.08), "wheel_r": 0.175, "cabin_tilt": 62.0, "rake": 22.0, "scale": 0.96},
 	"roof_number": Vector3(0.0, 1.428, 0.6), "brake_light": Vector3(0.0, 0.5, 2.1), "tailpipe": Vector3(0.30, 0.19, 1.56),
 	"fx_axle": Vector3(0.0, 0.03, 1.12), "contact": Vector2(2.0, 3.9),
 	# the race's on-car cameras (RaceWorld): m ahead of the visual's origin and up, just past the bumper and over the scuttle
@@ -22,6 +26,10 @@ const STOCK_VISUAL := {
 }
 const GOLF4_VISUAL := {
 	"model": "res://models/golf4.glb", "wheel_radius": 0.3172, "wheelbase": 2.511, "half_track_front": 0.7565, "half_track_rear": 0.747,
+	# the driver (RaceCarVisual): `seat` is the hip on the cushion and `wheel` the hub, both measured from the model's seat and wheel
+	# in tools/blender/build_golf4.py (-X: left-hand drive); `wheel_r` the rim's radius; `cabin_tilt` the baked-in wheel's tilt, so the
+	# visual can cut it out of the Cabin mesh and draw its own turning one; `scale` fits the figure under the roof
+	"driver": {"seat": Vector3(-0.37, 0.495, 0.3265), "wheel": Vector3(-0.37, 0.99, -0.2235), "wheel_r": 0.19, "cabin_tilt": 66.0, "rake": 22.0, "scale": 0.96},
 	"roof_number": Vector3(0.0, 1.444, 0.55), "brake_light": Vector3(0.0, 0.6, 2.25), "tailpipe": Vector3(0.35, 0.24, 2.08),
 	"fx_axle": Vector3(0.0, 0.03, 1.2555), "contact": Vector2(2.1, 4.5),
 	# the plates' bottom edges (front bumper, tailgate recess) and a top limit for car_plate.gdshader; 512 x 105 mm as the Seicento's
@@ -47,6 +55,10 @@ const GOLF4_VISUAL := {
 
 const LOGAN_VISUAL := {
 	"model": "res://models/logan.glb", "wheel_radius": 0.3108, "wheelbase": 2.630, "half_track_front": 0.733, "half_track_rear": 0.728,
+	# the driver (RaceCarVisual): `seat` is the hip on the cushion and `wheel` the hub, both measured from the model's seat and wheel
+	# in tools/blender/build_logan.py (-X: left-hand drive); `wheel_r` the rim's radius; `cabin_tilt` the baked-in wheel's tilt, so the
+	# visual can cut it out of the Cabin mesh and draw its own turning one; `scale` fits the figure under the roof
+	"driver": {"seat": Vector3(-0.37, 0.495, 0.335), "wheel": Vector3(-0.37, 0.99, -0.215), "wheel_r": 0.19, "cabin_tilt": 66.0, "rake": 22.0, "scale": 0.96},
 	"roof_number": Vector3(0.0, 1.530, 0.30), "brake_light": Vector3(0.0, 0.85, 2.36), "tailpipe": Vector3(0.40, 0.262, 2.142),
 	"fx_axle": Vector3(0.0, 0.03, 1.315), "contact": Vector2(2.05, 4.6),
 	# the plates' bottom edges (front bumper, boot lid recess between the tail lamps) and a top limit (build_logan.py)
@@ -70,6 +82,10 @@ const LOGAN_VISUAL := {
 
 const V50_VISUAL := {
 	"model": "res://models/v50.glb", "wheel_radius": 0.3160, "wheelbase": 2.640, "half_track_front": 0.7675, "half_track_rear": 0.7655,
+	# the driver (RaceCarVisual): `seat` is the hip on the cushion and `wheel` the hub, both measured from the model's seat and wheel
+	# in tools/blender/build_v50.py (-X: left-hand drive); `wheel_r` the rim's radius; `cabin_tilt` the baked-in wheel's tilt, so the
+	# visual can cut it out of the Cabin mesh and draw its own turning one; `scale` fits the figure under the roof
+	"driver": {"seat": Vector3(-0.37, 0.435, 0.4), "wheel": Vector3(-0.37, 0.93, -0.15), "wheel_r": 0.19, "cabin_tilt": 66.0, "rake": 22.0, "scale": 0.96},
 	"roof_number": Vector3(0.0, 1.418, 0.30), "brake_light": Vector3(0.0, 0.95, 2.55), "tailpipe": Vector3(0.42, 0.268, 2.32),
 	"fx_axle": Vector3(0.0, 0.03, 1.32), "contact": Vector2(2.1, 4.85),
 	# the plates' bottom edges (front bumper under the grille, tailgate between the lamps) and a top limit (build_v50.py)
@@ -93,6 +109,10 @@ const V50_VISUAL := {
 
 const I20_VISUAL := {
 	"model": "res://models/i20.glb", "wheel_radius": 0.3015, "wheelbase": 2.525, "half_track_front": 0.7525, "half_track_rear": 0.7515,
+	# the driver (RaceCarVisual): `seat` is the hip on the cushion and `wheel` the hub, both measured from the model's seat and wheel
+	# in tools/blender/build_i20.py (-X: left-hand drive); `wheel_r` the rim's radius; `cabin_tilt` the baked-in wheel's tilt, so the
+	# visual can cut it out of the Cabin mesh and draw its own turning one; `scale` fits the figure under the roof
+	"driver": {"seat": Vector3(-0.35, 0.505, 0.1525), "wheel": Vector3(-0.35, 1.01, -0.3675), "wheel_r": 0.185, "cabin_tilt": 66.0, "rake": 22.0, "scale": 0.96},
 	"roof_number": Vector3(0.0, 1.494, 0.45), "brake_light": Vector3(0.0, 1.00, 2.08), "tailpipe": Vector3(0.36, 0.254, 1.897),
 	"fx_axle": Vector3(0.0, 0.03, 1.2625), "contact": Vector2(2.05, 4.30),
 	# the plates' bottom edges (front hexagonal grille bar, rear bumper recess) and a top limit (build_i20.py)
@@ -116,6 +136,10 @@ const I20_VISUAL := {
 
 const SANDERO_VISUAL := {
 	"model": "res://models/sandero.glb", "wheel_radius": 0.310, "wheelbase": 2.588, "half_track_front": 0.740, "half_track_rear": 0.7345,
+	# the driver (RaceCarVisual): `seat` is the hip on the cushion and `wheel` the hub, both measured from the model's seat and wheel
+	# in tools/blender/build_sandero.py (-X: left-hand drive); `wheel_r` the rim's radius; `cabin_tilt` the baked-in wheel's tilt, so the
+	# visual can cut it out of the Cabin mesh and draw its own turning one; `scale` fits the figure under the roof
+	"driver": {"seat": Vector3(-0.36, 0.525, 0.171), "wheel": Vector3(-0.36, 1.03, -0.349), "wheel_r": 0.185, "cabin_tilt": 66.0, "rake": 22.0, "scale": 0.96},
 	"roof_number": Vector3(0.0, 1.538, 0.45), "brake_light": Vector3(0.0, 0.96, 2.10), "tailpipe": Vector3(0.38, 0.270, 1.917),
 	"fx_axle": Vector3(0.0, 0.03, 1.294), "contact": Vector2(2.08, 4.38),
 	# the plates' bottom edges (front bumper beam, tailgate recess) and a top limit (build_sandero.py)
@@ -138,6 +162,10 @@ const SANDERO_VISUAL := {
 
 const FOCUS_VISUAL := {
 	"model": "res://models/focus.glb", "wheel_radius": 0.321, "wheelbase": 2.648, "half_track_front": 0.772, "half_track_rear": 0.767,
+	# the driver (RaceCarVisual): `seat` is the hip on the cushion and `wheel` the hub, both measured from the model's seat and wheel
+	# in tools/blender/build_focus.py (-X: left-hand drive); `wheel_r` the rim's radius; `cabin_tilt` the baked-in wheel's tilt, so the
+	# visual can cut it out of the Cabin mesh and draw its own turning one; `scale` fits the figure under the roof
+	"driver": {"seat": Vector3(-0.38, 0.495, 0.306), "wheel": Vector3(-0.38, 1.0, -0.264), "wheel_r": 0.185, "cabin_tilt": 66.0, "rake": 22.0, "scale": 0.96},
 	"roof_number": Vector3(0.0, 1.488, 0.40), "brake_light": Vector3(0.0, 0.90, 2.30), "tailpipe": Vector3(0.40, 0.248, 2.138),
 	"fx_axle": Vector3(0.0, 0.03, 1.324), "contact": Vector2(2.15, 4.70),
 	# the plates' bottom edges (front hexagonal grille plinth, rear tailgate) and a top limit (build_focus.py)
@@ -160,6 +188,10 @@ const FOCUS_VISUAL := {
 
 const ZAFIRA_VISUAL := {
 	"model": "res://models/zafira.glb", "wheel_radius": 0.3160, "wheelbase": 2.703, "half_track_front": 0.744, "half_track_rear": 0.755,
+	# the driver (RaceCarVisual): `seat` is the hip on the cushion and `wheel` the hub, both measured from the model's seat and wheel
+	# in tools/blender/build_zafira.py (-X: left-hand drive); `wheel_r` the rim's radius; `cabin_tilt` the baked-in wheel's tilt, so the
+	# visual can cut it out of the Cabin mesh and draw its own turning one; `scale` fits the figure under the roof
+	"driver": {"seat": Vector3(-0.37, 0.63, -0.0115), "wheel": Vector3(-0.37, 1.12, -0.5015), "wheel_r": 0.19, "cabin_tilt": 66.0, "rake": 22.0, "scale": 0.96},
 	"roof_number": Vector3(0.0, 1.620, 0.50), "brake_light": Vector3(0.0, 1.00, 2.42), "tailpipe": Vector3(0.40, 0.264, 2.231),
 	"fx_axle": Vector3(0.0, 0.03, 1.3515), "contact": Vector2(2.15, 4.80),
 	# front bumper beam plate (0.440) and tailgate recess plate (0.695), 512 x 105 mm (build_zafira.py)

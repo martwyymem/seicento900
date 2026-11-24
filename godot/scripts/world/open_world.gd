@@ -2551,6 +2551,7 @@ func _update_camera(delta: float) -> void:
 	# swung round the car, the chase camera looks along the view and, more and more, at the car itself
 	var view := look.turn(d3)
 	var at_car := smoothstep(0.0, 1.2, absf(look.yaw)) * 0.7
+	car_visual.set_driver_visible(cam_mode != 2) # the driver's seat is where the cockpit camera sits
 	match cam_mode:
 		1:
 			var target := p - d3 * (8.5 + float(CarCatalog.visual(String(car_visual.car_key)).get("chase_back", 0.0))) + Vector3.UP * 3.2

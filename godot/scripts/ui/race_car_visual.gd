@@ -15,6 +15,14 @@ const HALF_TRACK := 0.6315
 const CABIN_RANGE := 45.0 ## m: farther cars skip the cabin (dash, seat, cage), unseen through the glass
 const FX_REACH := [0.0, 35.0, 60.0, 90.0] ## m from the camera within which bots show effects, per quality preset
 const FX_AXLE := Vector3(0.0, 0.03, 1.12) ## effects come off the rear contact patches (+Z is backwards)
+const DRIVER_MODEL := "res://models/driver.glb" ## built by tools/blender/build_driver.py
+const DRIVER_RANGE := 80.0 ## m: farther cars show no driver (a few pixels there) and skip his animation
+const DRIVER_STEER_RATIO := 4.0 ## rad of steering wheel per rad of road-wheel steer
+const DRIVER_WHEEL_MAX := 2.2 ## rad: the most the wheel turns on screen (126 degrees)
+const DRIVER_RIM_R := 0.19 ## m: the rim radius driver.glb's wheel is built with (WHEEL_R in build_driver.py)
+## Where the glove's centre sits from the shoulder in the arm mesh (right arm; the left mirrors x): the line the visual turns at the hand
+const DRIVER_HAND_REST := Vector3(0.03, -0.185, -0.478)
+const DRIVER_HIDE_CAMERAS := [2, 6, 7] ## RaceWorld camera modes that ride inside or just ahead of the car: the player's driver goes
 const WHEEL_SPOTS := [Vector3(-HALF_TRACK, WHEEL_RADIUS, -1.1), Vector3(HALF_TRACK, WHEEL_RADIUS, -1.1),
 	Vector3(-HALF_TRACK, WHEEL_RADIUS, 1.1), Vector3(HALF_TRACK, WHEEL_RADIUS, 1.1)] ## FL, FR, RL, RR like the physics
 
@@ -26,6 +34,7 @@ var _wheel_radius := WHEEL_RADIUS
 var _wheelbase := WHEELBASE
 var _wheel_spots: Array = WHEEL_SPOTS
 static var _env_materials: Array[ShaderMaterial] = [] ## every car_coat.gdshader material, see _env_material()
+static var _driver_cache := {} ## driver.glb's meshes by object name: {"mesh", "pos"} (shared by every car)
 
 var paint_material: StandardMaterial3D
 var stripe_material: StandardMaterial3D
@@ -67,6 +76,30 @@ var car_number := 1:
 			number_label.text = str(car_number)
 		_update_decals()
 var is_player := false
+
+# the driver (see _build_driver): a figure in the seat, a wheel that turns with the steering, a head that follows the corners
+var _driver: Node3D
+var _drv_body: MeshInstance3D
+var _drv_head: MeshInstance3D
+var _drv_arms: Array[MeshInstance3D] = [] ## left, right
+var _drv_wheel: MeshInstance3D
+var _drv_seat := Vector3.ZERO ## the hip, in the visual's frame
+var _drv_hub := Vector3.ZERO
+var _drv_wheel_r := 0.19
+var _drv_scale := 1.0
+var _drv_rake := Basis()
+var _drv_wheel_scale := Basis()
+var _drv_shoulders: Array[Vector3] = [] ## in the driver's frame (the arms' pivots)
+var _drv_neck := Vector3.ZERO
+var _drv_turn := 0.0 ## wheel angle, rad (+ = counter-clockwise seen by the driver)
+var _drv_yaw := 0.0
+var _drv_roll := 0.0
+var _drv_pitch := 0.0
+var _drv_accel := 0.0
+var _drv_speed := 0.0
+var _driver_shown := true ## false in the cameras that sit inside the car
+var _drv_suit_mat: StandardMaterial3D ## this car's own two tinted materials (the meshes are shared)
+var _drv_helmet_mat: StandardMaterial3D
 
 ## Smoothed presentation state (radians).
 var grade_pitch := 0.0
@@ -224,6 +257,11 @@ func set_car(key: String) -> void:
 	_near_beam = null
 	_beam_pool = null
 	_beacon = null
+	_driver = null
+	_drv_body = null
+	_drv_head = null
+	_drv_wheel = null
+	_drv_arms.clear()
 	_lamp_sig = Vector4(-1.0, -1.0, -1.0, -1.0)
 	_damage_shown = 0.0
 	_dents_shown = {"front": 0.0, "rear": 0.0, "left": 0.0, "right": 0.0}
@@ -313,6 +351,7 @@ func _build() -> void:
 	cabin.visibility_range_end = CABIN_RANGE
 	cabin.visibility_range_end_margin = 4.0
 	body_pivot.add_child(cabin)
+	_build_driver()
 
 	stripes_node = MeshInstance3D.new()
 	stripes_node.name = "Stripes"
@@ -1079,6 +1118,7 @@ func set_paint(color: Color) -> void:
 	_paint = color
 	_apply_finish()
 	_apply_paint()
+	_tint_driver()
 
 ## The base coat: Martini Racing and Marlboro cars are always white, whatever paint was picked.
 func _base_paint() -> Color:
@@ -1093,6 +1133,7 @@ func set_livery(value: int) -> void:
 		return
 	_apply_finish()
 	_apply_paint()
+	_tint_driver()
 	_show_livery()
 	if is_instance_valid(stripes_node) and livery in WHITE_LIVERIES:
 		stripes_node.visible = false
@@ -1316,6 +1357,7 @@ func sync(car: RaceCar, dt: float, curvature: float, night: float, ghost: bool) 
 	var steer_angle: float = car.steer if car.control == "free" else atan(_wheelbase * curvature) * 1.4
 	steer_pivots[0].rotation.y = -steer_angle
 	steer_pivots[1].rotation.y = -steer_angle
+	_animate_driver(car, dt, steer_angle)
 
 	var reversing: bool = car.control == "free" and car.rev
 	set_lamps(night, car.brake_on, reversing)
@@ -1338,6 +1380,7 @@ func sync(car: RaceCar, dt: float, curvature: float, night: float, ghost: bool) 
 
 	if ghost != _ghost:
 		_ghost = ghost
+		_refresh_driver()
 		paint_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA if ghost else BaseMaterial3D.TRANSPARENCY_DISABLED
 		_apply_paint()
 		_show_livery()
@@ -1371,6 +1414,192 @@ func sync(car: RaceCar, dt: float, curvature: float, night: float, ghost: bool) 
 	if car.last_hit > _hit_seen and _fx_near and DriftStyle.amount(absf(DriftStyle.slip_angle(car.vx, car.vy, car.heading)), absf(car.speed)) > 0.2:
 		FxParticles.burst(self, "sparks", global_position + Vector3(0.0, 0.25, 0.0), 14, _world.quality) # a wall touched mid-drift
 	_hit_seen = car.last_hit
+
+# ---------------- the driver ----------------
+## The figure in the left seat (models/driver.glb, tools/blender/build_driver.py): body, helmet, two arms and a steering wheel that
+## replaces the baked-in one (the shared Cabin mesh has it cut out, see _without_wheel). The meshes are shared by every car; each car
+## has its own two tinted materials and about six draw calls, and none of it is seen past DRIVER_RANGE. The wheel turns with the
+## steering, the hands ride its rim, the head turns into the corner, rolls with it and nods under braking and acceleration.
+func _build_driver() -> void:
+	var fit: Dictionary = _fit.get("driver", {})
+	var parts := _driver_parts()
+	if fit.is_empty() or parts.size() < 5:
+		return
+	_drv_seat = fit.seat
+	_drv_hub = fit.wheel
+	_drv_wheel_r = fit.wheel_r
+	_drv_scale = fit.scale
+	_drv_rake = Basis(Vector3.RIGHT, -deg_to_rad(float(fit.rake)))
+	_drv_wheel_scale = Basis.from_scale(Vector3.ONE * (_drv_wheel_r / DRIVER_RIM_R))
+	_driver = Node3D.new()
+	_driver.name = "Driver"
+	_driver.position = _drv_seat
+	_driver.scale = Vector3.ONE * _drv_scale
+	body_pivot.add_child(_driver)
+	_drv_suit_mat = _driver_material(0.85, 0.0)
+	_drv_helmet_mat = _driver_material(0.3, 0.6)
+	_drv_body = _driver_mesh(_driver, "DriverBody", parts["DriverBody"])
+	_drv_head = _driver_mesh(_driver, "DriverHead", parts["DriverHead"])
+	_drv_neck = _drv_head.position
+	_drv_arms.clear()
+	_drv_shoulders.clear()
+	for name in ["DriverArmL", "DriverArmR"]:
+		var arm := _driver_mesh(_driver, name, parts[name])
+		_drv_arms.append(arm)
+		_drv_shoulders.append(arm.position)
+	_drv_wheel = _driver_mesh(body_pivot, "SteeringWheel", parts["SteeringWheel"]) # in the car's frame: it is not scaled with the figure
+	_drv_turn = 0.0
+	_drv_yaw = 0.0
+	_drv_roll = 0.0
+	_drv_pitch = 0.0
+	_drv_accel = 0.0
+	_pose_driver()
+	_tint_driver()
+	_refresh_driver()
+
+## One of driver.glb's meshes as a node (named after it) under parent, with this car's suit and helmet materials on its surfaces.
+func _driver_mesh(parent: Node3D, label: String, part: Dictionary) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.name = label
+	mi.mesh = part.mesh
+	mi.position = part.pos
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.visibility_range_end = DRIVER_RANGE
+	mi.visibility_range_end_margin = 6.0
+	var m: Mesh = part.mesh
+	for i in m.get_surface_count():
+		var mat := m.surface_get_material(i)
+		match mat.resource_name if mat else "":
+			"Suit":
+				mi.set_surface_override_material(i, _drv_suit_mat)
+			"Helmet":
+				mi.set_surface_override_material(i, _drv_helmet_mat)
+	parent.add_child(mi)
+	return mi
+
+## A suit or helmet material: the mesh's vertex colours (white cloth, dark gloves and boots) times the tint set per car.
+func _driver_material(rough: float, spec: float) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.vertex_color_use_as_albedo = true
+	m.roughness = rough
+	m.metallic_specular = 0.5 if spec <= 0.0 else spec
+	if spec > 0.0:
+		m.clearcoat_enabled = true
+		m.clearcoat = 0.7
+		m.clearcoat_roughness = 0.12
+	return m
+
+## Suit and helmet colours from the car's paint (the Hypercar's AF Corse yellow gives a yellow suit and helmet, the visor dark; a
+## white car or livery gets the team colours instead: Martini blue, Marlboro red, a dark navy otherwise, with a white helmet).
+func _tint_driver() -> void:
+	if _driver == null:
+		return
+	var base := _base_paint()
+	var suit := base
+	var helmet := Color.WHITE
+	if livery == 2:
+		suit = Color("#1d3f8f")
+	elif livery == 4:
+		suit = Color("#c8102e")
+	elif base.s < 0.2 and base.v > 0.55:
+		suit = Color("#1c2a4a") # white and silver cars
+	else:
+		suit = Color.from_hsv(base.h, minf(1.0, base.s * 0.95), base.v * 0.82)
+	if suit.get_luminance() > 0.45:
+		helmet = base # a bright suit (the yellow Hypercar): a helmet in the paint's colour, which shows against the dark seat
+	_drv_suit_mat.albedo_color = suit
+	_drv_helmet_mat.albedo_color = helmet
+
+## Shown unless a camera inside the car (or a ghost) would have it in the way; set_driver_visible() is the outside's switch.
+func _refresh_driver() -> void:
+	if _driver:
+		_driver.visible = _driver_shown and not _ghost
+		_drv_wheel.visible = _driver_shown and not _ghost
+
+func set_driver_visible(shown: bool) -> void:
+	if shown != _driver_shown:
+		_driver_shown = shown
+		_refresh_driver()
+
+## Moves the wheel, hands and head to the state in _drv_*. No allocations: only Basis, Vector3 and Transform3D values.
+func _pose_driver() -> void:
+	var wb := _drv_rake * Basis(Vector3.BACK, _drv_turn)
+	_drv_wheel.transform = Transform3D(wb * _drv_wheel_scale, _drv_hub)
+	_drv_head.transform = Transform3D(Basis.from_euler(Vector3(_drv_pitch, _drv_yaw, _drv_roll)), _drv_neck)
+	for i in 2:
+		var side := -1.0 if i == 0 else 1.0
+		var hand := (_drv_hub + wb * Vector3(side * _drv_wheel_r, 0.0, 0.0) - _drv_seat) / _drv_scale # in the driver's frame
+		var rest := Vector3(side * DRIVER_HAND_REST.x, DRIVER_HAND_REST.y, DRIVER_HAND_REST.z)
+		var d := hand - _drv_shoulders[i]
+		var arm := _drv_arms[i]
+		arm.transform = Transform3D(Basis(Quaternion(rest.normalized(), d.normalized())) * (d.length() / rest.length()), _drv_shoulders[i])
+
+## Follows the steering, the lateral and the longitudinal acceleration (smoothed, so a kerb or a bump does not jerk the head).
+func _animate_driver(car: RaceCar, dt: float, steer_angle: float) -> void:
+	if _driver == null or dt <= 0.0:
+		return
+	if is_player and _world != null and "camera_mode" in _world:
+		set_driver_visible(not (_world.camera_mode in DRIVER_HIDE_CAMERAS))
+	if not _driver.visible:
+		return
+	var cam := get_viewport().get_camera_3d()
+	if cam and cam.global_position.distance_squared_to(global_position) > DRIVER_RANGE * DRIVER_RANGE * 1.3:
+		return
+	var turn_goal := clampf(-steer_angle * DRIVER_STEER_RATIO, -DRIVER_WHEEL_MAX, DRIVER_WHEEL_MAX)
+	_drv_turn += (turn_goal - _drv_turn) * minf(1.0, dt * 14.0)
+	var ax := clampf((car.speed - _drv_speed) / dt, -16.0, 9.0)
+	_drv_speed = car.speed
+	var slow := minf(1.0, dt * 4.0)
+	_drv_accel += (ax - _drv_accel) * minf(1.0, dt * 6.0)
+	_drv_yaw += (clampf(-steer_angle * 1.1, -0.5, 0.5) - _drv_yaw) * slow
+	_drv_roll += (clampf(-steer_angle * absf(car.speed) * 0.016, -0.14, 0.14) - _drv_roll) * slow
+	_drv_pitch += (clampf(_drv_accel * 0.011, -0.13, 0.09) - _drv_pitch) * slow
+	_pose_driver()
+
+static func _driver_parts() -> Dictionary:
+	if not _driver_cache.is_empty():
+		return _driver_cache
+	var root := _load_model(DRIVER_MODEL)
+	if root == null:
+		return _driver_cache
+	for mi in root.find_children("*", "MeshInstance3D", true, false):
+		_driver_cache[String(mi.name).split(".")[0]] = {"mesh": (mi as MeshInstance3D).mesh, "pos": (mi as MeshInstance3D).position}
+	root.free()
+	return _driver_cache
+
+## The Cabin mesh without its baked-in steering wheel (rim, spokes and hub boss, a disc round the hub in the wheel's plane,
+## tilted cabin_tilt degrees by tools/blender/build_*.py): the driver brings a wheel that turns. The column stays. A new mesh;
+## the shared model is not touched.
+static func _without_wheel(mesh: Mesh, fit: Dictionary) -> Mesh:
+	var d: Dictionary = fit.get("driver", {})
+	if d.is_empty() or mesh.get_surface_count() == 0:
+		return mesh
+	var tilt := deg_to_rad(float(d.cabin_tilt))
+	var normal := Vector3(0.0, sin(tilt), cos(tilt)) # Blender (0, -cos, sin) in Godot's frame
+	var hub: Vector3 = d.wheel
+	var reach: float = float(d.wheel_r) + 0.03
+	var out := ArrayMesh.new()
+	for s in mesh.get_surface_count():
+		var arrays := mesh.surface_get_arrays(s)
+		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var index: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+		if index.is_empty():
+			index = PackedInt32Array(range(verts.size()))
+		var kept := PackedInt32Array()
+		for t in range(0, index.size() - 2, 3):
+			var c := (verts[index[t]] + verts[index[t + 1]] + verts[index[t + 2]]) / 3.0 - hub
+			var along := c.dot(normal)
+			if absf(along) < 0.018 and (c - normal * along).length() < reach:
+				continue
+			kept.append(index[t])
+			kept.append(index[t + 1])
+			kept.append(index[t + 2])
+		if kept.is_empty():
+			continue # a surface that was only wheel (the yellow marker, the badge)
+		arrays[Mesh.ARRAY_INDEX] = kept
+		out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		out.surface_set_material(out.get_surface_count() - 1, mesh.surface_get_material(s))
+	return out
 
 # ---------------- tyre smoke, spray and kick-up ----------------
 ## Effect strengths from what the car is doing and what it drives on. Bots only show them near the camera
@@ -1523,7 +1752,7 @@ static func _shared_resources(key := "stock") -> Dictionary:
 			meshes[mi.name] = (mi as MeshInstance3D).mesh
 		root.free()
 	var shell: Mesh = meshes.get("Body", BoxMesh.new())
-	var cabin: Mesh = meshes.get("Cabin", ArrayMesh.new())
+	var cabin: Mesh = _without_wheel(meshes.get("Cabin", ArrayMesh.new()), fit)
 	var details: Mesh = meshes.get("Details", BoxMesh.new())
 
 	# the Details mesh and the panels' Details pieces cut from it (a bumper took the plate and the grille with it): the
