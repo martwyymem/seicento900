@@ -133,6 +133,9 @@ var _split_prev_s := 0.0
 var _split_marks: Array = [] ## times into this lap at the splits passed so far
 var _split_ref: Array = [] ## the splits of the player's best lap this session
 var _split_show := {} ## {k, t, delta (null: no reference), until}
+var _decel_last_t := -1.0 ## race_time of last player-speed sample for BRAKE cue deceleration check
+var _decel_last_v := 0.0
+var _decel_measured := 0.0
 
 var _font: Font
 var _bold: Font
@@ -307,6 +310,9 @@ func start(race_: Race, world_: Node3D, audio_: RaceAudio) -> void:
 	_last_flag = ""
 	_refresh_t = 0.0
 	_map_track = null
+	_decel_last_t = -1.0
+	_decel_last_v = 0.0
+	_decel_measured = 0.0
 	_map_key = ""
 	_dash_key = []
 	_fitted.clear()
@@ -1390,34 +1396,48 @@ func _draw_clock() -> void:
 ## The co-driver's calls, as CMR 2.0 shows them: an orange box per note called and not yet driven, its
 ## black arrow drawn for the grade (a gentle bend for flat, an elbow for square, a U for a hairpin, a hump
 ## for a crest) with a red "!" for a caution; the call written underneath, or the corner's name between notes.
-## Evaluates the upcoming corner countdown and braking cue for the player car from PaceNotes.brake_cue
-## (using the active car's speed profile and braking decel), with Race.brake_assist as a short-range fallback.
+## Player's observed deceleration (m/s², >= 0) from actual speed change across sim ticks and body ax_f.
+## Idempotent when queried multiple times within the same simulation timestamp.
+func _player_decel(p: RaceCar, spd: float) -> float:
+	var t := race.race_time
+	if _decel_last_t < 0.0 or t < _decel_last_t:
+		_decel_last_t = t
+		_decel_last_v = spd
+		_decel_measured = 0.0
+	elif t > _decel_last_t + 1e-4:
+		var dt := t - _decel_last_t
+		if dt < 0.5:
+			var dv_dt := (_decel_last_v - spd) / dt
+			_decel_measured = lerpf(_decel_measured, maxf(0.0, dv_dt), 0.65)
+		else:
+			_decel_measured = 0.0
+		_decel_last_t = t
+		_decel_last_v = spd
+	var phys_decel := maxf(0.0, -p.phys.ax_f) if p.phys != null else 0.0
+	return maxf(_decel_measured, phys_decel)
+
+## Evaluates the upcoming corner countdown (from the co-driver's live note) and the dynamic BRAKE cue
+## using the exact same PaceNotes.track_brake_cue / brake_zone calculation as the red racing-line chevrons.
+## Stays quiet once the player is already braking hard enough or already slow enough for the corner.
 func _live_brake_state(live: Array) -> Dictionary:
 	var p := race.player
-	if p == null or race.phase != "racing" or p.finished or p.dnf or p.mode != "race":
+	if p == null or race.phase != "racing" or p.finished or p.dnf or p.mode != "race" or p.rev:
 		return {"countdown": 0, "brake_alert": false}
 	var tr := race.track
-	var spd := maxf(absf(p.speed), p.v if p.control == "rail" else 0.0)
-	var mu := race.tyres.tyre_grip(p.tyre, race.weather.wet) if (race.tyres and race.weather) else 1.0
+	var spd := maxf(0.0, p.speed if p.control == "free" else p.v)
+	var mu := race.plan_grip(p) if (race.tyres and race.weather) else 1.0
 	var countdown := 0
-	var cue_brake := false
-	for i in live.size():
-		var nt: Dictionary = live[i]
-		var ahead := tr.wrap_s(float(nt.s) - p.s)
-		if ahead > tr.L * 0.5:
-			ahead = 0.0
-		var v_corner := INF
-		if int(nt.dir) != 0:
-			v_corner = tr.sample(tr.PROF, float(nt.apex)) * sqrt(maxf(0.2, mu)) if not tr.PROF.is_empty() \
-				else PaceNotes.corner_speed(float(nt.radius), race.brake_k, race.brake_aero, mu)
-		var decel := PaceNotes.brake_decel(spd, v_corner, race.brake_k, race.brake_aero, mu)
-		var cue := PaceNotes.brake_cue(ahead, spd, v_corner, decel)
-		if i == 0:
-			countdown = int(cue.countdown)
-		if bool(cue.brake):
-			cue_brake = true
-	var assist_brake: bool = race.brake_assist(p) > 0.08 and spd > 13.0 and p.brake < 0.25
-	return {"countdown": countdown, "brake_alert": cue_brake or assist_brake}
+	if not live.is_empty():
+		var nt0: Dictionary = live[0]
+		var ahead0 := tr.wrap_s(float(nt0.s) - p.s)
+		if ahead0 > tr.L * 0.5:
+			ahead0 = 0.0
+		countdown = PaceNotes.countdown_metres(ahead0)
+	var corner_v := PaceNotes.corner_profile(tr, race.brake_k, race.brake_aero, race._loose)
+	var actual_decel := _player_decel(p, spd)
+	var cue := PaceNotes.track_brake_cue(tr, corner_v, p.s, spd,
+		race.brake_k * p.fx_brake, race.brake_aero * p.fx_brake, mu, p.brake, actual_decel)
+	return {"countdown": countdown, "brake_alert": bool(cue.brake)}
 
 func _draw_pacenote() -> void:
 	if not race:

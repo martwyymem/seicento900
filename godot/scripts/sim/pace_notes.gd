@@ -34,8 +34,16 @@ const FINISH_CALLS := [[200.0, "200 to finish", "200 TO FINISH"], [100.0, "flyin
 const V_TOP := 39.0 ## m/s: about a Seicento's top speed, for the caution calls
 const BRAKE_REACTION := 2.5 ## s of reaction time added before a corner's braking point for early callouts
 const LEAD_CAP := 650.0 ## m: upper bound on dynamic callout lead distance
-const BRAKE_MARGIN := 1.12 ## safety factor on braking distance when lighting the BRAKE cue
+const BRAKE_MARGIN := 1.12 ## safety factor on braking distance when lighting the BRAKE cue / red arrows
 const BRAKE_MIN_DROP := 3.5 ## m/s: ignore tiny speed trims where a lift is enough
+const YELLOW_LEAD := 0.55 ## s of speed-scaled lift/prepare warning ahead of the red braking point
+const YELLOW_MIN_MARGIN := 12.0 ## m minimum yellow lead ahead of a braking zone
+const BRAKE_SUFFICIENT_INPUT := 0.55 ## brake pedal share at which the driver counts as actively braking
+const BRAKE_SUFFICIENT_RATIO := 0.85 ## actual decel vs required decel (while braking) to keep BRAKE quiet
+
+enum BrakeZone { GREEN, YELLOW, RED }
+
+static var _corner_cache := {} ## track + car key -> PackedFloat64Array steady-state cornering limits (mu = 1)
 
 ## [{s, e, apex, dir (+1 right / -1 left, 0 straight: crest, jump, narrows or a finish call), grade, turn (rad),
 ##   radius (m), mods: [String], caution, link ("into" | "and" | ""), dist (m, 0 = none)}] sorted by s, the start of the corner.
@@ -377,18 +385,174 @@ static func countdown_metres(dist: float) -> int:
 		return 0
 	return maxi(50, int(roundf(dist / 50.0)) * 50)
 
-## Braking-cue state for a corner `dist_to_corner` metres ahead: returns {brake, brake_dist, urgency, countdown}.
-## `brake` is true only when the car is faster than the corner allows (by BRAKE_MIN_DROP) and at or past its braking point.
-static func brake_cue(dist_to_corner: float, v: float, v_corner: float, decel: float) -> Dictionary:
+## Braking-zone distances (m before a corner of speed `v_corner`) for a car currently at speed `v` (m/s)
+## with realistic braking deceleration `decel` (m/s²). Returns Vector2(red_dist, yellow_dist); negative
+## entries mean that band does not apply. Shared by both the dynamic racing-line arrows and the BRAKE cue.
+static func brake_zone_distances(v: float, v_corner: float, decel: float) -> Vector2:
+	var spd := maxf(0.0, v)
+	if not is_finite(v_corner) or decel <= 0.0 or spd <= v_corner + 0.5:
+		return Vector2(-1.0, -1.0)
+	var d_brake := braking_distance(spd, v_corner, decel)
+	var red_dist := d_brake * BRAKE_MARGIN if spd > v_corner + BRAKE_MIN_DROP and d_brake > 0.0 else -1.0
+	var yellow_pad := maxf(YELLOW_MIN_MARGIN, spd * YELLOW_LEAD) if red_dist >= 0.0 else maxf(6.0, d_brake * 0.5)
+	var yellow_dist := d_brake * BRAKE_MARGIN + yellow_pad
+	return Vector2(red_dist, yellow_dist)
+
+## Pure speed-vs-corner classifier for a point `dist` metres ahead of a corner with target speed `v_corner`,
+## given current speed `v` (m/s) and realistic braking decel `decel` (m/s²):
+## BrakeZone.GREEN (fine / can accelerate), YELLOW (lift / prepare to brake), RED (must brake now).
+static func brake_zone(v: float, dist: float, v_corner: float, decel: float) -> int:
+	var lim := brake_zone_distances(v, v_corner, decel)
+	var d := maxf(0.0, dist)
+	if lim.x >= 0.0 and d <= lim.x:
+		return BrakeZone.RED
+	if lim.y >= 0.0 and d <= lim.y:
+		return BrakeZone.YELLOW
+	return BrakeZone.GREEN
+
+## Braking-cue state for a corner `dist_to_corner` metres ahead: returns {brake, brake_dist, urgency, countdown, zone}.
+## `brake` is true only when `brake_zone` is RED (stopping distance >= distance left) AND the driver is not
+## already braking enough (brake pedal high and deceleration sufficient) or already slow enough.
+static func brake_cue(dist_to_corner: float, v: float, v_corner: float, decel: float,
+		brake_input := 0.0, actual_decel := NAN) -> Dictionary:
 	var spd := maxf(0.0, v)
 	var d_brake := braking_distance(spd, v_corner, decel)
-	var too_fast := is_finite(v_corner) and spd > v_corner + BRAKE_MIN_DROP and d_brake > 0.0
+	var zone := brake_zone(spd, dist_to_corner, v_corner, decel)
+	var at_point := zone == BrakeZone.RED
+	var braking_enough := false
+	if at_point and brake_input >= BRAKE_SUFFICIENT_INPUT:
+		var a_req := (spd * spd - v_corner * v_corner) / (2.0 * maxf(dist_to_corner, 1.0))
+		var cur_decel := decel * clampf(brake_input, 0.0, 1.0) if is_nan(actual_decel) else actual_decel
+		if cur_decel >= maxf(2.0, a_req * BRAKE_SUFFICIENT_RATIO):
+			braking_enough = true
+	var show_brake := at_point and not braking_enough
 	var trigger := d_brake * BRAKE_MARGIN
-	var at_point := too_fast and dist_to_corner <= trigger
 	var urgency := 0.0
-	if at_point:
+	if show_brake:
 		urgency = clampf((trigger - dist_to_corner) / maxf(25.0, d_brake * 0.4) + 0.25, 0.25, 1.0)
-	return {"brake": at_point, "brake_dist": d_brake, "urgency": urgency, "countdown": countdown_metres(dist_to_corner)}
+	return {"brake": show_brake, "brake_dist": d_brake, "urgency": urgency,
+		"countdown": countdown_metres(dist_to_corner), "zone": zone}
+
+## Cached steady-state cornering speed profile (m/s at mu = 1, without backward braking envelope) for a
+## track and car, matching Track.build_profile / profile_for / loose_profile without mutating Track.
+static func corner_profile(tr: Track, brake_k := 1.0, brake_aero := 0.0, loose := false) -> PackedFloat64Array:
+	var key := "%s:%d:%.4f:%.6f:%d" % [tr.key, tr.get_instance_id(), brake_k, brake_aero, 1 if loose else 0]
+	if _corner_cache.has(key):
+		return _corner_cache[key]
+	var n := tr.n
+	var out := PackedFloat64Array()
+	out.resize(n)
+	var vcap := 60.0 if is_equal_approx(brake_k, 1.0) and is_zero_approx(brake_aero) else 100.0
+	for i in n:
+		var t := absf(tr.BANK[i])
+		var k := maxf(absf(tr.RK[i]), 1e-5)
+		var a0 := G * brake_k * (1.0 + t) / (1.0 - t)
+		var vc := vcap if k <= brake_aero else minf(vcap, sqrt(a0 / (k - brake_aero)))
+		if loose:
+			var kind := tr.loose_at(i * tr.step)
+			if kind != 0:
+				vc *= sqrt(Physics.SURF_GRIP[Physics.SURF_GRAVEL_ROAD if kind == 2 else Physics.SURF_DIRT])
+		out[i] = vc
+	if _corner_cache.size() > 32:
+		_corner_cache.clear()
+	_corner_cache[key] = out
+	return out
+
+## Minimum cornering speed in corner_v across [s - half_span, s + half_span], so a tight apex is never
+## skipped between coarser sampling steps. Zero allocations.
+static func _min_corner_at(tr: Track, corner_v: PackedFloat64Array, s: float, half_span: float) -> float:
+	var n := tr.n
+	var inv_step := 1.0 / tr.step
+	var s_lo := tr.wrap_s(s - half_span)
+	var i0 := int(floorf(s_lo * inv_step)) % n
+	var steps := maxi(1, int(ceilf((half_span * 2.0) * inv_step)))
+	var best := corner_v[i0]
+	for k in range(1, steps + 1):
+		var v := corner_v[(i0 + k) % n]
+		if v < best:
+			best = v
+	return best
+
+## Fills out_zones[0..count-1] with BrakeZone values for `count` arrows starting at `s0` spaced by `step_m`
+## along `tr`, given current speed `v`, car braking parameters and grip `mu`. Single O(M) backward pass,
+## zero allocations, matching brake_zone(v, dist, vc, decel) for every future point.
+static func fill_arrow_zones(tr: Track, corner_v: PackedFloat64Array, s0: float, step_m: float, count: int,
+		v: float, brake_k: float, brake_aero: float, mu: float, out_zones: PackedInt32Array) -> void:
+	if count <= 0:
+		return
+	if corner_v.is_empty():
+		for i in count:
+			out_zones[i] = BrakeZone.GREEN
+		return
+	var spd := maxf(0.0, v)
+	var sqrt_mu := sqrt(maxf(0.2, mu))
+	var decel_floor := brake_decel(spd, 0.0, brake_k, brake_aero, mu)
+	var max_reach := brake_zone_distances(spd, 0.0, decel_floor).y
+	var look_extra := clampf(maxf(max_reach, 0.0) + step_m, 0.0, minf(260.0, tr.L * 0.45))
+	var max_total := minf(float(count - 1) * step_m + look_extra, tr.L * 0.48)
+	var total_steps := maxi(count, int(ceilf(max_total / step_m)) + 1)
+	var half_span := step_m * 0.5
+	var red_left := -1.0
+	var yellow_left := -1.0
+	for m in range(total_steps - 1, -1, -1):
+		red_left -= step_m
+		yellow_left -= step_m
+		var vc := _min_corner_at(tr, corner_v, s0 + float(m) * step_m, half_span) * sqrt_mu
+		if spd > vc + 0.5:
+			var decel := brake_decel(spd, vc, brake_k, brake_aero, mu)
+			var lim := brake_zone_distances(spd, vc, decel)
+			if lim.x > red_left:
+				red_left = lim.x
+			if lim.y > yellow_left:
+				yellow_left = lim.y
+		if m < count:
+			if red_left >= 0.0:
+				out_zones[m] = BrakeZone.RED
+			elif yellow_left >= 0.0:
+				out_zones[m] = BrakeZone.YELLOW
+			else:
+				out_zones[m] = BrakeZone.GREEN
+
+## Evaluates the HUD BRAKE cue at car position `s` along `tr` using the exact same corner profile and
+## brake_zone / brake_cue calculation as the dynamic racing-line chevrons so the two always agree.
+static func track_brake_cue(tr: Track, corner_v: PackedFloat64Array, s: float, v: float,
+		brake_k: float, brake_aero: float, mu: float, brake_input := 0.0, actual_decel := NAN) -> Dictionary:
+	var spd := maxf(0.0, v)
+	if spd < 6.0 or corner_v.is_empty():
+		return {"brake": false, "zone": BrakeZone.GREEN, "dist": INF, "v_corner": INF, "decel": 0.0, "urgency": 0.0}
+	var sqrt_mu := sqrt(maxf(0.2, mu))
+	var decel_floor := brake_decel(spd, 0.0, brake_k, brake_aero, mu)
+	var lim_max := brake_zone_distances(spd, 0.0, decel_floor)
+	var look := clampf(maxf(lim_max.y, 0.0) + 10.0, 20.0, minf(320.0, tr.L * 0.45))
+	var step_m := 5.0
+	var half_span := step_m * 0.5
+	var steps := int(ceilf(look / step_m)) + 1
+	var worst_zone := BrakeZone.GREEN
+	var worst_req := -1.0
+	var worst_dist := INF
+	var worst_vc := INF
+	var worst_decel := decel_floor
+	for m in steps:
+		var dist := float(m) * step_m
+		var vc := _min_corner_at(tr, corner_v, s + dist, half_span) * sqrt_mu
+		if spd <= vc + 0.5:
+			continue
+		var decel := brake_decel(spd, vc, brake_k, brake_aero, mu)
+		var z := brake_zone(spd, dist, vc, decel)
+		if z > worst_zone:
+			worst_zone = z
+		if z == BrakeZone.RED:
+			var a_req := (spd * spd - vc * vc) / (2.0 * maxf(dist, 1.0))
+			if a_req > worst_req:
+				worst_req = a_req
+				worst_dist = dist
+				worst_vc = vc
+				worst_decel = decel
+	if worst_zone != BrakeZone.RED:
+		return {"brake": false, "zone": worst_zone, "dist": INF, "v_corner": INF, "decel": decel_floor, "urgency": 0.0}
+	var cue := brake_cue(worst_dist, spd, worst_vc, worst_decel, brake_input, actual_decel)
+	return {"brake": bool(cue.brake), "zone": worst_zone, "dist": worst_dist, "v_corner": worst_vc,
+		"decel": worst_decel, "urgency": float(cue.urgency)}
 
 ## The index of the next note to start ahead of s (or the one whose corner s is still in, when inside is true).
 func next_from(s: float, inside := false) -> int:
