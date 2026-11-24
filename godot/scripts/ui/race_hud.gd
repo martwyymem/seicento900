@@ -1686,7 +1686,7 @@ func _update_banner() -> void:
 			big = "FINISHED P%d" % p.pos
 			small = "Enter / Ⓐ — skip to results"
 	elif p.mode == "pit" and p.pit and p.pit.phase == "service":
-		big = "PIT STOP %.1f s" % p.pit.left
+		big = "PIT STOP %.1f s" % p.pit.left if p.pit.left > 0.0 else "WAITING FOR THE PIT LANE"
 	elif p.out_of_fuel:
 		big = "OUT OF FUEL"
 	elif p.pit_request:
@@ -1894,7 +1894,7 @@ func _draw_pitwall() -> void:
 			status = "Red flag, queue at the pit exit"
 			status_col = RED
 		elif p.pit.phase == "service":
-			status = "Crew working %.1f / %.1f s" % [p.pit.total - p.pit.left, p.pit.total]
+			status = "Crew working %.1f / %.1f s" % [p.pit.total - p.pit.left, p.pit.total] if p.pit.left > 0.0 else "WAITING FOR THE PIT LANE"
 		else:
 			status = "Released, pit exit ahead"
 	elif p.pit_request:
@@ -1958,8 +1958,7 @@ func _build_map() -> void:
 	_map_track = tr
 	_map_size = minimap.size
 	var b := tr.bounds
-	var span := maxf(b[2] - b[0], b[3] - b[1])
-	_map_follow = MapMarker.race_use_follow(tr.L, span)
+	_map_follow = true # every race uses the zoomed heading-up view (user, 2026-11-24)
 	_map_zoom = MapMarker.RACE_ZOOM_MIN
 	var pad := 12.0
 	_map_scale = minf((_map_size.x - 2.0 * pad) / maxf(1.0, b[2] - b[0]), (_map_size.y - 2.0 * pad) / maxf(1.0, b[3] - b[1]))
