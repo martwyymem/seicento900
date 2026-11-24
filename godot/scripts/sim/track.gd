@@ -240,8 +240,9 @@ const RL_PASSES := [[30, 120], [12, 120], [5, 80]]
 
 ## The same relaxation over the samples [from, to) of an open road (a point-to-point route: no wrap through the
 ## ends, which hold their offset), each sample kept `edge` m inside its own half width (HW, else half). The
-## samples outside the span keep d = 0.
-func build_racing_line_span(from: int, to: int, edge := 1.25) -> void:
+## samples outside the span keep d = 0. coarse > 1 relaxes on every coarse-th sample (the chords as long in metres),
+## then interpolates and finishes with a short pass on every sample: about 1 / coarse of the work.
+func build_racing_line_span(from: int, to: int, edge := 1.25, coarse := 1) -> void:
 	var d := PackedFloat64Array()
 	d.resize(n)
 	d.fill(0.0)
@@ -251,13 +252,39 @@ func build_racing_line_span(from: int, to: int, edge := 1.25) -> void:
 	lims.resize(n)
 	for i in n:
 		lims[i] = maxf((HW[i] if HW.size() == n else half) - edge, 0.0)
-	var last := to - 1
-	for pass_ in RL_PASSES:
+	coarse = maxi(coarse, 1)
+	var idx := PackedInt32Array() # the samples relaxed (every coarse-th, both ends)
+	var i0 := from
+	while i0 < to - 1:
+		idx.append(i0)
+		i0 += coarse
+	if to - 1 > from:
+		idx.append(to - 1)
+	var m := idx.size()
+	var passes: Array = RL_PASSES if coarse == 1 else [[30 / coarse, 120], [maxi(12 / coarse, 2), 120], [maxi(5 / coarse, 1), 80]]
+	for pass_ in passes:
 		var k: int = pass_[0]
 		for it in pass_[1]:
-			for i in range(from + 1, last):
-				var a := maxi(i - k, from)
-				var b := mini(i + k, last)
+			for q in range(1, m - 1):
+				var i := idx[q]
+				var a := idx[maxi(q - k, 0)]
+				var b := idx[mini(q + k, m - 1)]
+				var px := (X[a] + NX[a] * d[a] + X[b] + NX[b] * d[b]) / 2
+				var py := (Y[a] + NY[a] * d[a] + Y[b] + NY[b] * d[b]) / 2
+				var dn := (px - X[i]) * NX[i] + (py - Y[i]) * NY[i]
+				var v := d[i] + (dn - d[i]) * 0.6
+				var lim := lims[i]
+				d[i] = lim if v > lim else (-lim if v < -lim else v)
+	if coarse > 1:
+		for q in range(m - 1):
+			var a := idx[q]
+			var b := idx[q + 1]
+			for i in range(a + 1, b):
+				d[i] = clampf(lerpf(d[a], d[b], float(i - a) / float(b - a)), -lims[i], lims[i])
+		for it in 20:
+			for i in range(from + 1, to - 1):
+				var a := maxi(i - 5, from)
+				var b := mini(i + 5, to - 1)
 				var px := (X[a] + NX[a] * d[a] + X[b] + NX[b] * d[b]) / 2
 				var py := (Y[a] + NY[a] * d[a] + Y[b] + NY[b] * d[b]) / 2
 				var dn := (px - X[i]) * NX[i] + (py - Y[i]) * NY[i]

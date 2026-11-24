@@ -40,7 +40,10 @@ var player_s := 0.0 ## the player's distance from the start (m), on the race's l
 var player_v := 0.0
 var player_hits: Array = [] ## [[Vector2 contact point, closing m/s]] the race's contacts with the player, for the host
 var contacts := 0 ## contacts with the player so far
-var bot_contacts := 0 ## contacts between two bots so far
+var bot_contacts := 0 ## contact ticks between two bots so far (a scrape alongside is one a tick)
+var bot_knocks := 0 ## of those, the knocks: a closing speed of KNOCK m/s or more
+var bot_knock_s := PackedFloat32Array() ## where along the route each knock was (m from the start), for the probes
+const KNOCK := 1.5
 var difficulty := "medium"
 var pace_k := 1.0
 var _next_lap := 1
@@ -139,6 +142,7 @@ func _init(path: PackedVector2Array, car_key: String, count: int, seed_value: in
 		rivals.append({"s": b.s - et.start_s, "lat": b.d, "v": 0.0, "out": false, "gone": false, "done": false, "t_done": -1.0,
 			"name": b.name, "number": b.number})
 	me.fuel = 30.0
+	me.tyre = {"c": "M", "wear": 1.0, "temp": 1.0}
 
 ## A Strategy.calibrate result good enough for a race nobody pits in: T0 from the reference driver (pace_time) and
 ## large enough that no "the winner's been home for ages" cap ends the race under the player.
@@ -269,6 +273,10 @@ func _read_impacts() -> void:
 				player_hits.append([Vector2(im[i], im[i + 1]), float(im[i + 2])])
 			else:
 				bot_contacts += 1
+				if float(im[i + 2]) >= KNOCK:
+					bot_knocks += 1
+					if bot_knock_s.size() < 4096:
+						bot_knock_s.append(_s_of_id(a))
 		i += Race.IMPACT_STRIDE
 	im.clear()
 	if player_hits.size() > 32:
@@ -280,8 +288,7 @@ func _park() -> void:
 		var b := bots[k]
 		if not b.finished or _gone.has(k):
 			continue
-		var spot := race.stop_at - float((b.finish_order - 1) / 2) * Race.PARK_GAP
-		if spot < et.finish_s + 2.0:
+		if race.park_spot(b).x < et.finish_s + 2.0:
 			_gone[k] = true
 			b.dnf = true # (out of the race's contact and traffic; still home in its time)
 			b.recovered = true
@@ -328,6 +335,12 @@ func _knock_out() -> void:
 			b.vy = 0.0
 			b.v = 0.0
 			rivals[who].out = true
+
+func _s_of_id(id: int) -> float:
+	for b in bots:
+		if b.id == id:
+			return b.s - et.start_s
+	return -1.0
 
 func _is_out(k: int) -> bool:
 	return bool(rivals[k].out)

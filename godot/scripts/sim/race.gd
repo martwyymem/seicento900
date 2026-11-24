@@ -1405,6 +1405,15 @@ func to_free(car: RaceCar) -> void:
 	car.line_off = car.d - track.sample(track.RLD, car.s)
 
 # ---------------- AI / rail driving ----------------
+## Where a car home parks (stop_at): (s, d), pulled over past the line, the first home furthest on; two abreast
+## (one each side) where the road takes them, else single file in the middle.
+func park_spot(car: RaceCar) -> Vector2:
+	var k := car.finish_order - 1
+	var side := maxf(track.half_at(stop_at) - 1.3, 0.0)
+	if 2.0 * side < spec.width + 0.6:
+		return Vector2(stop_at - float(k) * PARK_GAP, 0.0)
+	return Vector2(stop_at - float(k / 2) * PARK_GAP, side * (1.0 if k % 2 == 0 else -1.0))
+
 func traffic(car: RaceCar, vT: float, rl: float, dt: float) -> Dictionary:
 	var tr := track
 	var lim := tr.half_at(car.s) - 1.0
@@ -1671,11 +1680,9 @@ func targets(car: RaceCar, dt: float, mu: float, is_phys: bool) -> Dictionary:
 	if car.finished:
 		vT *= 0.8
 		if stop_at < INF:
-			# home: pulled over to its own side past the line, single file each side, the first home furthest on
-			var k := car.finish_order - 1
-			var spot := stop_at - float(k / 2) * PARK_GAP
-			vT = minf(vT, sqrt(2.0 * 3.0 * maxf(spot - car.s, 0.0)))
-			dT = maxf(tr.half_at(car.s) - 1.3, 0.0) * (1.0 if k % 2 == 0 else -1.0)
+			var spot := park_spot(car)
+			vT = minf(vT, sqrt(2.0 * 3.0 * maxf(spot.x - car.s, 0.0)))
+			dT = spot.y
 	if car.slow_t > 0.0:
 		car.slow_t -= dt
 		vT *= 0.82

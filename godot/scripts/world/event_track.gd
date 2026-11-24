@@ -15,14 +15,17 @@ const STEP := 2.0 ## m between samples (as the baked tracks)
 const LEAD := 40.0 ## m of straight before the start (whole samples)
 const STUB := 120.0 ## m of straight past the end of the road beyond the finish
 const VERGE := 1.0 ## m beyond the road's edge the bots' wall stands (a kerb and a strip of pavement)
-const HALF_MIN := 1.7 ## m: the narrowest half width the bots are given
+const HALF_MIN := 1.4 ## m: the narrowest half width the bots are given
 const HALF_MAX := 12.0
+const COARSE := 5 ## the racing line relaxed on every 5th sample, then finished on all (Track.build_racing_line_span)
+const ROUND_PASSES := 3 ## smoothing passes over the 5 m route centre (a right-angle junction turn to a ~10 m radius)
 
 var track: Track
 var start_s := 0.0 ## m along the loop where the route starts
 var finish_s := 0.0 ## where it ends (the finish line)
 var park_s := 0.0 ## the end of the road past the finish (the cars home park short of it)
 var build_ms := 0.0
+var phase_ms := {} ## build time by phase (centre, road, frames, line, profile)
 
 ## path: the event's route; beyond: the road on past its finish (may be empty); key: the track's key (cache and
 ## corner-profile key, unique per event); z0: the height of the start (the deck the route sets off on).
@@ -43,6 +46,7 @@ func _init(map: TownMap, path: PackedVector2Array, beyond: PackedVector2Array, k
 	var e := full[full.size() - 1]
 	var de := (e - full[full.size() - 2]).normalized()
 	full.append(e + de * STUB)
+	phase_ms.centre = (Time.get_ticks_usec() - t0) / 1000.0
 	var pts := LiveEvents.resample(full, STEP)
 	var n := pts.size()
 	start_s = LEAD
@@ -159,10 +163,13 @@ func _init(map: TownMap, path: PackedVector2Array, beyond: PackedVector2Array, k
 	var gw := 5
 	for i in n:
 		tr.GRADE[i] = (tr.H[(i + gw) % n] - tr.H[(i - gw + n) % n]) / (2 * gw * STEP)
+	phase_ms.road = (Time.get_ticks_usec() - t0) / 1000.0
 	tr.build_frames()
 	tr.build_banking()
 	tr.build_corner_envelope()
-	tr.build_racing_line_span(maxi(i_lo - 10, 0), i_hi)
+	phase_ms.frames = (Time.get_ticks_usec() - t0) / 1000.0
+	tr.build_racing_line_span(maxi(i_lo - 10, 0), i_hi, 1.25, COARSE)
+	phase_ms.line = (Time.get_ticks_usec() - t0) / 1000.0
 	tr.build_profile()
 	tr.build_bounds()
 	track = tr
@@ -181,6 +188,12 @@ static func _on_centre(map: TownMap, path: PackedVector2Array) -> PackedVector2A
 		var d := (pts[mini(i + 1, n - 1)] - pts[maxi(i - 1, 0)]).normalized()
 		var off := c[i] if i < c.size() else 0.0
 		out.append(pts[i] + Vector2(-d.y, d.x) * off)
+	# the corners where one street meets the next rounded (the router turns on the junction's node; the junction's
+	# own tarmac lets a car round it): a few passes of a 3-point average, the ends held
+	for pass_i in ROUND_PASSES:
+		var prev := out.duplicate()
+		for i in range(1, n - 1):
+			out[i] = prev[i] * 0.5 + (prev[i - 1] + prev[i + 1]) * 0.25
 	return out
 
 ## Junction samples (hw < 0) take the width of the road either side of them; samples with no height take the

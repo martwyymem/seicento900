@@ -910,6 +910,18 @@ func bump(n_out: Vector2, depth: float, r: Vector2, other_mass: float, other_v :
 	car.vy += other_v.y
 	return v
 
+## A knock another car's contact already resolved (a race's Race.collide in an open-world event, EventField): the
+## body dents and the knock is heard and felt as one from bump() would be, the motion being already the race's.
+## point: the contact on the map, closing: m/s.
+func car_contact(point: Vector2, closing: float) -> void:
+	if closing <= 0.0:
+		return
+	_contact_t = 0.0
+	var r := point - Vector2(car.x, car.y)
+	if closing > 1.0:
+		hits.append([point.x, point.y, closing])
+	_dent(r, closing)
+
 ## The race's automatic gearbox (Race.auto_shift), for a car without a race around it.
 func _auto_shift(vF: float, brk: float) -> void:
 	var cm := model

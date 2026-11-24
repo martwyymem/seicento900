@@ -863,7 +863,29 @@ func set_live(title: String, line: String, color: Color) -> void:
 	if shown != live_title.visible or title != "":
 		_layout()
 
-## The running order of a race on the map (StreetRivals.standings rows), [] hides it.
+var _brake_cue: Label = null
+
+## The racing line's BRAKE call during a race on the map (RacingArrows.brake_cue): a pulsing red plate over the car.
+func set_brake_cue(on: bool) -> void:
+	if not on:
+		if _brake_cue:
+			_brake_cue.visible = false
+		return
+	if _brake_cue == null:
+		_brake_cue = _label("[ ! BRAKE ! ]", 30, Color.WHITE, 900, true, 6)
+		_brake_cue.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_brake_cue.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+		_brake_cue.offset_top = 210.0
+		var box := StyleBoxFlat.new()
+		box.bg_color = Color("#ff2a22")
+		box.content_margin_left = 18.0
+		box.content_margin_right = 18.0
+		_brake_cue.add_theme_stylebox_override("normal", box)
+		add_child(_brake_cue)
+	_brake_cue.visible = true
+	_brake_cue.modulate.a = 1.0 if int(Time.get_ticks_msec() / 125) % 2 == 0 else 0.7
+
+## The running order of a race on the map (EventField / StreetRivals standings rows), [] hides it.
 func set_standings(rows: Array, color: Color) -> void:
 	if rows.is_empty() and _standings.is_empty():
 		return
