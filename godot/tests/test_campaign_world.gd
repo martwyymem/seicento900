@@ -90,9 +90,12 @@ func _medal_gate() -> void:
 ## won. A damaged gate value never locks anybody out.
 func _old_saves() -> void:
 	var t: Array = []
-	for i in 3:
+	var bor := Campaign.index_of("stage_3") # the stages up to and through Bór won
+	var best := {}
+	for i in bor + 1:
 		t.append(String(Campaign.STAGES[i].trophy))
-	var prog := _write({"unlocked": 3, "best_pos": {"0": 1, "1": 1, "2": 1}, "trophies": t, "arc": Campaign.ARC,
+		best[str(i)] = 1
+	var prog := _write({"unlocked": bor + 1, "best_pos": best, "trophies": t, "arc": Campaign.ARC,
 		"missions": {"knockout_bor": {"cleared": true, "best": 1}}})
 	check(int(prog.get("gate", 0)) == Campaign.GATE, "an old save did not take the gate on load")
 	for id in ["drag_quarter", "sprint_rajsko", "sprint_s1"]:
@@ -101,7 +104,7 @@ func _old_saves() -> void:
 	check(Missions.is_cleared(Missions.index_of("knockout_bor"), prog), "old save: a won mission is not won any more")
 	# written back it keeps that, and the next mission (after stage 4) waits for its medals
 	Campaign.save_progress(prog)
-	Campaign.record_result(3, 1)
+	Campaign.record_result(bor + 1, 1)
 	prog = Campaign.load_progress()
 	var kop := Missions.index_of("drift_kopalnia")
 	check(Missions.is_unlocked(Missions.index_of("sprint_s1"), prog, 0), "old save: written back, an open mission locked")

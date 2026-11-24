@@ -117,7 +117,7 @@ func _saves(errors: Array[String]) -> void:
 	if not Story.seen_keys(Campaign.load_progress()).is_empty():
 		errors.append("story save: RESET CAMPAIGN keeps the seen beats")
 	# a save from before the story: no "story" key; and a broken one
-	Campaign.save_progress({"unlocked": 3, "best_pos": {"0": 1}, "trophies": [String(Campaign.STAGES[0].trophy)]})
+	Campaign.save_progress({"unlocked": 3, "best_pos": {"0": 1}, "trophies": [String(Campaign.STAGES[0].trophy)], "arc": Campaign.ARC})
 	var old := Campaign.load_progress()
 	if not Story.seen_keys(old).is_empty() or not Story.needs_catch_up(old):
 		errors.append("story save: an old save with progress is not caught up")
@@ -164,8 +164,8 @@ func _triggers(errors: Array[String]) -> void:
 		errors.append("story triggers: no won beat after a miss")
 	_see_all(0)
 	# the act changes with the unlocked stage
-	Campaign.record_result(2, 1)
-	Campaign.record_result(3, 1)
+	for i in range(2, Story.first_of_act(2)):
+		Campaign.record_result(i, 1)
 	p = Story.pending(Campaign.load_progress(), 0)
 	if not "act_2" in p or "act_3" in p:
 		errors.append("story triggers: act II: %s" % [p])

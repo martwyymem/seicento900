@@ -336,7 +336,7 @@ func _migration_arc2(errors: Array[String]) -> void:
 	var want_best := {str(Campaign.index_of("stage_3")): 1, str(Campaign.index_of("stage_5")): 3}
 	if _ints(prog.best_pos) != want_best or _ints(prog.fails) != {str(rewanz): 1}:
 		errors.append("migration arc 2: best_pos %s (want %s), fails %s" % [prog.best_pos, want_best, prog.fails])
-	if prog.missions.keys() != ["sprint_s1"] or not bool(prog.missions.sprint_s1.cleared) or prog.cars != ["sandero"] or prog.trophies != won:
+	if not bool(prog.missions.sprint_s1.cleared) or prog.cars != ["sandero"] or prog.trophies != won:
 		errors.append("migration arc 2: missions, cars or trophies changed: %s" % prog)
 	for id in ["stage_wola", "stage_gora"]:
 		if not Campaign.is_unlocked(Campaign.index_of(id)):

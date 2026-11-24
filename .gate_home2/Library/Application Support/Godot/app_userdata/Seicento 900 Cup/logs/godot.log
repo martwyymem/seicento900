@@ -1,0 +1,16 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+    cold TownMap load of brzeszcze: 511 ms
+    WARN 12 closures stand more than 45 m inside the outline (worst 83 m), 0 outside it
+    WARN 0 of 117 edge road ends have no barrier on their road (known: 6)
+    WARN 542 fence(s) lie beyond the 240 m content margin (worst 2035 m out); known: 542
+    WARN 309 garden bed(s) lie beyond the 240 m content margin (worst 1829 m out); known: 309
+ok   res://tests/test_open_world_borders.gd
+    decal DoorDecalL sits 6.0 mm off the body
+    decal DoorDecalR sits 6.0 mm off the body
+    decal Sunstrip   sits 5.5 mm off the body
+    decal HoodDecal  sits 6.0 mm off the body
+    decal SillDecalL sits 5.9 mm off the body
+    decal SillDecalR sits 5.9 mm off the body
+ok   res://tests/test_car_visual_contract.gd
+0 failure(s)

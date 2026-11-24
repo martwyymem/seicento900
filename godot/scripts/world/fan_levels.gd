@@ -10,7 +10,9 @@ const TITLES := ["Local Hopeful", "Street Regular", "Town Favourite", "Silesian 
 	"National Name", "Poland's Pride", "Fest Icon", "Seicento Legend"]
 static var dev_unlock := false ## the dev menu (§ + 1) unlocks everything the top level would
 
-const STAGE_BASE := 3000 ## fans for clearing stage 1; the last stage pays CAREER_SPAN times as much, the ones between in step
+## fans for clearing stage 1; the last stage pays CAREER_SPAN times as much, the ones between in step (2625 since the
+## sixteen-stage arc: the whole chain pays what the fourteen-stage one did at 3000, so the career still ends a level short)
+const STAGE_BASE := 2625
 const CAREER_SPAN := 10.0 ## (with the ten-stage arc that was exactly STAGE_BASE times the stage's number)
 const REPEAT_SHARE := 0.25 ## a stage that was cleared before pays this much again
 const FAIL_SHARE := 0.1 ## the crowd still cheers a try that missed the objective
