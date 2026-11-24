@@ -188,16 +188,18 @@ func run() -> Array:
 	if test_res.trophy != CampaignData.get_stage(0).trophy:
 		errors.append("Expected trophy '%s', got '%s'" % [CampaignData.get_stage(0).trophy, test_res.trophy])
 
-	# a stage that keeps beating the player eases off: one difficulty level per two failed tries, reset on a win
+	# a stage that keeps beating the player eases off: one difficulty level per FAILS_PER_EASE failed tries, reset on
+	# a win. (B2: a stage's field is its difficulty plus its own "pace" in levels, so the check reads the effective
+	# level rather than the authored name: Oświęcim is Medium + 1.0, raced as Hard, eased to Medium.)
 	var ease_idx := 6
-	var base_level: String = CampaignData.STAGES[ease_idx].difficulty
+	var base_lv := float(CampaignData.get_stage(ease_idx).level)
 	for k in CampaignData.FAILS_PER_EASE:
 		CampaignData.record_result(ease_idx, 99)
 	var eased_st: Dictionary = CampaignData.get_stage(ease_idx)
-	if eased_st.eased != 1 or CampaignData.LEVELS.find(eased_st.difficulty) != maxi(0, CampaignData.LEVELS.find(base_level) - 1):
-		errors.append("Stage %d after %d failures: difficulty %s (base %s), eased %d" % [ease_idx, CampaignData.FAILS_PER_EASE, eased_st.difficulty, base_level, eased_st.eased])
+	if eased_st.eased != 1 or not is_equal_approx(float(eased_st.level), maxf(0.0, base_lv - 1.0)):
+		errors.append("Stage %d after %d failures: level %.2f (base %.2f), eased %d" % [ease_idx, CampaignData.FAILS_PER_EASE, float(eased_st.level), base_lv, eased_st.eased])
 	CampaignData.record_result(ease_idx, 1)
-	if CampaignData.get_stage(ease_idx).difficulty != base_level:
+	if not is_equal_approx(float(CampaignData.get_stage(ease_idx).level), base_lv):
 		errors.append("A win on stage %d should reset its easing" % ease_idx)
 	# no stage asks for a win against a Hard field from mid-grid (stage 7 used to: 13 Hard bots, P1 from P7)
 	for st in CampaignData.STAGES:

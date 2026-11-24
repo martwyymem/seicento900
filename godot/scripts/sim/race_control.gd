@@ -799,8 +799,9 @@ func limit_speed(car: RaceCar, t: Dictionary, mu: float) -> void:
 	if neutral:
 		var pace := RED_PACE if flag == "red" else DELTA_PACE
 		var v_race := vT
-		var v_prof := track.sample(track.PROF, car.s + car.v * 0.12) * sqrt(mu)
-		vT = minf(vT, track.sample(track.PROF, car.s + car.v * 0.12) * sqrt(mu) * pace)
+		var prof := car.prof if not car.prof.is_empty() else track.PROF # the car's own class
+		var v_prof := track.sample(prof, car.s + car.v * 0.12) * sqrt(mu)
+		vT = minf(vT, track.sample(prof, car.s + car.v * 0.12) * sqrt(mu) * pace)
 		# close up to whatever is physically ahead: the safety car or the next car in the queue
 		var ahead := _queue_ahead(car)
 		var gap: float = ahead[0]

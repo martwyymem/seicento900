@@ -34,6 +34,16 @@ var wet_skill := 1.0 ## grip in the rain against the field (Drivers.ROSTER "wet"
 var setup := {} ## CarSetup notches the car runs
 var model: CarModel ## the car on its set-up (Race.fit_setup), shared by every car on the same one
 var physics: Physics
+## The car itself (Race.make_car): its CarCatalog key, and its class's stock CarModel, Physics, speed profile
+## (Track.profile_for) and rail braking, which the rail model, the drivers' targets and contact use. Every car
+## in a one-make race shares the race's own (car_model, phys, track.PROF, brake_k, brake_aero), so nothing
+## changes there; a mixed-class field (RaceSettings.field_classes) gives each car its own.
+var car_key := ""
+var class_model: CarModel
+var class_phys: Physics
+var prof := PackedFloat64Array()
+var brake_k := 1.0
+var brake_aero := 0.0
 
 # ---- track position and motion
 var s := 0.0 ## distance along the centreline

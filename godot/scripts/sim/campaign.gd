@@ -25,8 +25,11 @@ const STAGES := [
 		"opponents": 5,
 		"difficulty": "easy",
 		"target_pos": 3,
-		"grid": "p3",
+		"grid": "p5",
 		"trophy": "Wilamowice Bronze Piston",
+		"class": "city",
+		"rivals": {"stock": 5},
+		"pace": 1.0, ## levels over its difficulty (tuned with tests/_campaign_ladder_probe.gd)
 		"desc": "Wujek Mirek handed you the keys to Ciocia Basia's stock 1998 Fiat Seicento 900 (39 bhp). Prove your racecraft round Wilamowice: from the Rynek past Holy Trinity church, down Kęcka and Krakowska into Hecznarowice, back through the fields and the esses by the pond.",
 		"tip": "The lefts at Hecznarowice and Handlowa are sharp: brake early, then carry momentum along the open field lane."
 	},
@@ -45,8 +48,11 @@ const STAGES := [
 		"opponents": 7,
 		"difficulty": "easy",
 		"target_pos": 3,
-		"grid": "p3",
+		"grid": "p7",
 		"trophy": "Mining Headframe Cup",
+		"class": "city",
+		"rivals": {"stock": 6, "sandero": 1},
+		"pace": 1.0, ## levels over its difficulty (tuned with tests/_campaign_ladder_probe.gd)
 		"desc": "Dense morning fog blankets the mining town: up ul. Ofiar Oświęcimia past the Andrzej shafts, round Leśna, Kościuszki and Piastowska, and back by Daszyńskiego.",
 		"tip": "The town's right-angle junctions loom out of the fog late: brake while the corner is still a guess, not when you see it."
 	},
@@ -65,8 +71,11 @@ const STAGES := [
 		"opponents": 8,
 		"difficulty": "easy",
 		"target_pos": 3,
-		"grid": "p3",
+		"grid": "p7",
 		"trophy": "Bór Forester Pine",
+		"class": "city",
+		"rivals": {"stock": 6, "sandero": 2},
+		"pace": 0.5, ## levels over its difficulty (tuned with tests/_campaign_ladder_probe.gd)
 		"desc": "Blast through the pine woods of Brzeszcze Bór: past the OSP Bór fire station, over the railway twice at the Borska and Lachowicka level crossings, and past the fishponds back to ul. Bór.",
 		"tip": "Guardrail lines the road and the verges are only grass: a mistake ends on the steel, so keep your throttle smooth between the trees."
 	},
@@ -85,8 +94,11 @@ const STAGES := [
 		"opponents": 9,
 		"difficulty": "medium",
 		"target_pos": 3,
-		"grid": "p3",
+		"grid": "p8",
 		"trophy": "Princess Daisy Crown",
+		"class": "supermini",
+		"rivals": {"sandero": 4, "i20": 4, "stock": 1},
+		"pace": 1.0, ## levels over its difficulty (tuned with tests/_campaign_ladder_probe.gd)
 		"desc": "Sunset battle over the setts of Piastowska and the Rynek, past the castle and the wisent enclosure on Żorska, then in through the park gate: the alley by the big pond, the hairpin under the castle, the bridges between the ponds and the gravel of the western lobe.",
 		"tip": "Setts offer less bite than asphalt, and the park alleys are barely wider than the car: brake early for the hairpin and the narrow bridges."
 	},
@@ -105,8 +117,11 @@ const STAGES := [
 		"opponents": 9,
 		"difficulty": "medium",
 		"target_pos": 2,
-		"grid": "p2",
+		"grid": "p8",
 		"trophy": "Bielsko FSM Golden Gear",
+		"class": "supermini",
+		"rivals": {"i20": 4, "sandero": 4, "golf4": 1},
+		"pace": 1.0, ## levels over its difficulty (tuned with tests/_campaign_ladder_probe.gd)
 		"desc": "Back in the Seicento's home town, at the foot of Szyndzielnia. Climb al. Armii Krajowej to the cable-car car park at Rondo Fieldorfa, then plunge 70 m down Karbowa past the Dębowiec ski slope, over the Kamieniczanka and home along Gościnna.",
 		"tip": "Use the draft up the long Armii Krajowej drag, then brake hard for Rondo Fieldorfa at the top: the descent to Karpacka comes at you fast."
 	},
@@ -125,8 +140,11 @@ const STAGES := [
 		"opponents": 7,
 		"difficulty": "medium",
 		"target_pos": 2,
-		"grid": "p2",
+		"grid": "p7",
 		"trophy": "Pszczyna Moonlight Cup",
+		"class": "supermini",
+		"rivals": {"golf4": 3, "i20": 2, "sandero": 2},
+		"pace": 1.0, ## levels over its difficulty (tuned with tests/_campaign_ladder_probe.gd)
 		"desc": "Kamil wants his town back. The castle park again, but on a Saturday night in the rain: wet setts on Piastowska and the Rynek, the park lamps off after ten, the narrow bridges between the ponds lit only by your headlights. A smaller field, all of them Kamil's friends.",
 		"tip": "In the dark the bridges arrive before you see them: pick your braking points off the castle lights and the trees, and keep it straight on the wet setts."
 	},
@@ -145,8 +163,11 @@ const STAGES := [
 		"opponents": 9,
 		"difficulty": "medium",
 		"target_pos": 3,
-		"grid": "p3",
+		"grid": "p9",
 		"trophy": "Piast Shield",
+		"class": "supermini",
+		"rivals": {"golf4": 3, "logan": 2, "i20": 2, "sandero": 2},
+		"pace": 1.0, ## levels over its difficulty (tuned with tests/_campaign_ladder_probe.gd)
 		"desc": "Torrential rain over the Soła. Two laps of the old town: up ul. Legionów, over Most Piastowski, up past the castle hill, along the setts of Plebańska and round the Rynek, down ul. Jagiełły, and back over Most Jagielloński.",
 		"tip": "The setts of Plebańska and the Rynek are slick in the wet: brake in a straight line before you reach them, and keep it tidy through Rondo Płonki onto the bridge."
 	},
@@ -165,8 +186,11 @@ const STAGES := [
 		"opponents": 11,
 		"difficulty": "medium",
 		"target_pos": 3,
-		"grid": "p3",
+		"grid": "p10",
 		"trophy": "Wawel Dragon Sceptre",
+		"class": "supermini",
+		"rivals": {"i20": 3, "golf4": 3, "sandero": 2, "logan": 2, "zafira": 1},
+		"pace": 0.5, ## levels over its difficulty (tuned with tests/_campaign_ladder_probe.gd)
 		"desc": "Dusk falls over Kraków as the championship roars round the ring road outside the Planty: Basztowa past the Barbakan and Brama Floriańska, Podwale and Straszewskiego, then the setts of Podzamcze and św. Idziego under Wawel.",
 		"tip": "Tram rails run along half the lap. Brake before the setts under Wawel, and tuck into the slipstream on the long run along św. Gertrudy over the line."
 	},
@@ -185,8 +209,11 @@ const STAGES := [
 		"opponents": 11,
 		"difficulty": "medium",
 		"target_pos": 3,
-		"grid": "p3",
+		"grid": "p10",
 		"trophy": "Tor Fiata Test Cup",
+		"class": "touring",
+		"rivals": {"zafira": 5, "i20": 3, "golf4": 2, "v50": 1},
+		"pace": 0.75, ## levels over its difficulty (tuned with tests/_campaign_ladder_probe.gd)
 		"desc": "An exclusive invitation to the factory test track (Tor Fiata in Tychy) to battle factory test drivers in tuned machinery.",
 		"tip": "The slipstream is strongest on the kilometre-long back straight: time your pass before the West Turn, a long, flat 185° right-hander."
 	},
@@ -205,8 +232,11 @@ const STAGES := [
 		"opponents": 11,
 		"difficulty": "medium",
 		"target_pos": 2,
-		"grid": "p2",
+		"grid": "p10",
 		"trophy": "Parabolica Laurel",
+		"class": "touring",
+		"rivals": {"zafira": 5, "v50": 4, "i20": 2},
+		"pace": 0.75, ## levels over its difficulty (tuned with tests/_campaign_ladder_probe.gd)
 		"note": "North on the S1 to Katowice airport: the flight to Milan",
 		"desc": "Fiat's home crowd. The factory's people in Turin heard about the Polish Seicento and want it at the Autodromo in the royal park at Monza: the Rettifilo chicane, Curva Grande, the two Lesmos, Ascari and the long Parabolica onto the straight.",
 		"tip": "Monza is all straights and chicanes: brake hard and straight for the Rettifilo, then be patient through the Parabolica: a late apex is a fast exit and a tow down the straight."
@@ -226,8 +256,11 @@ const STAGES := [
 		"opponents": 11,
 		"difficulty": "hard",
 		"target_pos": 3,
-		"grid": "p3",
+		"grid": "p11",
 		"trophy": "Eifel Forest Medal",
+		"class": "touring",
+		"rivals": {"v50": 5, "focus": 4, "zafira": 2},
+		"pace": 0.5, ## levels over its difficulty (tuned with tests/_campaign_ladder_probe.gd)
 		"note": "Brzeszcze Jawiszowice station: the night train west to the Eifel",
 		"desc": "One lap of the Nürburgring Nordschleife in the morning fog: twenty kilometres through the Eifel forests, from Hatzenbach and Flugplatz down the Fuchsröhre, through Adenauer Forst, the Karussell and Brünnchen, over Pflanzgarten and home up the Döttinger Höhe.",
 		"tip": "Learn it as a string of short stages: the Karussell's concrete banking wants you in it and staying in it, and the Döttinger Höhe is the one place to use the tow."
@@ -247,8 +280,11 @@ const STAGES := [
 		"opponents": 11,
 		"difficulty": "hard",
 		"target_pos": 2,
-		"grid": "p2",
+		"grid": "p11",
 		"trophy": "Mulsanne Night Lantern",
+		"class": "touring",
+		"rivals": {"focus": 4, "v50": 4, "zafira": 3},
+		"pace": 0.5, ## levels over its difficulty (tuned with tests/_campaign_ladder_probe.gd)
 		"note": "Seicento Fest at the KS Górnik stadium: Pan Zbyszek's coach to Le Mans",
 		"desc": "The Circuit de la Sarthe after dark: under the Dunlop bridge, through Tertre Rouge onto the Mulsanne straight and its two chicanes, Mulsanne corner, Indianapolis and Arnage, then the Porsche Curves and the Ford chicanes home. Thirteen kilometres by headlight.",
 		"tip": "The Mulsanne is the longest you will ever hold it flat: take the tow, and brake by the boards for Mulsanne corner, not by feel. The Porsche Curves at night are where the lap is lost."
@@ -270,6 +306,9 @@ const STAGES := [
 		"target_pos": 1,
 		"grid": "pole",
 		"trophy": "Tokyo Midnight Emperor",
+		"class": "touring",
+		"rivals": {"focus": 5, "v50": 4, "zafira": 2},
+		"adaptive": false, ## reported unwinnable in the 2026-11-24 playtest: big wins do not tighten it further (its balance is a follow-up)
 		"desc": "The international showdown, a long way from Brzeszcze. One midnight lap of the Shuto C1 inner loop: the viaducts over the Nihonbashi river, the tunnels under the Imperial Palace moats, Hamazakibashi JCT and the Ginza trench.",
 		"tip": "Two lanes between concrete walls. Lift for the blind left at Miyakezaka in the tunnel, and carry speed round the Hamarikyu Spiral: it drops two full turns into the Ginza trench."
 	},
@@ -290,13 +329,36 @@ const STAGES := [
 		"target_pos": 1,
 		"grid": "pole",
 		"trophy": "The Goliath Crown",
+		"class": "hypercar",
+		"rivals": {"hypercar": 11},
 		"car_class": "hypercar",
 		"fan_lock": true,
+		"adaptive": false, ## authored for the Hypercar: big wins earlier in the campaign do not tighten it
 		"note": "Seicento Fest at the KS Górnik stadium: the Goliath's grid",
 		"desc": "The homecoming, and Pan Zbyszek's dream come true. One lap, 27 km, the whole of Brzeszcze closed for the night: the town, the S1 flat out, the villages and the Bór ponds, and back down the east side. Twelve Hypercar Seicentos in AF Corse yellow, and you on pole with eleven Legends behind you for 27 km.",
 		"tip": "The S1 is where races are won: 340 km/h, then the hardest stop of the lap into the junction. Save the tyres in town."
 	}
 ]
+
+## The car classes the stages' fields are built from (CarCatalog keys), slowest first. A stage names the class
+## it expects ("class", shown on its briefing) and its field ("rivals": CarCatalog key -> how many): the expected
+## class, with a few cars of the class above in the later stages. Nothing is locked: the player enters any car
+## they have (cars are still won only by the map missions, which open them after stages 1, 3, 5, 6, 8, 9 and 11).
+const CAR_CLASSES := {
+	"city": {"name": "City car", "cars": ["stock"]},
+	"supermini": {"name": "Supermini", "cars": ["sandero", "i20", "golf4", "logan"]},
+	"touring": {"name": "Touring", "cars": ["zafira", "v50", "focus"]},
+	"hypercar": {"name": "Hypercar", "cars": ["hypercar"]},
+}
+const CLASS_ORDER := ["city", "supermini", "touring", "hypercar"]
+
+## Adaptive field (the "heat", in difficulty levels, campaign-wide): a dominant win tightens every later stage,
+## a failed try gives some of it back, and failed tries on a stage still ease it down to Easy (get_stage).
+const BIG_WIN := 6.0 ## s: a win by this much over P2 is a big win
+const RUNAWAY_WIN := 15.0 ## s: and by this much counts twice
+const HEAT_STEP := 0.25 ## levels a big win adds (the second big win in a row adds twice this)
+const HEAT_MAX := 1.0 ## at most one full level (Medium -> Hard)
+const HEAT_FAIL := 0.5 ## levels a failed try takes off
 
 ## The stage layout a save was written for: 1 (no "arc" key) is the first, ten-stage arc; 2 is this one.
 const ARC := 2
@@ -307,7 +369,7 @@ const ARC1_MISSION_AFTER := {"drag_quarter": 0, "sprint_s1": 1, "drift_babudy": 
 	"rally_bor": 5, "drag_kilometre": 7}
 
 static func empty_progress() -> Dictionary:
-	return {"unlocked": 0, "best_pos": {}, "trophies": [], "arc": ARC}
+	return {"unlocked": 0, "best_pos": {}, "trophies": [], "arc": ARC, "heat": 0.0, "streak": 0}
 
 static func load_progress() -> Dictionary:
 	var path := SaveData.read_path(save_file)
@@ -334,6 +396,12 @@ static func clean_progress(json: Dictionary) -> Dictionary:
 				out[k] = (out[k] as Array).filter(func(x: Variant) -> bool: return x is String)
 			else:
 				out.erase(k)
+	# the adaptive field (saves before it have neither: no heat, no streak)
+	if out.has("heat"):
+		var h := SaveData.to_float(out.heat, 0.0)
+		out["heat"] = clampf(h, 0.0, HEAT_MAX) if is_finite(h) else 0.0
+	if out.has("streak"):
+		out["streak"] = maxi(SaveData.to_int(out.streak, 0), 0)
 	return out
 
 static func save_progress(data: Dictionary) -> void:
@@ -400,19 +468,30 @@ static func _arc1_index(old: int) -> int:
 const LEVELS := ["easy", "medium", "hard", "alien"]
 const FAILS_PER_EASE := 1 ## failed tries on a stage before its field drops one difficulty level
 
-## A stage as it will be raced: after every FAILS_PER_EASE failed tries the field drops a difficulty level
+## A stage as it will be raced. Its field's level is the stage's difficulty moved by its own "pace" (levels) and
+## the campaign's heat (big wins, see record_result); after every FAILS_PER_EASE failed tries it drops a level
 ## (down to Easy), so a stage that keeps beating the player gets kinder instead of blocking the campaign.
-## base_difficulty is the stage's own level, eased says how many steps it came down.
+## base_difficulty is the stage's own level name, level the field's (0 easy .. 3 alien), difficulty the level's
+## row below it and level_shift the rest (configure_stage), eased how many steps failures took off, heat the
+## tightening it carries.
 static func get_stage(index: int) -> Dictionary:
 	if Missions.is_mission(index):
 		return Missions.as_stage(index) # a mission (Missions.BASE + k) reads like a stage
 	var st: Dictionary = (STAGES[index] if index >= 0 and index < STAGES.size() else STAGES[0]).duplicate()
+	var prog := load_progress()
 	var base: String = st.get("difficulty", "medium")
-	var fails := int(load_progress().get("fails", {}).get(str(index), 0))
-	var at := LEVELS.find(base)
-	var eased := mini(fails / FAILS_PER_EASE, at)
+	var fails := int(prog.get("fails", {}).get(str(index), 0))
+	var heat := float(prog.get("heat", 0.0)) if st.get("adaptive", true) else 0.0
+	var lv := minf(float(maxi(LEVELS.find(base), 0)) + float(st.get("pace", 0.0)) + heat, float(LEVELS.size() - 1)) # Alien at most
+	var steps := fails / FAILS_PER_EASE
+	var eased := mini(steps, ceili(lv - 0.001)) if lv > 0.0 else 0
+	lv = maxf(0.0, lv - steps) if steps > 0 else lv
+	var at := clampi(floori(lv + 0.0001), 0, LEVELS.size() - 1)
 	st["base_difficulty"] = base
-	st["difficulty"] = LEVELS[at - eased]
+	st["difficulty"] = LEVELS[at]
+	st["level"] = lv
+	st["level_shift"] = lv - float(at)
+	st["heat"] = heat
 	st["eased"] = eased
 	st["fails"] = fails
 	if not st.has("start_hour"):
@@ -435,7 +514,8 @@ static func configure_stage(st: RaceSettings, stage: Dictionary, rival_step := D
 	st.format = "laps"
 	st.weather = String(stage.weather)
 	st.opponents = int(stage.opponents)
-	var rivals := DifficultyProfile.resolve(String(stage.difficulty), rival_step)
+	st.field_classes = field_classes(stage)
+	var rivals := resolve_level(String(stage.difficulty), float(stage.get("level_shift", 0.0)), rival_step)
 	st.difficulty = String(rivals.difficulty)
 	st.difficulty_shift = float(rivals.shift)
 	st.start_hour = float(stage.get("start_hour", stage.get("time_of_day", 14.0)))
@@ -460,6 +540,119 @@ static func configure_stage(st: RaceSettings, stage: Dictionary, rival_step := D
 	arcade.wear = false
 	DifficultyProfile.apply_sim(st, arcade)
 
+## The rivals' level: DifficultyProfile.resolve for the stage's level name, moved by `extra` levels (the stage's
+## level_shift); with no extra it is resolve's own answer.
+static func resolve_level(name: String, extra: float, step: int) -> Dictionary:
+	if extra == 0.0:
+		return DifficultyProfile.resolve(name, step)
+	var lv := clampf(DifficultyProfile.level_of(name) + extra + DifficultyProfile.shift_of(step), DifficultyProfile.LEVEL_MIN, DifficultyProfile.LEVEL_MAX)
+	var at := clampi(int(round(lv)), 0, LEVELS.size() - 1)
+	return {"difficulty": LEVELS[at], "shift": lv - float(at), "level": lv}
+
+## The level a stage's field is raced at, as a name for the briefing: "Medium", "Medium+" past the half-way to Hard.
+static func level_name(stage: Dictionary) -> String:
+	var name := String(stage.get("difficulty", "medium")).capitalize()
+	return name + ("+" if float(stage.get("level_shift", 0.0)) >= 0.5 else "")
+
+## The class a stage expects ("city" when it names none) and its display name.
+static func stage_class(stage: Dictionary) -> String:
+	var c := String(stage.get("class", ""))
+	return c if CAR_CLASSES.has(c) else "city"
+
+static func class_name_of(cls: String) -> String:
+	return String(CAR_CLASSES.get(cls, CAR_CLASSES.city).name)
+
+## The class a car belongs to (CAR_CLASSES), "city" for an unknown key.
+static func class_of(car_key: String) -> String:
+	for c in CLASS_ORDER:
+		if car_key in CAR_CLASSES[c].cars:
+			return c
+	return "city"
+
+## Where a car stands against the class a stage expects: -1 below it, 0 in it, 1 above.
+static func class_cmp(car_key: String, stage: Dictionary) -> int:
+	return signi(CLASS_ORDER.find(class_of(car_key)) - CLASS_ORDER.find(stage_class(stage)))
+
+## The briefing's car line: the expected class and the cars in it, and how the field is made up.
+static func class_line(stage: Dictionary) -> String:
+	var cls := stage_class(stage)
+	var names: Array = []
+	for k in CAR_CLASSES[cls].cars:
+		names.append(CarCatalog.display_name(k))
+	var mix: Array = []
+	var riv = stage.get("rivals", {})
+	if riv is Dictionary:
+		for k in riv:
+			mix.append("%d× %s" % [int(riv[k]), CarCatalog.display_name(String(k))])
+	return "Expected class: %s (%s) · Field: %s" % [class_name_of(cls), ", ".join(names), ", ".join(mix) if mix.size() else "as your car"]
+
+## What the briefing says about the player's car against the class: "" when it fits.
+static func class_advice(car_key: String, stage: Dictionary) -> String:
+	match class_cmp(car_key, stage):
+		-1:
+			return "Your %s is below the %s class: the field will be quicker on the straights." % [CarCatalog.display_name(car_key), class_name_of(stage_class(stage))]
+		1:
+			return "Your %s is above the %s class." % [CarCatalog.display_name(car_key), class_name_of(stage_class(stage))]
+	return ""
+
+## The car each opponent drives (RaceSettings.field_classes, by opponent index): the stage's "rivals" dealt
+## through the roster, the rarer cars spread evenly among the rest (so the quicker class is not bunched with
+## the strongest drivers), padded with the expected class's first car. Empty for a stage with no "rivals".
+static func field_classes(stage: Dictionary) -> PackedStringArray:
+	var n := int(stage.get("opponents", 0))
+	var out := PackedStringArray()
+	var riv = stage.get("rivals", {})
+	if not riv is Dictionary or (riv as Dictionary).is_empty() or n <= 0:
+		return out
+	var fill: String = CAR_CLASSES[stage_class(stage)].cars[0]
+	out.resize(n)
+	for i in n:
+		out[i] = ""
+	var keys: Array = (riv as Dictionary).keys().filter(func(k: Variant) -> bool: return CarCatalog.is_key(String(k)))
+	# rarest first (ties in the order the stage lists them), each into evenly spaced free slots
+	var order := keys.duplicate()
+	order.sort_custom(func(a: Variant, b: Variant) -> bool:
+		return int(riv[a]) < int(riv[b]) or (int(riv[a]) == int(riv[b]) and keys.find(a) < keys.find(b)))
+	for k in order:
+		var count := mini(int(riv[k]), n)
+		var free: Array[int] = []
+		for i in n:
+			if out[i] == "":
+				free.append(i)
+		for j in mini(count, free.size()):
+			out[free[int(floor((j + 0.5) * free.size() / float(count)))]] = String(k)
+	for i in n:
+		if out[i] == "":
+			out[i] = fill
+	return out
+
+## The gap (s) the player won by: P2's total minus P1's, from Race.results() rows; 0 when the player did not win,
+## RUNAWAY_WIN when nobody else was classified on the same lap (lapped or still out on the projection).
+static func win_margin(rows: Array) -> float:
+	if rows.is_empty() or not (rows[0].car as RaceCar).is_player:
+		return 0.0
+	if rows.size() < 2:
+		return 0.0
+	var a = rows[0].get("total")
+	var b = rows[1].get("total")
+	if int(rows[1].get("laps", 0)) < int(rows[0].get("laps", 0)) or (a != null and b == null):
+		return RUNAWAY_WIN
+	if a == null or b == null:
+		return 0.0
+	return maxf(0.0, float(b) - float(a))
+
+## The campaign's heat after a stage result: a big win (P1 by BIG_WIN s or more) adds HEAT_STEP, twice that for
+## the second big win in a row and again twice for a runaway; another clear keeps it and ends the streak; a failed
+## try takes HEAT_FAIL off. Returns [heat, streak].
+static func next_heat(heat: float, streak: int, success: bool, pos: int, margin: float) -> Array:
+	if not success:
+		return [maxf(0.0, heat - HEAT_FAIL), 0]
+	if pos == 1 and margin >= BIG_WIN:
+		var s := streak + 1
+		var add := HEAT_STEP * float(mini(s, 2)) * (2.0 if margin >= RUNAWAY_WIN else 1.0)
+		return [minf(HEAT_MAX, heat + add), s]
+	return [heat, 0]
+
 ## fans: the player's fan total (read from the open-world save when not given). A "fan_lock" stage (the Goliath)
 ## opens at the top fan level instead of after the stage before it.
 static func is_unlocked(stage_idx: int, fans := -1) -> bool:
@@ -470,7 +663,8 @@ static func is_unlocked(stage_idx: int, fans := -1) -> bool:
 	var prog := load_progress()
 	return stage_idx <= int(prog.get("unlocked", 0))
 
-static func record_result(stage_idx: int, pos: int) -> Dictionary:
+## margin: s the player won by (win_margin), for the adaptive field; 0 (a place only) never tightens it.
+static func record_result(stage_idx: int, pos: int, margin := 0.0) -> Dictionary:
 	if Missions.is_mission(stage_idx): # a place-only result (the map judges missions with MapMissions.outcome)
 		var st := get_stage(stage_idx)
 		return Missions.record(stage_idx, {"pos": pos, "success": pos <= int(st.target_pos), "tier": 0, "score": 0})
@@ -505,6 +699,10 @@ static func record_result(stage_idx: int, pos: int) -> Dictionary:
 	else:
 		fails[sid] = int(fails.get(sid, 0)) + 1
 	prog["fails"] = fails
+	var heat_before := float(prog.get("heat", 0.0))
+	var hs := next_heat(heat_before, int(prog.get("streak", 0)), success, pos, margin)
+	prog["heat"] = hs[0]
+	prog["streak"] = hs[1]
 	prog["unlocked"] = unlocked
 	prog["best_pos"] = best_pos
 	prog["trophies"] = trophies
@@ -517,6 +715,10 @@ static func record_result(stage_idx: int, pos: int) -> Dictionary:
 		"trophy": stage.trophy if success else "",
 		"first_clear": first_clear,
 		"fans": FanLevels.stage_reward(stage_idx, pos, target_pos, first_clear),
+		"margin": margin,
+		"heat": float(hs[0]),
+		"tightened": float(hs[0]) > heat_before,
+		"streak": int(hs[1]),
 	}
 
 ## The car carried from one stage to the next ({parts, pull, used, serviced}, see Service): what the crew

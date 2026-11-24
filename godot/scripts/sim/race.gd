@@ -131,6 +131,14 @@ var brake_k := 1.0 ## rail braking against the stock car's (the hypercar's grip)
 var brake_aero := 0.0 ## rail braking from downforce, m/s² per (m/s)² at mu = 1
 ## [CarModel, Physics] for each car set-up in the race, so cars on the same one share them (Race.fit_setup).
 var _setup_cars := {}
+## The race's own car (s.car_class, the player's) as a CarCatalog key, and whether any opponent drives another
+## (RaceSettings.field_classes): then each car carries its own class (RaceCar.class_model, prof, brake_k...).
+var car_key := "stock"
+var mixed := false
+## CarCatalog key -> {model, phys, prof, brake_k, brake_aero} for each car class on the grid (_class_kit).
+var _class_kits := {}
+## CarCatalog key -> the CarModel of a rival class, kept across races so Track.profile_for's cache (by spec) holds.
+static var _class_models := {}
 var tyres: Tyres
 var strategy: Strategy
 var phys: Physics
@@ -168,6 +176,7 @@ var order: Array[RaceCar] = []
 var _order_idx := {} ## car -> its fixed index in `cars`, used to break order_key ties
 var _order_key_cache := {} ## car -> order_key, recomputed once per tick and reused during the sort
 var _collide_live: Array[RaceCar] = [] ## scratch for collide(), reused every tick
+var _contact_r2 := 16.0 ## collide(): centres further apart than this (m²) can't touch (4 m, or two of the field's longest cars)
 ## traffic() looks only at the cars near the one it drives: _ring holds every car sorted by where it was at
 ## the start of the tick (an insertion sort, as the order barely changes from tick to tick), and the search
 ## allows for how far any car can have moved since. A car that jumps further (a recovery, a rejoin) marks
@@ -277,6 +286,8 @@ func _init(settings: RaceSettings, player_plan = null, seed_ := -1, models := {}
 	if spec.resource_name != "": # a derived car (CarCatalog: the hypercar, the Golf...): its own grip and downforce
 		brake_k = spec.grip_k / 1.4
 		brake_aero = brake_k * 0.5 * 1.225 * maxf(0.0, -spec.lift_a) / car_model.mass_with_fuel(spec.tank * 0.5)
+	car_key = settings.car_class if CarCatalog.is_key(settings.car_class) else "stock"
+	_class_kits[car_key] = {"model": car_model, "phys": phys, "prof": track.PROF, "brake_k": brake_k, "brake_aero": brake_aero}
 	cal = strategy.calibrate(track)
 	fpl = cal.fuel_per_lap * settings.fuel_mult
 	# timed races (up to 24 h) finish when the leader crosses the line after the clock runs out;
@@ -318,6 +329,9 @@ func _init(settings: RaceSettings, player_plan = null, seed_ := -1, models := {}
 	order = cars.duplicate()
 	for i in cars.size():
 		_order_idx[cars[i]] = i
+	for c in cars:
+		var cs := c.class_model.spec
+		_contact_r2 = maxf(_contact_r2, cs.length * cs.length + cs.width * cs.width) # (2 half-diagonals)²
 
 ## The plans a bot that gambles picks from: the best four, with the best plan of another shape (stop count
 ## and fuel mixes) in the last place when it is close, so at a fuel race some of the field runs flat out
@@ -376,7 +390,8 @@ func plan_opts(extra := {}) -> Dictionary:
 func quali_compound() -> String:
 	return "W" if weather.wet > 0.4 else "S"
 
-func make_car(id: int, name: String, color: Color, number: int, is_player: bool) -> RaceCar:
+## key: the CarCatalog car it drives ("" or the race's own car_key: the race's car_model and phys).
+func make_car(id: int, name: String, color: Color, number: int, is_player: bool, key := "") -> RaceCar:
 	var c := RaceCar.new()
 	c.id = id
 	c.name = name
@@ -385,11 +400,39 @@ func make_car(id: int, name: String, color: Color, number: int, is_player: bool)
 	c.is_player = is_player
 	c.control = "free" if is_player else "rail"
 	c.setup = CarSetup.stock()
-	c.model = car_model
-	c.physics = phys
+	var kit := _class_kit(key if key != "" else car_key)
+	c.car_key = key if _class_kits.has(key) else car_key
+	c.class_model = kit.model
+	c.class_phys = kit.phys
+	c.prof = kit.prof
+	c.brake_k = kit.brake_k
+	c.brake_aero = kit.brake_aero
+	c.model = kit.model
+	c.physics = kit.phys
 	c.plan_wet = weather.wet
-	c.rpm = spec.idle_rpm
+	c.rpm = c.class_model.spec.idle_rpm
 	return c
+
+## The race's kit for a car class (a CarCatalog key): the race's own car for its car_key, else the class's
+## CarModel (shared across races, see _class_models), its Physics, speed profile and rail braking, built once.
+func _class_kit(key: String) -> Dictionary:
+	if not _class_kits.has(key):
+		if not CarCatalog.is_key(key):
+			return _class_kits[car_key]
+		if not _class_models.has(key):
+			_class_models[key] = CarCatalog.model(key)
+		var cm: CarModel = _class_models[key]
+		var cs: CarSpec = cm.spec
+		var bk := 1.0
+		var ba := 0.0
+		if cs.resource_name != "":
+			bk = cs.grip_k / 1.4
+			ba = bk * 0.5 * 1.225 * maxf(0.0, -cs.lift_a) / cm.mass_with_fuel(cs.tank * 0.5)
+		var pr := track.profile_for(cm)
+		if _loose:
+			pr = track.loose_profile(pr)
+		_class_kits[key] = {"model": cm, "phys": Physics.new(cm), "prof": pr, "brake_k": bk, "brake_aero": ba}
+	return _class_kits[key]
 
 const START_FUEL_LAPS := 0.2 ## extra fuel a standing start burns, in laps of the car's mix
 
@@ -422,13 +465,18 @@ func apply_plan(car: RaceCar, p: Dictionary) -> void:
 func _tyre_quality() -> float:
 	return 0.92 + 0.16 * rng.next()
 
-## Puts a car on a set-up (CarSetup notches): its own CarModel and Physics, shared with any other car on the
-## same set-up. The stock set-up is the race's own car_model and phys.
+## Puts a car on a set-up (CarSetup notches): its own CarModel and Physics, shared with any other car of its
+## class on the same set-up. The stock set-up is the class's own model (the race's car_model and phys).
 func fit_setup(car: RaceCar, setup: Dictionary) -> void:
 	car.setup = CarSetup.clean(setup)
 	var key := _setup_key(car.setup)
+	var own := car.car_key == "" or car.car_key == car_key
+	if not own:
+		key = car.car_key + ":" + key
+		if not _setup_cars.has(key) and _setup_key(car.setup) == _setup_key(CarSetup.stock()):
+			_setup_cars[key] = [car.class_model, car.class_phys]
 	if not _setup_cars.has(key):
-		var cm := CarModel.new(CarSetup.apply(spec, car.setup))
+		var cm := CarModel.new(CarSetup.apply(spec if own else car.class_model.spec, car.setup))
 		_setup_cars[key] = [cm, Physics.new(cm)]
 	car.model = _setup_cars[key][0]
 	car.physics = _setup_cars[key][1]
@@ -459,7 +507,26 @@ func plan_grip(car: RaceCar) -> float:
 		g *= Rally.SURFACE_GRIP.get(s.surface, 1.0)
 	return g
 
+## The CarCatalog car opponent i drives: its RaceSettings.field_classes entry, else the race's own.
+func field_class(i: int) -> String:
+	if i >= 0 and i < s.field_classes.size() and CarCatalog.is_key(String(s.field_classes[i])):
+		return String(s.field_classes[i])
+	return car_key
+
+## How many opponents before i drive the same car as opponent i (each class's paints are dealt in turn).
+func _class_count(i: int) -> int:
+	var k := field_class(i)
+	var n := 0
+	for j in i:
+		if field_class(j) == k:
+			n += 1
+	return n
+
 func build_field(player_plan) -> void:
+	mixed = false
+	for i in s.opponents:
+		if field_class(i) != car_key:
+			mixed = true
 	var diff: Dictionary = DifficultyProfile.race_params(s.difficulty, s.difficulty_shift)
 	diff_params = diff
 	# a rally stage, time trial or arcade no-pit race has no pit strategy: everyone gets the one-stint fallback
@@ -472,15 +539,17 @@ func build_field(player_plan) -> void:
 	for i in s.opponents:
 		var who: Dictionary = Drivers.ROSTER[i] if s.real_drivers else {}
 		var car: RaceCar
+		var ck := field_class(i)
 		if who:
-			car = make_car(i + 1, who.name, Color(who.color), who.number, false)
+			car = make_car(i + 1, who.name, Color(who.color), who.number, false, ck)
 			# the driver's own pace against the field, around the difficulty's level, and a little form on the day
 			car.skill = diff.skill + (who.pace - 0.6) * diff.spread * 0.9 + (rng.next() - 0.5) * diff.spread * 0.3
 		else:
-			car = make_car(i + 1, BOTS[i][0], Color(BOTS[i][1]), BOT_NUMBERS[i], false)
+			car = make_car(i + 1, BOTS[i][0], Color(BOTS[i][1]), BOT_NUMBERS[i], false, ck)
 			car.skill = diff.skill + (rng.next() - 0.6) * diff.spread
 		# the field wears the driven car's factory paints (CarCatalog.PALETTES), the player's own left out; no rng drawn
-		car.color = CarCatalog.field_color(s.car_class if CarCatalog.is_key(s.car_class) else "stock", i, s.player_color)
+		car.color = CarCatalog.field_color(car_key, i, s.player_color) if car.car_key == car_key else \
+			CarCatalog.field_color(car.car_key, _class_count(i), s.player_color, CarCatalog.index_of(car.car_key) * 3)
 		if s.quali_grid.has("skills") and s.quali_grid.skills.has(str(car.id)):
 			car.skill = float(s.quali_grid.skills[str(car.id)]) # the field races as it qualified
 		car.stripes = rng.next() < 0.3
@@ -1647,7 +1716,7 @@ func targets(car: RaceCar, dt: float, mu: float, is_phys: bool) -> Dictionary:
 	var K := sqrt(mu) * (br.pace_at(car, look) if br else car.skill) * car.pace * car.pace_scale
 	if car.err and car.err.kind == "late":
 		K *= 1.05
-	var vT := tr.sample(tr.PROF, look) * K
+	var vT := tr.sample(car.prof, look) * K
 	var dT := rl
 	var drag := 1.0
 	var room := Vector2(-INF, INF) # the lateral room cars alongside leave
@@ -1683,7 +1752,7 @@ func step_rail(car: RaceCar, dt: float) -> void:
 	if car.mode == "pit" and car.pit.phase == "service":
 		car.v = 0.0
 		car.throttle = 0.0
-		car.rpm = spec.idle_rpm
+		car.rpm = car.class_model.spec.idle_rpm
 		car.pit.left = maxf(0.0, car.pit.left - dt) # the work is done once it reaches 0; a held car waits there
 		if car.pit.left <= 0.0:
 			car.pit.hold += dt
@@ -1691,13 +1760,14 @@ func step_rail(car: RaceCar, dt: float) -> void:
 			finish_service(car)
 		return
 	var mu := plan_grip(car)
-	var mass := car_model.mass_with_fuel(car.fuel)
+	var cm := car.class_model # the car's own class on the stock set-up (the race's car_model in a one-make race)
+	var mass := cm.mass_with_fuel(car.fuel)
 	var rl := tr.sample(tr.RLD, car.s)
 	var vT: float
 	var dT: float
 	var drag: float
 	if car.mode == "pit":
-		vT = pit_traffic(car, pit_speed(car, tr.sample(tr.PROF, car.s + car.v * 0.12) * sqrt(mu)))
+		vT = pit_traffic(car, pit_speed(car, tr.sample(car.prof, car.s + car.v * 0.12) * sqrt(mu)))
 		dT = pit_lateral(car, rl)
 		drag = 1.0
 		if car.pit.phase == "out" and car.v < 0.5:
@@ -1725,22 +1795,22 @@ func step_rail(car: RaceCar, dt: float) -> void:
 				drag *= car.fx_drag
 
 	var a := 0.0
-	var climb := G * tr.sample(tr.GRADE, car.s) + (0.0 if car.mode == "pit" else car_model.scrub(car.v, tr.sample(tr.RK, car.s), mu))
-	var a_max := car_model.max_accel(car.v, mass, mu, drag, car.mix_power) * (1.0 - 0.3 * car.damage) * car.fx_power - climb
+	var climb := G * tr.sample(tr.GRADE, car.s) + (0.0 if car.mode == "pit" else cm.scrub(car.v, tr.sample(tr.RK, car.s), mu))
+	var a_max := cm.max_accel(car.v, mass, mu, drag, car.mix_power) * (1.0 - 0.3 * car.damage) * car.fx_power - climb
 	if car.v < vT and car.fuel > 0.0 and a_max > 0.0:
 		a = minf(a_max, (vT - car.v) / dt)
 	elif car.v > vT:
-		a = -minf(mu * G * car.fx_brake * brake_k + mu * brake_aero * car.v * car.v + climb, (car.v - vT) / dt)
+		a = -minf(mu * G * car.fx_brake * car.brake_k + mu * car.brake_aero * car.v * car.v + climb, (car.v - vT) / dt)
 	else:
-		a = -car_model.resistance(car.v, mass, drag) / mass - climb
+		a = -cm.resistance(car.v, mass, drag) / mass - climb
 	car.brake_on = a < -2.5
 	car.v = maxf(0.0, car.v + a * dt)
-	var force := mass * 1.05 * a + car_model.resistance(car.v, mass, drag) + mass * climb if a >= -climb else 0.0
-	car.gear = car_model.best_gear(car.v)
-	var f_max := maxf(1.0, car_model.full_force() * car.mix_power)
+	var force := mass * 1.05 * a + cm.resistance(car.v, mass, drag) + mass * climb if a >= -climb else 0.0
+	car.gear = cm.best_gear(car.v)
+	var f_max := maxf(1.0, cm.full_force() * car.mix_power)
 	car.throttle = clampf(force / f_max, 0.0, 1.0)
-	car.rpm = car_model.engine_rpm(car.v, car.gear, car.throttle)
-	burn_fuel(car, car_model.fuel_rate(force * car.v / spec.efficiency) * car.mix_burn * dt * s.fuel_mult)
+	car.rpm = cm.engine_rpm(car.v, car.gear, car.throttle)
+	burn_fuel(car, cm.fuel_rate(force * car.v / cm.spec.efficiency) * car.mix_burn * dt * s.fuel_mult)
 
 	var in_pit := car.mode == "pit"
 	var lat_max := 5.0 if in_pit else 1.2 + 0.1 * car.v
@@ -1934,7 +2004,7 @@ func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float,
 			steer = Service.steer_feel(car, steer, brk)
 			env.mu = mu * car.fx_grip
 			drag_mul *= car.fx_drag
-			Service.gearbox(car, spec.gears.size() - 1, clock)
+			Service.gearbox(car, car.class_model.spec.gears.size() - 1, clock)
 	# the fuel mix: a lean map gives the engine less to work with
 	env.power = car.mix_power
 	env.drag_mul = drag_mul
@@ -1976,7 +2046,7 @@ func step_free(car: RaceCar, dt: float, thr: float, brk: float, steer_in: float,
 func auto_shift(car: RaceCar, vF: float, thr: float, brk: float) -> void:
 	var cm := car.model
 	var vp := maxf(0.0, vF)
-	var top := spec.gears.size() - 1
+	var top := cm.spec.gears.size() - 1
 	if car.fx_on and Service.top_gear_lost(car):
 		top -= 1 # a wrecked gearbox has lost top gear: hold the one below instead of trying it every tick
 	var g := car.gear
@@ -2262,8 +2332,9 @@ func bot_mistake(car: RaceCar, severity := 1.0) -> void:
 func barrier_contact(car: RaceCar, mass: float) -> void:
 	var tr := track
 	var lim := tr.limits(car.s)
-	var hl := spec.length / 2.0
-	var hw := spec.width / 2.0
+	var cs := car.class_model.spec # each car's own size (the race's spec in a one-make race)
+	var hl := cs.length / 2.0
+	var hw := cs.width / 2.0
 	# a corner sits at most the half-diagonal from the centre (the interpolated normal is no longer than 1),
 	# so with that much room to both walls no corner can touch: skip the corner tests
 	var reach := sqrt(hl * hl + hw * hw) + 0.01
@@ -2304,7 +2375,7 @@ func barrier_contact(car: RaceCar, mass: float) -> void:
 			car.vy *= 0.97
 			car.yaw_rate *= 0.9
 			continue
-		var h := phys.barrier_hit(car, nx * side, ny * side, rx, ry, mass)
+		var h := car.class_phys.barrier_hit(car, nx * side, ny * side, rx, ry, mass)
 		if car.is_player and h > 0.0:
 			_player_wall_t = clock
 		if h > hit:
@@ -2324,8 +2395,10 @@ func barrier_contact(car: RaceCar, mass: float) -> void:
 # ---------------- contact ----------------
 ## Separating-axis test between two car rectangles: [nx, ny, depth] (n from a to b) or [] if clear.
 func sat(a: RaceCar, b: RaceCar) -> PackedFloat64Array:
-	var hl := spec.length / 2.0
-	var hw := spec.width / 2.0
+	var hl := a.class_model.spec.length / 2.0 # a's half size; b's (bl, bw) differ only in a mixed-class field
+	var hw := a.class_model.spec.width / 2.0
+	var bl := b.class_model.spec.length / 2.0
+	var bw := b.class_model.spec.width / 2.0
 	var ca := cos(a.heading)
 	var sa := sin(a.heading)
 	var cb := cos(b.heading)
@@ -2340,7 +2413,7 @@ func sat(a: RaceCar, b: RaceCar) -> PackedFloat64Array:
 		var ax: float = axes[2 * k]
 		var ay: float = axes[2 * k + 1]
 		var ra := hl * absf(ca * ax + sa * ay) + hw * absf(-sa * ax + ca * ay)
-		var rb := hl * absf(cb * ax + sb * ay) + hw * absf(-sb * ax + cb * ay)
+		var rb := bl * absf(cb * ax + sb * ay) + bw * absf(-sb * ax + cb * ay)
 		var dist := dx * ax + dy * ay
 		var o := ra + rb - absf(dist)
 		if o <= 0.0:
@@ -2355,8 +2428,8 @@ func sat(a: RaceCar, b: RaceCar) -> PackedFloat64Array:
 func corner(car: RaceCar, nx: float, ny: float) -> PackedFloat64Array:
 	var ch := cos(car.heading)
 	var sh := sin(car.heading)
-	var fx := (1.0 if ch * nx + sh * ny >= 0.0 else -1.0) * spec.length / 2.0
-	var fy := (1.0 if -sh * nx + ch * ny >= 0.0 else -1.0) * spec.width / 2.0
+	var fx := (1.0 if ch * nx + sh * ny >= 0.0 else -1.0) * car.class_model.spec.length / 2.0
+	var fy := (1.0 if -sh * nx + ch * ny >= 0.0 else -1.0) * car.class_model.spec.width / 2.0
 	return PackedFloat64Array([fx * ch - fy * sh, fx * sh + fy * ch])
 
 func collide() -> void:
@@ -2374,7 +2447,7 @@ func collide() -> void:
 			var b: RaceCar = live[j]
 			var dx := a.x - b.x
 			var dy := a.y - b.y
-			if dx * dx + dy * dy > 16.0:
+			if dx * dx + dy * dy > _contact_r2:
 				continue
 			# where the track crosses itself (Suzuka), one car is on the bridge and the other under it
 			if absf(track.sample(track.H, a.s) - track.sample(track.H, b.s)) > 3.0:
@@ -2468,7 +2541,7 @@ func shove(car: RaceCar, dx: float, dy: float) -> void:
 
 func kick(car: RaceCar, ix: float, iy: float, rx: float, ry: float) -> void:
 	if car.control == "free":
-		phys.kick(car, ix, iy, rx, ry)
+		car.class_phys.kick(car, ix, iy, rx, ry)
 		return
 	var tr := track
 	car.v = maxf(0.0, car.v + ix * tr.sample(tr.TX, car.s) + iy * tr.sample(tr.TY, car.s))
